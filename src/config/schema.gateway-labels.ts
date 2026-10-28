@@ -19,7 +19,7 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.environment": "Control UI Environment",
   "gateway.controlUi.environment.label": "Control UI Environment Label",
   "gateway.controlUi.environment.color": "Control UI Environment Color",
-  "gateway.controlUi.communityInvite": "Control UI Community Entry",
+  "gateway.controlUi.communityInvite": "Control UI Community Invitation",
   "gateway.controlUi.newSessionModelDefaults": "New Session Model Defaults",
   "gateway.controlUi.github.host": "Control UI GitHub Service Host",
   "gateway.controlUi.github.token": "Control UI GitHub Service Credential",

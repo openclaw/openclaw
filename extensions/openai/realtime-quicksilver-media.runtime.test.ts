@@ -1,11 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   OpenAIQuicksilverPendingAudio,
   OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
 } from "./realtime-quicksilver-audio-buffer.js";
+import { createGatewayHarness } from "./realtime-quicksilver-gateway.test-support.js";
 import { OpenAIQuicksilverAudioPeer } from "./realtime-quicksilver-media.runtime.js";
+import { createCallResponse } from "./realtime-quicksilver.test-helpers.js";
 
 type LibopusModule = typeof import("libopus-wasm");
 type LibopusDecoder = Awaited<ReturnType<LibopusModule["createDecoder"]>>;
@@ -141,7 +143,90 @@ async function captureOutboundRtp(testPeer: TestableAudioPeer) {
   return packets;
 }
 
+function useAudioTimers() {
+  vi.useFakeTimers({
+    toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
+  });
+}
+
 describe("GPT-Live werift audio peer", () => {
+  it("retains the newest five seconds through delayed peer adoption and the RTP pump", async () => {
+    vi.useFakeTimers();
+    const pending = Promise.withResolvers<OpenAIQuicksilverAudioPeer>();
+    const createPeer = vi.fn(
+      (_callbacks: Parameters<typeof createAudioPeer>[0]) => pending.promise,
+    );
+    const { bridge, onError } = createGatewayHarness({
+      model: "gpt-live-test-canary",
+      resolveAuth: async () => ({ type: "oauth", token: "oauth-token", accountId: "account-1" }),
+      createPeer,
+      fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
+    });
+    const connection = bridge.connect();
+    expect(bridge.connect()).toBe(connection);
+    const source = Buffer.alloc(256 * OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
+    for (let offset = 0; offset < source.length; offset += 2) {
+      source.writeUInt16LE(Math.floor(offset / OPENAI_QUICKSILVER_RELAY_FRAME_BYTES) + 1, offset);
+    }
+    for (let offset = 0; offset < source.length; offset += 8_192) {
+      const capture = Buffer.from(source.subarray(offset, offset + 8_192));
+      bridge.sendAudio(capture);
+      capture.fill(0xff);
+      await vi.advanceTimersByTimeAsync(171);
+    }
+    const testBridge = bridge as unknown as Pick<TestableAudioPeer, "pendingAudio">;
+    const retained = testBridge.pendingAudio;
+    expect(retained).toHaveLength(250 * OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
+    const callbacks = createPeer.mock.calls[0]?.[0];
+    assert(callbacks, "expected the bridge to start peer creation");
+    const { peer, testPeer } = await createAudioPeer(callbacks);
+    vi.spyOn(peer, "createOffer").mockResolvedValue("v=offer\r\n");
+    vi.spyOn(peer, "applyAnswer").mockResolvedValue();
+    const sendRtp = vi.spyOn(testPeer.state.transceiver.sender, "sendRtp").mockResolvedValue();
+    const frames = vi.spyOn(testPeer, "takeNextRelayFrame");
+    const { sequenceNumber, timestamp } = testPeer;
+    const copy = vi.spyOn(Buffer.prototype, "copy");
+    try {
+      pending.resolve(peer);
+      await connection;
+      expect(copy).not.toHaveBeenCalled();
+      expect(testPeer.pendingAudio).toBe(retained);
+      expect(testPeer.pendingAudio).toHaveLength(250 * OPENAI_QUICKSILVER_RELAY_FRAME_BYTES);
+      expect(testBridge.pendingAudio).not.toBe(retained);
+      expect(testBridge.pendingAudio).toHaveLength(0);
+      copy.mockRestore();
+      testPeer.state.peer.connectionStateChange.execute("connected");
+      await vi.advanceTimersByTimeAsync(4_980);
+      expect(testPeer.pendingAudio).toHaveLength(0);
+      expect(
+        frames.mock.results.flatMap((result) =>
+          result.type === "return" ? [result.value.readUInt16LE(0)] : [],
+        ),
+      ).toEqual(Array.from({ length: 250 }, (_, index) => index + 7));
+      expect(sendRtp).toHaveBeenCalledTimes(250);
+      const packets = sendRtp.mock.calls.map(([packet]) => packet);
+      expect(
+        packets.every((packet) => !Buffer.isBuffer(packet) && packet.header.payloadType === 111),
+      ).toBe(true);
+      expect(packets.every((packet) => !Buffer.isBuffer(packet) && packet.payload.length > 0)).toBe(
+        true,
+      );
+      expect(packets.at(-1)).toMatchObject({
+        header: {
+          sequenceNumber: (sequenceNumber + 249) & 0xffff,
+          timestamp: (timestamp + 249 * 960) >>> 0,
+        },
+      });
+      const sendAudio = vi.spyOn(peer, "sendAudio");
+      const capture = Buffer.from([0x30, 0x31]);
+      bridge.sendAudio(capture);
+      expect(sendAudio).toHaveBeenCalledExactlyOnceWith(capture);
+      expect(onError).not.toHaveBeenCalled();
+    } finally {
+      copy.mockRestore();
+      await bridge.close();
+    }
+  });
   it("creates a full-candidate Opus sendrecv offer without a data channel", async () => {
     const { peer } = await createAudioPeer();
     const offer = await peer.createOffer();
@@ -345,9 +430,7 @@ describe("GPT-Live werift audio peer", () => {
   it("keeps the RTP sample clock aligned through a minute of late timer callbacks", async () => {
     const { onError, peer, testPeer } = await createInboundAudioHarness();
     const packets = await captureOutboundRtp(testPeer);
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
-    });
+    useAudioTimers();
     const scheduleTimeout = globalThis.setTimeout;
     const scheduleInterval = globalThis.setInterval;
     // Both timer APIs incur the same scheduler lateness; only a deadline can compensate.
@@ -385,9 +468,7 @@ describe("GPT-Live werift audio peer", () => {
     const frames = [1, 2, 3].map((value) =>
       Buffer.alloc(OPENAI_QUICKSILVER_RELAY_FRAME_BYTES, value),
     );
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "performance"],
-    });
+    useAudioTimers();
     const timerNow = performance.now.bind(performance);
     let suspensionMs = 0;
     vi.spyOn(performance, "now").mockImplementation(() => timerNow() + suspensionMs);

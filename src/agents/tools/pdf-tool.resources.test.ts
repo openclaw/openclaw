@@ -8,7 +8,6 @@ import { getModelLlmRuntime } from "../../llm/model-runtime-binding.js";
 import * as llmStream from "../../llm/stream.js";
 import type { Model } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
-import * as pdfExtract from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
 import { loadPluginRegistryHandle } from "../../plugins/loader.js";
 import {
@@ -18,6 +17,10 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../../plugins/loader.test-fixtures.js";
+import {
+  cleanupNativeFixture,
+  nativeFixtureEnv,
+} from "../../plugins/native-resource.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
@@ -28,13 +31,13 @@ import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { getSessionMcpRequestSignal } from "../agent-bundle-mcp-request-context.js";
+import { makeModel } from "../embedded-agent-runner/model.test-harness.js";
 import * as modelAuth from "../model-auth.js";
 import * as preparedRuntime from "../prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 import { closeEphemeralPreparedModelRuntimeResources } from "../prepared-model-runtime.resources.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { createPdfTool } from "./pdf-tool.js";
-import { FAKE_PDF_MEDIA } from "./pdf-tool.test-support.js";
+import { FAKE_PDF_MEDIA, requirePdfTool, stubPdfInput } from "./pdf-tool.test-support.js";
 
 type Connection = {
   dbPath: string;
@@ -168,10 +171,8 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           apiKey: "synthetic-fixture",
           models: [
             {
-              id: "pdf-model",
+              ...makeModel("pdf-model"),
               name: "PDF model",
-              reasoning: false,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               input: ["text", "image"],
               contextWindow: 8192,
               maxTokens: 1024,
@@ -192,50 +193,34 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     parent,
     async run(test: () => Promise<void>) {
       try {
-        await withEnvAsync(
-          {
-            OPENCLAW_HOME: dir,
-            OPENCLAW_STATE_DIR: path.join(dir, "state"),
-            OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-          },
-          async () => {
-            useNoBundledPlugins();
-            vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
-            vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({
-              text: "Synthetic PDF text",
-              images: [],
-            });
-            lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
-              {
-                config,
-                agentId: "main",
-                agentDir,
-                workspaceDir: dir,
-                loadRuntimePlugins: true,
-                skipCredentials: true,
-                runtimePluginSelections: [{ provider: id, modelId: "pdf-model" }],
-              },
-              { catalogMode: "static" },
-            );
-            try {
-              await test();
-            } finally {
-              state.finish.resolve();
-              state.finishCleanup.resolve();
-              await outcome;
-              await parent.drain();
-              await lease[Symbol.asyncDispose]();
-              await closePreparedModelRuntimeSnapshots();
-            }
-          },
-        );
-      } finally {
-        for (const connection of connections) {
-          if (connection.database.isOpen) {
-            connection.database.close();
+        await withEnvAsync(nativeFixtureEnv(dir, path.join(dir, "state")), async () => {
+          useNoBundledPlugins();
+          stubPdfInput("Synthetic PDF text");
+          lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
+            {
+              config,
+              agentId: "main",
+              agentDir,
+              workspaceDir: dir,
+              loadRuntimePlugins: true,
+              skipCredentials: true,
+              runtimePluginSelections: [{ provider: id, modelId: "pdf-model" }],
+            },
+            { catalogMode: "static" },
+          );
+          try {
+            await test();
+          } finally {
+            state.finish.resolve();
+            state.finishCleanup.resolve();
+            await outcome;
+            await parent.drain();
+            await lease[Symbol.asyncDispose]();
+            await closePreparedModelRuntimeSnapshots();
           }
-        }
-        Reflect.deleteProperty(globalThis, stateKey);
+        });
+      } finally {
+        cleanupNativeFixture(stateKey, connections);
       }
     },
     get lease() {
@@ -245,15 +230,12 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       const snapshot = options.raw
         ? { ...lease.snapshot, pluginRegistry: options.raw }
         : lease.snapshot;
-      const tool = createPdfTool({
+      const tool = requirePdfTool({
         config,
         agentDir,
         workspaceDir: dir,
         ...(options.supplied !== false ? { preparedModelRuntime: snapshot } : {}),
       });
-      if (!tool) {
-        throw new Error("PDF fixture tool was unavailable");
-      }
       outcome = parent
         .track(() =>
           withPluginRuntimeGenerationScope(snapshot, () =>

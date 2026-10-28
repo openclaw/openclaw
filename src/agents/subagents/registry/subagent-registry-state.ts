@@ -7,7 +7,10 @@ import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db
 import { prepareOpenClawStateReadSource } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
-import { projectSubagentRunForMaintenance } from "./subagent-delivery-state.js";
+import {
+  projectSubagentRunForMaintenance,
+  shouldPreserveSubagentForMaintenance,
+} from "./subagent-delivery-state.js";
 import {
   getSubagentRunsForChildSession,
   getSubagentSessionReadLookup,
@@ -58,7 +61,10 @@ const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunRe
 };
 const persistedSubagentMaintenanceReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
   state: {},
-  copy: projectSubagentRunForMaintenance,
+  copy: (entry) =>
+    shouldPreserveSubagentForMaintenance(entry)
+      ? projectSubagentRunForMaintenance(entry)
+      : undefined,
   project: projectSubagentRunForMaintenance,
 };
 
@@ -198,9 +204,8 @@ export type SubagentSessionListReadView = {
 /** A long-lived projection retains its source; registry publications still own the facts. */
 export function createSubagentSessionListReadView(options: {
   env: NodeJS.ProcessEnv;
-  path?: string;
 }): SubagentSessionListReadView {
-  const path = options.path ?? resolveOpenClawStateSqlitePath(options.env);
+  const path = resolveOpenClawStateSqlitePath(options.env);
   const source = prepareOpenClawStateReadSource({ path, env: options.env });
   const cache = persistedSubagentSessionListRunsReadCache;
   const readPersisted = shouldReadPersistedSubagentRuns();

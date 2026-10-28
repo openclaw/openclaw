@@ -8,7 +8,7 @@ import {
   saveStoredZaloCredentials,
   type StoredZaloCredentials,
 } from "./session-state.js";
-import type { API, Credentials } from "./zca-client.js";
+import type { API } from "./zca-client.js";
 
 export type ZaloCredentialPayload = Omit<
   StoredZaloCredentials,
@@ -18,55 +18,10 @@ export type ZaloCredentialPayload = Omit<
 function credentialSignature(credentials: ZaloCredentialPayload): string {
   return JSON.stringify({
     imei: credentials.imei,
-    cookie: canonicalCredentialCookie(credentials.cookie),
+    cookie: credentials.cookie,
     userAgent: credentials.userAgent,
     language: credentials.language,
   });
-}
-
-function stableCanonicalValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stableCanonicalValue);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [key, stableCanonicalValue(entry)]),
-  );
-}
-
-function stableSignatureValue(value: unknown): string {
-  return JSON.stringify(stableCanonicalValue(value)) ?? "undefined";
-}
-
-function canonicalCookieArray(value: unknown[]): unknown[] {
-  return value
-    .map(stableCanonicalValue)
-    .toSorted((left, right) =>
-      stableSignatureValue(left).localeCompare(stableSignatureValue(right)),
-    );
-}
-
-function canonicalCredentialCookie(cookie: Credentials["cookie"]): unknown {
-  if (Array.isArray(cookie)) {
-    return canonicalCookieArray(cookie);
-  }
-  if (!cookie || typeof cookie !== "object") {
-    return cookie;
-  }
-  return Object.fromEntries(
-    Object.entries(cookie)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [
-        key,
-        key === "cookies" && Array.isArray(entry)
-          ? canonicalCookieArray(entry)
-          : stableCanonicalValue(entry),
-      ]),
-  );
 }
 
 export function snapshotApiCredentials(
@@ -101,6 +56,12 @@ export class ZaloCredentialPersistence {
   private readonly credentialRevocationsByProfile = new Map<string, Promise<boolean>>();
 
   constructor(private readonly isCurrentApi: (profile: string, api: API) => boolean) {}
+
+  dispose(): void {
+    this.credentialSignaturesByProfile.clear();
+    this.credentialRefreshesByProfile.clear();
+    this.credentialRevocationsByProfile.clear();
+  }
 
   pendingRevocation(profile: string): Promise<boolean> | undefined {
     return this.credentialRevocationsByProfile.get(profile);

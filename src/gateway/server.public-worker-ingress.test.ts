@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { promisify } from "node:util";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -14,6 +15,7 @@ import {
   type WorkerConnectParams,
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
+import { withEnv } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createWorkerConnection } from "../worker/worker-connection.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
@@ -164,7 +166,10 @@ class PublicWorkerHarness {
     maxPayload: 64 * 1024,
     perMessageDeflate: false,
   });
-  readonly preauthBudget = createPreauthConnectionBudget(8);
+  readonly preauthBudget = withEnv(
+    { OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP: "8" },
+    createPreauthConnectionBudget,
+  );
   readonly publicRateLimiter: ReturnType<typeof createGatewayAuthRateLimiter>;
   readonly handlePluginUpgrade = vi.fn(async () => false);
   readonly httpServer: ReturnType<typeof createGatewayHttpServer>;
@@ -277,13 +282,9 @@ class PublicWorkerHarness {
     this.connectionWork.beginClose();
     await this.connectionWork.drain();
     this.publicRateLimiter.dispose();
-    await new Promise<void>((resolve) => {
-      this.wss.close(() => resolve());
-    });
+    await promisify(this.wss.close.bind(this.wss))();
     if (this.httpServer.listening) {
-      await new Promise<void>((resolve, reject) => {
-        this.httpServer.close((error) => (error ? reject(error) : resolve()));
-      });
+      await promisify(this.httpServer.close.bind(this.httpServer))();
     }
   }
 }

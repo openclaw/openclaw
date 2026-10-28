@@ -22,24 +22,25 @@ async function main() {
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   const sessionCount = scenario === "batch" ? 256 : 1;
-  // Keep 390.625 MiB of public payload above the child heap cap, with a deep
-  // ancestry chain but fewer per-event SQLite writes and projection entries.
+  // Public payload is 390.625 MiB: exceed the child heap while retaining deep ancestry.
   const eventCount = scenario === "public" ? 25_000 : scenario === "batch" ? 64 : 8;
   const payloadBytes = scenario === "public" ? 16_384 : scenario === "batch" ? 32768 : 256;
+  const expectedProjection = [eventCount - 1, eventCount - 1, `e-${eventCount - 2}`, 0];
   const sessionsDir = path.join(stateDir, "agents/main/sessions");
   const storePath = path.join(sessionsDir, "sessions.json");
+  const importSessions = () =>
+    runDoctorSessionSqlite({ mode: "import", store: storePath, env: process.env });
   fs.mkdirSync(sessionsDir, { recursive: true });
   const store: Record<string, { sessionId: string; updatedAt: number; sessionFile: string }> = {};
   const expected = new Map<string, string>();
   const timestamp = 1_800_000_000_000;
+  const stamp = new Date(timestamp).toISOString();
+  const tool = { role: "toolResult", toolName: "exec", isError: false, timestamp };
   for (let session = 0; session < sessionCount; session++) {
-    const sessionId = `memory-${session}`;
-    const transcriptPath = path.join(sessionsDir, `${sessionId}.jsonl`);
-    store[`agent:main:memory-${session}`] = {
-      sessionId,
-      updatedAt: timestamp,
-      sessionFile: transcriptPath,
-    };
+    const id = `memory-${session}`;
+    const transcriptPath = path.join(sessionsDir, `${id}.jsonl`);
+    const entry = { sessionId: id, updatedAt: timestamp, sessionFile: transcriptPath };
+    store[`agent:main:memory-${session}`] = entry;
     const fd = fs.openSync(transcriptPath, "wx", 0o600);
     const hash = createHash("sha256");
     const write = (event: unknown) => {
@@ -48,28 +49,14 @@ async function main() {
       fs.writeSync(fd, `${json}\n`);
     };
     try {
-      write({
-        type: "session",
-        version: 3,
-        id: sessionId,
-        timestamp: new Date(timestamp).toISOString(),
-        cwd: "/fixture",
-      });
+      write({ type: "session", version: 3, id, timestamp: stamp, cwd: "/fixture" });
       for (let index = 0; index < eventCount; index++) {
-        write({
-          type: "message",
-          id: `e-${index}`,
-          parentId: index === 0 ? null : `e-${index - 1}`,
-          timestamp,
-          message: {
-            role: "toolResult",
-            toolCallId: `call-${index}`,
-            toolName: "exec",
-            isError: false,
-            content: [{ type: "text", text: `${session}:${index}:é🦞${"x".repeat(payloadBytes)}` }],
-            timestamp,
-          },
-        });
+        const eventId = `e-${index}`;
+        const parentId = index === 0 ? null : `e-${index - 1}`;
+        const toolCallId = `call-${index}`;
+        const text = `${session}:${index}:é🦞${"x".repeat(payloadBytes)}`;
+        const message = { ...tool, toolCallId, content: [{ type: "text", text }] };
+        write({ type: "message", id: eventId, parentId, timestamp, message });
       }
       // Force the full projection owner, including a deep selected ancestry.
       write({
@@ -81,11 +68,10 @@ async function main() {
     } finally {
       fs.closeSync(fd);
     }
-    expected.set(sessionId, hash.digest("hex"));
+    expected.set(id, hash.digest("hex"));
   }
   fs.writeFileSync(storePath, JSON.stringify(store));
   process.stderr.write(`seeded ${sessionCount} sessions x ${eventCount} events; importing\n`);
-  const started = performance.now();
   if (scenario === "public") {
     await withSuppressedNotes(() =>
       noteSessionTranscriptHealth({
@@ -96,11 +82,7 @@ async function main() {
     );
     assert(!fs.readdirSync(sessionsDir).some((name) => name.includes(".pre-doctor-")));
   }
-  const report = await runDoctorSessionSqlite({
-    mode: "import",
-    store: storePath,
-    env: process.env,
-  });
+  const report = await importSessions();
   assert.equal(report.totals.issues, 0, JSON.stringify(report.targets.map((t) => t.issues)));
   assert.equal(report.totals.importedEntries, scenario === "public" ? 0 : sessionCount);
   assert.equal(
@@ -111,6 +93,9 @@ async function main() {
     readOnly: true,
   });
   try {
+    const projection = db.prepare(
+      "SELECT active_event_count, active_message_count, leaf_event_id, needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
+    );
     const read = prepareSqliteQueryIterator<string, { event_json: string }>(db, (parameter) =>
       getNodeSqliteKysely<Pick<DB, "transcript_events">>(db)
         .selectFrom("transcript_events")
@@ -128,48 +113,19 @@ async function main() {
         hash.update(row.event_json).update("\n");
       }
       assert.equal(hash.digest("hex"), digest);
-      assert.deepEqual(
-        {
-          ...db
-            .prepare(
-              "SELECT active_event_count, active_message_count, leaf_event_id, needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
-            )
-            .get(sessionId),
-        },
-        {
-          active_event_count: eventCount - 1,
-          active_message_count: eventCount - 1,
-          leaf_event_id: `e-${eventCount - 2}`,
-          needs_rebuild: 0,
-        },
-      );
+      assert.deepEqual(Object.values(projection.get(sessionId)!), expectedProjection);
     }
   } finally {
     db.close();
   }
-  const rerun = await runDoctorSessionSqlite({
-    mode: "import",
-    store: storePath,
-    env: process.env,
-  });
+  const rerun = await importSessions();
   assert.equal(rerun.totals.importedEntries, 0);
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
-  process.stdout.write(
-    JSON.stringify({
-      scenario,
-      sessionCount,
-      eventCount,
-      elapsedMs: performance.now() - started,
-      maxRssKiB: process.resourceUsage().maxRSS,
-    }),
-  );
+  process.stdout.write(JSON.stringify({ scenario }));
 }
 // Node resolves the bundled module through a worktree's shared node_modules
 // symlink; resolve argv too or the child exits without running the proof.
 if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
-  void main().catch((error: unknown) => {
-    console.error(error);
-    process.exitCode = 1;
-  });
+  await main();
 }

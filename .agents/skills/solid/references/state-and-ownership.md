@@ -17,6 +17,15 @@ The Gateway store, capabilities, `lib/sessions/*` (reconciler, provenance, refre
 
 Projections are adopt-on-use: add just the thin domain wrapper in the same PR as its first production caller, and remove unadopted adapters. Do not restore event projections or lease machinery. Solid's `createProjection` derives a local readonly store; it does not replace `projectSource` or transfer domain authority. See [projections and local stores](idioms.md#projections-and-local-stores-have-different-jobs).
 
+Reuse the existing adapter for the owner's actual contract. `observeState` in
+`lib/reactive/observe-state.ts` publishes page-local synchronous assignments;
+its `edit()` handles nested changes and `invalidate()` handles external receipts.
+`projectCallbackOwner` in `lib/reactive/callback-owner.ts` connects a private leaf
+owner's sole notification callback to a projection. Owners retained beyond the
+view still need a rebindable subscription; do not replace one with that callback
+adapter. Both adapters preserve synchronous reads and keep request admission in
+the plain owner.
+
 ## Lifetimes
 
 Application → connection/presentation scope → session/pane → view. _Retained_, _presented_, _retiring_, and _disposed_ are different states:

@@ -1,46 +1,33 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
 import { verifyVitestWorkerArtifacts } from "../../scripts/lib/vitest-worker-artifacts.mts";
 import { formatErrorMessage } from "../../src/infra/errors.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../vitest/vitest.timeouts.js";
-import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
-import { writeFixture } from "./vitest-worker-artifacts.test-support.js";
+import {
+  compilerFixtureEnv,
+  readFixtureLines,
+  writeFixture,
+} from "./vitest-worker-artifacts.test-support.js";
 
 /** One real application build; borrowers still own independent, disposable generations. */
 export function createPreparedWorkerCompiler() {
   const root = process.cwd();
+  const compilerModuleUrl = pathToFileURL(createRequire(import.meta.url).resolve("tsdown")).href;
   const lifetime = createFixtureLifetime();
   let preload: string;
   let template: string;
   let receipt: string;
   const compiler = path.join(root, "scripts/lib/vitest-worker-compiler.mts");
-  const tsdown = pathToFileURL(createRequire(import.meta.url).resolve("tsdown")).href;
-
-  function env(base: NodeJS.ProcessEnv, runtime: "node" | "bun") {
-    return {
-      ...base,
-      ...Object.fromEntries(
-        Object.entries(fixturePreloadEnv(preload, runtime)).map(([key, value]) => [
-          key,
-          `${base[key] ?? ""} ${value}`.trim(),
-        ]),
-      ),
-    };
-  }
-
-  function readCompiles(): Array<{ kind: "full" | "copy"; directory: string }> {
-    return fs
-      .readFileSync(receipt, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-  }
+  const env = (base: NodeJS.ProcessEnv, runtime: "node" | "bun") =>
+    compilerFixtureEnv(preload, base, runtime);
+  const readCompiles = () =>
+    readFixtureLines<{ kind: "full" | "copy"; directory: string }>(receipt);
 
   return {
     env,
@@ -51,9 +38,7 @@ export function createPreparedWorkerCompiler() {
       fs.writeFileSync(path.join(template, "package.json"), '{"type":"module"}\n');
       const fixtures = lifetime.createTempDir("prepared-compiler-", path.join(root, ".artifacts"));
       receipt = path.join(fixtures, "compiles.jsonl");
-      const clone = fileURLToPath(
-        new URL("./fixtures/vitest-worker-prepared.mjs", import.meta.url),
-      );
+      const clone = new URL("./fixtures/vitest-worker-prepared.mjs", import.meta.url).href;
       preload = writeFixture(
         fixtures,
         "preload.mjs",
@@ -63,7 +48,7 @@ const compiler = ${JSON.stringify(pathToFileURL(compiler).href)};
 const buildEntries = ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/vitest-worker-build-entries.mts")).href)};
 registerFixtureSourceTransform({
   name:'prepared-worker-compiler',
-  filter:fixtureSourceFileFilter([compiler,buildEntries,${JSON.stringify(tsdown)}]),
+  filter:fixtureSourceFileFilter([compiler,buildEntries,${JSON.stringify(compilerModuleUrl)}]),
   transform(url,readSource) {
   const narrow = globalThis[Symbol.for('openclaw.fixture.realCompiler')];
   // These tests inspect only the declaration in the unbundled legacy graph.
@@ -73,14 +58,14 @@ registerFixtureSourceTransform({
     return 'export * from '+original+';import * as original from '+original+';'+
       'export const preservedModuleBuildSources=original.preservedModuleBuildSources.filter(source=>source==="src/infra/runtime-process-entrypoints.ts"||source==="scripts/run-with-env.mts");';
   }
-  if(url===${JSON.stringify(tsdown)} && process.argv[1]===${JSON.stringify(compiler)} && !narrow) {
+  if(url===${JSON.stringify(compilerModuleUrl)} && process.argv[1]===${JSON.stringify(compiler)} && !narrow) {
     fs.appendFileSync(${JSON.stringify(receipt)},JSON.stringify({kind:'full',directory:process.argv[2]})+'\\n');
   }
   if(url!==compiler) return readSource();
   const full = process.argv[2] === ${JSON.stringify(template)};
   if(full || narrow) return readSource();
   fs.appendFileSync(${JSON.stringify(receipt)},JSON.stringify({kind:'copy',directory:process.argv[2]})+'\\n');
-  return 'import {copyPreparedWorkerArtifacts} from '+JSON.stringify(${JSON.stringify(pathToFileURL(clone).href)})+';'+
+  return 'import {copyPreparedWorkerArtifacts} from '+JSON.stringify(${JSON.stringify(clone)})+';'+
     'await copyPreparedWorkerArtifacts('+JSON.stringify(${JSON.stringify(template)})+',process.argv[2]);';
 }});`,
       );
@@ -96,14 +81,11 @@ registerFixtureSourceTransform({
           },
         ),
       );
-      const preparationError = result.error === undefined ? "" : formatErrorMessage(result.error);
       expect(
         result.status,
-        [preparationError, result.stderr, result.stdout].filter(Boolean).join("\n"),
+        `${result.error === undefined ? "" : formatErrorMessage(result.error)}\n${result.stderr}\n${result.stdout}`,
       ).toBe(0);
       await verifyVitestWorkerArtifacts(template);
-      const manifest = JSON.parse(fs.readFileSync(path.join(template, "manifest.json"), "utf8"));
-      console.log(`file compiler prepared in ${Math.round(manifest.durationMs)}ms`);
     },
     readCompiles,
     async cleanup() {

@@ -28,7 +28,6 @@ import {
   resolveClaudeCliHistorySource,
   visitClaudeCliSessionMessages,
 } from "./cli-session-history.claude-snapshot.js";
-import { cleanClaudeCliImportedUserDisplay } from "./cli-session-history.claude.js";
 import {
   readChatHistoryMessageId,
   readChatHistoryMessageSeq,
@@ -108,6 +107,8 @@ export async function prepareCliSessionHistoryReader(
       offset: params.offset,
       readOnly: true,
       deferProfileDisplay: true,
+      // The history worker prepares current cron labels after selecting the page.
+      resolveCronJobName: () => undefined,
     });
     if (tail.rawMessages.length) {
       return undefined;
@@ -323,12 +324,8 @@ export async function prepareCliSessionHistoryReader(
     }
     const messages: unknown[] = [];
     for (const row of window) {
-      // The merge matched on original text; only an import that found no canonical row
-      // is served from the index, so its generated prefixes can leave the display copy here.
       const message =
-        row.local_seq === null
-          ? cleanClaudeCliImportedUserDisplay(index.message(row.id))
-          : localMessages.get(row.local_seq);
+        row.local_seq === null ? index.message(row.id) : localMessages.get(row.local_seq);
       const record = asOptionalRecord(message);
       if (!record) {
         throw new SessionTranscriptProjectionUnavailableError(params.sessionId!, "window-changed");

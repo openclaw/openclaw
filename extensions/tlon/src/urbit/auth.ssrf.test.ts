@@ -1,16 +1,31 @@
-// Tlon tests cover auth.ssrf plugin behavior.
 import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./auth.js";
 
-describe("tlon urbit auth ssrf", () => {
-  beforeEach(() => {
-    vi.unstubAllGlobals();
+const privateLogin = () =>
+  authenticate("http://127.0.0.1:8080", "code", {
+    ssrfPolicy: { allowPrivateNetwork: true },
   });
+function mockResponse(body: BodyInit, status = 200) {
+  const response = new Response(body, {
+    status,
+    headers: { "set-cookie": "urbauth-~zod=123; Path=/; HttpOnly" },
+  });
+  const fetch = vi.fn().mockResolvedValue(response);
+  vi.stubGlobal("fetch", fetch);
+  return { response, fetch };
+}
+function openBody(bytes: Uint8Array, cancel?: () => void) {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes);
+    },
+    cancel,
+  });
+}
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+describe("tlon urbit auth ssrf", () => {
+  afterEach(() => vi.unstubAllGlobals());
 
   it("blocks private IPs by default", async () => {
     const mockFetch = vi.fn();
@@ -23,90 +38,34 @@ describe("tlon urbit auth ssrf", () => {
   });
 
   it("allows private IPs when allowPrivateNetwork is enabled", async () => {
-    const response = new Response("ok", {
-      status: 200,
-      headers: { "set-cookie": "urbauth-~zod=123; Path=/; HttpOnly" },
-    });
-    const mockFetch = vi.fn().mockResolvedValue(response);
-    vi.stubGlobal("fetch", mockFetch);
-
-    const cookie = await authenticate("http://127.0.0.1:8080", "code", {
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-    expect(cookie).toContain("urbauth-~zod=123");
+    const { response, fetch } = mockResponse("ok");
+    expect(await privateLogin()).toContain("urbauth-~zod=123");
     expect(response.bodyUsed).toBe(true);
-    expect(mockFetch).toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalled();
   });
 
-  it("cancels an open body stream as soon as the drain cap is reached", async () => {
-    const cookieValue = "urbauth-~zod=789; Path=/; HttpOnly";
-    const cappedBody = new Uint8Array(64 * 1024).fill(0x78);
-    let canceled = false;
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(cappedBody);
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    const response = new Response(stream, {
-      status: 200,
-      headers: { "set-cookie": cookieValue },
-    });
-
-    const mockFetch = vi.fn().mockResolvedValue(response);
-    vi.stubGlobal("fetch", mockFetch);
-
-    const cookie = await authenticate("http://127.0.0.1:8080", "code", {
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-    expect(cookie).toContain("urbauth-~zod=789");
-    expect(canceled).toBe(true);
-  });
-
-  it("cancels failed login bodies before throwing", async () => {
-    let canceled = false;
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("login failed"));
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-      { status: 401 },
-    );
-    const mockFetch = vi.fn().mockResolvedValue(response);
-    vi.stubGlobal("fetch", mockFetch);
-
-    await expect(
-      authenticate("http://127.0.0.1:8080", "bad-code", {
-        ssrfPolicy: { allowPrivateNetwork: true },
-      }),
-    ).rejects.toMatchObject({
-      name: "UrbitAuthError",
-      message: "Login failed with status 401",
-    });
-    expect(canceled).toBe(true);
+  it.each([200, 401])("cancels open login bodies (status %s)", async (status) => {
+    const cancel = vi.fn();
+    const bytes =
+      status === 200
+        ? new Uint8Array(64 * 1024).fill(0x78)
+        : new TextEncoder().encode("login failed");
+    mockResponse(openBody(bytes, cancel), status);
+    if (status === 200) {
+      expect(await privateLogin()).toContain("urbauth-~zod=123");
+    } else {
+      await expect(privateLogin()).rejects.toMatchObject({
+        name: "UrbitAuthError",
+        message: "Login failed with status 401",
+      });
+    }
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("rejects failed logins promptly when a response clone keeps cancellation pending", async () => {
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("login failed"));
-        },
-      }),
-      { status: 401 },
-    );
+    const { response } = mockResponse(openBody(new TextEncoder().encode("login failed")), 401);
     const clone = response.clone();
-    const mockFetch = vi.fn().mockResolvedValue(response);
-    vi.stubGlobal("fetch", mockFetch);
-    const pending = authenticate("http://127.0.0.1:8080", "bad-code", {
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
+    const pending = privateLogin();
     let timeout: ReturnType<typeof setTimeout> | undefined;
 
     try {

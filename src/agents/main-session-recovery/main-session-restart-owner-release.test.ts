@@ -1,18 +1,31 @@
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import * as gatewayWorkAdmission from "../../process/gateway-work-admission.js";
-import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
+import {
+  beginSessionEffect,
+  captureSessionControllerSettlement,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
+import {
+  reserveSessionControllerSource,
+  retireSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
+import {
+  createRecoveryRuntimeFixture,
+  observeRecoveryRoots,
+} from "./main-session-recovery-runtime.test-support.js";
 import {
   createRestartRecoveryStoreFixture,
   readStore,
   runningSessionEntry,
 } from "./main-session-restart-recovery-fixture.test-support.js";
+import * as recoveryMarking from "./main-session-restart-recovery-marking.js";
 import {
   makeToolResultMessage,
   makeUserMessage,
@@ -30,9 +43,8 @@ const gatewayRuntime = createRecoveryRuntimeFixture({
 const { makeSessionsDir, writeStore, writeTranscript } = createRestartRecoveryStoreFixture(
   () => state.root,
 );
-const scheduleRestartAbortedMainSessionRecovery = (params: { delayMs: number }) =>
+const scheduleRestartAbortedMainSessionRecovery = () =>
   scheduleRecovery({
-    ...params,
     stateDir: state.root,
     getConfig: () => ({}),
     gatewayRuntime,
@@ -52,26 +64,6 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
   await state.cleanup();
 });
-
-function observeRecoveryRoots(expectedOrigin: string, expectedCount: number) {
-  const completed = createDeferred();
-  const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
-  let count = 0;
-  const spy = vi
-    .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
-    .mockImplementation(
-      async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal): Promise<T> => {
-        try {
-          return await admit(run, origin, signal);
-        } finally {
-          if (origin === expectedOrigin && ++count === expectedCount) {
-            completed.resolve();
-          }
-        }
-      },
-    );
-  return { completed: completed.promise, restore: () => spy.mockRestore() };
-}
 
 it.for(["abandoned", "completed", "replaced", "stopped"] as const)(
   "revisits a startup orphan after its temporary controller owner releases (%s)",
@@ -97,7 +89,7 @@ it.for(["abandoned", "completed", "replaced", "stopped"] as const)(
       dispatched.resolve();
       return { runId: "run-resumed" };
     });
-    const recovery = scheduleRestartAbortedMainSessionRecovery({ delayMs: 0 });
+    const recovery = scheduleRestartAbortedMainSessionRecovery();
     try {
       await withinTest(firstPass.completed, signal);
       expect(callGateway).not.toHaveBeenCalled();
@@ -141,3 +133,60 @@ it.for(["abandoned", "completed", "replaced", "stopped"] as const)(
     }
   },
 );
+
+it("observes rejected duplicate startup owner settlement captures", async () => {
+  const captured = createDeferred();
+  const stale = new Error("Session reader validation is no longer current");
+  const unhandled: unknown[] = [];
+  const captures: Promise<void>[] = [];
+  const listener = (reason: unknown) => unhandled.push(reason);
+  const target = {
+    agentId: "main",
+    storePath: path.join(state.root, "agents", "main", "sessions", "sessions.json"),
+    sessionKey: "agent:main:main",
+    sessionId: "main-session",
+  };
+  const source = reserveSessionControllerSource(target.sessionKey, {
+    target: captureSessionTarget({
+      storeScope: target.storePath,
+      sessionKey: target.sessionKey,
+      incarnation: target.sessionId,
+    }),
+    policy: { mode: "followup" },
+    adapter: {
+      onSettled() {
+        throw stale;
+      },
+    },
+  });
+  using marker = vi.spyOn(recoveryMarking, "markStartupOrphanedMainSessionsForRecovery");
+  marker.mockImplementationOnce(async (params) => {
+    // Repeated scans capture distinct receipts for the same still-live source.
+    for (let index = 0; index < 2; index++) {
+      const settled = captureSessionControllerSettlement({
+        scope: target.storePath,
+        identities: [target.sessionKey, target.sessionId],
+      });
+      expect(settled).toBeDefined();
+      captures.push(settled!);
+      params.onOwnerPending?.(target, settled!);
+    }
+    captured.resolve();
+    return { marked: 0, skipped: 0 };
+  });
+  process.on("unhandledRejection", listener);
+  const recovery = scheduleRestartAbortedMainSessionRecovery();
+  try {
+    await captured.promise;
+    await recovery.stop();
+    retireSessionControllerInput(source);
+    await expect(source.settlement.promise).rejects.toBe(stale);
+    await expect(captures[0]).rejects.toBe(stale);
+    await nextTurn();
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", listener);
+    retireSessionControllerInput(source);
+    await recovery.stop();
+  }
+});

@@ -17,6 +17,8 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import * as transcriptEvent from "../../config/sessions/session-transcript-event.js";
+import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readConversationDeliveryStateForTest } from "../../gateway/conversation-delivery.test-support.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
@@ -110,6 +112,8 @@ async function persistSentOperation(params: {
 function inboundReply(
   setup: Awaited<ReturnType<typeof setupReefConversation>>,
   outboundMessageId: string,
+  overrides: Partial<FinalizedRuntimeMsgContext> = {},
+  text = "ordinary reply",
 ) {
   return {
     AgentId: setup.scope.agentId,
@@ -122,27 +126,29 @@ function inboundReply(
     NativeDirectUserId: "peer-agent",
     MessageSidFull: "inbound-admission",
     ReplyToIdFull: outboundMessageId,
-    RawBody: "ordinary reply",
-    BodyForAgent: "ordinary reply",
-    commandText: "ordinary reply",
-    agentText: "ordinary reply",
-    rawText: "ordinary reply",
+    RawBody: text,
+    BodyForAgent: text,
+    commandText: text,
+    agentText: text,
+    rawText: text,
+    ...overrides,
   } as FinalizedRuntimeMsgContext;
 }
 
 async function registerCapture(
   setup: Awaited<ReturnType<typeof setupReefConversation>>,
   id: string,
+  { outboundMessageId = id, timeoutMs = 50 } = {},
 ) {
-  await persistSentOperation({ ...setup, operationId: id, outboundMessageId: id });
+  await persistSentOperation({ ...setup, operationId: id, outboundMessageId });
   const pending = registerPendingConversationTurn({
     agentId: setup.scope.agentId,
     id,
     conversationRef: setup.conversationRef,
     sessionId: setup.sessionId,
-    timeoutMs: 50,
+    timeoutMs,
   });
-  pending.setOutboundMessageId(id);
+  pending.setOutboundMessageId(outboundMessageId);
   return pending;
 }
 
@@ -441,7 +447,7 @@ describe("conversation turn capture", () => {
   it("retains a relative configured store when the working directory changes during correlation", async () => {
     const setup = await setupReefConversation();
     const cfg = {
-      session: { store: path.relative(process.cwd(), setup.storePath) },
+      session: { store: path.relative(resolveStateDir(), setup.storePath) },
     } as OpenClawConfig;
     const movedDirectory = tempDirs.make("capture-moved-cwd-");
     vi.useFakeTimers();
@@ -529,42 +535,23 @@ describe("conversation turn capture", () => {
   it("consumes a correlated reply inline and persists only a side artifact", async () => {
     const setup = await setupReefConversation();
     const operationId = "turn-full-id";
-    await persistSentOperation({
-      scope: setup.scope,
-      operationId,
-      conversationRef: setup.conversationRef,
+    const pending = await registerCapture(setup, operationId, {
       outboundMessageId: "reef-outbound-full",
-    });
-    const pending = registerPendingConversationTurn({
-      agentId: "main",
-      id: operationId,
-      conversationRef: setup.conversationRef,
-      sessionId: setup.sessionId,
       timeoutMs: 5_000,
     });
-    pending.setOutboundMessageId("reef-outbound-full");
     pending.markReady();
 
-    const inboundContext = {
-      AgentId: "main",
-      SessionKey: setup.sessionKey,
-      ChatType: "direct",
-      Provider: "reef",
-      InboundAccessAuthorized: true,
-      OriginatingChannel: "reef",
-      OriginatingTo: "reef:peer-agent",
-      NativeDirectUserId: "peer-agent",
+    const inboundContext = inboundReply(setup, "reef-outbound-full", {
       MessageSid: "reef-inbound-short",
       MessageSidFull: "reef-inbound-full",
       ReplyToId: "wrong-short-id",
-      ReplyToIdFull: "reef-outbound-full",
       RawBody: "peer acknowledged",
       BodyForAgent: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
       commandText: "peer acknowledged",
       agentText: "trusted provenance\n\n<reef-message>peer acknowledged</reef-message>",
       rawText: "peer acknowledged",
       Timestamp: 1_710_000_000,
-    } as FinalizedRuntimeMsgContext;
+    });
     const sql = observeHostDataSql();
     try {
       await expect(
@@ -647,20 +634,10 @@ describe("conversation turn capture", () => {
     const outboundMessageId = "reef-outbound-redacted";
     const replyValue = "sensitive-reply-value";
     const replyText = `trusted provenance\n\n<reef-message>secret ${replyValue}</reef-message>`;
-    await persistSentOperation({
-      scope: setup.scope,
-      operationId,
-      conversationRef: setup.conversationRef,
+    const pending = await registerCapture(setup, operationId, {
       outboundMessageId,
-    });
-    const pending = registerPendingConversationTurn({
-      agentId: "main",
-      id: operationId,
-      conversationRef: setup.conversationRef,
-      sessionId: setup.sessionId,
       timeoutMs: 5_000,
     });
-    pending.setOutboundMessageId(outboundMessageId);
     pending.markReady();
 
     await expect(
@@ -671,23 +648,14 @@ describe("conversation turn capture", () => {
             redactPatterns: ["sensitive-reply-[a-z]+"],
           },
         },
-        ctx: {
-          AgentId: "main",
-          SessionKey: setup.sessionKey,
-          ChatType: "direct",
-          Provider: "reef",
-          InboundAccessAuthorized: true,
-          OriginatingChannel: "reef",
-          OriginatingTo: "reef:peer-agent",
-          NativeDirectUserId: "peer-agent",
+        ctx: inboundReply(setup, outboundMessageId, {
           MessageSidFull: "reef-inbound-redacted",
-          ReplyToIdFull: outboundMessageId,
           RawBody: `secret ${replyValue}`,
           BodyForAgent: replyText,
           commandText: `secret ${replyValue}`,
           agentText: replyText,
           rawText: `secret ${replyValue}`,
-        } as FinalizedRuntimeMsgContext,
+        }),
       }),
     ).resolves.toBe(true);
     await expect(pending.wait()).resolves.toMatchObject({ text: replyText });
@@ -704,59 +672,31 @@ describe("conversation turn capture", () => {
 
   it("completes the durable reply when optional audit persistence throws", async () => {
     const setup = await setupReefConversation();
-    const database = openOpenClawAgentDatabase(
-      toDatabaseOptions(resolveSqliteReadScope(setup.scope)),
-    );
-    database.db.exec(`
-      CREATE TRIGGER refuse_reply_audit BEFORE INSERT ON transcript_events
-      WHEN json_extract(NEW.event_json, '$.customType') = 'openclaw.conversation-turn-reply'
-      BEGIN SELECT RAISE(ABORT, 'audit store unavailable'); END;
-    `);
     const operationId = "turn-audit-failure";
-    const outboundMessageId = "reef-outbound-audit-failure";
-    await persistSentOperation({
-      scope: setup.scope,
-      operationId,
-      conversationRef: setup.conversationRef,
-      outboundMessageId,
-    });
-    const pending = registerPendingConversationTurn({
-      agentId: "main",
-      id: operationId,
-      conversationRef: setup.conversationRef,
-      sessionId: setup.sessionId,
-      timeoutMs: 5_000,
-    });
-    pending.setOutboundMessageId(outboundMessageId);
+    const pending = await registerCapture(setup, operationId, { timeoutMs: 5_000 });
     pending.markReady();
+    // mock-isolation: Fail only the optional audit append, preserving canonical schema admission.
+    const appendAudit = vi
+      .spyOn(transcriptEvent, "appendPreparedTranscriptEvent")
+      .mockRejectedValueOnce(new Error("audit store unavailable"));
     await expect(
       capturePendingConversationTurnReply({
         cfg: setup.cfg,
-        ctx: {
-          AgentId: "main",
-          SessionKey: setup.sessionKey,
-          ChatType: "direct",
-          Provider: "reef",
-          InboundAccessAuthorized: true,
-          OriginatingChannel: "reef",
-          OriginatingTo: "reef:peer-agent",
-          NativeDirectUserId: "peer-agent",
-          MessageSidFull: "reef-inbound-audit-failure",
-          ReplyToIdFull: outboundMessageId,
-          RawBody: "reply survives audit failure",
-          BodyForAgent: "reply survives audit failure",
-          commandText: "reply survives audit failure",
-          agentText: "reply survives audit failure",
-          rawText: "reply survives audit failure",
-        } as FinalizedRuntimeMsgContext,
+        ctx: inboundReply(setup, operationId),
       }),
     ).resolves.toBe(true);
     const reply = await pending.wait();
-    expect(reply).toMatchObject({ text: "reply survives audit failure" });
+    expect(reply).toMatchObject({ text: "ordinary reply" });
     expect(reply).not.toHaveProperty("transcriptArtifactId");
     expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
       status: "replied",
-      reply: { text: "reply survives audit failure" },
+      reply: { text: "ordinary reply" },
+    });
+    expect(appendAudit).toHaveBeenCalledOnce();
+    expect(appendAudit.mock.calls[0]?.[1]).toMatchObject({
+      customType: "openclaw.conversation-turn-reply",
+      appendMode: "side",
+      data: { turnId: operationId },
     });
   });
 
@@ -775,23 +715,12 @@ describe("conversation turn capture", () => {
     await expect(
       capturePendingConversationTurnReply({
         cfg: setup.cfg,
-        ctx: {
-          AgentId: "main",
-          SessionKey: setup.sessionKey,
-          ChatType: "direct",
-          Provider: "reef",
-          InboundAccessAuthorized: true,
-          OriginatingChannel: "reef",
-          OriginatingTo: "reef:peer-agent",
-          NativeDirectUserId: "peer-agent",
-          MessageSidFull: "reef-inbound-restart",
-          ReplyToIdFull: "reef-outbound-restart",
-          RawBody: "reply after restart",
-          BodyForAgent: "reply after restart",
-          commandText: "reply after restart",
-          agentText: "reply after restart",
-          rawText: "reply after restart",
-        } as FinalizedRuntimeMsgContext,
+        ctx: inboundReply(
+          setup,
+          "reef-outbound-restart",
+          { MessageSidFull: "reef-inbound-restart" },
+          "reply after restart",
+        ),
       }),
     ).resolves.toBe(false);
 
@@ -826,23 +755,9 @@ describe("conversation turn capture", () => {
     await expect(
       capturePendingConversationTurnReply({
         cfg: setup.cfg,
-        ctx: {
-          AgentId: "main",
-          SessionKey: setup.sessionKey,
-          ChatType: "direct",
-          Provider: "reef",
-          InboundAccessAuthorized: true,
-          OriginatingChannel: "reef",
-          OriginatingTo: "reef:peer-agent",
-          NativeDirectUserId: "peer-agent",
+        ctx: inboundReply(setup, "reef-outbound-send", {
           MessageSidFull: "reef-inbound-send-reply",
-          ReplyToIdFull: "reef-outbound-send",
-          RawBody: "ordinary reply",
-          BodyForAgent: "ordinary reply",
-          commandText: "ordinary reply",
-          agentText: "ordinary reply",
-          rawText: "ordinary reply",
-        } as FinalizedRuntimeMsgContext,
+        }),
       }),
     ).resolves.toBe(false);
     expect(await getConversationDeliveryOperation(setup.scope, operationId)).toMatchObject({
@@ -855,39 +770,20 @@ describe("conversation turn capture", () => {
     const setup = await setupReefConversation();
     const operationId = "turn-promoted-thread";
     const outboundMessageId = "reef-promoted-root";
-    await persistSentOperation({
-      scope: setup.scope,
-      operationId,
-      conversationRef: setup.conversationRef,
+    const pending = await registerCapture(setup, operationId, {
       outboundMessageId,
-    });
-    const pending = registerPendingConversationTurn({
-      agentId: "main",
-      id: operationId,
-      conversationRef: setup.conversationRef,
-      sessionId: setup.sessionId,
       timeoutMs: 5_000,
     });
-    pending.setOutboundMessageId(outboundMessageId);
     pending.markReady();
-    const inboundContext = {
-      AgentId: "main",
-      SessionKey: setup.sessionKey,
-      ChatType: "direct",
-      Provider: "reef",
-      InboundAccessAuthorized: true,
-      OriginatingChannel: "reef",
-      OriginatingTo: "reef:peer-agent",
-      NativeDirectUserId: "peer-agent",
-      MessageThreadId: outboundMessageId,
-      MessageSidFull: "reef-promoted-reply",
-      ReplyToIdFull: outboundMessageId,
-      RawBody: "thread-promoted reply",
-      BodyForAgent: "thread-promoted reply",
-      commandText: "thread-promoted reply",
-      agentText: "thread-promoted reply",
-      rawText: "thread-promoted reply",
-    } as FinalizedRuntimeMsgContext;
+    const inboundContext = inboundReply(
+      setup,
+      outboundMessageId,
+      {
+        MessageThreadId: outboundMessageId,
+        MessageSidFull: "reef-promoted-reply",
+      },
+      "thread-promoted reply",
+    );
 
     await expect(
       capturePendingConversationTurnReply({ cfg: setup.cfg, ctx: inboundContext }),

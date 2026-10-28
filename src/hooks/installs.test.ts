@@ -15,6 +15,7 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { writeHookFixture } from "./hook-fixture.test-support.js";
 import { stageHookInstall } from "./install-record-transaction.js";
 import * as hookInstaller from "./install.js";
 import { readHookInstalls, readHookInstallsAsync, recordHookInstall } from "./installs.js";
@@ -67,20 +68,16 @@ async function withHookInstallFixture(
   fs.mkdirSync(sourceDir, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
   fs.writeFileSync(join(sourceDir, "payload.txt"), "candidate");
-  fs.mkdirSync(join(sourceDir, "command-audit"));
   fs.writeFileSync(
     join(sourceDir, "package.json"),
-    JSON.stringify({
-      name: "alpha",
-      version: "2.0.0",
-      openclaw: { hooks: ["./command-audit"] },
-    }),
+    JSON.stringify({ name: "alpha", version: "2.0.0", openclaw: { hooks: ["./command-audit"] } }),
   );
-  fs.writeFileSync(
-    join(sourceDir, "command-audit", "HOOK.md"),
+  writeHookFixture(
+    join(sourceDir, "command-audit"),
     '---\nname: command-audit\ndescription: "Fixture hook"\n---\n',
+    "export default () => {};\n",
+    "handler.js",
   );
-  fs.writeFileSync(join(sourceDir, "command-audit", "handler.js"), "export default () => {};\n");
   fs.writeFileSync(configPath, "{}\n");
   await withEnvAsync(
     { OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
@@ -117,17 +114,16 @@ async function withHookInstallFixture(
           let readyForPersistence = false;
           // Retain the real installer's payload transaction; this suite owns the later
           // record/config commit rather than repeating artifact discovery and copying.
-          const hookResult: Extract<hookInstaller.InstallHooksResult, { ok: true }> = {
-            ...result,
-            ok: true,
-            hookPackId: "alpha",
-            hooks: ["command-audit"],
-            targetDir,
-            version: "2.0.0",
-          };
           vi.spyOn(hookInstaller, "installHooksFromPath").mockImplementation(async () => {
             readyForPersistence = true;
-            return hookResult;
+            return {
+              ...result,
+              ok: true,
+              hookPackId: "alpha",
+              hooks: ["command-audit"],
+              targetDir,
+              version: "2.0.0",
+            };
           });
           await run({
             configPath,
@@ -162,10 +158,7 @@ async function withHookInstallFixture(
 
 it.each(
   (["install", "update", "link"] as const).flatMap((mode) =>
-    (["before record", "after record", "after config"] as const).map((phase) => ({
-      mode,
-      phase,
-    })),
+    (["before record", "after record", "after config"] as const).map((phase) => ({ mode, phase })),
   ),
 )("compensates $mode cancellation $phase without touching its source", async ({ mode, phase }) =>
   withHookInstallFixture(mode, async ({ configPath, sourceDir, targetDir, persist }) => {

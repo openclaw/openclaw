@@ -36,18 +36,18 @@ it("reads complete lifecycle fences in one statement and observes foreign commit
       const before = queries.counts.snapshot;
       const snapshot = readSessionStateDeleteSnapshot(database, sessionId);
       expect(queries.counts.snapshot - before).toBe(1);
-      return snapshot;
+      return [
+        snapshot.acpParentStreamEventCount,
+        snapshot.generation,
+        snapshot.lastSeq,
+        snapshot.sessionKey,
+        snapshot.sessionUpdatedAt,
+        snapshot.trajectoryLastSeq,
+        snapshot.transcriptUpdatedAt,
+      ];
     };
     try {
-      const original = {
-        acpParentStreamEventCount: 2,
-        generation: "generation-one",
-        lastSeq: 8,
-        sessionKey: "agent:main:first",
-        sessionUpdatedAt: 20,
-        trajectoryLastSeq: 7,
-        transcriptUpdatedAt: 10,
-      };
+      const original = [2, "generation-one", 8, "agent:main:first", 20, 7, 10];
       expect(read("first")).toEqual(original);
       runSqliteDeferredTransactionSync(database, () => {
         expect(read("first")).toEqual(original);
@@ -62,41 +62,12 @@ it("reads complete lifecycle fences in one statement and observes foreign commit
         `);
         expect(read("first")).toEqual(original);
       });
-      const updated = {
-        acpParentStreamEventCount: 3,
-        generation: "generation-two",
-        lastSeq: 12,
-        sessionKey: "agent:main:renamed",
-        sessionUpdatedAt: 40,
-        trajectoryLastSeq: 13,
-        transcriptUpdatedAt: 30,
-      };
+      const updated = [3, "generation-two", 12, "agent:main:renamed", 40, 13, 30];
       expect(read("first")).toEqual(updated);
       peer.exec("DELETE FROM session_windows WHERE session_id = 'first'");
-      expect(read("first")).toEqual({
-        ...updated,
-        sessionKey: null,
-        sessionUpdatedAt: null,
-        transcriptUpdatedAt: null,
-      });
-      expect(read("missing")).toEqual({
-        acpParentStreamEventCount: 0,
-        generation: null,
-        lastSeq: null,
-        sessionKey: null,
-        sessionUpdatedAt: null,
-        trajectoryLastSeq: null,
-        transcriptUpdatedAt: null,
-      });
-      expect(read("other")).toEqual({
-        acpParentStreamEventCount: 1,
-        generation: null,
-        lastSeq: 999,
-        sessionKey: null,
-        sessionUpdatedAt: null,
-        trajectoryLastSeq: 999,
-        transcriptUpdatedAt: null,
-      });
+      expect(read("first")).toEqual([3, "generation-two", 12, null, null, 13, null]);
+      expect(read("missing")).toEqual([0, null, null, null, null, null, null]);
+      expect(read("other")).toEqual([1, null, 999, null, null, 999, null]);
     } finally {
       queries.restore();
     }

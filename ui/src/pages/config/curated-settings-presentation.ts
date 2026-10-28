@@ -10,33 +10,30 @@ export type CuratedSettingsDefault =
       fallbackKey: string;
     };
 
-type CuratedSettingsFieldBase = {
+export type CuratedSettingsField = {
   path: readonly string[];
   labelKey: string;
   helpKey: string;
-};
-
-export type CuratedSettingsField = CuratedSettingsFieldBase &
-  (
-    | { kind: "text"; displayDefault: CuratedSettingsDefault }
-    | {
-        kind: "model";
-        displayDefault: CuratedSettingsDefault;
-        placeholderKey: string;
-        customLabelKey: string;
-      }
-    | {
-        kind: "number";
-        displayDefault: number;
-        bounds: { integer: boolean; min: number; max?: number };
-      }
-    | { kind: "toggle"; displayDefault: boolean }
-    | {
-        kind: "segmented";
-        displayDefault: string;
-        options: readonly { value: string; labelKey: string }[];
-      }
-  );
+} & (
+  | { kind: "text"; displayDefault: CuratedSettingsDefault }
+  | {
+      kind: "model";
+      displayDefault: CuratedSettingsDefault;
+      placeholderKey: string;
+      customLabelKey: string;
+    }
+  | {
+      kind: "number";
+      displayDefault: number;
+      bounds: { integer: boolean; min: number; max?: number };
+    }
+  | { kind: "toggle"; displayDefault: boolean }
+  | {
+      kind: "segmented";
+      displayDefault: string;
+      options: readonly { value: string; labelKey: string }[];
+    }
+);
 
 export type CuratedSettingsPresentation = {
   id: string;

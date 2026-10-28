@@ -52,25 +52,20 @@ describe("internal session effects", () => {
         if (!previousEntry) {
           throw new Error("failed to seed incognito internal-effects entry");
         }
-        const nextTranscript = path.join(dir, "next-internal.jsonl");
+        const replacement = {
+          sessionFile: path.join(dir, "next-internal.jsonl"),
+          sessionId: "internal-session-effects-rotated",
+        };
 
         const reset = await resetSessionEntryLifecycle({
           ...scope(),
           target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
-          buildNextEntry: () => ({
-            ...previousEntry,
-            sessionFile: nextTranscript,
-            sessionId: "internal-session-effects-rotated",
-            updatedAt: Date.now(),
-          }),
+          buildNextEntry: () => ({ ...previousEntry, ...replacement, updatedAt: Date.now() }),
           resetBoundary: { context: "preserve-tail", reason: "reset", cwd: dir },
         });
 
         expect(reset.archivedTranscripts).toEqual([]);
-        expect(loadExactSessionEntry(target)?.entry).toMatchObject({
-          sessionId: "internal-session-effects-rotated",
-          sessionFile: nextTranscript,
-        });
+        expect(loadExactSessionEntry(target)?.entry).toMatchObject(replacement);
         expect(await fs.readdir(dir)).toContain("private-internal.jsonl");
         expect((await fs.readdir(dir)).some((name) => name.includes(".reset."))).toBe(false);
       } finally {
@@ -146,12 +141,7 @@ describe("internal session effects", () => {
         onError: (error) => errors.push(error),
       });
       const initial = await prepare("tracked-run");
-      const rotated = {
-        agentId: initial.agentId,
-        sessionId: "rotated-hidden-session",
-        sessionKey: initial.sessionKey,
-        storePath,
-      };
+      const rotated = { ...initial, sessionId: "rotated-hidden-session" };
       await upsertSessionEntryCore(rotated, { sessionId: rotated.sessionId, updatedAt: 2 });
       const additional = await prepare("additional-binding");
       const untracked = await prepare("other-run");

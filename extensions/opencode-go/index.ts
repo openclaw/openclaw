@@ -18,6 +18,11 @@ import { createOpencodeGoWireWrapper, createOpencodeGoWrapper } from "./stream.j
 
 const PROVIDER_ID = "opencode-go";
 
+function normalizeGoBaseUrl<T extends { api?: string | null; baseUrl?: string }>(value: T) {
+  const baseUrl = normalizeOpencodeGoBaseUrl(value);
+  return baseUrl && baseUrl !== value.baseUrl ? { ...value, baseUrl } : undefined;
+}
+
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "OpenCode Go Provider",
@@ -46,39 +51,12 @@ export default defineSingleProviderPluginEntry({
       ].join("\n"),
       noteTitle: "OpenCode",
     },
-    normalizeConfig: ({ providerConfig }) => {
-      const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({
-        api: providerConfig.api,
-        baseUrl: providerConfig.baseUrl,
-      });
-      return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
-        ? { ...providerConfig, baseUrl: normalizedBaseUrl }
-        : undefined;
-    },
+    normalizeConfig: ({ providerConfig }) => normalizeGoBaseUrl(providerConfig),
     normalizeResolvedModel: ({ model }) => {
-      const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({
-        api: model.api,
-        baseUrl: model.baseUrl,
-      });
-      const baseUrlNormalized =
-        normalizedBaseUrl && normalizedBaseUrl !== model.baseUrl
-          ? { ...model, baseUrl: normalizedBaseUrl }
-          : model;
-      const modelNormalized = normalizeOpencodeGoResolvedModel(baseUrlNormalized);
-      if (modelNormalized) {
-        return modelNormalized;
-      }
-      return baseUrlNormalized !== model ? baseUrlNormalized : undefined;
+      const baseUrlNormalized = normalizeGoBaseUrl(model);
+      return normalizeOpencodeGoResolvedModel(baseUrlNormalized ?? model) ?? baseUrlNormalized;
     },
-    normalizeTransport: ({ api: apiLocal, baseUrl }) => {
-      const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({ api: apiLocal, baseUrl });
-      return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
-        ? {
-            api: apiLocal,
-            baseUrl: normalizedBaseUrl,
-          }
-        : undefined;
-    },
+    normalizeTransport: ({ api, baseUrl }) => normalizeGoBaseUrl({ api, baseUrl }),
     resolveDynamicModel: ({ modelId }) => resolveOpencodeGoModel(modelId),
     catalog: {
       order: "simple",

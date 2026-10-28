@@ -8,7 +8,11 @@ import type {
   AgentHarnessSelectionDecision,
   AgentHarnessSelectionDecisionParams,
 } from "./harness/selection-decision.js";
-import type { AgentHarness } from "./harness/types.js";
+import type {
+  AgentHarness,
+  AgentHarnessIsolatedCompletionParamsV2,
+  AgentHarnessIsolatedCompletionResult,
+} from "./harness/types.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 export type IsolatedCliRunParams = RunCliAgentParams & {
@@ -137,7 +141,9 @@ export function isolatedAssistant(
   };
 }
 
-export function isolatedRequest() {
+export function isolatedRequest(
+  overrides: Partial<Parameters<typeof runIsolatedCompletion>[0]> = {},
+) {
   return {
     config: {},
     provider: "openai",
@@ -146,11 +152,54 @@ export function isolatedRequest() {
     prompt: "Do the task.",
     timeoutMs: 1_000,
     agentHarnessRuntimeOverride: "codex",
+    ...overrides,
   };
+}
+
+export const isolatedReply = (text = "done") => ({
+  assistant: isolatedAssistant([{ type: "text", text }]),
+});
+export const isolatedErrorReply = (errorMessage: string) => ({
+  assistant: { ...isolatedAssistant([], "error"), errorMessage },
+});
+
+export function prepareQuotaProfiles() {
+  const profileIds = ["openai:first", "openai:backup"];
+  const store = {
+    version: 1,
+    profiles: Object.fromEntries(
+      profileIds.map((id) => [id, { type: "token", provider: "openai", token: id }]),
+    ),
+  };
+  isolatedCompletionMocks.ensureAuthProfileStore.mockReturnValue(store);
+  isolatedCompletionMocks.prepareAgentRuntimeAuth.mockReturnValue({
+    plan: nativeAuthPlan,
+    attempts: profileIds.map((profileId) => ({
+      kind: "profile",
+      profileId,
+      plan: { ...nativeAuthPlan, forwardedAuthProfileId: profileId },
+    })),
+  });
+  return store;
+}
+
+export function registerIsolatedRuntime(
+  runtime: "v1" | "v2" | "v2-native",
+  dispatch: (
+    params: Pick<AgentHarnessIsolatedCompletionParamsV2, "abortSignal" | "timeoutMs">,
+  ) => Promise<AgentHarnessIsolatedCompletionResult>,
+) {
+  registerIsolatedHarness({
+    ...(runtime === "v1"
+      ? { runIsolatedCompletion: dispatch }
+      : { runIsolatedCompletionV2: dispatch }),
+    ...(runtime === "v2-native" ? { authBootstrap: "harness" } : {}),
+  });
 }
 
 export const nativeAuthPlan = {
   providerForAuth: "openai",
+  authProfileProviderForAuth: "openai",
   modelId: "gpt-test",
   harnessAuthProvider: "openai",
   modelRoute: {

@@ -145,6 +145,16 @@ export function createHostChannelInboundEventContextBuilder<
                 input?.requesterProfile?.id === requester.id && input.requesterProfile.isCurrent(),
             )
           ) {
+            // Retain the remote provenance and record the attested human contribution too.
+            for (const input of batch) {
+              if (input) {
+                prepareSessionParticipantInput(
+                  built,
+                  { type: "profile", id: requester.id },
+                  input.promptedAt,
+                );
+              }
+            }
             bindRequesterProfile(built, {
               ...requester,
               isCurrent: () =>

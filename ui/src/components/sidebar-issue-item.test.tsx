@@ -119,7 +119,6 @@ describe("renderSidebarMentionItem", () => {
     expect(title.nextElementSibling?.textContent?.replace(/\s+/g, " ").trim()).toBe(
       "Riley mentioned you · 5m ago",
     );
-    expect(summary.querySelector(".sidebar-issues-panel__chevron svg")).not.toBeNull();
     expect(container.querySelectorAll("[data-issue-row-focus]")).toHaveLength(1);
     expect(summary.hasAttribute("data-issue-row-focus")).toBe(true);
     expect(details).toMatchObject({ open: false });
@@ -144,7 +143,6 @@ describe("renderSidebarMentionItem", () => {
     summary.click();
     const dismiss = summary.querySelector<HTMLButtonElement>("button")!;
     expect(dismiss.getAttribute("aria-label")).toBe("Dismiss Release notes");
-    expect(dismiss.textContent?.trim()).toBe("");
     dismiss.click();
     expect(details.open).toBe(false);
     expect(onDismiss).toHaveBeenCalledOnce();

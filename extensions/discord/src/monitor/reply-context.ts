@@ -1,5 +1,4 @@
 import type { Guild, Message, User } from "../internal/discord.js";
-import { resolveTimestampMs } from "./format.js";
 import {
   resolveDiscordReferencedReplyMessage,
   resolveDiscordReferencedReplyMessageId,
@@ -15,7 +14,6 @@ export function resolveReplyContext(
     return null;
   }
   const referenced = resolveDiscordReferencedReplyMessage(message);
-  const channelId = message.messageReference?.channel_id ?? message.channelId;
   if (!referenced?.author || referenced.id !== id) {
     return null;
   }
@@ -28,23 +26,17 @@ export function resolveReplyContext(
   });
   return {
     id,
-    channelId,
     sender: sender.tag ?? sender.label ?? "unknown",
     senderId: referenced.author.id,
     senderName: referenced.author.username,
     senderTag: sender.tag,
-    memberRoleIds: (() => {
-      const roles = (referenced as { member?: { roles?: string[] } }).member?.roles;
-      return Array.isArray(roles) ? roles.slice() : undefined;
-    })(),
+    memberRoleIds: referenced.member?.roles,
     ...(referencedText ? { body: referencedText } : {}),
-    timestamp: resolveTimestampMs(referenced.timestamp),
   };
 }
 
-export function buildDirectLabel(author: User, tagOverride?: string) {
-  const username =
-    tagOverride?.trim() || resolveDiscordSenderIdentity({ author, pluralkitInfo: null }).tag;
+export function buildDirectLabel(author: User) {
+  const username = resolveDiscordSenderIdentity({ author, pluralkitInfo: null }).tag;
   return `${username ?? "unknown"} user id:${author.id}`;
 }
 

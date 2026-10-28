@@ -25,7 +25,7 @@ function setup(visibility: DocumentVisibilityState = "visible") {
   const stop = startGatewayPresenceActivity(store.gateway, target);
   disposers.push(stop);
   const ready = () =>
-    store.current().opts.onHello?.({
+    store.current().testOptions.onHello?.({
       ...GATEWAY_STORE_TEST_HELLO,
       auth: { role: "operator", scopes: ["operator.read"] },
     });
@@ -49,7 +49,7 @@ async function settle() {
 describe("Control UI presence activity", () => {
   it("does not report visits or input without operator read access", async () => {
     const store = setup();
-    store.current().opts.onHello?.({
+    store.current().testOptions.onHello?.({
       ...GATEWAY_STORE_TEST_HELLO,
       auth: { role: "operator", scopes: ["operator.sessions.read", "operator.sessions.write"] },
     });
@@ -70,10 +70,12 @@ describe("Control UI presence activity", () => {
         store.target.dispatchEvent(new Event("visibilitychange"));
         store.target.dispatchEvent(new Event("scroll"));
         store.input("pointerdown", false);
-        store
-          .current()
-          .opts.onEvent?.({ type: "event", event: "chat", payload: { text: "agent output" } });
-        store.current().opts.onEvent?.({ type: "event", event: "tick" });
+        store.current().testOptions.onEvent?.({
+          type: "event",
+          event: "chat",
+          payload: { text: "agent output" },
+        });
+        store.current().testOptions.onEvent?.({ type: "event", event: "tick" });
         expect(store.activityCalls()).toHaveLength(0);
         store.input("wheel");
       }
@@ -120,7 +122,7 @@ describe("Control UI presence activity", () => {
     store.input("keydown");
     store.ready();
     store.visible.mockReturnValue("visible");
-    store.current().opts.onClose?.({ code: 1006, reason: "closed", willRetry: true });
+    store.current().testOptions.onClose?.({ code: 1006, reason: "closed", willRetry: true });
     store.input("pointerdown");
     store.ready();
     expect(store.activityCalls()).toHaveLength(0);

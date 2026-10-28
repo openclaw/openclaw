@@ -477,6 +477,8 @@ on:
         default: true
         type: boolean
     secrets:
+      ABLITERATION_API_KEY:
+        required: false
       AZURE_SPEECH_KEY:
         required: false
       AZURE_SPEECH_REGION:
@@ -624,7 +626,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
   OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
   OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}
   OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}
@@ -765,7 +767,7 @@ jobs:
 
       - name: Setup admission Node.js
         env:
-          REQUESTED_NODE_VERSION: "24.x"
+          REQUESTED_NODE_VERSION: "24.22.1"
         run: |
           set -euo pipefail
           source .release-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -1230,7 +1232,7 @@ jobs:
 
       - name: Setup admission Node.js
         env:
-          REQUESTED_NODE_VERSION: "24.x"
+          REQUESTED_NODE_VERSION: "24.22.1"
         run: |
           set -euo pipefail
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -1340,12 +1342,19 @@ jobs:
           OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
         run: |
           set -euo pipefail
-          timeout --foreground --kill-after=30s 8m pnpm test:live:cache
+          mkdir -p .artifacts/live-cache
+          timeout --foreground --kill-after=30s 8m pnpm test:live:cache -- \
+            --reporter=default \
+            --reporter=json \
+            --outputFile.json=.artifacts/live-cache/cache-floors.vitest.json \
+            2>&1 | tee .artifacts/live-cache/cache-floors.log
 
       - name: Verify live prompt prefix reuse
         run: |
           set -euo pipefail
-          timeout --foreground --kill-after=30s 8m node --import ./scripts/tsx.mjs scripts/e2e/anthropic-cache-live.mts
+          mkdir -p .artifacts/live-cache
+          timeout --foreground --kill-after=30s 8m node --import ./scripts/tsx.mjs scripts/e2e/anthropic-cache-live.mts \
+            2>&1 | tee .artifacts/live-cache/prefix-reuse.log
 
       - name: Verify live agent prompt prefix reuse
         env:
@@ -1353,7 +1362,23 @@ jobs:
           OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
         run: |
           set -euo pipefail
-          timeout --foreground --kill-after=30s 8m pnpm test:live src/agents/embedded-agent-runner.cache.live.test.ts --testNamePattern 'release prompt-prefix gate'
+          mkdir -p .artifacts/live-cache
+          timeout --foreground --kill-after=30s 8m pnpm test:live \
+            src/agents/embedded-agent-runner.cache.live.test.ts \
+            --testNamePattern 'release prompt-prefix gate' \
+            --reporter=default \
+            --reporter=json \
+            --outputFile.json=.artifacts/live-cache/agent-prefix-reuse.vitest.json \
+            2>&1 | tee .artifacts/live-cache/agent-prefix-reuse.log
+
+      - name: Upload live cache diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: live-cache-${{ needs.validate_selected_ref.outputs.selected_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/live-cache/
+          retention-days: 14
+          if-no-files-found: warn
 
   validate_repo_e2e_gateway:
     name: Gateway E2E${{ inputs.test_runtime == 'bun' && ' (Bun advisory)' || '' }}
@@ -3071,6 +3096,24 @@ jobs:
                 }
             fi
           fi
+          metadata=".artifacts/docker-e2e-package/package-candidate.json"
+          if [[ ! -f "$metadata" ]]; then
+            jq -n \
+              --arg name "$name" \
+              --arg packageSourceSha "$package_source_sha" \
+              --arg sha256 "$digest" \
+              --arg version "$version" \
+              '{
+                name: $name,
+                packageSourceSha: $packageSourceSha,
+                sha256: $sha256,
+                version: $version
+              }' > "$metadata"
+          fi
+          [[ -s "$metadata" ]] || {
+            echo "Docker E2E package metadata was not created." >&2
+            exit 1
+          }
           tag="pkg-${digest:0:32}"
           echo "sha256=$digest" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -3088,7 +3131,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: docker-e2e-package-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/docker-e2e-package/openclaw-current.tgz
+          path: |
+            .artifacts/docker-e2e-package/openclaw-current.tgz
+            .artifacts/docker-e2e-package/package-candidate.json
           if-no-files-found: error
 
       - name: Validate prerelease plugin registry artifact identity
@@ -4752,7 +4797,21 @@ jobs:
           OPENCLAW_VITEST_RUNTIME: ${{ inputs.test_runtime }}
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
         shell: bash
-        run: bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"
+        run: |
+          mkdir -p .artifacts/live-shards .artifacts/qa-e2e
+          bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND" \
+            2>&1 | tee ".artifacts/live-shards/${{ matrix.suite_id }}.log"
+
+      - name: Upload native live diagnostics
+        if: always() && steps.selection.outputs.run == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-live-${{ matrix.suite_id }}-${{ needs.validate_selected_ref.outputs.selected_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/live-shards/
+            .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: warn
 
   validate_live_docker_provider_suites:
     name: Docker live suites (${{ matrix.label }})
@@ -5012,6 +5071,7 @@ jobs:
             profile_env_only: false
             profiles: full
     env:
+      ABLITERATION_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.ABLITERATION_API_KEY || '' }}
       AZURE_SPEECH_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.AZURE_SPEECH_KEY || '' }}
       AZURE_SPEECH_REGION: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.AZURE_SPEECH_REGION || '' }}
       BASETEN_API_KEY: ${{ matrix.suite_id == 'native-live-extensions-a-k' && secrets.BASETEN_API_KEY || '' }}

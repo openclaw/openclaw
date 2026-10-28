@@ -14,6 +14,7 @@ import type { prepareAgentCommandExecutionIdentity } from "../agent-command-exec
 import { shouldPersistCurrentRunSessionCleanup } from "../agent-command-restart-recovery.js";
 import { buildMainSessionRecoverySettlementPatch } from "../main-session-recovery/main-session-recovery-clear.js";
 import { inspectMainSessionRecoveryLifecycleEvent } from "../main-session-recovery/main-session-recovery-lifecycle.js";
+import { settleTerminalPendingFinalRecovery } from "../main-session-recovery/main-session-restart-recovery-failure.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -30,6 +31,7 @@ export async function finishAgentCommandCleanup(params: {
   runOwnedSessionId: string;
   sessionReboundDuringRun: boolean;
   trackedRestartRecoveryDeliveryClaim: boolean;
+  pendingFinalRecovery?: SessionEntry["pendingFinalDelivery"];
   terminalDeliveryEvidence?: RestartRecoveryTerminalDeliveryEvidenceResult;
   terminalEvent: Parameters<typeof inspectMainSessionRecoveryLifecycleEvent>[0]["event"];
   abortSignal?: AbortSignal;
@@ -58,6 +60,38 @@ export async function finishAgentCommandCleanup(params: {
       return;
     }
     try {
+      const terminal = inspectMainSessionRecoveryLifecycleEvent({
+        currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+        event: params.terminalEvent,
+        abortSignal: params.abortSignal,
+      }).terminal;
+      if (
+        terminal &&
+        terminal.status !== "ok" &&
+        (await settleTerminalPendingFinalRecovery({
+          agentId: params.prepared.sessionAgentId,
+          sessionKey,
+          storePath,
+          expectedSessionId: params.runOwnedSessionId,
+          pendingFinalDelivery: params.pendingFinalRecovery,
+          terminalDeliveryEvidence: params.terminalDeliveryEvidence,
+          runId,
+          status:
+            terminal.status === "timeout"
+              ? "timeout"
+              : terminal.reason === "cancelled"
+                ? "killed"
+                : "failed",
+          assertCurrent: () => {
+            assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+            if (interruptedForRestart()) {
+              throw createAgentRunRestartAbortError();
+            }
+          },
+        }))
+      ) {
+        return;
+      }
       const entry = sessionStore[sessionKey] ?? params.sessionEntry;
       const ownsDeliveryClaim = (current: SessionEntry) =>
         params.trackedRestartRecoveryDeliveryClaim &&

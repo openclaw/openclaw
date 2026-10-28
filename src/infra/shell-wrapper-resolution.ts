@@ -63,6 +63,18 @@ function withWindowsExeAliases(names: readonly string[]): string[] {
   return names.flatMap((name) => [name, `${name}.exe`]);
 }
 
+export const POSIX_SHELLS_WITH_PLUS_OPTIONS = new Set([
+  "ash",
+  "bash",
+  "dash",
+  "ksh",
+  "mksh",
+  "osh",
+  "sh",
+  "yash",
+  "zsh",
+]);
+
 export const POSIX_SHELL_WRAPPERS = new Set(withWindowsExeAliases(POSIX_SHELL_WRAPPER_NAMES));
 export const POSIX_PARSEABLE_SHELL_WRAPPERS = new Set(
   withWindowsExeAliases(POSIX_PARSEABLE_SHELL_WRAPPER_NAMES),

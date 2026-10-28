@@ -135,7 +135,6 @@ type ActiveVault = {
   path: string;
   vaultGeneration: string;
   compiledCachePublicationId?: string;
-  reconciled: boolean;
   snapshot?: MemoryWikiCompiledCacheSnapshot;
 };
 
@@ -202,8 +201,7 @@ export function activateMemoryWikiCompiledCacheOwner(
   const publicationId = compiledCachePublicationId?.trim() || undefined;
   const active = activeVaults.get(ownerId);
   if (
-    active?.reconciled &&
-    active.path === vaultPath &&
+    active?.path === vaultPath &&
     active.vaultGeneration === normalizedVaultGeneration &&
     active.compiledCachePublicationId === publicationId
   ) {
@@ -213,7 +211,6 @@ export function activateMemoryWikiCompiledCacheOwner(
     path: vaultPath,
     vaultGeneration: normalizedVaultGeneration,
     compiledCachePublicationId: publicationId,
-    reconciled: false,
   });
   return true;
 }
@@ -254,7 +251,7 @@ export function isMemoryWikiCompiledCacheOwnerActive(
   vaultGeneration: string,
 ): boolean {
   const active = resolveActiveVault(config);
-  return active?.reconciled === true && active.vaultGeneration === vaultGeneration;
+  return active?.vaultGeneration === vaultGeneration;
 }
 
 function parseSnapshot(
@@ -308,7 +305,7 @@ export function createMemoryWikiCompiledCacheStore(
     async read(this: void, config: ResolvedMemoryWikiConfig) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
       const activeVault = resolveActiveVault(config);
-      if (!activeVault?.reconciled || !activeVault.compiledCachePublicationId) {
+      if (!activeVault?.compiledCachePublicationId) {
         return null;
       }
       if (activeVault.snapshot) {
@@ -373,33 +370,6 @@ export function createMemoryWikiCompiledCacheStore(
       };
       await store.register(publicationKey(ownerId, publicationId), gzipSync(serialized), metadata);
       return { activeVault, serializedSnapshot: serialized };
-    },
-
-    async reconcile(
-      this: void,
-      config: ResolvedMemoryWikiConfig,
-      loadDurableIdentity: () => Promise<DurableVaultIdentity>,
-    ) {
-      const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
-      const activeVault = resolveActiveVault(config);
-      if (!activeVault) {
-        return;
-      }
-      const durableIdentity = await loadDurableIdentity();
-      if (resolveActiveVault(config) !== activeVault) {
-        return;
-      }
-      if (!durableIdentity.vaultGeneration) {
-        activeVaults.delete(ownerId);
-        return;
-      }
-      // Lifecycle refresh owns identity changes; reads validate the selected blob.
-      activeVaults.set(ownerId, {
-        path: activeVault.path,
-        vaultGeneration: durableIdentity.vaultGeneration,
-        compiledCachePublicationId: durableIdentity.compiledCachePublicationId ?? undefined,
-        reconciled: true,
-      });
     },
 
     async delete(this: void, config: ResolvedMemoryWikiConfig) {
@@ -494,13 +464,6 @@ export async function invalidateMemoryWikiCompiledCache(
   dashboardStates.delete(dashboardStateKey(config));
 }
 
-export async function reconcileMemoryWikiCompiledCacheOwner(
-  config: ResolvedMemoryWikiConfig,
-  loadDurableIdentity: () => Promise<DurableVaultIdentity>,
-): Promise<void> {
-  await requireConfiguredStore().reconcile(config, loadDurableIdentity);
-}
-
 export async function writeMemoryWikiCompiledCache(
   config: ResolvedMemoryWikiConfig,
   snapshot: MemoryWikiCompiledCacheSnapshot,
@@ -537,10 +500,6 @@ export async function writeMemoryWikiCompiledCache(
     }
     throw new Error("Memory Wiki vault changed while its compiled cache was being published.");
   }
-  if (resolveActiveVault(config) !== activeVault) {
-    await store.deletePublication(config, publicationId);
-    throw new Error("Memory Wiki cache owner retired during publication.");
-  }
   if (parentPublicationId) {
     await store.deletePublication(config, parentPublicationId);
   }
@@ -551,7 +510,6 @@ export async function writeMemoryWikiCompiledCache(
   activeVaults.set(resolveMemoryWikiCompiledCacheOwnerId(config), {
     ...activeVault,
     compiledCachePublicationId: publicationId,
-    reconciled: true,
     // Own the persisted payload, not compiler strings whose slices can retain entire
     // source pages. Reuse the serialized snapshot to detach every nested string
     // without changing its JSON representation (including lone surrogates).

@@ -82,6 +82,32 @@ describe("syntax-aware diff folding", () => {
       ]),
     );
   });
+  it("folds a complete function across a fully revealed retained context marker", async () => {
+    const source = context("function revealed() {\n  const value = 1;\n  return value;\n}");
+    const marker: DiffLine = {
+      kind: "skip",
+      text: "2 unmodified lines",
+      gap: { oldStart: 2, newStart: 2, count: 2 },
+    };
+    const lines = [source[0]!, marker, ...source.slice(1)];
+    const result = await analyze(lines);
+    expect(result.projected).toMatchObject([{ from: 0, to: 4, function: true }]);
+    for (const line of source) {
+      expect(
+        result.highlighted
+          .get(line)
+          ?.map((token) => token.text)
+          .join(""),
+      ).toBe(line.text);
+    }
+    expect(result.highlighted.has(marker)).toBe(false);
+    for (const revealed of [
+      [source[1]!, source[3]!],
+      [source[2]!, source[1]!, source[3]!],
+    ]) {
+      expect((await analyze([source[0]!, marker, ...revealed])).projected).toEqual([]);
+    }
+  });
   it("keeps incomplete, gapped, unsupported and over-budget source expanded", async () => {
     const incomplete = context("function nope() {\n  return 2;");
     expect((await analyze(incomplete)).projected).toEqual([]);

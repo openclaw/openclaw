@@ -873,7 +873,7 @@ describe("preflightDiscordMessage", () => {
 
       if (accepted) {
         const preflight = expectPreflightResult(result);
-        expect(preflight.wasMentioned).toBe(true);
+        expect(preflight.effectiveWasMentioned).toBe(true);
         expect(preflight.preflightAudioTranscript).toBe(transcript);
       } else {
         expect(result).toBeNull();
@@ -1027,7 +1027,7 @@ describe("preflightDiscordMessage", () => {
 
     const preflight = expectPreflightResult(result);
     expect(preflight.shouldRequireMention).toBe(true);
-    expect(preflight.wasMentioned).toBe(true);
+    expect(preflight.effectiveWasMentioned).toBe(true);
   });
 
   it.each([
@@ -1072,7 +1072,7 @@ describe("preflightDiscordMessage", () => {
       expect(preflight.groupThread?.peerId).toBe(peerId);
       expect(preflight.groupThread?.mentionedAgentIds).toEqual(mentionedAgentIds);
       expect(preflight.messageChannelId).toBe(threadId);
-      expect(preflight.wasMentioned).toBe(true);
+      expect(preflight.effectiveWasMentioned).toBe(true);
     },
   );
 
@@ -1148,7 +1148,7 @@ describe("preflightDiscordMessage", () => {
       } else {
         expect(expectPreflightResult(result).message.id).toBe(message.id);
         if (mentioned) {
-          expect(expectPreflightResult(result).wasMentioned).toBe(true);
+          expect(expectPreflightResult(result).effectiveWasMentioned).toBe(true);
         }
       }
     },
@@ -1246,7 +1246,7 @@ describe("preflightDiscordMessage", () => {
 
     const preflight = expectPreflightResult(result);
     expect(preflight.hasAnyMention).toBe(false);
-    expect(preflight.wasMentioned).toBe(false);
+    expect(preflight.effectiveWasMentioned).toBe(false);
   });
 
   it("does not transcribe guild audio from unauthorized members", async () => {

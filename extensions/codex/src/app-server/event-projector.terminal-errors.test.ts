@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
+import * as fixture from "./event-projector.compact.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -13,46 +14,48 @@ import {
   THREAD_ID,
   TURN_ID,
   createProjector,
-  buildEmptyToolTelemetry,
   createParams,
   readAttemptTerminal,
   expectUsageLimitPromptError,
   forCurrentTurn,
-  agentMessageDelta,
   appServerError,
   rateLimitsUpdated,
-  turnCompleted,
   turnWithStatus,
   pendingCommandStarted,
   vi,
   expectUsageFields,
 } from "./event-projector.test-harness.js";
 import { prepareCodexServerNotification } from "./protocol-validators.js";
-
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector terminal errors", () => {
   type Projector = Awaited<ReturnType<typeof createProjector>>;
-
-  function terminalError(
-    error: Record<string, unknown>,
-    method: "error" | "turn/completed" = "error",
-  ) {
-    return forCurrentTurn(
-      method,
-      method === "error"
-        ? { error, willRetry: false }
-        : { turn: { id: TURN_ID, status: "failed", items: [], error } },
+  function fail(projector: Projector, error: Record<string, unknown>, completed = false) {
+    return fixture.notify(
+      projector,
+      completed ? "turn/completed" : "error",
+      completed
+        ? { turn: { id: TURN_ID, status: "failed", items: [], error } }
+        : { error, willRetry: false },
     );
   }
-  const compaction = (phase: "started" | "completed", id: string) =>
-    forCurrentTurn(`item/${phase}`, { item: { type: "contextCompaction", id } });
-  const snapshot = (projector: Projector) => projector.buildResult(buildEmptyToolTelemetry());
+  function expectTerminal(
+    result: ReturnType<typeof fixture.result>,
+    promptError: unknown,
+    promptErrorSource: unknown,
+  ) {
+    expect(readAttemptTerminal(result)).toMatchObject({
+      promptError,
+      promptErrorSource,
+    });
+  }
+  const compaction = (projector: Projector, phase: "started" | "completed", id: string) =>
+    fixture.notify(projector, `item/${phase}`, { item: { type: "contextCompaction", id } });
   const refusalDetails = (projector: Projector) =>
-    snapshot(projector).currentAttemptAssistant?.diagnostics?.[0]?.details;
+    fixture.result(projector).currentAttemptAssistant?.diagnostics?.[0]?.details;
   const review = (projector: Projector) => refusalDetails(projector)?.review;
-  const compactionEvents = (callback: ReturnType<typeof vi.fn>) =>
-    callback.mock.calls.map(([event]) => event).filter((event) => event.stream === "compaction");
+  const compactionEvents = (callback: Parameters<typeof fixture.events>[0]) =>
+    fixture.events(callback, "compaction");
   function compactionEvent(phase: "start" | "end", itemId: string, completed?: boolean) {
     return {
       stream: "compaction",
@@ -66,30 +69,22 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       },
     };
   }
-  async function compactionFixture() {
-    const onAgentEvent = vi.fn();
-    const onContextCompacted = vi.fn();
-    const projector = await createProjector(
-      { ...(await createParams()), onAgentEvent },
-      { onContextCompacted },
-    );
-    return { projector, onAgentEvent, onContextCompacted };
+  async function compactionFixture(onContextCompacted = vi.fn()) {
+    return { ...(await fixture.observe({}, { onContextCompacted })), onContextCompacted };
   }
   async function misalignmentProjector(
     detailedExplanation: string | undefined,
     steer: { message: string } | undefined,
   ) {
     const projector = await createProjector();
-    await projector.handleNotification(
-      forCurrentTurn("error", {
-        error: {
-          message: "The provider paused this request.",
-          codexErrorInfo: "misalignmentPolicyViolation",
-          misalignment: { detailedExplanation, ...(steer ? { steer } : {}) },
-        },
-        willRetry: false,
-      }),
-    );
+    await fixture.notify(projector, "error", {
+      error: {
+        message: "The provider paused this request.",
+        codexErrorInfo: "misalignmentPolicyViolation",
+        misalignment: { detailedExplanation, ...(steer ? { steer } : {}) },
+      },
+      willRetry: false,
+    });
     return projector;
   }
 
@@ -101,11 +96,11 @@ describe("CodexAppServerEventProjector terminal errors", () => {
   ])(
     "preserves terminal provider facts for $codexErrorInfo",
     async ({ codexErrorInfo, ...facts }) => {
-      for (const method of ["error", "turn/completed"] as const) {
+      for (const completed of [false, true]) {
         const projector = await createProjector();
         const error = { message: "The model is not available.", codexErrorInfo };
-        await projector.handleNotification(terminalError(error, method));
-        const terminal = readAttemptTerminal(snapshot(projector));
+        await fail(projector, error, completed);
+        const terminal = readAttemptTerminal(fixture.result(projector));
         expect(terminal.promptError).toBeInstanceOf(Error);
         expect(terminal.promptError).toMatchObject({ message: error.message, ...facts });
         expect(projector.settledTurnFailureFinalizationAllowed).toBe(
@@ -120,7 +115,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     projector.markAborted();
     await projector.handleNotification(pendingCommandStarted("cmd-aborted"));
     await projector.handleNotification(turnWithStatus("interrupted"));
-    const result = snapshot(projector);
+    const result = fixture.result(projector);
     expect(readAttemptTerminal(result)).toMatchObject({
       aborted: true,
       promptError: null,
@@ -133,9 +128,8 @@ describe("CodexAppServerEventProjector terminal errors", () => {
   });
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
-    const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-    await projector.handleNotification(agentMessageDelta("still working"));
+    const { projector, onAgentEvent } = await fixture.observe();
+    await fixture.delta(projector, "still working");
     await projector.handleNotification(
       appServerError({
         message: "Rate limit reached",
@@ -143,17 +137,11 @@ describe("CodexAppServerEventProjector terminal errors", () => {
         codexErrorInfo: "rateLimitExceeded",
       }),
     );
-    await projector.handleNotification(
-      turnCompleted([{ type: "agentMessage", id: "msg-1", text: "final answer" }]),
-    );
-    const result = snapshot(projector);
+    await fixture.finish(projector, [fixture.message("msg-1", "final answer")]);
+    const result = fixture.result(projector);
     expect(result.assistantTexts).toEqual(["final answer"]);
-    expect(readAttemptTerminal(result)).toMatchObject({
-      promptError: null,
-      promptErrorSource: null,
-    });
-    expect(result.lastAssistant?.stopReason).toBe("stop");
-    expect(result.lastAssistant?.errorMessage).toBeUndefined();
+    expectTerminal(result, null, null);
+    expect(result.lastAssistant).toMatchObject({ stopReason: "stop", errorMessage: undefined });
     expect(onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "run_status",
@@ -164,78 +152,59 @@ describe("CodexAppServerEventProjector terminal errors", () => {
 
   it.each([
     {
-      label: "biological-risk",
       message: "This content was flagged for possible biological risk. Try rephrasing it.",
       codexErrorInfo: "other",
       category: "bio",
-      completionOnly: true,
     },
     {
-      label: "typed cyber",
       message: "This request was blocked by the provider's cyber policy.",
       codexErrorInfo: "cyberPolicy",
       category: "cyber",
-      completionOnly: false,
     },
-  ])(
-    "keeps $label refusals terminal (completion only: $completionOnly)",
-    async ({ message, codexErrorInfo, category, completionOnly }) => {
-      const onAgentEvent = vi.fn();
-      const projector = await createProjector({ ...(await createParams()), onAgentEvent });
-      const error = { message, codexErrorInfo };
-
-      if (!completionOnly) {
-        await projector.handleNotification(appServerError({ ...error, willRetry: false }));
-      }
-      await projector.handleNotification(terminalError(error, "turn/completed"));
-
-      const result = snapshot(projector);
-      const terminalAssistant = result.currentAttemptAssistant;
-
-      expect(readAttemptTerminal(result)).toMatchObject({
-        promptError: null,
-        promptErrorSource: null,
-      });
-      expect(terminalAssistant).toMatchObject({
-        stopReason: "error",
-        errorMessage: message,
-        diagnostics: [
-          {
-            type: "provider_refusal",
-            details: { provider: "openai", category },
-          },
-        ],
-      });
-      expect(result.lastAssistant).toBe(terminalAssistant);
-      expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
-      const policyNotices = onAgentEvent.mock.calls
-        .map(([event]) => event)
-        .filter((event) => event.stream === "notice" && event.data.phase === "provider_policy");
-      expect(policyNotices).toEqual(
-        category === "cyber"
-          ? [
-              {
-                stream: "notice",
-                data: {
-                  phase: "provider_policy",
-                  category: "cyber",
-                  state: "blocked",
-                  provider: "openai",
-                  model: "gpt-5.4-codex",
-                },
+  ])("keeps $category refusals terminal", async ({ message, codexErrorInfo, category }) => {
+    const { projector, onAgentEvent } = await fixture.observe();
+    const error = { message, codexErrorInfo };
+    if (category === "cyber") {
+      await projector.handleNotification(appServerError({ ...error, willRetry: false }));
+    }
+    await fail(projector, error, true);
+    const result = fixture.result(projector);
+    const terminalAssistant = result.currentAttemptAssistant;
+    expectTerminal(result, null, null);
+    expect(terminalAssistant).toMatchObject({
+      stopReason: "error",
+      errorMessage: message,
+      diagnostics: [{ type: "provider_refusal", details: { provider: "openai", category } }],
+    });
+    expect(result.lastAssistant).toBe(terminalAssistant);
+    expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
+    const policyNotices = fixture
+      .events(onAgentEvent, "notice")
+      .filter((event) => event.data.phase === "provider_policy");
+    expect(policyNotices).toEqual(
+      category === "cyber"
+        ? [
+            {
+              stream: "notice",
+              data: {
+                phase: "provider_policy",
+                category: "cyber",
+                state: "blocked",
+                provider: "openai",
+                model: "gpt-5.4-codex",
               },
-            ]
-          : [],
-      );
-      expect(
-        result.messagesSnapshot.filter(
-          (candidate) =>
-            candidate.role === "assistant" &&
-            candidate.diagnostics?.some((diagnostic) => diagnostic.type === "provider_refusal"),
-        ),
-      ).toHaveLength(1);
-    },
-  );
+            },
+          ]
+        : [],
+    );
+    expect(
+      result.messagesSnapshot.filter(
+        (candidate) =>
+          candidate.role === "assistant" &&
+          candidate.diagnostics?.some((diagnostic) => diagnostic.type === "provider_refusal"),
+      ),
+    ).toHaveLength(1);
+  });
 
   it("upgrades same-turn misalignment findings at exact UTF-8 limits without borrowing another turn's continuation", async () => {
     const projector = await createProjector();
@@ -243,7 +212,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       message: "The provider paused this request.",
       codexErrorInfo: "misalignmentPolicyViolation",
     };
-    await projector.handleNotification(forCurrentTurn("error", { error, willRetry: false }));
+    await fixture.notify(projector, "error", { error, willRetry: false });
     const details = {
       errorType: "future_category",
       detailedExplanation: "🙂".repeat(16_384),
@@ -261,10 +230,8 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       }),
     );
     expect(refusalDetails(projector)).not.toHaveProperty("review");
-    await projector.handleNotification(
-      terminalError({ ...error, misalignment: details }, "turn/completed"),
-    );
-    expect(snapshot(projector).currentAttemptAssistant?.diagnostics?.[0]).toMatchObject({
+    await fail(projector, { ...error, misalignment: details }, true);
+    expect(fixture.result(projector).currentAttemptAssistant?.diagnostics?.[0]).toMatchObject({
       type: "provider_refusal",
       details: {
         provider: "openai",
@@ -280,78 +247,69 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     });
   });
 
-  it.each([{ label: "too many UTF-8 bytes", explanation: "🙂".repeat(16_385) }])(
-    "does not offer review for $label native explanation",
-    async ({ explanation }) => {
-      const projector = await misalignmentProjector(explanation, {
-        message: "Continue only the requested task.",
-      });
-      expect(review(projector)).toBeUndefined();
-    },
-  );
-
-  it.each([{ label: "missing", steer: undefined }])(
-    "keeps $label continuation findings non-continuable",
-    async ({ steer }) => {
-      const explanation = "Review the proposed action before proceeding.";
-      const projector = await misalignmentProjector(explanation, steer);
-      expect(review(projector)).toEqual({ explanation });
-    },
-  );
-
-  it("keeps an active native compaction failure scoped through the failed turn", async () => {
-    const { projector, onAgentEvent, onContextCompacted } = await compactionFixture();
-    await projector.handleNotification(compaction("started", "compact-failed"));
-    await projector.handleNotification(
-      appServerError({
-        message: "remote compaction failed",
-        willRetry: false,
-        codexErrorInfo: "other",
-      }),
-    );
-    expect(readAttemptTerminal(snapshot(projector))).toMatchObject({
-      promptError: "remote compaction failed",
-      promptErrorSource: "compaction",
+  it("does not offer review for too many UTF-8 bytes in a native explanation", async () => {
+    const projector = await misalignmentProjector("🙂".repeat(16_385), {
+      message: "Continue only the requested task.",
     });
-    expect(projector.settledTurnFailureFinalizationAllowed).toBe(true);
-    await projector.handleNotification(
-      terminalError(
-        { message: "remote compaction failed", codexErrorInfo: "other" },
-        "turn/completed",
-      ),
-    );
-    const result = snapshot(projector);
-    expect(readAttemptTerminal(result)).toMatchObject({
-      promptError: "remote compaction failed",
-      promptErrorSource: "compaction",
-    });
-    expect(projector.settledTurnFailureFinalizationAllowed).toBe(true);
-    expect(projector.isCompacting()).toBe(false);
-    expect(result.itemLifecycle).toEqual({ startedCount: 1, completedCount: 0, activeCount: 0 });
-    expect(result.compactionCount).toBeUndefined();
-    expect(onContextCompacted).not.toHaveBeenCalled();
-    expect(compactionEvents(onAgentEvent)).toEqual([
-      compactionEvent("start", "compact-failed"),
-      compactionEvent("end", "compact-failed", false),
-    ]);
+    expect(review(projector)).toBeUndefined();
   });
+
+  it("keeps missing continuation findings non-continuable", async () => {
+    const explanation = "Review the proposed action before proceeding.";
+    const projector = await misalignmentProjector(explanation, undefined);
+    expect(review(projector)).toEqual({ explanation });
+  });
+
+  it.each([false, true])(
+    "scopes errors to active compaction only (completed: %s)",
+    async (completed) => {
+      const { projector, onAgentEvent, onContextCompacted } = await compactionFixture();
+      const id = "compact-1";
+      const error = { message: "provider failure", codexErrorInfo: "other" };
+      const source = completed ? "prompt" : "compaction";
+      await compaction(projector, "started", id);
+      if (completed) {
+        await compaction(projector, "completed", id);
+      }
+      await fail(projector, error);
+      expectTerminal(fixture.result(projector), error.message, source);
+      expect(projector.settledTurnFailureFinalizationAllowed).toBe(!completed);
+      if (completed) {
+        await compaction(projector, "completed", id);
+        await projector.handleNotification(turnWithStatus("interrupted"));
+        await projector.closeProjection();
+      } else {
+        await fail(projector, error, true);
+      }
+      const result = fixture.result(projector);
+      expectTerminal(result, error.message, source);
+      expect(projector.settledTurnFailureFinalizationAllowed).toBe(!completed);
+      expect(projector.isCompacting()).toBe(false);
+      expect(result.itemLifecycle).toEqual({
+        startedCount: 1,
+        completedCount: Number(completed),
+        activeCount: 0,
+      });
+      expect(result.compactionCount).toBe(completed ? 1 : undefined);
+      expect(onContextCompacted).toHaveBeenCalledTimes(Number(completed));
+      expect(compactionEvents(onAgentEvent)).toEqual([
+        compactionEvent("start", id),
+        compactionEvent("end", id, completed),
+      ]);
+    },
+  );
 
   it("preserves observed native completion when closing progress with a pending observer", async () => {
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
-    const onAgentEvent = vi.fn();
-    const onContextCompacted = vi.fn(async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    const projector = await createProjector(
-      { ...(await createParams()), onAgentEvent },
-      { onContextCompacted },
+    const { projector, onAgentEvent, onContextCompacted } = await compactionFixture(
+      vi.fn(async () => {
+        entered.resolve();
+        await release.promise;
+      }),
     );
-    await projector.handleNotification(compaction("started", "compact-observer-pending"));
-    const completion = projector.handleNotification(
-      compaction("completed", "compact-observer-pending"),
-    );
+    await compaction(projector, "started", "compact-observer-pending");
+    const completion = compaction(projector, "completed", "compact-observer-pending");
     const expectedEvents = [
       compactionEvent("start", "compact-observer-pending"),
       compactionEvent("end", "compact-observer-pending", true),
@@ -360,7 +318,7 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       await entered.promise;
       await projector.closeProjection();
       await projector.closeProjection();
-      expect(snapshot(projector)).toMatchObject({
+      expect(fixture.result(projector)).toMatchObject({
         compactionCount: 1,
         itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
       });
@@ -373,82 +331,41 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(compactionEvents(onAgentEvent)).toEqual(expectedEvents);
   });
 
-  it("keeps other errors prompt-scoped after native compaction completes", async () => {
-    const { projector, onAgentEvent, onContextCompacted } = await compactionFixture();
-    await projector.handleNotification(compaction("started", "compact-completed"));
-    await projector.handleNotification(compaction("completed", "compact-completed"));
-    await projector.handleNotification(
-      appServerError({
-        message: "unrelated provider failure",
-        willRetry: false,
-        codexErrorInfo: "other",
-      }),
-    );
-    expect(readAttemptTerminal(snapshot(projector))).toMatchObject({
-      promptError: "unrelated provider failure",
-      promptErrorSource: "prompt",
-    });
-    expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
-    await projector.handleNotification(compaction("completed", "compact-completed"));
-    await projector.handleNotification(turnWithStatus("interrupted"));
-    await projector.closeProjection();
-    expect(snapshot(projector).compactionCount).toBe(1);
-    expect(onContextCompacted).toHaveBeenCalledOnce();
-    expect(
-      onAgentEvent.mock.calls
-        .map(([event]) => event)
-        .filter((event) => event.stream === "compaction" && event.data.phase === "end"),
-    ).toEqual([
-      expect.objectContaining({
-        data: expect.objectContaining({ itemId: "compact-completed", completed: true }),
-      }),
-    ]);
-  });
-
-  it("uses a recent Codex rate-limit snapshot when failed turns omit reset details", async () => {
-    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    const projector = await createProjector(undefined, {
-      readRecentRateLimits: () => rateLimitsUpdated(resetsAt).params,
-    });
-    await projector.handleNotification(
-      terminalError(
+  it.each([false, true])(
+    "preserves usage-limit reset details (recent snapshot: %s)",
+    async (recent) => {
+      const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+      const projector = await createProjector(
+        undefined,
+        recent
+          ? {
+              readRecentRateLimits: () => rateLimitsUpdated(resetsAt).params,
+            }
+          : undefined,
+      );
+      await fail(
+        projector,
         {
-          message: "You've reached your usage limit.",
+          message: recent
+            ? "You've reached your usage limit."
+            : "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at May 11th, 2026 9:00 AM.",
           codexErrorInfo: "usageLimitExceeded",
           additionalDetails: null,
         },
-        "turn/completed",
-      ),
-    );
-    const result = snapshot(projector);
-
-    const promptError = expectUsageLimitPromptError(readAttemptTerminal(result).promptError);
-    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
-    expect(promptError.message).toContain("Next reset in");
-    expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
-  });
-
-  it("preserves Codex retry hints when failed turns omit structured reset details", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(
-      terminalError(
-        {
-          message:
-            "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at May 11th, 2026 9:00 AM.",
-          codexErrorInfo: "usageLimitExceeded",
-          additionalDetails: null,
-        },
-        "turn/completed",
-      ),
-    );
-    const result = snapshot(projector);
-
-    const promptError = expectUsageLimitPromptError(readAttemptTerminal(result).promptError);
-    expect(promptError.message).toContain("You've reached your Codex subscription usage limit.");
-    expect(promptError.message).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
-    expect(promptError.message).not.toContain("Codex did not return a reset time");
-    expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
-  });
+        true,
+      );
+      const terminal = readAttemptTerminal(fixture.result(projector));
+      const { message } = expectUsageLimitPromptError(terminal.promptError);
+      expect(message).toContain("You've reached your Codex subscription usage limit.");
+      expect(message).toContain(
+        recent ? "Next reset in" : "Codex says to try again at May 11th, 2026 9:00 AM.",
+      );
+      if (!recent) {
+        expect(message).not.toContain("Codex did not return a reset time");
+      }
+      expect(terminal.promptErrorSource).toBe("prompt");
+    },
+  );
 });
 
 describe("CodexAppServerEventProjector usage projection", () => {
@@ -463,17 +380,24 @@ describe("CodexAppServerEventProjector usage projection", () => {
     outputTokens: 500,
   };
   const unavailable = { state: "unavailable" };
-  const result = (projector: Projector) => projector.buildResult(buildEmptyToolTelemetry());
+  const result = (projector: Projector) => fixture.result(projector);
   const response = (responseId: string, value: Record<string, unknown> | null) =>
     forCurrentTurn("rawResponse/completed", { responseId, usage: value });
   const thread = (last: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
     forCurrentTurn("thread/tokenUsage/updated", { tokenUsage: { last, ...extra } });
   const retry = () => forCurrentTurn("error", { error: { message: "retry" }, willRetry: true });
+  const responseCounts = (responses: number, output: number) => ({
+    input: 2 * responses,
+    output,
+    cacheRead: 2 * responses,
+    cacheWrite: responses,
+    reasoningTokens: 3 * responses,
+    total: 5 * responses + output,
+  });
 
   it("replaces the resolved window with native context and prompt-token snapshots", async () => {
-    const callback = vi.fn();
-    const projector = await createProjector(
-      { ...(await createParams()), onAgentEvent: callback },
+    const { projector, onAgentEvent: callback } = await fixture.observe(
+      {},
       { initialContextTokens: 1_050_000 },
     );
     expect(result(projector)).toMatchObject({
@@ -505,8 +429,8 @@ describe("CodexAppServerEventProjector usage projection", () => {
         reasoningOutputTokens: 4,
       },
     });
-    await projector.handleNotification(agentMessageDelta("done"));
-    await projector.handleNotification(turnCompleted());
+    await fixture.delta(projector, "done");
+    await fixture.finish(projector);
     expect(result(projector)).toMatchObject({
       contextTokens: 875_900,
       contextTokensSource: "runtime",
@@ -556,12 +480,7 @@ describe("CodexAppServerEventProjector usage projection", () => {
       await projector.handleNotification(completedResponse("response-1", 100));
       await projector.handleNotification(retry());
       expect(result(projector).attemptUsage).toMatchObject({
-        input: 4,
-        output: 120,
-        cacheRead: 4,
-        cacheWrite: 2,
-        reasoningTokens: 6,
-        total: 130,
+        ...responseCounts(2, 120),
         contextUsage: unavailable,
       });
       await projector.handleNotification(completedResponse("response-3", 50));
@@ -570,15 +489,10 @@ describe("CodexAppServerEventProjector usage projection", () => {
         thread({ inputTokens: 5, outputTokens: 50, totalTokens: 55 }),
       );
       expect(observed).toEqual([100, 120, 170]);
-      await projector.handleNotification(agentMessageDelta("done"));
-      await projector.handleNotification(turnCompleted());
+      await fixture.delta(projector, "done");
+      await fixture.finish(projector);
       const expected = {
-        input: 6,
-        output: 170,
-        cacheRead: 6,
-        cacheWrite: 3,
-        reasoningTokens: 9,
-        total: 185,
+        ...responseCounts(3, 170),
         contextUsage: { state: "available", promptTokens: 5, totalTokens: 55 },
       };
       expect(result(projector).attemptUsage).toMatchObject(expected);
@@ -589,8 +503,7 @@ describe("CodexAppServerEventProjector usage projection", () => {
       });
       await nextAttempt.handleNotification(completedResponse("response-4", 10));
       expect(observed).toEqual([100, 120, 170, 180]);
-      const nextCounts = { input: 2, output: 10, cacheRead: 2, cacheWrite: 1, total: 15 };
-      const nextUsage = { ...nextCounts, reasoningTokens: 3 };
+      const nextUsage = responseCounts(1, 10);
       expect(result(nextAttempt).attemptUsage).toMatchObject(nextUsage);
       nextAttempt.markAborted();
       expect(result(nextAttempt).attemptUsage).toMatchObject({
@@ -604,11 +517,9 @@ describe("CodexAppServerEventProjector usage projection", () => {
       await otherRun.handleNotification(completedResponse("another-response", 7));
       expect(observed).toEqual([100, 120, 170, 180, 7]);
       expect(
-        callback.mock.calls
-          .map(([event]) => event)
-          .filter(
-            (event) => event.stream === "usage" && typeof event.data.outputTokens === "number",
-          )
+        fixture
+          .events(callback, "usage")
+          .filter((event) => typeof event.data.outputTokens === "number")
           .map((event) => event.data.outputTokens),
       ).toEqual(observed);
     } finally {
@@ -625,9 +536,9 @@ describe("CodexAppServerEventProjector usage projection", () => {
       ...(await createParams()),
       authoredContextTokenCap: 272_000,
     });
-    await projector.handleNotification(
-      forCurrentTurn("thread/tokenUsage/updated", { tokenUsage: { modelContextWindow: 272_000 } }),
-    );
+    await fixture.notify(projector, "thread/tokenUsage/updated", {
+      tokenUsage: { modelContextWindow: 272_000 },
+    });
     expect(result(projector)).toMatchObject({
       contextTokens: 272_000,
       contextTokensSource: "runtime-configured",
@@ -636,7 +547,7 @@ describe("CodexAppServerEventProjector usage projection", () => {
 
   it("keeps exact counts over cumulative thread usage and missing or replayed final response usage", async () => {
     const projector = await createProjector();
-    await projector.handleNotification(agentMessageDelta("done"));
+    await fixture.delta(projector, "done");
     await projector.handleNotification(response("response-1", usage));
     await projector.handleNotification(
       thread(

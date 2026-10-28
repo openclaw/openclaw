@@ -411,6 +411,7 @@ struct ChatProTab: View {
             self.showsChatActions.toggle()
         } label: {
             Image(systemName: "ellipsis.circle")
+                .font(.system(size: 22))
                 .foregroundStyle(OpenClawBrand.accent)
         }
         .frame(width: 44, height: 44)

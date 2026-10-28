@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -118,38 +120,26 @@ async function holdGatewayLifecycle(databasePath: string, signal: AbortSignal) {
     import { acquireGatewayStateOwner } from ${JSON.stringify(ownerUrl.href)};
     const owner = acquireGatewayStateOwner({
       databasePath: ${JSON.stringify(databasePath)},
-      payload: { pid: process.pid, createdAt: new Date().toISOString(), configPath: "/fixture/config.json", role: "gateway" },
+      payload: { pid: process.pid, processNamespace: ${JSON.stringify(readGatewayLockProcessNamespace())}, createdAt: new Date().toISOString(), configPath: "/fixture/config.json", role: "gateway" },
     });
-    process.stdout.write("ready\\n");
-    process.stdin.resume();
-    process.stdin.once("end", () => owner.release());
+    process.send("ready");
+    process.once("message", () => { owner.release(); process.disconnect(); });
   `;
   const child = spawn(
     process.execPath,
     [...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1), "--input-type=module", "--eval", source],
-    { stdio: ["pipe", "pipe", "pipe"] },
+    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
   const closed = new Promise<void>((resolve) => {
     child.once("close", () => resolve());
   });
   try {
     await withinTest(
-      new Promise<void>((resolve, reject) => {
-        child.once("error", reject);
-        let stdout = "";
-        child.stdout?.on("data", (chunk: Buffer) => {
-          stdout += chunk.toString("utf8");
-          if (!stdout.includes("ready\n")) {
-            return;
-          }
-          resolve();
-        });
-        child.once("exit", (code, exitSignal) => {
-          reject(
-            new Error(`Gateway lifecycle holder exited early: code=${code} signal=${exitSignal}`),
-          );
-        });
-      }),
+      awaitGateBeforeSettlement(
+        once(child, "message"),
+        closed,
+        "Gateway holder exited before readiness",
+      ),
       signal,
     );
   } catch (error) {
@@ -162,7 +152,9 @@ async function holdGatewayLifecycle(databasePath: string, signal: AbortSignal) {
   return {
     [Symbol.asyncDispose]: () =>
       fixture.verifyCleanup(async () => {
-        child.stdin?.end();
+        if (child.connected) {
+          child.send("release");
+        }
         await closed;
       }),
   };

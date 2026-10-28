@@ -17,10 +17,10 @@ import {
   executeMcpAppOperation,
   type McpAppActiveView,
   parseMcpAppOperation,
-  requireMcpAppInteraction,
+  supportsMcpAppInteraction,
   withMcpAppActiveView,
 } from "./mcp-app-operations.js";
-import { runStandaloneMcpAppHost } from "./mcp-app-standalone-host.js";
+import { MCP_APP_STANDALONE_HOST_SOURCE } from "./mcp-app-standalone-host.generated.js";
 
 const MCP_APP_STANDALONE_TICKET_SCOPE = "mcp-app-standalone-view";
 const MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS = 30_000;
@@ -198,15 +198,6 @@ function supportsStandaloneToolOperations(
   );
 }
 
-async function supportsStandaloneResourceOperations(view: McpAppViewLease): Promise<boolean> {
-  try {
-    await requireMcpAppInteraction(view);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function sendJsonRepresentation(
   req: IncomingMessage,
   res: ServerResponse,
@@ -226,7 +217,7 @@ function standaloneHostHtml(): { html: string; scriptHash: string } {
     viewPath: MCP_APP_STANDALONE_VIEW_PATH,
     initialLoadTimeoutMs: MCP_APP_STANDALONE_INITIAL_LOAD_TIMEOUT_MS,
   });
-  const clientSource = `;(() => { const __name = (target) => target; (${runStandaloneMcpAppHost.toString()})(${serializedConfig}); })();`;
+  const clientSource = `;(${MCP_APP_STANDALONE_HOST_SOURCE})(${serializedConfig});`;
   const escapedSource = clientSource.replaceAll("</script", "<\\/script");
   return {
     html: `<!doctype html>
@@ -373,7 +364,7 @@ export async function handleMcpAppStandaloneHttpRequest(
     return await withMcpAppActiveView(active, "read", async () => {
       const { runtime, view } = active;
       const serverResources =
-        runtime.readResource !== undefined && (await supportsStandaloneResourceOperations(view));
+        runtime.readResource !== undefined && (await supportsMcpAppInteraction(view));
       sendJsonRepresentation(req, res, 200, {
         sandboxUrl: buildMcpAppSandboxPath(view.csp),
         sandboxPort,

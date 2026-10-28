@@ -31,7 +31,6 @@ import {
   getChromeMcpSessionOwner,
 } from "./chrome-mcp-session.js";
 import {
-  countChromeMcpTabs,
   ensureChromeMcpAvailable,
   listChromeMcpTabs,
   openChromeMcpTab,
@@ -977,7 +976,7 @@ describe("chrome MCP page parsing", () => {
     });
 
     await expect(
-      countChromeMcpTabs("chrome-live", undefined, {
+      listChromeMcpTabs("chrome-live", undefined, {
         ephemeral: true,
       }),
     ).rejects.toThrow(/No page selected/);

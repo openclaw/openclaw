@@ -1,11 +1,17 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 import { publishUserGitHubConnectionCommit } from "./user-github-connection-events.js";
+import {
+  afterUserPreferenceOperationSettled,
+  beginUserPreferenceMutation,
+  waitForUserPreferenceReadPermits,
+} from "./user-preferences-publication.js";
 import { normalizeProfileEmail } from "./user-profile-email.kernel.js";
 import {
   emitUserProfilesChanged,
@@ -57,13 +63,26 @@ async function write<Key extends keyof UserProfileWriteOperations>(
   const context = captureOpenClawStateWorkerContext(options);
   const assertCurrent = options.assertCurrent;
   let publicationSettled: Promise<void> | undefined;
+  let retained: RetainedWorkerTransactionAdmission | undefined;
+  // These identity operations can merge profiles and move or discard personal shortcuts.
+  const movesPreferences =
+    type === "userProfiles.merge" ||
+    type === "userProfiles.linkEmail" ||
+    type === "userProfiles.syncGitHub";
+  const finishPreferences = movesPreferences
+    ? beginUserPreferenceMutation(context.admission)
+    : undefined;
   try {
+    if (movesPreferences) {
+      await waitForUserPreferenceReadPermits(context.admission);
+    }
     return await runOpenClawStateWorkerOperation(
       context,
       (scope) => scope.execute({ type, input }),
       {
         assertCurrent,
         createAdmission: (operation) => {
+          retained = operation;
           const pending = new Map<
             number,
             {
@@ -184,7 +203,15 @@ async function write<Key extends keyof UserProfileWriteOperations>(
     );
   } finally {
     // Caller revocation cannot discard a committed mutation or its catalog publication.
-    await publicationSettled;
+    try {
+      await publicationSettled;
+    } finally {
+      if (retained && finishPreferences) {
+        afterUserPreferenceOperationSettled(retained, finishPreferences);
+      } else {
+        finishPreferences?.();
+      }
+    }
   }
 }
 

@@ -8,41 +8,30 @@ vi.mock("../send.outbound.js", async (importOriginal) => ({
   sendMessageDiscord,
 }));
 
-defineDiscordVoiceTests(
-  ({
-    expect,
-    it,
-    agentCommandMock,
-    agentCommandArgsAt,
-    beginSpeakerTurn,
-    createJoinedAgentProxyFixture,
-    lastRealtimeBridge,
-    loggerWarnMock,
-    realtimeSessionMock,
-    resolveVoiceIngressWithParticipantsMock,
-  }) => {
-    it.each(["reply", "cancel", "permission", "shutdown", "revoked", "replacement"] as const)(
-      "handles %s after a call closes without redirecting or duplicating the reply",
-      async (outcome) => {
-        const started = createDeferred<void>();
-        const answer = createDeferred<{ payloads: Array<{ text: string }> }>();
-        agentCommandMock.mockImplementationOnce(() => {
-          started.resolve();
-          return answer.promise;
-        });
-        sendMessageDiscord.mockReset();
-        sendMessageDiscord.mockImplementation(async (_to, _text, options) => {
-          options.assertPlatformSendAuthorized();
-          if (outcome === "permission") {
-            throw new Error("Missing Permissions: SendMessages");
-          }
-        });
-        const { manager, entry, bridgeParams } = await createJoinedAgentProxyFixture({
-          config: { voice: { agentSession: { mode: "target", target: "channel:2002" } } },
-        });
-        beginSpeakerTurn(entry).close();
-        const source = lastRealtimeBridge();
-        const consult = (callId: string) =>
+defineDiscordVoiceTests((h) => {
+  const { expect, it } = h;
+  it.each(["reply", "cancel", "permission", "shutdown", "revoked", "replacement"] as const)(
+    "handles %s after a call closes without redirecting or duplicating the reply",
+    async (outcome) => {
+      const started = createDeferred<void>();
+      const answer = createDeferred<{ payloads: Array<{ text: string }> }>();
+      h.agentCommandMock.mockImplementationOnce(() => {
+        started.resolve();
+        return answer.promise;
+      });
+      sendMessageDiscord.mockReset().mockImplementation(async (_to, _text, options) => {
+        options.assertPlatformSendAuthorized();
+        if (outcome === "permission") {
+          throw new Error("Missing Permissions: SendMessages");
+        }
+      });
+      const { manager, entry, bridgeParams } = await h.createJoinedAgentProxyFixture({
+        config: { voice: { agentSession: { mode: "target", target: "channel:2002" } } },
+      });
+      h.beginSpeakerTurn(entry).close();
+      const source = h.lastRealtimeBridge();
+      const consult = (callId: string) =>
+        Promise.resolve(
           bridgeParams.onToolCall!(
             {
               name: "openclaw_agent_consult",
@@ -51,53 +40,51 @@ defineDiscordVoiceTests(
               args: { question: "Check the ticket." },
             },
             source.session,
-          );
-        const first = consult("first");
-        const duplicate = consult("duplicate");
-        try {
-          await started.promise;
-          const signal = agentCommandArgsAt(0).abortSignal;
-          expect(signal).toBeInstanceOf(AbortSignal);
-          await manager.leave({ guildId: "g1" });
-          expect(signal).toHaveProperty("aborted", false);
-          if (outcome === "shutdown") {
-            await manager.destroy();
-            expect(signal).toHaveProperty("aborted", true);
-          } else if (outcome === "replacement") {
-            await manager.join({ guildId: "g1", channelId: "1002" });
-          } else if (outcome === "revoked") {
-            resolveVoiceIngressWithParticipantsMock.mockResolvedValue(null);
-          }
-          if (outcome === "cancel") {
-            answer.reject(new DOMException("Explicit user cancellation", "AbortError"));
-          } else {
-            answer.resolve({ payloads: [{ text: "The ticket is resolved." }] });
-          }
-          await Promise.all([first, duplicate]);
-          expect(agentCommandMock).toHaveBeenCalledTimes(1);
-          expect(realtimeSessionMock.submitToolResult).not.toHaveBeenCalled();
-          if (outcome === "reply" || outcome === "permission") {
-            expect(sendMessageDiscord).toHaveBeenCalledExactlyOnceWith(
-              "channel:1001",
-              "The ticket is resolved.",
-              expect.objectContaining({ accountId: "default" }),
-            );
-          } else {
-            expect(sendMessageDiscord).not.toHaveBeenCalled();
-          }
-          if (outcome === "permission") {
-            expect(loggerWarnMock).toHaveBeenCalledWith(
-              expect.stringContaining(
-                "text fallback dropped guild=g1 channel=1001: Missing Permissions",
-              ),
-            );
-          }
-        } finally {
-          answer.resolve({ payloads: [] });
-          await Promise.allSettled([first, duplicate]);
+          ),
+        );
+      const pending = ["first", "duplicate"].map(consult);
+      try {
+        await started.promise;
+        const signal = h.agentCommandArgsAt(0).abortSignal;
+        expect(signal).toBeInstanceOf(AbortSignal);
+        await manager.leave({ guildId: "g1" });
+        expect(signal).toHaveProperty("aborted", false);
+        if (outcome === "shutdown") {
           await manager.destroy();
+          expect(signal).toHaveProperty("aborted", true);
+        } else if (outcome === "replacement") {
+          await manager.join({ guildId: "g1", channelId: "1002" });
+        } else if (outcome === "revoked") {
+          h.resolveVoiceIngressWithParticipantsMock.mockResolvedValue(null);
         }
-      },
-    );
-  },
-);
+        if (outcome === "cancel") {
+          answer.reject(new DOMException("Explicit user cancellation", "AbortError"));
+        } else {
+          answer.resolve({ payloads: [{ text: "The ticket is resolved." }] });
+        }
+        await Promise.all(pending);
+        expect(h.agentCommandMock).toHaveBeenCalledTimes(1);
+        expect(h.realtimeSessionMock.submitToolResult).not.toHaveBeenCalled();
+        if (outcome === "reply" || outcome === "permission") {
+          expect(sendMessageDiscord).toHaveBeenCalledExactlyOnceWith(
+            "channel:1001",
+            "The ticket is resolved.",
+            expect.objectContaining({ accountId: "default" }),
+          );
+        } else {
+          expect(sendMessageDiscord).not.toHaveBeenCalled();
+        }
+        if (outcome === "permission") {
+          expect(h.loggerWarnMock).toHaveBeenCalledWith(
+            expect.stringContaining(
+              "text fallback dropped guild=g1 channel=1001: Missing Permissions",
+            ),
+          );
+        }
+      } finally {
+        answer.resolve({ payloads: [] });
+        await Promise.allSettled(pending);
+      }
+    },
+  );
+});

@@ -1,4 +1,5 @@
 import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import {
@@ -9,7 +10,6 @@ import {
 import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import { normalizeToolPolicyName, readToolAllowlistIntersection } from "./tool-policy-shared.js";
-import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
 import type { ToolSearchConfig } from "./tool-search-types.js";
 import {
   applyToolSchemaDirectoryCatalog,
@@ -54,13 +54,22 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
       : undefined,
   );
   codeModeConfig.enabled = params.codeModeOverride ?? codeModeConfig.enabled;
-  const selectedToolConfig = resolveAgentToolSearchRuntimeConfig({
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    completionPrivateMessageOnly,
-    model: params.model,
-  });
+  // Select before overlay cloning; cloning source config first loses snapshot identity and can
+  // reintroduce unresolved SecretRefs into plugin tool factories.
+  const runtimeConfig = selectLiveRuntimeConfig(params.config);
+  const selectedToolConfig: OpenClawConfig | undefined =
+    completionPrivateMessageOnly ||
+    runtimeConfig?.tools?.toolSearch !== undefined ||
+    (params.model?.toolSearchMode !== "tools" &&
+      !isLocalModelLeanEnabled({ ...params, config: runtimeConfig }))
+      ? runtimeConfig
+      : {
+          ...runtimeConfig,
+          tools: {
+            ...runtimeConfig?.tools,
+            toolSearch: { enabled: true, mode: "tools", searchDefaultLimit: 5, maxSearchLimit: 10 },
+          },
+        };
   // Apply restrictions after snapshot selection so config rebinding cannot
   // restore discovery for direct-tool or persistence-only turns.
   const isMemoryFlushRun = params.trigger === "memory";

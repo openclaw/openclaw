@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../providers/provider-stream.test-support.js";
 import { readAnthropicMessagesErrorSnippet } from "./transport-utils.js";
 
 afterEach(() => {
@@ -16,18 +17,14 @@ describe("Anthropic Messages error snippet cancellation", () => {
       );
       let cancelStarted = false;
       let cancelReason: unknown;
-      const body = new ReadableStream<Uint8Array>({
-        start(controller) {
-          if (boundary === "byte limit") {
-            controller.enqueue(new TextEncoder().encode("a".repeat(8194)));
-          }
-        },
-        cancel(reason) {
+      const body = makeStallingStream(
+        boundary === "byte limit" ? [new TextEncoder().encode("a".repeat(8194))] : [],
+        (reason) => {
           cancelStarted = true;
           cancelReason = reason;
           return cancellation.promise;
         },
-      });
+      );
       const response = new Response(body);
       let outcome: { value?: string; error?: unknown } | undefined;
       const pending = readAnthropicMessagesErrorSnippet(response).then(

@@ -1,4 +1,5 @@
 import type { AgentDeletionSessionStoreAbsentReadOperations } from "../agents/agent-delete-session-store-safety.worker-contract.js";
+import type { startupMetadataReadOperations } from "../state/startup-metadata-live-read.worker.js";
 import {
   createWorkerOperationRegistry,
   type WorkerOperations,
@@ -9,7 +10,9 @@ import type { pageCacheReadOperations } from "./sqlite-page-cache.worker.js";
 import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation-types.js";
 
 export type SqliteReadOnlyOperations = WorkerOperations<
-  typeof immutableInstallReadOperations & typeof pageCacheReadOperations
+  typeof immutableInstallReadOperations &
+    typeof pageCacheReadOperations &
+    typeof startupMetadataReadOperations
 > &
   DeferredSessionTranscriptReadOperations &
   AgentDeletionSessionStoreAbsentReadOperations;
@@ -18,6 +21,10 @@ export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
   SqliteReadOnlyOperations,
   SqliteReadOnlyOperationContext
 >({
+  startupMetadata: () =>
+    import("../state/startup-metadata-live-read.worker.js").then(
+      (module) => module.startupMetadataReadOperations,
+    ),
   deferredSessionImport: () =>
     import("./deferred-plugin-session-transcript-read.worker.js").then(
       (module) => module.deferredSessionTranscriptReadOperations,

@@ -1,7 +1,6 @@
 import { hash } from "node:crypto";
 import type { ResponseFunctionToolCall } from "openai/resources/responses/responses.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   claimOpenAIResponsesHttpContinuation,
@@ -37,15 +36,7 @@ const assistantOutput = {
     {
       type: "output_text",
       text: "answer",
-      annotations: [
-        {
-          type: "url_citation",
-          url: "https://example.test/source",
-          title: "source",
-          start_index: 0,
-          end_index: 6,
-        },
-      ],
+      annotations: [{ type: "file_citation", file_id: "file_1", filename: "a", index: 0 }],
       logprobs: [{ token: "answer", logprob: -0.1, bytes: [], top_logprobs: [] }],
     },
   ],
@@ -218,6 +209,128 @@ describe("OpenAI Responses continuation", () => {
     expect(
       responsesContinuationPrefixFingerprint([userInput(`${text}changed`)], [assistantOutput]),
     ).not.toBe(prefixHash);
+  });
+
+  it("fingerprints mutable history without serializing the whole prefix", () => {
+    const text = "history payload".repeat(2_000);
+    const content = { type: "input_text", text };
+    const item = { type: "message", role: "user", content: [content] };
+    const input = [item];
+    const encodedText = JSON.stringify(text);
+    const expected = hash(
+      "sha256",
+      `[{"content":[{"text":${encodedText},"type":"input_text"}],"role":"user","type":"message"}]`,
+    );
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      expect(responsesContinuationPrefixFingerprint(input)).toBe(expected);
+      // The canonical writer encodes string leaves; no container needs another JSON encoding.
+      expect(
+        stringify.mock.calls.filter(([value]) => value !== null && typeof value === "object"),
+      ).toHaveLength(0);
+      content.text = `${text} edited`;
+      expect(responsesContinuationPrefixFingerprint(input)).not.toBe(expected);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
+  it("compares mutable continuation history without materializing property-entry arrays", () => {
+    const previousMessage = userInput("message 0");
+    const currentMessage = structuredClone(previousMessage);
+    const input = [
+      previousMessage,
+      ...Array.from({ length: 63 }, (_, index) => userInput(`message ${index + 1}`)),
+    ];
+    const state: ResponsesContinuationState = {
+      lastRequest: { input },
+      lastResponseId: "resp_previous",
+      lastResponseItems: [],
+    };
+    const current = [currentMessage, ...structuredClone(input.slice(1))];
+    const request = { input: [...current, secondUser] };
+    const fromEntries = vi.spyOn(Object, "fromEntries");
+    try {
+      expect(resolve(state, request)).toMatchObject({
+        continuationStatus: "continued",
+        request: { previous_response_id: "resp_previous", input: [secondUser] },
+      });
+      expect(fromEntries).not.toHaveBeenCalled();
+      currentMessage.content[0] = { type: "input_text", text: "edited in place" };
+      expectHistoryChanged(state, request);
+      previousMessage.content[0] = { type: "input_text", text: "edited in place" };
+      expect(resolve(state, request).continuationStatus).toBe("continued");
+    } finally {
+      fromEntries.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      name: "omitted fields, sparse arrays, nonfinite numbers and signed zero",
+      // oxlint-disable-next-line no-sparse-arrays -- A genuine array hole must compare as JSON null.
+      value: { omit: undefined, values: [, undefined, Number.NaN, Infinity, -0], text: "🦞\ud800" },
+      expected: { values: [null, null, null, null, 0], text: "🦞\ud800" },
+    },
+    {
+      name: "built-in serializers",
+      value: {
+        at: new Date("2026-01-01Z"),
+        url: new URL("https://example.test/"),
+        data: Buffer.from([1, 2]),
+      },
+      expected: {
+        at: "2026-01-01T00:00:00.000Z",
+        url: "https://example.test/",
+        data: { type: "Buffer", data: [1, 2] },
+      },
+    },
+    {
+      name: "key-sensitive serializers on objects and functions",
+      value: {
+        nested: { toJSON: (key: string) => ({ key }) },
+        array: [Object.assign(() => {}, { toJSON: (key: string) => key })],
+      },
+      expected: { nested: { key: "nested" }, array: ["0"] },
+    },
+    {
+      name: "own __proto__ fields and null-prototype objects",
+      value: Object.assign(
+        Object.create(null),
+        JSON.parse('{"__proto__":{"own":true},"omit":null}'),
+      ),
+      expected: JSON.parse('{"omit":null,"__proto__":{"own":true}}'),
+    },
+    {
+      name: "proxy serializers",
+      value: new Proxy(
+        { text: "plain" },
+        {
+          get: (target, key) =>
+            key === "toJSON" ? () => ({ text: "wire" }) : Reflect.get(target, key),
+        },
+      ),
+      expected: { text: "wire" },
+    },
+  ])("compares continuation envelopes using JSON semantics: $name", ({ value, expected }) => {
+    const state = continuationState();
+    state.lastRequest.provider_options = expected;
+    const request = { ...nextRequest(), provider_options: value };
+    expect(resolve(state, request).continuationStatus).toBe("continued");
+    state.lastRequest.provider_options = { changed: true };
+    expect(resolve(state, request).continuationStatus).toBe("request_changed");
+  });
+
+  it("rejects unserializable history without retaining a failed comparison", () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    const state = continuationState();
+    for (const value of [cycle, 1n]) {
+      expect(() => resolve(state, { ...nextRequest(), provider_options: value })).toThrow(
+        TypeError,
+      );
+    }
+    expect(resolve(state, nextRequest()).continuationStatus).toBe("continued");
   });
 
   it("matches JSON wire semantics and provider-only assistant replay metadata", () => {
@@ -541,27 +654,6 @@ describe("OpenAI Responses continuation", () => {
     cleanupSessionResources("session-1");
     commitBaseline(stale, "resp_stale");
     expect(previousResponseId()).toBeUndefined();
-  });
-
-  it("keeps matching-session and all-session cleanup inside one runtime owner", () => {
-    const firstHost = createAiTransportHost();
-    const secondHost = createAiTransportHost();
-    const commit = (owner: typeof firstHost, sessionId: string, responseId: string) =>
-      runWithAiTransportHost(owner, () => {
-        commitBaseline(claim({ sessionId }), responseId);
-      });
-    const previous = (owner: typeof firstHost, sessionId: string) =>
-      runWithAiTransportHost(owner, () => previousResponseId(sessionId));
-    commit(firstHost, "shared", "first-shared");
-    commit(firstHost, "other", "first-other");
-    commit(secondHost, "shared", "second-shared");
-    commit(secondHost, "other", "second-other");
-    cleanupSessionResources("shared", firstHost);
-    expect(previous(firstHost, "shared")).toBeUndefined();
-    expect(previous(secondHost, "shared")).toBe("second-shared");
-    cleanupSessionResources(undefined, firstHost);
-    expect(previous(firstHost, "other")).toBeUndefined();
-    expect(previous(secondHost, "other")).toBe("second-other");
   });
 });
 

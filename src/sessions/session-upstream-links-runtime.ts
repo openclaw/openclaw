@@ -4,7 +4,6 @@ import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-ope
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
   observeSessionUpstreamPresence,
@@ -16,9 +15,8 @@ import type { SessionUpstreamSettlement } from "./session-upstream-links.worker-
 export type SessionUpstreamLinkReadSource = ReturnType<typeof captureSessionUpstreamLinkReadSource>;
 
 /** Missing-path admissions may later promote; this read keeps its original physical source. */
-export function captureSessionUpstreamLinkReadSource(
-  context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
-) {
+export function captureSessionUpstreamLinkReadSource() {
+  const context = captureOpenClawStateWorkerContext();
   return {
     context,
     present: context.admission.identity.key.startsWith("file:"),

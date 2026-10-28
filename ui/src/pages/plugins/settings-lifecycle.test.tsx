@@ -1,14 +1,23 @@
 /* @vitest-environment jsdom */
 
-import { flush } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { queryWithin } from "./plugins-page.lifecycle-test-support.ts";
-import { createInspectResult, createPlugin, createResult } from "./plugins-page.test-support.ts";
-import { renderPluginSettingsDetail, type DetailProps } from "./settings-view.tsx";
+import {
+  createDiscoveryDetail,
+  createInspectResult,
+  createPlugin,
+  createPluginSettingsDetailProps,
+  createResult,
+} from "./plugins-page.test-support.ts";
+import {
+  renderPluginSettingsDetail as PluginSettingsDetail,
+  type DetailProps,
+} from "./settings-view.tsx";
 
 beforeEach(() => i18n.setLocale("en"));
 
@@ -20,49 +29,23 @@ function setting(container: ParentNode, key: string) {
   return container.querySelector(`[data-setting="${key}"]`)!;
 }
 
-function mount(overrides: Partial<DetailProps>) {
-  const props: DetailProps = {
-    connected: true,
-    loading: false,
-    result: createResult(),
-    error: null,
-    busy: {},
-    messages: {},
-    iconUrls: {},
-    canMutate: true,
-    mutationBlockedReason: null,
-    configBusy: false,
-    configSchemaLoading: false,
-    configError: null,
-    canEditConfig: true,
-    configValue: {},
-    configHints: {},
-    configUnsupportedPaths: [],
-    pluginId: "workboard",
-    inspection: null,
-    inspectionError: null,
-    configSchema: null,
-    hostControlsSchema: null,
-    backHref: "/settings/plugins",
-    backLabel: "Plugins",
-    tab: "readme",
-    onBack: vi.fn(),
-    onRetryInspection: vi.fn(),
-    onTabChange: vi.fn(),
-    onIconError: vi.fn(),
-    onSetEnabled: vi.fn(),
-    onUninstall: vi.fn(),
-    onConfigPatch: vi.fn(),
-    onConfigRemove: vi.fn(),
-    onConfigReload: vi.fn(),
-    onConfigReadRetry: vi.fn(),
-    onConfigWriteRetry: vi.fn(),
-    onRefresh: vi.fn(),
-    ...overrides,
-  };
-  const { container } = mountSolid(() => renderPluginSettingsDetail(props));
+function mount(overrides: Partial<DetailProps>, setup?: (props: DetailProps) => void) {
+  const props: DetailProps = createPluginSettingsDetailProps(createResult(), overrides);
+  const [currentProps, setProps] = createSignal(props);
+  const { container } = mountSolid(() => {
+    setup?.(props);
+    return <PluginSettingsDetail {...currentProps()} />;
+  });
   flush();
-  return { container, find: queryWithin(container), props };
+  return {
+    container,
+    find: queryWithin(container),
+    props,
+    update: (next: Partial<DetailProps>) => {
+      setProps((previous) => ({ ...previous, ...next }));
+      flush();
+    },
+  };
 }
 
 async function selectSettingAction(row: Element, value: "ask" | "reset") {
@@ -78,6 +61,38 @@ async function selectSettingAction(row: Element, value: "ask" | "reset") {
   flush();
 }
 
+it.each(["multiple-servers", "mixed-capabilities", "missing-description", "disabled"] as const)(
+  "retains server-specific setup for %s instead of misattributing the plugin summary",
+  (scenario) => {
+    const plugin = createPlugin({
+      enabled: scenario !== "disabled",
+      state: scenario === "disabled" ? "disabled" : "enabled",
+      description: scenario === "missing-description" ? "" : "Manage workspace records.",
+    });
+    const catalog = createDiscoveryDetail(plugin);
+    catalog.plugin.catalog.family = "bundle-plugin";
+    catalog.plugin.catalog.summary = plugin.description;
+    catalog.detail.mcpServers = ["workspace"];
+    catalog.detail.mcpServerDetails = [
+      { name: "workspace", setup: "Connect the workspace account." },
+    ];
+    const inspection = createInspectResult();
+    inspection.components.mapped = ["mcpServers"];
+    inspection.components.mcpServers = ["workspace"];
+    inspection.declared.mcpServers = ["workspace"];
+    if (scenario === "multiple-servers") {
+      inspection.components.mcpServers.push("other");
+      inspection.declared.mcpServers.push("other");
+    } else if (scenario === "mixed-capabilities") {
+      inspection.declared.tools = ["workspace_sync"];
+    }
+    const { container } = mount({ result: createResult(plugin), catalog, inspection });
+    const details = container.querySelector(".plugin-capability__details")!;
+    expect(details.textContent).toContain("Connect the workspace account.");
+    expect(details.textContent).not.toContain("What this server does");
+  },
+);
+
 it("does not offer enablement or Settings for an uninstalled plugin", () => {
   const { find } = mount({
     result: createResult(createPlugin({ installed: false, state: "not-installed" })),
@@ -85,40 +100,97 @@ it("does not offer enablement or Settings for an uninstalled plugin", () => {
   expect(find('[aria-label="Enable Workboard"], [aria-label="Settings"]')).toBeNull();
 });
 
-it("does not dispatch enablement when setup is missing", () => {
-  const { find, props } = mount({
-    result: createResult(createPlugin({ state: "needs-setup" })),
+it("updates native UI disclosure from inventory and inspection across enablement", () => {
+  const { container, find, update } = mount({});
+  expect(find(".plugin-native-ui-disclosure")).toBeNull();
+  for (const [inventory, inspected, enabled, visible] of [
+    [true, null, false, true],
+    [true, null, true, true],
+    [true, undefined, true, true],
+    [true, false, true, false],
+    [false, true, true, true],
+    [undefined, undefined, true, false],
+  ] as const) {
+    update({
+      result: createResult(
+        createPlugin({ hasNativeUi: inventory, enabled, state: enabled ? "enabled" : "disabled" }),
+      ),
+      inspection:
+        inspected === null
+          ? null
+          : createInspectResult({
+              overview: {
+                hasNativeUi: inspected,
+                capabilities: { providers: [], channels: [], contracts: {}, ui: ["page"] },
+              },
+            }),
+    });
+    expect(Boolean(container.querySelector(".plugin-native-ui-disclosure"))).toBe(visible);
+    expect(find(`[aria-label="${enabled ? "Disable" : "Enable"} Workboard"]`)).not.toBeNull();
+  }
+});
+
+it("retains inspection retry focus and uses the current error and callback", async () => {
+  const firstRetry = vi.fn();
+  const nextRetry = vi.fn();
+  let replace!: () => void;
+  const { container } = mount({}, (props) => {
+    const [failure, setFailure] = createSignal(new Error("Inspection unavailable"));
+    const [retry, setRetry] = createSignal<() => void>(() => firstRetry);
+    props.inspectionRead = {
+      receipt: () => null,
+      value: () => {
+        throw failure();
+      },
+    };
+    Object.defineProperty(props, "onRetryInspection", { get: retry });
+    replace = () => {
+      setFailure(new Error("Inspection still unavailable"));
+      setRetry(() => nextRetry);
+    };
   });
+  const alert = container.querySelector('[role="alert"]')!;
+  const button = alert.querySelector("button")!;
+  expect(alert.textContent).toContain("Inspection unavailable");
+  button.focus();
+  replace();
+  await waitForSolid(() => expect(alert.textContent).toContain("Inspection still unavailable"));
+  expect(alert.querySelector("button")).toBe(button);
+  expect(document.activeElement).toBe(button);
+  button.click();
+  expect(firstRetry).not.toHaveBeenCalled();
+  expect(nextRetry).toHaveBeenCalledOnce();
+});
+
+it.each(["needs-setup", "disconnected"])("does not dispatch enablement when %s", (reason) => {
+  const disconnected = reason === "disconnected";
+  const { container, find, props } = mount(
+    disconnected
+      ? { connected: false, canMutate: false }
+      : { result: createResult(createPlugin({ state: "needs-setup" })) },
+  );
+  if (disconnected) {
+    expect(container.textContent).toContain("Agent work queue and session handoff.");
+    expect(find("[inert]")).toBeNull();
+  }
   const button = find<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
-  expect(button.disabled || button.getAttribute("aria-disabled") === "true").toBe(true);
+  expect(
+    disconnected
+      ? button.disabled
+      : button.disabled || button.getAttribute("aria-disabled") === "true",
+  ).toBe(true);
   button.click();
   expect(props.onSetEnabled).not.toHaveBeenCalled();
 });
 
-it("retains disconnected plugin details without dispatching enablement", () => {
-  const { container, find, props } = mount({ connected: false, canMutate: false });
-  expect(container.textContent).toContain("Agent work queue and session handoff.");
-  expect(find("[inert]")).toBeNull();
-  const button = find<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
-  expect(button.disabled).toBe(true);
-  button.click();
-  expect(props.onSetEnabled).not.toHaveBeenCalled();
-});
-
-it("gives host permissions the setting menu and preserves configured, inherited, and read-only values", async () => {
+it("gives inherited host permissions the setting menu and preserves read-only values", async () => {
   const { container, props } = mount({
     tab: "configuration",
     inspection: createInspectResult(),
     onAskSetting: vi.fn(),
-    configValue: { plugins: { entries: { workboard: { hooks: { timeoutMs: 5000 } } } } },
     hostControlsSchema: objectSchema({
       hooks: objectSchema({
         allowPromptInjection: { type: "boolean" },
-        allowConversationAccess: { type: "boolean" },
-        timeoutMs: { type: "integer" },
-      }),
-      llm: objectSchema({
-        allowedModels: { type: "array", items: { type: "string" } },
       }),
     }),
   });
@@ -131,18 +203,10 @@ it("gives host permissions the setting menu and preserves configured, inherited,
   const hooksPath = ["plugins", "entries", "workboard", "hooks"];
   const path = [...hooksPath, "allowPromptInjection"];
   expect(props.onAskSetting).toHaveBeenCalledWith(
-    expect.objectContaining({
-      path,
-      value: true,
-      label: "Add context to prompts",
-    }),
+    expect.objectContaining({ path, value: true, label: "Add context to prompts" }),
   );
   row.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
   expect(props.onConfigPatch).toHaveBeenCalledWith(path, false);
-  await selectSettingAction(setting(container, "hooks.timeoutMs"), "reset");
-  expect(props.onConfigRemove).toHaveBeenCalledWith([...hooksPath, "timeoutMs"]);
-  expect(setting(container, "llm.allowedModels").querySelector(".oc-menu-trigger")).not.toBeNull();
-  expect(container.textContent).not.toMatch(/Declared capabilities|Your grants/);
   vi.mocked(props.onConfigPatch).mockClear();
   const { container: readOnly } = mount({ ...props, canEditConfig: false });
   await Promise.resolve();
@@ -158,14 +222,12 @@ it("shows selected capabilities without a catalog", () => {
   inspection.declared = {
     ...inspection.declared,
     tools: ["speech_status"],
-    providers: ["local-model", "sibling-model"],
-    channels: ["local-channel", "sibling-channel"],
     contracts: ["speechProviders: local-speech", "videoGenerationProviders: sibling-video"],
   };
   inspection.overview = {
     capabilities: {
-      providers: ["local-model"],
-      channels: ["local-channel"],
+      providers: [],
+      channels: [],
       contracts: { speechProviders: ["local-speech", "local-speech-alias"] },
       ui: ["page"],
     },

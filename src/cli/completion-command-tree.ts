@@ -1,19 +1,13 @@
 import type { Command, Option } from "commander";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 
-type ShellCompletionValueChoice = {
-  flags: string[];
-  choices: string[];
-  requiresValue: boolean;
-};
-
 export type ShellCompletionContext = {
   command: Command;
   pathVariants: string[][];
   completions: string[];
   valueOptions: string[];
   requiredValueOptions: string[];
-  valueChoices: ShellCompletionValueChoice[];
+  valueChoices: { flags: string[]; choices: string[]; requiresValue: boolean }[];
 };
 
 export type ShellCompletionCommandTree = ReturnType<typeof collectShellCompletionCommandTree>;

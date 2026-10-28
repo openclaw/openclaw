@@ -184,7 +184,10 @@ it("joins notice cleanup and upstream deletion after close prelude", async ({ si
   const logs = { info() {}, warn() {}, error() {} };
   await installGatewaySubagentModuleLoad(
     async () => {},
-    async () => {},
+    () => {
+      const settled = Promise.resolve();
+      return { initial: settled, pending: new Map(), settled };
+    },
     context.startupModuleRestorers,
   );
   const sentinel = vi

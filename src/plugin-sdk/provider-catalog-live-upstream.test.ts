@@ -1,4 +1,6 @@
 import { assert, beforeEach, expect, it, vi, type MockedFunction } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { withProviderCatalogDiscoveryBudget } from "../plugins/provider-catalog-expiry.js";
 import { projectUpstreamProviderCatalogModel as projectUpstream } from "./provider-catalog-live-normalize.internal.js";
 import {
   clearLiveCatalogCacheForTests,
@@ -72,9 +74,10 @@ it("lazily shares one anonymous upstream metadata download across provider ids",
   expect(fetchGuard.mock.calls[0]?.[0]).toMatchObject({
     url: endpoint,
     requireHttps: true,
-    timeoutMs: 15_000,
     auditContext: "upstream-provider-catalog-discovery",
   });
+  expect(fetchGuard.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(0);
+  expect(fetchGuard.mock.calls[0]?.[0].timeoutMs).toBeLessThanOrEqual(15_000);
   expect(new Headers(fetchGuard.mock.calls[0]?.[0].init?.headers).get("authorization")).toBeNull();
   expect(release).toHaveBeenCalledTimes(1);
 });
@@ -210,4 +213,52 @@ it("rejects upstream metadata that would redirect authenticated inference to ano
       "https://opencode.ai/zen/v1",
     ),
   ).toBeUndefined();
+});
+
+it.each([
+  [undefined, 180_000],
+  [2_000, 2_000],
+  [0, 180_000],
+])("caps a shared feed by its acquisition and explicit cap %s", async (timeoutMs, cap) => {
+  const { fetchGuard } = buildFetchGuard({ opencode: makeProvider() });
+  await withProviderCatalogDiscoveryBudget(180_000, () =>
+    getCachedUpstreamProviderCatalog({ endpoint, providerId: "opencode", timeoutMs, fetchGuard }),
+  );
+  const admitted = fetchGuard.mock.calls[0]?.[0].timeoutMs;
+  expect(admitted).toBeGreaterThan(cap - 1_000);
+  expect(admitted).toBeLessThanOrEqual(cap);
+});
+
+it("preserves a standalone feed's zero timer without sharing a finite pending load", async () => {
+  const unscoped = createDeferred<Awaited<ReturnType<LiveModelCatalogFetchGuard>>>();
+  const finite = createDeferred<Awaited<ReturnType<LiveModelCatalogFetchGuard>>>();
+  const fetchGuard = vi
+    .fn<LiveModelCatalogFetchGuard>()
+    .mockImplementationOnce(() => unscoped.promise)
+    .mockImplementationOnce(() => finite.promise);
+  const read = (timeoutMs: number) =>
+    getCachedUpstreamProviderCatalog({
+      endpoint,
+      providerId: "opencode",
+      timeoutMs,
+      fetchGuard,
+    });
+  const noTimer = read(0);
+  const bounded = read(5_000);
+  try {
+    expect(fetchGuard).toHaveBeenCalledTimes(2);
+    expect(fetchGuard.mock.calls[0]?.[0].timeoutMs).toBe(0);
+    expect(fetchGuard.mock.calls[1]?.[0].timeoutMs).toBeGreaterThan(0);
+    expect(fetchGuard.mock.calls[1]?.[0].timeoutMs).toBeLessThanOrEqual(5_000);
+  } finally {
+    const response = () => ({
+      response: new Response(JSON.stringify({ opencode: makeProvider() })),
+      finalUrl: endpoint,
+      release: async () => undefined,
+    });
+    unscoped.resolve(response());
+    finite.resolve(response());
+  }
+  expect(await noTimer).toMatchObject({ id: "opencode" });
+  expect(await bounded).toMatchObject({ id: "opencode" });
 });

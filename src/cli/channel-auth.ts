@@ -35,6 +35,16 @@ type ChannelAuthOptions = {
 type ChannelPlugin = NonNullable<ReturnType<typeof getChannelPlugin>>;
 type ChannelAuthMode = "login" | "logout";
 
+function unsupportedChannelAuth(channel: string, action: ChannelAuthMode): Error {
+  return new Error(
+    formatUnsupportedChannelActionMessage({
+      channel,
+      action,
+      inspectCommand: "openclaw channels status --channel " + channel,
+    }),
+  );
+}
+
 function supportsChannelAuthMode(plugin: ChannelPlugin, mode: ChannelAuthMode): boolean {
   return mode === "login" ? Boolean(plugin.auth?.login) : Boolean(plugin.gateway?.logoutAccount);
 }
@@ -136,13 +146,7 @@ async function resolveChannelPluginForMode(
   }
   const plugin = resolved.plugin;
   if (!plugin || !supportsChannelAuthMode(plugin, mode)) {
-    throw new Error(
-      formatUnsupportedChannelActionMessage({
-        channel: channelId,
-        action: mode,
-        inspectCommand: "openclaw channels status --channel " + channelId,
-      }),
-    );
+    throw unsupportedChannelAuth(channelId, mode);
   }
   if (resolved.configChanged) {
     await commitConfigWithPendingPluginInstalls({
@@ -181,13 +185,7 @@ export async function runChannelLogin(
   const { cfg, channelInput, plugin } = resolvedChannel;
   const login = plugin.auth?.login;
   if (!login) {
-    throw new Error(
-      formatUnsupportedChannelActionMessage({
-        channel: channelInput,
-        action: "login",
-        inspectCommand: "openclaw channels status --channel " + channelInput,
-      }),
-    );
+    throw unsupportedChannelAuth(channelInput, "login");
   }
   // Auth-only flow: do not mutate channel config here.
   setVerbose(Boolean(opts.verbose));
@@ -267,13 +265,7 @@ export async function runChannelLogout(
   const { cfg, channelInput, plugin } = resolvedChannel;
   const logoutAccount = plugin.gateway?.logoutAccount;
   if (!logoutAccount) {
-    throw new Error(
-      formatUnsupportedChannelActionMessage({
-        channel: channelInput,
-        action: "logout",
-        inspectCommand: "openclaw channels status --channel " + channelInput,
-      }),
-    );
+    throw unsupportedChannelAuth(channelInput, "logout");
   }
   // Prefer the live gateway so logout also stops any active channel runtime.
   const accountId =

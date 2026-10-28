@@ -59,7 +59,6 @@ export function registerQueuedUnknownKillAuthorityTest() {
 
   it("restores an uncertain accepted address with its original runtime and completion custody", async () => {
     await withQueuedRegistrationFixture(async (f) => {
-      expect(f.runs.size).toBe(0);
       const context = createContext();
       const resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;
@@ -106,10 +105,7 @@ export function registerQueuedUnknownKillAuthorityTest() {
         }
         expect(plan).not.toHaveBeenCalled();
         await restoreSubagentRunsFromDisk({ runs: f.runs });
-        const accepted = f.runs.get(acceptedId);
-        if (!accepted) {
-          throw new Error("Canonical accepted row was not restored");
-        }
+        const accepted = expectDefined(f.runs.get(acceptedId), "canonical accepted row");
         expect(f.runs.has(original.runId)).toBe(false);
         expect(accepted).toMatchObject({
           swarmRunId: original.runId,
@@ -139,16 +135,13 @@ export function registerQueuedUnknownKillAuthorityTest() {
           }),
         ).resolves.toBe(true);
         const unrelated = structuredClone(accepted);
-        await mutateSubagentRuns(
-          [acceptedId],
-          () => ({ value: undefined, postimages: new Map([[acceptedId, null]]) }),
-          { runs: f.runs },
-        );
-        await mutateSubagentRuns(
-          [acceptedId],
-          () => ({ value: undefined, postimages: new Map([[acceptedId, unrelated]]) }),
-          { runs: f.runs },
-        );
+        for (const postimage of [null, unrelated]) {
+          await mutateSubagentRuns(
+            [acceptedId],
+            () => ({ value: undefined, postimages: new Map([[acceptedId, postimage]]) }),
+            { runs: f.runs },
+          );
+        }
         expect(isSameSubagentRunOwner(f.runs.get(acceptedId), original)).toBe(false);
         expect(getCurrentSubagentRunOwner(f.runs, original)).toBeUndefined();
       } finally {
@@ -161,3 +154,4 @@ export function registerQueuedUnknownKillAuthorityTest() {
     }, subagentRuns);
   });
 }
+import { expectDefined } from "@openclaw/normalization-core";

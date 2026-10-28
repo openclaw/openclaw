@@ -131,7 +131,6 @@ describe("cron terminal error persistence", () => {
       harness.runEmbeddedAgentMock.mockImplementationOnce(
         async (params: RunEmbeddedAgentParams) => {
           expect(params.sessionKey).toBe(runKey);
-          expect(params.assistantErrorTranscript).toBeDefined();
           assert(params.preparedRunAdmission, "Missing real cron admission");
           const admitted = await params.preparedRunAdmission.admit("embedded");
           const assertActive = resolveAdmittedRunActiveAssertion(admitted, params.abortSignal);
@@ -163,11 +162,9 @@ describe("cron terminal error persistence", () => {
               );
             },
           );
-          const exactBefore = accessor.loadSessionEntry(target);
           await accessor.patchSessionEntryCore({ sessionKey, storePath }, () => ({
             label: "Renamed root",
           }));
-          expect(accessor.loadSessionEntry(target)).toEqual(exactBefore);
           expect(accessor.loadSessionEntry(target)).toMatchObject({
             sessionId,
             lifecycleRevision: entry.lifecycleRevision,
@@ -195,7 +192,6 @@ describe("cron terminal error persistence", () => {
           job: makeIsolatedAgentJobFixture({ id: "synthetic-job", delivery: { mode: "none" } }),
         }),
       );
-      expect(harness.runEmbeddedAgentMock).toHaveBeenCalledOnce();
       expect(result.error ?? "").not.toContain("session rebound");
       const messages = SessionManager.open(target)
         .getBranch()

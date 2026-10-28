@@ -4,7 +4,9 @@ import nativeFs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
+import { transformSync } from "esbuild";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -22,17 +24,23 @@ function runScript(
   return runInNewContext(command[2]!, {
     performance: { now: () => 0 },
     ...context,
+    require: (name: string) =>
+      name === "node:module" ? { createRequire: () => context.require } : context.require(name),
     process: Object.assign(context.process, { argv: [process.execPath, ...command.slice(3)] }),
   });
 }
 
-function acquisition(root = "/workspace") {
-  return workspaceQuiescenceArgv(
-    root,
-    { action: "acquire", nonce, timeoutMs: 10_000 },
-    "shared-host",
-    "owned",
+function acquisition(root = "/workspace", hostMode = "shared-host", lifetime = "owned") {
+  const filename = fileURLToPath(
+    new URL("./workspace-quiescence-acquire.generated.worker.mjs", import.meta.url),
   );
+  const source = transformSync(nativeFs.readFileSync(filename, "utf8"), {
+    format: "cjs",
+    sourcefile: filename,
+    define: { "import.meta.url": JSON.stringify(pathToFileURL(filename).href) },
+    logLevel: "silent",
+  }).code;
+  return ["node", "-e", source, filename, root, "10000", hostMode, lifetime, nonce];
 }
 
 function dependencies(overrides: Record<string, unknown>) {
@@ -49,6 +57,60 @@ function dependencies(overrides: Record<string, unknown>) {
     return modules[name];
   };
 }
+
+it("starts and retires the detached watchdog without runtime function source", () => {
+  const root = tempDirs.make("workspace-quiescence-built-watchdog-");
+  let watchdogSource = "";
+  let leasePath = "";
+  let watchdogNonce = "";
+  const requireRemote = (name: string) => {
+    if (name === "node:os") {
+      return { homedir: () => root };
+    }
+    if (name === "node:child_process") {
+      return {
+        execFileSync: () => "synthetic start",
+        spawn: (_executable: string, args: string[]) => {
+          [, watchdogSource = "", leasePath = "", watchdogNonce = ""] = args;
+          return { pid: 222, unref() {} };
+        },
+      };
+    }
+    return require(name);
+  };
+  const command = workspaceQuiescenceArgv(
+    root,
+    { action: "acquire", nonce, timeoutMs: 10_000 },
+    "shared-host",
+  );
+  command[2] =
+    'Function.prototype.toString = () => { throw Error("function source unavailable"); };\n' +
+    command[2];
+  runScript(command, {
+    process: {
+      platform: "linux",
+      pid: 111,
+      execPath: process.execPath,
+      getuid: () => 1000,
+      stdout: { write() {} },
+      stderr: { write() {} },
+    },
+    require: requireRemote,
+  });
+  const lease = JSON.parse(nativeFs.readFileSync(leasePath, "utf8"));
+  nativeFs.writeFileSync(leasePath, JSON.stringify({ ...lease, expiresAtMs: Date.now() - 1 }));
+  runInNewContext(watchdogSource, {
+    process: {
+      argv: [process.execPath, leasePath, watchdogNonce],
+      pid: 222,
+      stderr: { write() {} },
+    },
+    require: requireRemote,
+    performance,
+    setTimeout: vi.fn(),
+  });
+  expect(nativeFs.existsSync(leasePath)).toBe(false);
+});
 
 it("renews and releases an initialized Windows lease without repeating DDL", () => {
   const root = nativeFs.realpathSync(tempDirs.make("workspace-quiescence-warm-schema-"));
@@ -87,6 +149,25 @@ it("renews and releases an initialized Windows lease without repeating DDL", () 
     sql.restore();
     database.close();
   }
+});
+
+it.each([
+  ["shared-host", "detached", "local quiescence requires an owned watchdog"],
+  ["dedicated", "owned", "native quiescence requires a shared host"],
+])("rejects local acquisition with %s/%s", (hostMode, lifetime, error) => {
+  expect(() =>
+    runScript(acquisition("/workspace", hostMode, lifetime), {
+      process: { platform: "linux" },
+      require: dependencies({
+        "node:fs": {
+          realpathSync: (value: string) => value,
+          mkdirSync() {},
+          chmodSync() {},
+        },
+        "node:child_process": {},
+      }),
+    }),
+  ).toThrow(error);
 });
 
 it("closes the generated Windows lease database when admission fails", () => {

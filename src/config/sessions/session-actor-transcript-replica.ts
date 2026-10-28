@@ -10,6 +10,7 @@ import type { SessionTranscriptAuthority } from "./session-transcript-authority.
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { transcriptEventContextEligibility } from "./session-transcript-projection-append.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import { cloneTranscriptView } from "./transcript-snapshot.js";
 import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
 
 type Bounded = Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
@@ -272,7 +273,10 @@ export function rewriteSessionActorTranscriptReplica(
   const next: SessionActorTranscriptReplica = {
     version: postimage.transcript.version,
     sessionId: previous.sessionId,
-    anchors: previous.anchors,
+    anchors: previous.anchors?.map((anchor) => ({
+      ...anchor,
+      generation: postimage.transcript.version.generation ?? anchor.generation,
+    })),
     tail: boundedTail(patch(previous.tail.events), previous.tail.coveredAfterSeq),
   };
   if (previous.context?.rows) {
@@ -343,8 +347,8 @@ export function seedSessionActorTranscriptContext(
   if (!prepared.residentRows && current.context) {
     return { ...current, anchors };
   }
-  // Own one detached window; row views share it, and worker/cohort facts stay with the read.
-  const snapshot = structuredClone(prepared.snapshot);
+  // Select the retained shape before detaching it; row contexts discard snapshot navigation.
+  const snapshot = prepared.snapshot;
   const rows = prepared.residentRows?.map((row, index) => ({
     ...row,
     event: snapshot.events[index],
@@ -369,6 +373,12 @@ export function seedSessionActorTranscriptContext(
   }
   const window =
     !complete && rows ? seedContextWindow(current, snapshot, rows, limits, admission) : undefined;
+  if (rows && (complete || window)) {
+    const events = cloneTranscriptView(snapshot.events);
+    for (let index = 0; index < rows.length; index++) {
+      rows[index]!.event = events[index];
+    }
+  }
   return {
     ...current,
     anchors,
@@ -382,7 +392,7 @@ export function seedSessionActorTranscriptContext(
         ? { limits: { ...limits }, window }
         : {
             limits: { ...limits },
-            exact: { kind: "bounded", snapshot },
+            exact: { kind: "bounded", snapshot: cloneTranscriptView(snapshot) },
             admission: admission && { ...admission },
           },
   };
@@ -393,12 +403,24 @@ export function advanceSessionActorTranscriptReplica(
   outcome: Extract<SessionActorOutcome<unknown>, { kind: "committed" }>,
 ): SessionActorTranscriptReplica {
   const { transcript, postimage } = outcome.receipt;
-  const unchanged = sameSessionActorTranscriptVersion(transcript.before, transcript.after);
+  const rewrite = transcript.append?.modelPromptProjection;
+  const before = rewrite?.after ?? transcript.before;
+  const projected = rewrite
+    ? rewriteSessionActorTranscriptReplica(previous, {
+        before: rewrite.before,
+        postimage: {
+          ...postimage,
+          transcript: { ...postimage.transcript, version: rewrite.after },
+        },
+        rows: rewrite.rows,
+      })
+    : previous;
+  const unchanged = sameSessionActorTranscriptVersion(before, transcript.after);
   const retained =
-    previous &&
-    previous.sessionId === postimage.entry?.sessionId &&
-    sameSessionActorTranscriptVersion(previous.version, transcript.before)
-      ? previous
+    projected &&
+    projected.sessionId === postimage.entry?.sessionId &&
+    sameSessionActorTranscriptVersion(projected.version, before)
+      ? projected
       : undefined;
   const appendedAnchors = transcript.appendedMessages.flatMap((message) => message.anchor ?? []);
   if (unchanged && retained) {
@@ -411,7 +433,7 @@ export function advanceSessionActorTranscriptReplica(
     retained &&
     appended &&
     !transcript.projectionNeedsReconcile &&
-    transcript.before.generation === transcript.after.generation;
+    before.generation === transcript.after.generation;
   const events = [...(contiguous ? retained.tail.events : []), ...(appended ?? [])];
   const coveredAfterSeq = contiguous
     ? retained.tail.coveredAfterSeq
@@ -482,7 +504,7 @@ export function readSessionActorTranscriptContext(
     if (JSON.stringify(context.admission) !== JSON.stringify(admission)) {
       return undefined;
     }
-    return structuredClone(context.exact);
+    return cloneTranscriptView(context.exact);
   }
   const events = admission
     ? context.rows.filter((row) => row.rawSeq < admission.rawSeq)

@@ -1677,12 +1677,13 @@ extension GatewayConnection {
         agentID: String? = nil,
         expectedSessionRoutingContract: String? = nil,
         expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
+        queueMode: OpenClawChatQueueMode? = nil,
         message: String,
         thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
         runTimeoutMs: Int? = nil,
-        requestTimeoutMs: Int = 30000,
+        requestTimeoutMs: Int? = nil,
         ifCurrentRoute route: Route? = nil,
         distinguishPreDispatchRouteChange: Bool = false) async throws -> OpenClawChatSendResponse
     {
@@ -1702,6 +1703,7 @@ extension GatewayConnection {
             expectedSessionRoutingContract: expectedSessionRoutingContract,
             expectedSessionSettings: expectedSessionSettings,
             supportsSessionSettingsCAS: supportsSettingsCAS,
+            queueMode: queueMode,
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,

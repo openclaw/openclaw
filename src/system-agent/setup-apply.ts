@@ -22,7 +22,6 @@ import { shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { GatewayServiceSetupOutcome } from "../wizard/setup.finalize.js";
 import {
-  assertSetupTarget,
   projectInferenceRoute,
   sameSetupConfiguredRoute,
   sameSetupInferenceRoute,
@@ -48,12 +47,6 @@ export type SystemAgentSetupApplyParams = {
   allowWorkspaceChange?: boolean;
   /** Exact default-agent route whose inference passed the setup gate. */
   expectedInferenceRoute?: DefaultInferenceRouteProjection;
-  /** Live-probe target; setup aborts if another process switches the default agent. */
-  expectedAgentId?: string;
-  /** Manual-auth target; setup aborts if the selected agent's credential directory moves. */
-  expectedAgentDir?: string;
-  /** Existing-model probe target; setup aborts if that model changes before persistence. */
-  expectedModelRef?: string;
   /** Full config revision used by the live probe; null means the file was absent. */
   expectedConfigHash?: string | null;
   /** Success-gated final normalization against the config held by the write lock. */
@@ -69,8 +62,6 @@ export type SystemAgentSetupApplyParams = {
 
 export type SystemAgentSetupApplyResult = {
   configPath: string;
-  configHashBefore: string | null;
-  configHashAfter: string | null;
   bootstrapPending: boolean;
   workspaceReady: boolean;
   gateway: GatewayServiceSetupOutcome;
@@ -124,9 +115,6 @@ export async function applySystemAgentSetup(
 ): Promise<SystemAgentSetupApplyResult> {
   const {
     workspace,
-    expectedAgentId,
-    expectedAgentDir,
-    expectedModelRef,
     expectedConfigHash,
     finalizeConfig,
     assertCommitPreconditions,
@@ -179,8 +167,8 @@ export async function applySystemAgentSetup(
     }
   }
   let verifiedRoute = params.expectedInferenceRoute;
-  let guardedExpectedAgentId = expectedAgentId;
-  let guardedExpectedAgentDir = expectedAgentDir;
+  let guardedExpectedAgentId: string | undefined;
+  let guardedExpectedAgentDir: string | undefined;
   let sessionMigrationWarnings: string[] = [];
   let coordinatorId: string | undefined;
   const resolveSetupTarget = (config: OpenClawConfig) =>
@@ -192,28 +180,26 @@ export async function applySystemAgentSetup(
     throw new Error("OpenClaw config changed while AI access was being tested. Try setup again.");
   }
 
-  let guardModules =
-    expectedAgentId || expectedAgentDir || expectedModelRef
-      ? await Promise.all([
-          import("../agents/agent-scope.js"),
-          import("../agents/model-selection.js"),
-        ] as const)
-      : undefined;
+  let agentScope: typeof import("../agents/agent-scope.js") | undefined;
   const assertExpectedTarget = (config: OpenClawConfig): void => {
-    if (!guardModules) {
+    if (!agentScope) {
       return;
     }
-    assertSetupTarget({
-      config,
-      expectedAgentId: guardedExpectedAgentId,
-      expectedAgentDir: guardedExpectedAgentDir,
-      expectedModelRef,
-      resolveAgentDir: guardModules[0].resolveAgentDir,
-      resolveDefaultAgentId: (currentConfig) => resolveSetupTarget(currentConfig).agentId,
-      resolveDefaultModelForAgent: guardModules[1].resolveDefaultModelForAgent,
-    });
+    const agentId = resolveSetupTarget(config).agentId;
+    if (guardedExpectedAgentId && agentId !== guardedExpectedAgentId) {
+      throw new Error(
+        "The default agent changed while AI access was being tested. Try setup again.",
+      );
+    }
+    if (
+      guardedExpectedAgentDir &&
+      agentScope.resolveAgentDir(config, agentId) !== guardedExpectedAgentDir
+    ) {
+      throw new Error(
+        "The agent credential location changed while AI access was being tested. Try setup again.",
+      );
+    }
   };
-  assertExpectedTarget(snapshotConfig.runtimeConfig);
 
   const assertVerifiedRoute = async (
     setupSnapshot: ConfigFileSnapshot,
@@ -293,12 +279,9 @@ export async function applySystemAgentSetup(
     coordinatorId = params.firstAgent?.team ? created.agentId : undefined;
     const rebasedRoute = await assertVerifiedRoute(snapshot, verifiedRoute, "before", true);
     verifiedRoute = rebasedRoute ?? verifiedRoute;
-    guardModules ??= await Promise.all([
-      import("../agents/agent-scope.js"),
-      import("../agents/model-selection.js"),
-    ] as const);
+    agentScope = await import("../agents/agent-scope.js");
     guardedExpectedAgentId = created.agentId;
-    guardedExpectedAgentDir = guardModules[0].resolveAgentDir(
+    guardedExpectedAgentDir = agentScope.resolveAgentDir(
       snapshotConfig.runtimeConfig,
       created.agentId,
     );
@@ -590,8 +573,6 @@ export async function applySystemAgentSetup(
 
   return {
     configPath: committed.path,
-    configHashBefore,
-    configHashAfter: committed.persistedHash,
     bootstrapPending: workspaceResult?.bootstrapPending === true,
     workspaceReady: workspaceResult !== undefined,
     gateway,

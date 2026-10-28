@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
+import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
@@ -13,9 +14,9 @@ import type {
   SessionActorAuthority,
   SessionActorLifetime,
 } from "./session-actor-contract.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   getSessionActorStorageBinding,
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
 } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageAuthority } from "./session-actor-storage-contract.js";
@@ -195,7 +196,9 @@ export async function getSessionInputActor(
     }
     return undefined;
   }
+  using acquisitionPhase = observeDiagnosticsTimelinePhases("session.inputActor.acquire");
   const acquired = await binding.acquire();
+  acquisitionPhase[Symbol.dispose]();
   if (!acquired) {
     return undefined;
   }
@@ -229,15 +232,15 @@ export async function getSessionInputActor(
 export function throwSessionInputActorFailure(
   outcome: {
     kind: "rolled-back" | "stale-version" | "unknown";
-    error: { name: string; message: string };
+    error: { name: string; message: string; cause?: unknown };
   },
   authorityFailure?: unknown,
 ): never {
   if (outcome.kind === "unknown") {
-    throw new SqliteWorkerError(outcome.error.message, "outcome-unknown");
+    throw wrapSqliteWorkerError(outcome.error.message, "outcome-unknown", outcome.error);
   }
   if (authorityFailure !== undefined) {
     throw toErrorObject(authorityFailure, "Input actor authority rejected the operation");
   }
-  throw Object.assign(new Error(outcome.error.message), { name: outcome.error.name });
+  throw toErrorObject(outcome.error, outcome.error.message);
 }

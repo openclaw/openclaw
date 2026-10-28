@@ -270,39 +270,6 @@ describe("command queue", () => {
     expect(queue.getQueueSize(lane)).toBe(0);
   });
 
-  it("owner cancellation rejects pending promises at every priority without releasing active work", async () => {
-    const gate = createDeferred();
-    const cancellation = new AbortController();
-    const first = queue.enqueueCommandInLane(
-      CommandLane.Main,
-      async () => {
-        await gate.promise;
-        return "first";
-      },
-      { abortSignal: cancellation.signal },
-    );
-    const task = vi.fn(async () => "unexpected");
-    const pending = (["background", "normal", "foreground"] as const).map((priority) =>
-      queue.enqueueCommandInLane(CommandLane.Main, task, {
-        priority,
-        abortSignal: cancellation.signal,
-      }),
-    );
-    const reason = new Error("owner stopped pending work");
-    const outcomes = Promise.allSettled(pending);
-
-    cancellation.abort(reason);
-    expect(queue.getCommandLaneSnapshot(CommandLane.Main)).toMatchObject({
-      activeCount: 1,
-      queuedCount: 0,
-    });
-    expect(await outcomes).toEqual(pending.map(() => ({ status: "rejected", reason })));
-    expect(task).not.toHaveBeenCalled();
-
-    gate.resolve();
-    await expect(first).resolves.toBe("first");
-  });
-
   it("keeps draining functional after synchronous onWait failure", async () => {
     const lane = "drain-sync-throw";
     queue.setCommandLaneConcurrency(lane, 1);

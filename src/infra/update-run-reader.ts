@@ -3,6 +3,7 @@ import type {
   OpenClawStateSchemaReadAdmission,
 } from "../state/openclaw-state-db-contract.js";
 import { createOpenClawStateCurrentWarmReader } from "../state/openclaw-state-db-current-reader.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
@@ -137,6 +138,11 @@ export function createUpdateRunAdmissionReader(
   );
   let previous: { version: string; runs: UpdateRunRecord[] } | undefined;
   return () => {
+    // PostgreSQL ledger writes do not change the SQLite anchor's content fingerprint.
+    if (isStatePostgres()) {
+      previous = undefined;
+      return listUpdateRuns(input, options, openStateSchemaReadAdmission);
+    }
     const warm = readWarm();
     if (warm.available) {
       previous = undefined;

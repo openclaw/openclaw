@@ -5,8 +5,11 @@ import type {
   TerminalUploadResult,
 } from "../../../../packages/gateway-protocol/src/schema/terminal.ts";
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
+
+registerTerminalEnglish();
 
 type TerminalUploadFile = { name: string; contentBase64: string };
 

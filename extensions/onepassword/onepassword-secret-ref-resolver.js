@@ -24,15 +24,12 @@ function writeResponse(response) {
   process.stdout.write(`${JSON.stringify(response)}\n`);
 }
 
-function parseRequest(input) {
+function parseRequestIds(input) {
   const parsed = JSON.parse(input);
   if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.ids)) {
     throw new Error("invalid exec SecretRef request");
   }
-  return {
-    protocolVersion: 1,
-    ids: parsed.ids.filter((id) => typeof id === "string" && id.length > 0),
-  };
+  return parsed.ids.filter((id) => typeof id === "string" && id.length > 0);
 }
 
 async function resolveOpCommand() {
@@ -240,8 +237,7 @@ async function resolveFromOnePassword(ids) {
 
 async function main() {
   const input = await consumeText(process.stdin.setEncoding("utf8"));
-  const request = parseRequest(input);
-  writeResponse(await resolveFromOnePassword(request.ids));
+  writeResponse(await resolveFromOnePassword(parseRequestIds(input)));
 }
 
 main().catch(() => {

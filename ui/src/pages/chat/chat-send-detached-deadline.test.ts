@@ -18,7 +18,6 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-send-support.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
@@ -157,7 +156,7 @@ it.each(["unchanged", "newer input", "navigation", "account"] as const)(
     });
     const expectedError =
       change === "unchanged" || change === "newer input"
-        ? UNCONFIRMED_CHAT_SEND_ERROR
+        ? "gateway request timed out after 300000ms: chat.send"
         : "Current context notice";
     expectComposer(host, draft, expectedError);
     if (change === "unchanged") {
@@ -230,7 +229,6 @@ it.each(["success", "terminal error", "known rejection"] as const)(
           ? "Approval rejected"
           : "Chat failed before the run started; try again.",
       );
-      expect(host.chatError).not.toBe(UNCONFIRMED_CHAT_SEND_ERROR);
     }
     const previousError = host.chatError;
     await heartbeatUntilDeadline(ws);
@@ -241,7 +239,7 @@ it.each(["success", "terminal error", "known rejection"] as const)(
   },
 );
 
-it("does not call a known unsent timeout unconfirmed", async () => {
+it("restores detached approval after a known unsent timeout", async () => {
   const error = new GatewayProtocolRequestTimeoutError({
     method: "chat.send",
     timeoutMs: 30_000,

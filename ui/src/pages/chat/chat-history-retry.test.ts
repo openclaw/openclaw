@@ -9,7 +9,6 @@ import {
 import { GatewayBrowserClient, GatewayRequestError } from "../../api/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { requestSharedHistory } from "./chat-history-request.ts";
-import { formatChatHistoryLoadError } from "./chat-history-retry.ts";
 import { getChatHistoryLoadState, isChatHistoryRetrying } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -22,7 +21,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function readHistory(client: GatewayBrowserClient, key: string, isCurrent = () => true) {
+function readHistory(
+  client: GatewayBrowserClient,
+  key: string,
+  isCurrent = () => true,
+  signal?: AbortSignal,
+) {
+  const observation = { isCurrent, signal };
   return requestSharedHistory(
     null,
     client,
@@ -31,8 +36,50 @@ function readHistory(client: GatewayBrowserClient, key: string, isCurrent = () =
     "main",
     undefined,
     {},
-    { isCurrent },
+    observation,
   );
+}
+
+async function connectHistoryClient() {
+  stubWindowGlobals();
+  vi.stubGlobal("WebSocket", MockWebSocket);
+  // No RNG means no paired identity; this fixture exercises RPC ownership, not signing.
+  vi.stubGlobal("crypto", { randomUUID: () => "history-read-fixture" });
+  const timing = vi.fn();
+  const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:18789", onRequestTiming: timing });
+  onTestFinished(() => client.stop());
+  client.start();
+  const socket = getLatestWebSocket();
+  const send = socket.send.bind(socket);
+  vi.spyOn(socket, "send").mockImplementation((data) => {
+    send(data);
+    const frame = JSON.parse(data);
+    // A held history read still has a live server; answer its real liveness probe.
+    if (frame.method === "health") {
+      socket.emitMessage({ type: "res", id: frame.id, ok: true, payload: {} });
+    }
+  });
+  socket.emitOpen();
+  socket.emitMessage({
+    type: "event",
+    event: "connect.challenge",
+    payload: { nonce: "fixture", ts: Date.now() },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const connect = JSON.parse(socket.sent[0]!);
+  socket.emitMessage({
+    type: "res",
+    id: connect.id,
+    ok: true,
+    payload: {
+      type: "hello-ok",
+      protocol: 4,
+      auth: { role: "operator", scopes: [], recoveryScope: "fixture-owner" },
+      policy: { tickIntervalMs: 60_000 },
+    },
+  });
+  expect(client.connected).toBe(true);
+  return { client, socket, timing };
 }
 const timeout = (method = "chat.history") =>
   new GatewayProtocolRequestTimeoutError({ method, timeoutMs: 30_000, requestSent: true });
@@ -41,26 +88,6 @@ const requestError = (code: string, message: string, retryable: boolean, retryAf
   new GatewayRequestError({ code, message, retryable, retryAfterMs });
 
 describe("shared chat history transient recovery", () => {
-  it.each([
-    {
-      message: "Startup inspection pending: /private/agent.sqlite",
-      details: {
-        paths: ["/private/agent.sqlite"],
-        code: "agent-database-inspection-pending",
-      },
-      retryable: true,
-      expected: "This agent is still starting. Retry in a moment.",
-    },
-    {
-      message: "Agent database inspection failed. Run Doctor.",
-      details: { code: "agent-database-inspection-failed" },
-      retryable: false,
-    },
-  ])("formats $details.code for the operator", ({ expected, ...params }) => {
-    const error = new GatewayRequestError({ code: "UNAVAILABLE", ...params });
-    expect(formatChatHistoryLoadError(error)).toBe(expected ?? params.message);
-  });
-
   it.each([false, true])(
     "keeps manual Retry after the recovery deadline (startup=%s)",
     async (startup) => {
@@ -138,6 +165,9 @@ describe("shared chat history transient recovery", () => {
       });
       await loadChatHistory(state, { deferBranches: true });
       expect(getChatHistoryLoadState(state)).toMatchObject({ phase: "failed", retryable });
+      if (error instanceof GatewayRequestError) {
+        expect(getChatHistoryLoadState(state)).toMatchObject({ message: error.message });
+      }
       expect(state.request).toHaveBeenCalledOnce();
     },
   );
@@ -163,48 +193,97 @@ describe("shared chat history transient recovery", () => {
   });
 
   it("retries a missing WebSocket response through the browser client's real request deadline", async () => {
-    stubWindowGlobals();
-    vi.stubGlobal("WebSocket", MockWebSocket);
-    // No RNG means no paired identity; this fixture exercises RPC deadlines, not signing.
-    vi.stubGlobal("crypto", { randomUUID: () => "history-timeout-fixture" });
-    const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:18789" });
-    onTestFinished(() => client.stop());
-    client.start();
-    const socket = getLatestWebSocket();
-    socket.emitOpen();
-    socket.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "fixture", ts: Date.now() },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    const connect = JSON.parse(socket.sent[0]!);
-    socket.emitMessage({
-      type: "res",
-      id: connect.id,
-      ok: true,
-      payload: {
-        type: "hello-ok",
-        protocol: 4,
-        auth: { role: "operator", scopes: [], recoveryScope: "fixture-owner" },
-        policy: { tickIntervalMs: 60_000 },
-      },
-    });
-    expect(client.connected).toBe(true);
-    const read = readHistory(client, "real-wire");
-    const outcome = read.catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(29_000);
-    socket.emitMessage({ type: "event", event: "tick", payload: {} });
-    await vi.advanceTimersByTimeAsync(1_499);
-    const methods = () => socket.sent.map((frame) => JSON.parse(frame).method);
-    expect(methods()).toEqual(["connect", "chat.history"]);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(methods()).toEqual(["connect", "chat.history", "chat.history"]);
-    const retry = JSON.parse(socket.sent[2]!);
-    socket.emitMessage({ type: "res", id: retry.id, ok: true, payload: { messages: [] } });
-    await expect(outcome).resolves.toEqual({ messages: [] });
-    expect(client.connected).toBe(true);
-    client.stop();
+    const { client, socket } = await connectHistoryClient();
+    try {
+      const read = readHistory(client, "real-wire");
+      const outcome = read.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(29_000);
+      socket.emitMessage({ type: "event", event: "tick", payload: {} });
+      await vi.advanceTimersByTimeAsync(1_499);
+      const reads = () =>
+        socket.sent
+          .map((frame) => JSON.parse(frame))
+          .filter((frame) => frame.method === "chat.history");
+      expect(reads()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(reads()).toHaveLength(2);
+      const retry = reads()[1]!;
+      socket.emitMessage({ type: "res", id: retry.id, ok: true, payload: { messages: [] } });
+      await expect(outcome).resolves.toEqual({ messages: [] });
+      expect(client.connected).toBe(true);
+    } finally {
+      client.stop();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+  });
+
+  it("releases retired consumers without canceling a joined reader, then retires the last wire correlation", async () => {
+    const { client, socket, timing } = await connectHistoryClient();
+    try {
+      const retired = new AbortController();
+      const current = new AbortController();
+      let retiredSettled = false;
+      const first = readHistory(client, "joined-wire", () => true, retired.signal)
+        .catch((error: unknown) => error)
+        .finally(() => {
+          retiredSettled = true;
+        });
+      const second = readHistory(client, "joined-wire", () => true, current.signal);
+      // Cleanup also rejects the joined read when the baseline stops at its red assertion.
+      void second.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      const joined = JSON.parse(socket.sent[1]!);
+      retired.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(retiredSettled).toBe(true);
+      await first;
+      expect(socket.sent).toHaveLength(2);
+      expect(timing.mock.calls.filter(([event]) => event.method === "chat.history")).toEqual([]);
+      socket.emitMessage({
+        type: "res",
+        id: joined.id,
+        ok: true,
+        payload: { messages: ["current"] },
+      });
+      await expect(second).resolves.toEqual({ messages: ["current"] });
+
+      const last = new AbortController();
+      let lastSettled = false;
+      const abandoned = readHistory(client, "retired-wire", () => true, last.signal)
+        .catch((error: unknown) => error)
+        .finally(() => {
+          lastSettled = true;
+        });
+      await vi.advanceTimersByTimeAsync(0);
+      const obsolete = JSON.parse(socket.sent[2]!);
+      last.abort();
+      const replacement = readHistory(client, "retired-wire");
+      void replacement.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(lastSettled).toBe(true);
+      await abandoned;
+      expect(timing).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: obsolete.id,
+          method: "chat.history",
+          ok: false,
+          errorCode: "CLIENT_ABORTED",
+        }),
+      );
+      const fresh = JSON.parse(socket.sent[3]!);
+      expect(fresh.id).not.toBe(obsolete.id);
+      socket.emitMessage({
+        type: "res",
+        id: obsolete.id,
+        ok: true,
+        payload: { messages: ["obsolete"] },
+      });
+      socket.emitMessage({ type: "res", id: fresh.id, ok: true, payload: { messages: ["fresh"] } });
+      await expect(replacement).resolves.toEqual({ messages: ["fresh"] });
+    } finally {
+      client.stop();
+      await vi.advanceTimersByTimeAsync(0);
+    }
   });
 
   it("expires staggered readers before a long server hint", async () => {

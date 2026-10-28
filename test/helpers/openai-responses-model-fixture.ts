@@ -19,7 +19,6 @@ export function createOpenAiResponsesModelConfig(params: {
     plugins: { slots: { memory: "none" } },
     agents: {
       defaults: {
-        heartbeat: { every: "0m" },
         model: { primary: modelRef },
         models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
         skipBootstrap: true,

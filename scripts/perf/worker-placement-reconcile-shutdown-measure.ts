@@ -25,6 +25,8 @@ const { values } = parseArgs({
     "blocked-shutdown-tail": { type: "boolean", default: false },
     "open-existing": { type: "boolean", default: false },
     "device-inspection": { type: "string" },
+    "slow-provider-inspection": { type: "boolean", default: false },
+    "suspend-before-stop": { type: "boolean", default: false },
     port: { type: "string" },
   },
 });
@@ -38,9 +40,12 @@ assert(
 );
 const idleOwnerRead = values["idle-owner-read"];
 const deviceInspection = values["device-inspection"];
+const slowProviderInspection = values["slow-provider-inspection"];
+const remoteInspection = Boolean(deviceInspection) || slowProviderInspection;
 assert(deviceInspection === undefined || ["pairing", "presence"].includes(deviceInspection));
-assert(!deviceInspection || (!idleOwnerRead && !values["open-existing"]));
-const idlePlacements = idleOwnerRead || Boolean(deviceInspection);
+assert(!remoteInspection || (!idleOwnerRead && !values["open-existing"]));
+assert(!(deviceInspection && slowProviderInspection));
+const idlePlacements = idleOwnerRead || remoteInspection;
 const blockedShutdownTail = values["blocked-shutdown-tail"];
 const placementCount = blockedShutdownTail ? 3 : 2;
 const stateDir = path.resolve(values["state-dir"]);
@@ -87,7 +92,7 @@ const [
   { nodeWorkerPlanHash },
   { startGatewayRestartTrace },
   { runWithProcessCleanupBudget },
-  { markGatewayRestartDraining },
+  { markGatewayRestartDraining, tryBeginGatewaySuspendAdmission },
 ] = await Promise.all([
   import("../../packages/gateway-protocol/src/schema/worker-admission.js"),
   import("../../packages/gateway-protocol/src/client-info.js"),
@@ -230,7 +235,7 @@ const inspectionPort = Number(values.port ?? 40978);
 assert(
   Number.isSafeInteger(inspectionPort) && inspectionPort >= 40_000 && inspectionPort <= 65_535,
 );
-const inspectionServer = deviceInspection
+const inspectionServer = remoteInspection
   ? createServer((_request, response) => {
       deviceReadEntered.resolve();
       const timer = setTimeout(() => {
@@ -247,7 +252,10 @@ if (inspectionServer) {
   });
 }
 const readDevice = async (phase: string) => {
-  if (holdDeviceRead && deviceInspection === phase) {
+  if (
+    holdDeviceRead &&
+    (deviceInspection === phase || (slowProviderInspection && phase === "provider"))
+  ) {
     // The real device provider must stop awaiting a read whose API has no signal.
     await fetch(`http://127.0.0.1:${inspectionPort}/device`, {
       signal: deviceReadCleanup.signal,
@@ -346,6 +354,7 @@ const syntheticProvider: WorkerProvider = {
   },
   inspect: async () => {
     providerInspections++;
+    await readDevice("provider");
     return { status: "active", sharedHost };
   },
   destroy: async () => {
@@ -578,7 +587,7 @@ startGatewayRestartTrace("synthetic-reconcile-shutdown");
 let ownerReads = 0;
 let sweep: Promise<unknown>;
 let ready: Promise<unknown>;
-if (deviceInspection) {
+if (remoteInspection) {
   holdDeviceRead = true;
   sweep = environments.reconcileOnce();
   ready = deviceReadEntered.promise;
@@ -625,6 +634,25 @@ await Promise.race([
     throw new Error("Synthetic reconciliation fixture did not enter its expected wait");
   }),
 ]).finally(() => setupDeadline.abort());
+let reconcileSettledAt: number | undefined;
+const observeReconcile = sweep.then(
+  () => {
+    reconcileSettledAt = performance.now();
+  },
+  () => {
+    reconcileSettledAt = performance.now();
+  },
+);
+let suspendAbortMs: number | null = null;
+if (values["suspend-before-stop"]) {
+  const suspendStarted = performance.now();
+  const suspension = tryBeginGatewaySuspendAdmission(() => {});
+  assert(suspension, "Synthetic Gateway must accept suspension");
+  assert(suspension.drain());
+  await Promise.race([observeReconcile, sleep(1_000)]);
+  suspendAbortMs = reconcileSettledAt === undefined ? null : reconcileSettledAt - suspendStarted;
+}
+const reconcileInFlightAtShutdown = reconcileSettledAt === undefined;
 const shutdownStartedAtMs = Date.now();
 const shutdownStarted = performance.now();
 const postShutdownStoreOperations: string[] = [];
@@ -691,23 +719,30 @@ const result = {
   scriptSha256: createHash("sha256")
     .update(await fs.readFile(new URL(import.meta.url)))
     .digest("hex"),
-  scope: deviceInspection
-    ? "real placement sidecar, SQLite, environment service and device provider; actual slow loopback HTTP-backed pairing/presence read; synthetic node acknowledgements"
-    : idleOwnerRead
-      ? "real placement sidecar, SQLite and environment service; controlled stalled owner lookup, synthetic provider/node acknowledgements; exact production blocked await unknown"
-      : "real placement sidecar, SQLite, environment service, node tunnel and launch adapter; synthetic provider and non-acknowledging node transport",
-  scenario: deviceInspection
-    ? `device-inspection-${deviceInspection}`
-    : blockedShutdownTail
-      ? "active-worker-cancellation-with-blocked-store-tail"
+  scope: slowProviderInspection
+    ? "real placement sidecar, SQLite and environment service; actual slow loopback HTTP-backed provider inspection ignoring cancellation; synthetic node acknowledgements"
+    : deviceInspection
+      ? "real placement sidecar, SQLite, environment service and device provider; actual slow loopback HTTP-backed pairing/presence read; synthetic node acknowledgements"
       : idleOwnerRead
-        ? "controlled-stalled-owner-read"
-        : "active-worker-cancellation",
+        ? "real placement sidecar, SQLite and environment service; controlled stalled owner lookup, synthetic provider/node acknowledgements; exact production blocked await unknown"
+        : "real placement sidecar, SQLite, environment service, node tunnel and launch adapter; synthetic provider and non-acknowledging node transport",
+  scenario: slowProviderInspection
+    ? "slow-provider-inspection"
+    : deviceInspection
+      ? `device-inspection-${deviceInspection}`
+      : blockedShutdownTail
+        ? "active-worker-cancellation-with-blocked-store-tail"
+        : idleOwnerRead
+          ? "controlled-stalled-owner-read"
+          : "active-worker-cancellation",
   controlledStoreBusyMs: blockedShutdownTail ? 35_000 : null,
   postShutdownStoreOperations,
   controlledOwnerReadDelayMs: idleOwnerRead ? 85_000 : null,
-  controlledDeviceReadDelayMs: deviceInspection ? 85_000 : null,
-  deviceReadCompletedBeforeStop: deviceInspection ? deviceReadCompletedBeforeStop : null,
+  controlledDeviceReadDelayMs: remoteInspection ? 85_000 : null,
+  deviceReadCompletedBeforeStop: remoteInspection ? deviceReadCompletedBeforeStop : null,
+  suspendBeforeStop: values["suspend-before-stop"],
+  suspendAbortMs,
+  reconcileInFlightAtShutdown,
   wholeGatewayRestart: false,
   realModelTurns: false,
   realRemoteWorkerProcesses: false,

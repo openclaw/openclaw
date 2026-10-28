@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createSessionCapability } from "./index.ts";
@@ -38,12 +39,9 @@ it.each([false, true])(
       { ...gateway, connection: { gatewayUrl: "ws://gateway.example.test" } },
       {
         state: {
-          agentsList: {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "per-sender",
+          agentsList: makeBootRoster({
             agents: [{ id: "main" }, { id: "writer" }],
-          },
+          }),
         },
         subscribe: () => () => undefined,
       },

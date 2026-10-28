@@ -1,4 +1,4 @@
-import { modelRequestBodyState } from "@openclaw/ai/internal/openai";
+import { modelRequestBodyState } from "@openclaw/ai/internal/model-request-body";
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -13,7 +13,10 @@ import {
   diagnosticHttpStatusCode,
   diagnosticProviderRequestIdHash,
 } from "../../../infra/diagnostic-error-metadata.js";
-import { hasInternalDiagnosticEventInterest } from "../../../infra/diagnostic-event-listener-presence.js";
+import {
+  hasInternalDiagnosticEventInterest,
+  hasModelCallPromptStatsInterest,
+} from "../../../infra/diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
   type DiagnosticEventInput,
@@ -31,11 +34,19 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import { formatPropagatedDiagnosticTraceparent } from "../../../infra/diagnostic-trace-propagation.js";
-import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
+import {
+  formatPropagatedDiagnosticTraceparent,
+  hasDiagnosticTracePropagationConsumer,
+} from "../../../infra/diagnostic-trace-propagation.js";
+import {
+  emitDiagnosticsTimelineEvent,
+  modelUsageTimelineAttributes,
+} from "../../../infra/diagnostics-timeline.js";
 import { withModelTransportContext } from "../../../llm/model-transport-context.js";
+import type { ModelRequestHeaders } from "../../../llm/types.js";
 import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import { recordReasoningSuppressedDiagnostic } from "../../../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
@@ -183,92 +194,15 @@ function dispatchModelCallHook(
   );
 }
 
-function withDiagnosticRequestContext(
-  options: ModelCallStreamOptions,
-  trace: DiagnosticTraceContext,
-  observer: ModelCallObserver,
-  callId: string,
-  ctx: ModelCallDiagnosticContext,
-): NonNullable<ModelCallStreamOptions> {
-  const traceparent = formatPropagatedDiagnosticTraceparent(trace);
-  const originalOnPayload = options?.onPayload;
-  const originalOnResponse = options?.onResponse;
-  const onPayload: NonNullable<ModelCallStreamOptions>["onPayload"] = (payload, model) => {
-    if (modelRequestBodyState(requestOptions).enabled) {
-      return originalOnPayload?.(payload, model);
-    }
-    if (!originalOnPayload) {
-      observer.assignRequestPayloadBytes(payload);
-      return undefined;
-    }
-    const result = originalOnPayload(payload, model);
-    const observeReplacement = (replacement: unknown) => {
-      observer.assignRequestPayloadBytes(replacement ?? payload);
-      return replacement;
-    };
-    return isPromiseLike(result) ? result.then(observeReplacement) : observeReplacement(result);
-  };
-  const onResponse: NonNullable<ModelCallStreamOptions>["onResponse"] = (response, model) => {
-    // Retrying providers can expose several responses; the terminal request status
-    // is the latest response observed before the model call completes or fails.
-    if (!observer.state.terminalEventEmitted) {
-      observer.state.responseStatus = response.status;
-      observer.state.lastProviderActivityAtMs = Date.now();
-    }
-    return originalOnResponse?.(response, model);
-  };
-
-  const headers: Record<string, string> = {};
-  for (const [key, value] of Object.entries(options?.headers ?? {})) {
-    if (key.toLowerCase() === TRACEPARENT_HEADER_NAME) {
-      continue;
-    }
-    headers[key] = value;
-  }
-  if (traceparent) {
-    headers[TRACEPARENT_HEADER_NAME] = traceparent;
-  }
-  const requestOptions = {
-    ...options,
-    requestId: callId,
-    ...((options?.headers || traceparent) && { headers }),
-    onPayload,
-    onResponse,
-  };
-  modelRequestBodyState(requestOptions).onBytes = (bytes) => {
-    observer.state.requestPayloadBytes = bytes;
-    emitDiagnosticsTimelineEvent(
-      {
-        type: "mark",
-        name: "provider.request.serialized",
-        timestamp: new Date().toISOString(),
-        runId: ctx.runId,
-        spanId: callId,
-      },
-      { config: ctx.config },
-    );
-  };
-  return withProviderAcceptanceObserver(requestOptions, (acceptance) => {
-    if (observer.state.terminalEventEmitted) {
-      return;
-    }
-    observer.state.lastProviderActivityAtMs = Date.now();
-    observer.state.providerAcceptanceKind = acceptance.kind;
-    if (acceptance.kind === "http_response") {
-      observer.state.responseStatus = acceptance.status;
-    }
-  });
-}
-
 export function createModelLifecycle(params: {
   ctx: ModelCallDiagnosticContext;
   options: ModelCallStreamOptions;
   requestTimeoutMs?: number;
-  createObserver: (capturePromptStats: boolean) => ModelCallObserver;
+  createObserver: (capturePromptStats: boolean, captureByteStats: boolean) => ModelCallObserver;
 }) {
   const callId = params.ctx.nextCallId();
   const runContext = getAgentRunContext(params.ctx.runId);
-  const transportContext = {
+  const transportContext: Parameters<typeof withModelTransportContext>[0] = {
     sessionKey: params.ctx.sessionKey,
     runId: params.ctx.runId,
     requestId: callId,
@@ -287,10 +221,13 @@ export function createModelLifecycle(params: {
   };
   const trace = freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace));
   const observer = params.createObserver(
-    areDiagnosticsEnabledForProcess() &&
-      (hasInternalDiagnosticEventInterest("model.call.started", true) ||
-        hasInternalDiagnosticEventInterest("model.call.completed", true) ||
-        hasInternalDiagnosticEventInterest("model.call.error", true)),
+    areDiagnosticsEnabledForProcess() && hasModelCallPromptStatsInterest(),
+    (areDiagnosticsEnabledForProcess() &&
+      (hasInternalDiagnosticEventInterest("model.call.completed", true) ||
+        hasInternalDiagnosticEventInterest("model.call.error", true) ||
+        hasDiagnosticTracePropagationConsumer())) ||
+      (params.ctx.suppressPluginHooks !== true &&
+        getGlobalHookRunner()?.hasHooks("model_call_ended") === true),
   );
   const eventBase: ModelCallEventBase = {
     ...modelCallHookEventBase({ ...params.ctx, callId }),
@@ -324,16 +261,87 @@ export function createModelLifecycle(params: {
       timestamp: new Date(startedAt).toISOString(),
       runId: eventBase.runId,
       spanId: callId,
+      provider: eventBase.provider,
+      attributes: {
+        model: eventBase.model,
+        observationUnit: "logical-call",
+        ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+        traceId: trace.traceId,
+      },
     },
     { config: params.ctx.config },
   );
-  const propagatedOptions = withDiagnosticRequestContext(
-    params.options,
-    trace,
-    observer,
-    callId,
-    params.ctx,
-  );
+  const options = params.options;
+  const ctx = params.ctx;
+  const traceparent = formatPropagatedDiagnosticTraceparent(trace);
+  const originalOnPayload = options?.onPayload;
+  const originalOnResponse = options?.onResponse;
+  const onPayload: NonNullable<ModelCallStreamOptions>["onPayload"] = (payload, model) => {
+    const requestBody = modelRequestBodyState(requestOptions);
+    if (requestBody.enabled || requestBody.reportsBytes) {
+      return originalOnPayload?.(payload, model);
+    }
+    if (!originalOnPayload) {
+      observer.assignRequestPayloadBytes(payload);
+      return undefined;
+    }
+    const result = originalOnPayload(payload, model);
+    const observeReplacement = (replacement: unknown) => {
+      observer.assignRequestPayloadBytes(replacement ?? payload);
+      return replacement;
+    };
+    return isPromiseLike(result) ? result.then(observeReplacement) : observeReplacement(result);
+  };
+  const onResponse: NonNullable<ModelCallStreamOptions>["onResponse"] = (response, model) => {
+    // Retrying providers can expose several responses; the terminal request status
+    // is the latest response observed before the model call completes or fails.
+    if (!observer.state.terminalEventEmitted) {
+      observer.state.responseStatus = response.status;
+      observer.state.lastProviderActivityAtMs = Date.now();
+    }
+    return originalOnResponse?.(response, model);
+  };
+
+  const headers: ModelRequestHeaders = {};
+  for (const [key, value] of Object.entries(options?.headers ?? {})) {
+    if (key.toLowerCase() === TRACEPARENT_HEADER_NAME) {
+      continue;
+    }
+    headers[key] = value;
+  }
+  if (traceparent) {
+    headers[TRACEPARENT_HEADER_NAME] = traceparent;
+  }
+  const requestOptions = {
+    ...options,
+    requestId: callId,
+    ...((options?.headers || traceparent) && { headers }),
+    onPayload,
+    onResponse,
+  };
+  modelRequestBodyState(requestOptions).onBytes = (bytes) => {
+    observer.state.requestPayloadBytes = bytes;
+    emitDiagnosticsTimelineEvent(
+      {
+        type: "mark",
+        name: "provider.request.serialized",
+        timestamp: new Date().toISOString(),
+        runId: ctx.runId,
+        spanId: callId,
+      },
+      { config: ctx.config },
+    );
+  };
+  const propagatedOptions = withProviderAcceptanceObserver(requestOptions, (acceptance) => {
+    if (observer.state.terminalEventEmitted) {
+      return;
+    }
+    observer.state.lastProviderActivityAtMs = Date.now();
+    observer.state.providerAcceptanceKind = acceptance.kind;
+    if (acceptance.kind === "http_response") {
+      observer.state.responseStatus = acceptance.status;
+    }
+  });
   let waitReason: "response" | "slot" | null = null;
   let firstEventObserved = false;
   const trackStatusDelivery = captureAsyncWorkTracker();
@@ -377,6 +385,19 @@ export function createModelLifecycle(params: {
   signal?.addEventListener("abort", clearWait, { once: true });
   function emitModelCallEnded(failure: { error: unknown } | undefined): void {
     const { ownerGeneration, config } = params.ctx;
+    if (observer.state.reasoningSuppressed) {
+      const warning = recordReasoningSuppressedDiagnostic(
+        {
+          sessionKey: eventBase.sessionKey,
+          sessionId: eventBase.sessionId ?? (eventBase.sessionKey ? undefined : eventBase.runId),
+        },
+        eventBase.provider,
+        eventBase.model,
+      );
+      if (warning) {
+        log.warn(warning);
+      }
+    }
     if (observer.state.terminalEventEmitted) {
       return;
     }
@@ -425,6 +446,11 @@ export function createModelLifecycle(params: {
         ok: failure === undefined,
         ...(responseStatus !== undefined ? { status: responseStatus } : {}),
         attributes: {
+          observationUnit: "logical-call",
+          ...modelUsageTimelineAttributes(observer.terminalFields().usage),
+          ...(observer.state.responseModel ? { responseModel: observer.state.responseModel } : {}),
+          ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+          traceId: trace.traceId,
           ...(model ? { model } : {}),
           ...(api ? { api } : {}),
           ...(transport ? { transport } : {}),
@@ -447,7 +473,7 @@ export function createModelLifecycle(params: {
         durationMs,
         ...providerTimingFields,
         ...sizeTimingFields,
-        ...observer.usageField(),
+        ...observer.terminalFields(),
       },
       ownerGeneration,
       modelContentPrivateData(observer.completedContent()),
@@ -466,6 +492,7 @@ export function createModelLifecycle(params: {
   const notifyFinished = () => {
     if (!finishedNotified) {
       finishedNotified = true;
+      transportContext.onRateLimitWait = undefined;
       clearWait();
       signal?.removeEventListener("abort", clearWait);
       params.ctx.onFinished?.(callId);

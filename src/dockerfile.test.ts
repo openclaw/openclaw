@@ -106,9 +106,7 @@ describe("Dockerfile", () => {
       const documents = parseAllDocuments(await readFile(join(appRoot, "pnpm-lock.yaml"), "utf8"));
       expect(documents.flatMap((document) => document.errors)).toEqual([]);
       const importers = documents.at(-1)?.get("importers", true);
-      if (!isMap(importers)) {
-        throw new Error("Application pnpm lockfile importers are missing");
-      }
+      assert(isMap(importers), "Application pnpm lockfile importers are missing");
       expect(importers.items.length).toBeGreaterThan(1);
       for (const importer of importers.items) {
         const manifest = join(String(importer.key), "package.json");
@@ -120,8 +118,7 @@ describe("Dockerfile", () => {
 
       const readPluginDirs = (kind: string) =>
         readFile(join(inputsRoot, `tmp/openclaw-${kind}-plugin-dirs`), "utf8");
-      const selected = await readPluginDirs("selected");
-      expect(selected).toBe(selection ? `${selection}\n` : "");
+      expect(await readPluginDirs("selected")).toBe(selection ? `${selection}\n` : "");
       const installed = (await readPluginDirs("workspace")).trim().split("\n");
       expect(installed).toContain("telegram");
       expect(installed).not.toContain("facetime");

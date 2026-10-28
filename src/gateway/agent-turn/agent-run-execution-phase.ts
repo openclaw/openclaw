@@ -149,7 +149,7 @@ async function executeAgentRun(
         }
       : undefined;
     const assertSettlementCurrent = () => {
-      params.assertContextCurrent?.();
+      params.assertGatewayLifetimeCurrent?.();
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       // Cancellation closes execution, but its retained producer still records the outcome.
       if (
@@ -161,7 +161,7 @@ async function executeAgentRun(
       }
     };
     const assertDispatchCurrent = () => {
-      params.assertContextCurrent?.();
+      params.assertGatewayLifetimeCurrent?.();
       params.executionSource?.();
       prepared.operatorAuthority?.assertCurrent();
       prepared.userTurn.assertRequesterCurrent?.();
@@ -311,10 +311,13 @@ async function executeAgentRun(
           await reactivateCompletedSubagentSession({
             sessionKey: params.resolvedSessionKey,
             runId: params.runId,
-            task: message,
+            ...(params.inputProvenance?.kind === "internal_system" &&
+            params.inputProvenance.sourceTool === "subagent_restart_recovery"
+              ? {}
+              : { task: message }),
             gatewayContextResolver: params.context.resolveGatewayContext,
             assertCurrent: assertDispatchCurrent,
-            acpSession: params,
+            session: params,
           });
         }
         if (
@@ -404,7 +407,7 @@ async function executeAgentRun(
           prepared.operatorAuthority?.profileId,
         );
         // Awaited routing can retire this owner before final dispatch.
-        params.assertContextCurrent?.();
+        params.assertGatewayLifetimeCurrent?.();
         const callerContext = resolveChatSendCallerContext(params.client);
         const clientCaps = [...callerContext.GatewayClientCaps];
         const gatewayUiCommandTarget = captureGatewayUiCommandTarget(params.client);
@@ -419,7 +422,7 @@ async function executeAgentRun(
                 {
                   client: params.client,
                   context: gatewayContext,
-                  sessionMutationCommitGuard: params.assertContextCurrent,
+                  sessionMutationCommitGuard: params.assertGatewayLifetimeCurrent,
                 },
                 params.resolvedSessionKey,
                 !params.inputProvenance &&
@@ -482,9 +485,7 @@ async function executeAgentRun(
                 ...(execApprovalContinuationPromptRange
                   ? { execApprovalContinuationPromptRange }
                   : {}),
-                ...(execApprovalContinuationTranscriptPromptRange
-                  ? { execApprovalContinuationTranscriptPromptRange }
-                  : {}),
+                execApprovalContinuationTranscriptPromptRange,
                 groupId: params.groupId,
                 groupChannel: params.groupChannel,
                 groupSpace: params.groupSpace,
@@ -519,7 +520,7 @@ async function executeAgentRun(
                 cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,
                 acpTurnSource: params.request.acpTurnSource,
                 internalEvents: params.request.internalEvents,
-                runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
+                runtimeContextFragments: prepared.userTurn.runtimeContextFragments,
                 inputProvenance: params.inputProvenance,
                 privateCompletion: prepared.userTurn.privateCompletion,
                 replyExpectation: prepared.userTurn.replyExpectation,
@@ -568,17 +569,6 @@ async function executeAgentRun(
                     return;
                   }
                   params.io.emitExecutionStarted?.();
-                  if (params.resolvedSessionKey) {
-                    emitSessionsChanged(
-                      params.context,
-                      {
-                        sessionKey: params.resolvedSessionKey,
-                        agentId: params.agentId,
-                        reason: "agent.run.started",
-                      },
-                      { accessChanged: false },
-                    );
-                  }
                 },
                 onActiveModelSelected: createAgentRunModelSelectionHandler({
                   runId: params.runId,

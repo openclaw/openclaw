@@ -23,6 +23,7 @@ import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   reconcileOpenClawStateSchemaPublication,
@@ -152,6 +153,7 @@ afterEach(async () => {
   await lifecycle.stop();
   watcher = undefined;
   await scheduler.stop();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();

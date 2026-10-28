@@ -53,11 +53,7 @@ export async function resolveOpenClawReferencePaths(
       return null;
     }
   };
-  const packageRoot = await resolveOpenClawPackageRoot({
-    cwd: params.cwd,
-    argv1: params.argv1,
-    moduleUrl: params.moduleUrl,
-  });
+  const packageRoot = await resolveOpenClawPackageRoot(params);
   const workspaceDir = params.workspaceDir?.trim();
   return {
     docsPath:

@@ -26,11 +26,11 @@ Plugin compatibility contracts are tracked in the core registry at
 - status: `active`, `deprecated`, `removal-pending`, or `removed`
 - owner: `sdk`, `config`, `setup`, `channel`, `provider`, `plugin-execution`,
   `agent-runtime`, or `core`
-- introduction and deprecation dates when applicable
+- deprecation and warning start dates when applicable
 - an exact `removeAfter` date or named `removalGate` once the owning maintainer
   approves it; a record with neither remains ineligible for removal
 - replacement guidance
-- docs, diagnostics, and tests that cover the old and new behavior
+- docs and diagnostic references for the old and new behavior
 
 The registry is the source for maintainer planning and deprecated SDK import
 notices. If a plugin-facing behavior changes, add or update the

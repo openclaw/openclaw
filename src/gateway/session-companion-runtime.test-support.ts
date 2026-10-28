@@ -10,7 +10,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 
 /** Augments a fixture's existing stores and workspace; never installs a second state root. */
-export function companionRuntimeConfig(cfg: OpenClawConfig, workspaceDir: string): OpenClawConfig {
+export function companionRuntimeConfig(
+  cfg: OpenClawConfig,
+  workspaceDir: string,
+  provider = "companion-fixture",
+  models = ["main", "utility"],
+): OpenClawConfig {
   return {
     ...cfg,
     agents: {
@@ -18,19 +23,19 @@ export function companionRuntimeConfig(cfg: OpenClawConfig, workspaceDir: string
       defaults: {
         ...cfg.agents?.defaults,
         workspace: workspaceDir,
-        model: cfg.agents?.defaults?.model ?? "companion-fixture/main",
-        utilityModel: "companion-fixture/utility",
+        model: cfg.agents?.defaults?.model ?? `${provider}/${models[0]}`,
+        utilityModel: `${provider}/${models[1]}`,
       },
     },
     models: {
       ...cfg.models,
       providers: {
         ...cfg.models?.providers,
-        "companion-fixture": {
+        [provider]: {
           api: "openai-completions",
           apiKey: "synthetic-companion-key",
           baseUrl: "http://127.0.0.1:9/v1",
-          models: ["main", "utility"].map((id) => ({
+          models: models.map((id) => ({
             id,
             name: id,
             reasoning: false,

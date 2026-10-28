@@ -1,8 +1,10 @@
+import { toUSVString } from "node:util";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { parseStoredJson } from "./plugin-state-error.js";
-import { readCommittedPluginStateObservationCache } from "./plugin-state-observation-cache.js";
+import { readCommittedPluginStateNamespace } from "./plugin-state-namespace-owner.js";
 import {
   assertPluginStatePublicationSettled,
+  assertPluginStatePublicationPreserves,
   pluginStatePublication,
   pluginStatePublicationKey,
 } from "./plugin-state-publication.js";
@@ -20,11 +22,19 @@ export async function capturePluginStateNativeBindingFacts(
   store: NonNullable<ReturnType<typeof capturePluginStateNativeBindingStore>>,
   key: string,
   authority = false,
+  assertValueCurrent?: (value: unknown) => void,
 ): Promise<PluginStatePinnedEntry> {
   const { options } = store;
   const context = captureOpenClawStateWorkerContext({ env: options.env });
   const identity = () => context.admission.identity.key;
   const scope = { pluginId: options.pluginId, namespace: options.namespace, key };
+  const assertPublicationCurrent = () => {
+    if (assertValueCurrent) {
+      assertPluginStatePublicationPreserves(identity(), scope, assertValueCurrent);
+    } else {
+      assertPluginStatePublicationSettled(identity(), scope);
+    }
+  };
   const entryKey = pluginStatePublicationKey({
     plugin_id: scope.pluginId,
     namespace: scope.namespace,
@@ -67,8 +77,8 @@ export async function capturePluginStateNativeBindingFacts(
     });
     // A concurrent receipt wins over the read that was already in flight.
     if (!loaded) {
-      const observed = readCommittedPluginStateObservationCache(identity(), scope);
-      row = observed ? observed.row : observation.row;
+      const observed = readCommittedPluginStateNamespace(identity(), scope);
+      row = observed ? observed.get(toUSVString(key)) : observation.row;
       loaded = true;
     }
     if (!active || !loaded || unavailable) {
@@ -77,11 +87,11 @@ export async function capturePluginStateNativeBindingFacts(
   };
   try {
     if (authority) {
-      assertPluginStatePublicationSettled(identity(), scope);
+      assertPublicationCurrent();
     }
-    const cached = readCommittedPluginStateObservationCache(identity(), scope);
+    const cached = readCommittedPluginStateNamespace(identity(), scope);
     if (cached) {
-      row = cached.row;
+      row = cached.get(toUSVString(key));
       loaded = true;
     } else {
       await load();
@@ -92,13 +102,16 @@ export async function capturePluginStateNativeBindingFacts(
           throw new Error("Native binding committed state is unavailable");
         }
         if (authority) {
-          assertPluginStatePublicationSettled(identity(), scope);
+          assertPublicationCurrent();
           store.assertCurrent?.();
         }
         (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
-        return row && (row.expires_at == null || row.expires_at > Date.now())
-          ? parseStoredJson(row.value_json, "lookup", context.admission.databasePath)
-          : undefined;
+        const value =
+          row && (row.expires_at == null || row.expires_at > Date.now())
+            ? parseStoredJson(row.value_json, "lookup", context.admission.databasePath)
+            : undefined;
+        assertValueCurrent?.(value);
+        return value;
       },
       release,
     };

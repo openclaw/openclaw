@@ -78,16 +78,18 @@ export async function prepareMSTeamsDebounceEntry(params: {
   };
 }
 
-function buildStoredConversationReference(params: {
-  activity: MSTeamsTurnContext["activity"];
-  conversationId: string;
-  conversationType: string;
-  teamId?: string;
-  threadId?: string;
-}): StoredConversationReference {
-  const { activity, conversationId, conversationType, teamId, threadId } = params;
-  const from = activity.from;
+export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
+  const activity = entry.context.activity;
   const conversation = activity.conversation;
+  const rawConversationId = conversation?.id ?? "";
+  const conversationId = normalizeMSTeamsConversationId(rawConversationId);
+  const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
+  const conversationType = conversation?.conversationType ?? "personal";
+  const isChannel = conversationType === "channel";
+  const teamId = activity.channelData?.team?.id;
+  const threadId = isChannel ? (conversationMessageId ?? activity.replyToId) : undefined;
+  const advertisedMedia = resolveMSTeamsAdvertisedMedia(entry.attachments);
+  const from = activity.from;
   const clientInfo = activity.entities?.find((entity) => entity.type === "clientInfo") as
     | { timezone?: string }
     | undefined;
@@ -96,7 +98,7 @@ function buildStoredConversationReference(params: {
   const tenantId = activity.channelData?.tenant?.id ?? conversation?.tenantId;
   const aadObjectId = from?.aadObjectId;
   const serviceUrl = tryNormalizeBotFrameworkServiceUrl(activity.serviceUrl);
-  return {
+  const conversationRef: StoredConversationReference = {
     activityId: activity.id,
     user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
     agent: activity.recipient,
@@ -114,19 +116,6 @@ function buildStoredConversationReference(params: {
     ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
     ...(threadId ? { threadId } : {}),
   };
-}
-
-export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
-  const activity = entry.context.activity;
-  const conversation = activity.conversation;
-  const rawConversationId = conversation?.id ?? "";
-  const conversationId = normalizeMSTeamsConversationId(rawConversationId);
-  const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
-  const conversationType = conversation?.conversationType ?? "personal";
-  const isChannel = conversationType === "channel";
-  const teamId = activity.channelData?.team?.id;
-  const threadId = isChannel ? (conversationMessageId ?? activity.replyToId) : undefined;
-  const advertisedMedia = resolveMSTeamsAdvertisedMedia(entry.attachments);
 
   return {
     ...entry,
@@ -137,7 +126,6 @@ export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
     advertisedMedia,
     quoteInfo: extractMSTeamsQuoteInfo(entry.attachments),
     htmlSummary: summarizeMSTeamsHtmlAttachments(entry.attachments),
-    rawConversationId,
     conversationId,
     conversationMessageId,
     conversationType,
@@ -147,12 +135,6 @@ export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
     threadId,
     // Pending history must follow the channel thread through recording, reads, and cleanup.
     historyKey: threadId ? `${conversationId}:thread:${threadId}` : conversationId,
-    conversationRef: buildStoredConversationReference({
-      activity,
-      conversationId,
-      conversationType,
-      teamId,
-      threadId,
-    }),
+    conversationRef,
   };
 }

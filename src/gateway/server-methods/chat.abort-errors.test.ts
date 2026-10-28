@@ -15,15 +15,13 @@ import {
   createEmbeddedRunHandle,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import * as subagentControlSession from "../../agents/subagents/registry/subagent-control-session.js";
-import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-control.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../../agents/subagents/registry/subagent-control.types.js";
+import { createControlRunFixture } from "../../agents/subagents/registry/subagent-control.fixtures.test-support.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "../../auto-reply/reply/abort.js";
 import { initSessionState } from "../../auto-reply/reply/session.js";
 import { buildTestCtx } from "../../auto-reply/reply/test-ctx.js";
@@ -31,20 +29,18 @@ import { getRuntimeConfig } from "../../config/config.js";
 import {
   appendTranscriptMessageSync,
   loadExactSessionEntryReadOnly,
+  loadSessionEntry,
   loadTranscriptEvents,
   readSessionTranscriptWatermark,
   replaceSessionEntrySync,
+  replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { createGatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
-import {
-  claimSessionControllerTask,
-  releaseSessionControllerClaim,
-} from "../../sessions/session-controller.mailbox.js";
+import { trackSessionControllerSourceWork } from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import {
   registerRpcSource,
@@ -59,6 +55,7 @@ import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db
 import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import { handleSessionKillHttpRequest } from "../session-kill-http.js";
 import * as sessionUtils from "../session-utils.js";
+import * as chatAbortDescendants from "./chat-abort-descendants.js";
 import {
   handleChatAbortRequest,
   handleChatAbortRequestWithLifecycle,
@@ -75,6 +72,24 @@ import { sessionMutationHandlers } from "./sessions-mutations.js";
 
 const fixture = useChatAbortRegistryFixture();
 afterEach(() => vi.restoreAllMocks());
+
+function queueDispatches(groupId: string, capacity: string, queuedBad = true) {
+  const badDispatch = vi.fn(async () => {});
+  const healthyDispatch = vi.fn(async () => {});
+  const survivorDispatch = vi.fn(async () => {});
+  for (const [runId, start] of [
+    ...(queuedBad ? [["bad", badDispatch] as const] : []),
+    ["healthy", healthyDispatch],
+    ["survivor", survivorDispatch],
+  ] as const) {
+    fixture.queueRun({ groupId, runId, activeRunIds: [capacity], start });
+  }
+  return { badDispatch, healthyDispatch, survivorDispatch };
+}
+
+async function expectKilled(sessionKey: string) {
+  expect((await getSubagentRunByChildSessionKey(sessionKey))?.endedReason).toBe("subagent-killed");
+}
 
 async function corruptChildDatabase(storePath: string, sessionKey: string) {
   const database = listOpenClawAgentDatabasesForTest().find(
@@ -113,48 +128,21 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
       ["healthy", healthyKey],
     ] as const) {
       const childAgentId = runId === "bad" || runId === "second-bad" ? "broken" : "main";
-      const storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: childAgentId,
-        sessionKey: childSessionKey,
-        defaultSessionId: `${runId}-session`,
-        lifecycleRevision: "original-child",
-      });
-      await registerSubagentRun({
+      await fixture.seedRun({
         runId,
         childSessionKey,
         childAgentId,
-        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
-          ?.entry,
         requesterSessionKey: runId !== "root" ? rootKey : sessionKey,
-        requesterAgentId: "main",
         requesterDisplayKey: "main",
-        requesterTurnRunId: "parent",
-        task: runId,
-        cleanup: "keep",
-        collect: true,
         queued: true,
-        expectsCompletionMessage: false,
+        lifecycleRevision: "original-child",
       });
     }
     await corruptChildDatabase(badStore, badKey);
-    const badDispatch = vi.fn(async () => {});
-    const healthyDispatch = vi.fn(async () => {});
-    const survivorDispatch = vi.fn(async () => {});
-    for (const [runId, start] of [
-      ["bad", badDispatch],
-      ["healthy", healthyDispatch],
-      ["survivor", survivorDispatch],
-    ] as const) {
-      enqueueSwarmRun({
-        groupId: "errors",
-        runId,
-        maxConcurrent: 1,
-        activeRunIds: ["capacity"],
-        start,
-        onStartFailure: () => true,
-      });
-    }
+    const { badDispatch, healthyDispatch, survivorDispatch } = queueDispatches(
+      "errors",
+      "capacity",
+    );
     const cfg = getRuntimeConfig();
     const parent = createActiveRun(sessionKey, {
       runId: "parent",
@@ -252,9 +240,7 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
           formatAbortReplyText(result.stoppedSubagents, undefined, result.failedSubagents),
         ).toContain("Cancellation was incomplete for 2 sub-agents");
       }
-      expect(await getSubagentRunByChildSessionKey(healthyKey)).toMatchObject({
-        endedReason: "subagent-killed",
-      });
+      await expectKilled(healthyKey);
       expect(healthyDispatch).not.toHaveBeenCalled();
       expect((await getSubagentRunByChildSessionKey(badKey))?.killIntent).toBeUndefined();
       await vi.waitFor(() => expect(badDispatch).toHaveBeenCalledOnce());
@@ -267,12 +253,9 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
   },
 );
 
-it.each([
-  { boundary: "HTTP", queued: true },
-  { boundary: "admin", queued: false },
-])(
-  "$boundary reports incomplete cancellation for a corrupt descendant (queued=$queued)",
-  async ({ boundary, queued }) => {
+it.each([true, false])(
+  "HTTP reports incomplete cancellation for a corrupt descendant (queued=%s)",
+  async (queued) => {
     const sessionKey = "agent:main:subagent:parent";
     const badKey = "agent:broken:subagent:bad";
     const healthyKey = "agent:main:subagent:healthy";
@@ -281,48 +264,22 @@ it.each([
       ["bad", badKey, sessionKey],
       ["healthy", healthyKey, sessionKey],
     ] as const) {
-      const storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: runId === "bad" ? "broken" : "main",
-        sessionKey: childSessionKey,
-        defaultSessionId: `${runId}-session`,
-        lifecycleRevision: "original-child",
-      });
-      await registerSubagentRun({
+      await fixture.seedRun({
         runId,
         childSessionKey,
         childAgentId: runId === "bad" ? "broken" : "main",
-        sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
-          ?.entry,
         requesterSessionKey,
-        requesterAgentId: "main",
-        requesterDisplayKey: requesterSessionKey,
-        task: runId,
-        cleanup: "keep",
-        collect: true,
         queued: runId === "healthy" || (runId === "bad" && queued),
-        expectsCompletionMessage: false,
+        lifecycleRevision: "original-child",
       });
     }
     const badStore = path.join(fixture.stateDir, "agents/broken/sessions/sessions.json");
     await corruptChildDatabase(badStore, badKey);
-    const badDispatch = vi.fn(async () => {});
-    const healthyDispatch = vi.fn(async () => {});
-    const survivorDispatch = vi.fn(async () => {});
-    for (const [runId, start] of [
-      ...(queued ? [["bad", badDispatch] as const] : []),
-      ["healthy", healthyDispatch],
-      ["survivor", survivorDispatch],
-    ] as const) {
-      enqueueSwarmRun({
-        groupId: "admin-errors",
-        runId,
-        maxConcurrent: 1,
-        activeRunIds: ["parent"],
-        start,
-        onStartFailure: () => true,
-      });
-    }
+    const { badDispatch, healthyDispatch, survivorDispatch } = queueDispatches(
+      "admin-errors",
+      "parent",
+      queued,
+    );
     const parentAbort = vi.fn(() => {
       expect(releaseSwarmRun("parent")).toBe(true);
       clearActiveEmbeddedRun("parent-session", parentHandle, sessionKey);
@@ -336,66 +293,56 @@ it.each([
     }
     let server: ReturnType<typeof createServer> | undefined;
     try {
-      const cfg = getRuntimeConfig();
-      let result;
-      if (boundary === "HTTP") {
-        server = createServer((req, res) => {
-          void handleSessionKillHttpRequest(req, res, {
-            auth: {
-              mode: "trusted-proxy",
-              allowTailscale: false,
-              trustedProxy: {
-                userHeader: "x-test-user",
-                allowUsers: ["operator@example.test"],
-                allowLoopback: true,
-              },
+      server = createServer((req, res) => {
+        void handleSessionKillHttpRequest(req, res, {
+          auth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            trustedProxy: {
+              userHeader: "x-test-user",
+              allowUsers: ["operator@example.test"],
+              allowLoopback: true,
             },
-            trustedProxies: ["127.0.0.1"],
-          }).catch(() => finishFailedGatewayHttpResponse(res));
-        });
-        await new Promise<void>((resolve) => {
-          server!.listen(0, "127.0.0.1", resolve);
-        });
-        const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/sessions/${encodeURIComponent(sessionKey)}/kill`;
-        const headers = {
-          "x-test-user": "operator@example.test",
-          "x-forwarded-for": "203.0.113.10",
-          "x-openclaw-scopes": "operator.write",
-        };
-        const unauthenticated = await fetch(url, {
-          method: "POST",
-          headers: { "x-forwarded-for": "203.0.113.10" },
-        });
-        expect(unauthenticated.status, await unauthenticated.clone().text()).toBe(401);
-        await unauthenticated.arrayBuffer();
-        const wrongAgent = await fetch(
-          `${url.replace(encodeURIComponent(sessionKey), encodeURIComponent(badKey))}?agentId=main`,
-          {
-            method: "POST",
-            headers: { ...headers, "x-openclaw-scopes": "operator.admin" },
           },
-        );
-        expect(wrongAgent.status).toBe(400);
-        await wrongAgent.arrayBuffer();
-        const denied = await fetch(url, { method: "POST", headers });
-        expect(denied.status).toBe(403);
-        await denied.arrayBuffer();
-        expect(parentAbort).not.toHaveBeenCalled();
-        const response = await fetch(url, {
+          trustedProxies: ["127.0.0.1"],
+        }).catch(() => finishFailedGatewayHttpResponse(res));
+      });
+      await new Promise<void>((resolve) => {
+        server!.listen(0, "127.0.0.1", resolve);
+      });
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/sessions/${encodeURIComponent(sessionKey)}/kill`;
+      const headers = {
+        "x-test-user": "operator@example.test",
+        "x-forwarded-for": "203.0.113.10",
+        "x-openclaw-scopes": "operator.write",
+      };
+      const unauthenticated = await fetch(url, {
+        method: "POST",
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      });
+      expect(unauthenticated.status, await unauthenticated.clone().text()).toBe(401);
+      await unauthenticated.arrayBuffer();
+      const wrongAgent = await fetch(
+        `${url.replace(encodeURIComponent(sessionKey), encodeURIComponent(badKey))}?agentId=main`,
+        {
           method: "POST",
           headers: { ...headers, "x-openclaw-scopes": "operator.admin" },
-        });
-        result = { status: response.status, body: await response.json() };
-      } else {
-        result = await killSubagentRunAdmin({ cfg, sessionKey });
-      }
+        },
+      );
+      expect(wrongAgent.status).toBe(400);
+      await wrongAgent.arrayBuffer();
+      const denied = await fetch(url, { method: "POST", headers });
+      expect(denied.status).toBe(403);
+      await denied.arrayBuffer();
+      expect(parentAbort).not.toHaveBeenCalled();
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { ...headers, "x-openclaw-scopes": "operator.admin" },
+      });
+      const result = { status: response.status, body: await response.json() };
       expect(parentAbort, JSON.stringify(result)).toHaveBeenCalledOnce();
-      expect((await getSubagentRunByChildSessionKey(sessionKey))?.endedReason).toBe(
-        "subagent-killed",
-      );
-      expect((await getSubagentRunByChildSessionKey(healthyKey))?.endedReason).toBe(
-        "subagent-killed",
-      );
+      await expectKilled(sessionKey);
+      await expectKilled(healthyKey);
       expect(healthyDispatch).not.toHaveBeenCalled();
       expect(badAbort).not.toHaveBeenCalled();
       expect((await getSubagentRunByChildSessionKey(badKey))?.killIntent).toBeUndefined();
@@ -404,27 +351,13 @@ it.each([
         releaseSwarmRun("bad");
       }
       await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
-      if (boundary === "HTTP") {
-        expect(result).toMatchObject({
-          status: 503,
-          body: {
-            ok: false,
-            error: { type: "unavailable", message: expect.stringContaining("bad:") },
-          },
-        });
-      } else {
-        expect(result).toMatchObject({
-          found: true,
-          killed: true,
-          cascadeKilled: 1,
-          cascadeLabels: ["healthy"],
-          error: expect.stringContaining("bad:"),
-          targetState: {
-            state: "terminal",
-            task: { status: "cancelled", error: SUBAGENT_KILL_TASK_ERROR },
-          },
-        });
-      }
+      expect(result).toMatchObject({
+        status: 503,
+        body: {
+          ok: false,
+          error: { type: "unavailable", message: expect.stringContaining("bad:") },
+        },
+      });
     } finally {
       if (server) {
         await new Promise<void>((resolve, reject) => {
@@ -476,7 +409,7 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       message: { role: "user", content: "old user turn", timestamp: Date.now() },
     });
     expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
-    await registerSubagentRun({
+    await fixture.registerRun({
       runId: "child",
       childSessionKey: childKey,
       childAgentId: "child",
@@ -485,12 +418,8 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
         sessionKey: childKey,
       })?.entry,
       requesterSessionKey: sessionKey,
-      requesterAgentId: "main",
-      requesterDisplayKey: sessionKey,
       requesterTurnRunId: "parent",
       task: "child",
-      cleanup: "keep",
-      collect: true,
       expectsCompletionMessage: false,
     });
     const entered = createDeferred();
@@ -586,9 +515,7 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       );
       expect(parent.input.abortSignal.aborted).toBe(true);
       expect(rpcSourceTesting.has("parent")).toBe(false);
-      expect((await getSubagentRunByChildSessionKey(childKey))?.endedReason).toBe(
-        "subagent-killed",
-      );
+      await expectKilled(childKey);
       // Explicit reset drains children, including native /new. Keep the original
       // abort pending on its marker publication, not on work the reset must stop.
       clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
@@ -650,9 +577,7 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       release.resolve();
       const response = await abort;
       expect(response).toHaveBeenCalledWith(true, expect.objectContaining({ aborted: true }));
-      expect((await getSubagentRunByChildSessionKey(childKey))?.endedReason).toBe(
-        "subagent-killed",
-      );
+      await expectKilled(childKey);
       expect(
         await loadTranscriptEvents(scope),
         "old partial must not cross the committed lifecycle boundary",
@@ -684,7 +609,7 @@ it("reports typed contention without replaying or denying an already applied Sto
   });
   const sessionKey = "agent:main:main";
   const active = createActiveRun(sessionKey, { agentId: "main" });
-  const context = createChatAbortContext({ sources: new Map([["run-1", active]]) });
+  const context = createChatAbortContext({ sources: [["run-1", active]] });
   const respond = await invokeChatAbortHandler({
     handler: handleChatAbortRequest,
     context,
@@ -726,80 +651,103 @@ it.each([
   ).rejects.toBe(error);
 });
 
-it.each([
-  { scope: "session-wide", runId: undefined },
-  { scope: "exact-run", runId: "retained-run" },
-] as const)(
-  "$scope Stop acknowledges cancellation while preserving raw source custody",
-  async ({ runId }) => {
-    vi.useFakeTimers();
-    const raw = createDeferred();
-    const cancelled = createDeferred();
-    const source = createActiveRun("main", {
-      sessionId: "main-session",
-      agentId: "main",
+it("reports a replaced child's refusal and failed persistence while raw cleanup is pending", async () => {
+  const sessionKey = "agent:main:retained-parent";
+  const sessionId = "retained-parent-session";
+  const runId = "retained-parent-run";
+  const childKey = "agent:main:subagent:replaced-child";
+  const runs = createControlRunFixture(() => fixture.stateDir);
+  await runs.writeSession("parent", "original-revision", {
+    sessionKey,
+    defaultSessionId: sessionId,
+  });
+  await runs.seed(
+    "original-child",
+    {
+      runId: "original-child-run",
+      childSessionKey: childKey,
+      requesterSessionKey: sessionKey,
+      requesterTurnRunId: runId,
+      requesterDisplayKey: sessionKey,
+      task: "retain the replacement child",
+      collect: true,
       queued: true,
+    },
+    "original-revision",
+  );
+  const childSession = loadSessionEntry({ agentId: "main", sessionKey: childKey });
+  const replacement = {
+    ...childSession,
+    sessionId: "replacement-child-session",
+    lifecycleRevision: "replacement-revision",
+    updatedAt: Date.now(),
+  };
+  await replaceSessionEntry({ agentId: "main", sessionKey: childKey }, replacement);
+  const parent = createActiveRun(sessionKey, { runId, sessionId, agentId: "main" });
+  const raw = createDeferred();
+  trackSessionControllerSourceWork(parent.input, raw.promise);
+  const terminalWrite = createDeferred();
+  void terminalWrite.promise.catch(() => {});
+  parent.adapter.projectSessionTerminalPersistence = terminalWrite.promise;
+  const context = createChatAbortContext({ getRuntimeConfig, sources: new Map([[runId, parent]]) });
+  const childrenStopped = createDeferred();
+  const abortDescendants = chatAbortDescendants.abortControlledSubagents;
+  const observed = vi
+    .spyOn(chatAbortDescendants, "abortControlledSubagents")
+    .mockImplementation(async (params) => {
+      const result = await abortDescendants(params);
+      childrenStopped.resolve();
+      return result;
     });
-    const claim = await claimSessionControllerTask(source.input, (selected) => {
-      createReplyOperation({
-        sessionKey: "main",
-        sessionId: "main-session",
-        agentId: "main",
-        resetTriggered: false,
-        mailboxClaim: selected,
-      });
-    });
-    const producer = (async () => {
-      try {
-        await raw.promise;
-      } finally {
-        claim.operation?.complete();
-        releaseSessionControllerClaim(claim);
-      }
-    })();
-    source.input.abortSignal.addEventListener("abort", () => cancelled.resolve(), { once: true });
-    const context = createChatAbortContext({ sources: new Map([["retained-run", source]]) });
-    const stopping = invokeChatAbortHandler({
-      handler: handleChatAbortRequestWithLifecycle,
-      context,
-      request: { sessionKey: "main", ...(runId ? { runId } : {}) },
-      client: { connect: { scopes: ["operator.admin"] } },
-    }).then(
-      (respond) => ({ respond, error: undefined }),
-      (error: unknown) => ({ respond: undefined, error }),
-    );
-    try {
-      await cancelled.promise;
-      await vi.advanceTimersByTimeAsync(15_000);
-      const outcome = await stopping;
-      expect(outcome.error).toBeUndefined();
-      expect(outcome.respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ aborted: true, runIds: ["retained-run"] }),
-      );
-      expect(claim.released).toBe(false);
-      expect(source.input.phase).toBe("claimed");
-      const snapshot = createGatewayActiveWorkSnapshot({
-        getChatRuns: () => 0,
-        getQueuedTurns: () => 0,
-        getTerminalPersistence: () => 0,
-      });
-      expect(snapshot.idle).toBe(false);
-      expect(snapshot.counts.sessionAdmissions).toBe(1);
-      expect(() =>
-        createReplyOperation({
-          sessionKey: "main",
-          sessionId: "successor",
-          resetTriggered: false,
-          target: source.input.target,
+  const sourceSettled = vi.fn();
+  void parent.input.settlement.promise.then(sourceSettled);
+  const respond = vi.fn();
+  vi.useFakeTimers();
+  const stopping = invokeChatAbortHandler({
+    handler: handleChatAbortRequestWithLifecycle,
+    context,
+    request: { sessionKey, runId },
+    client: { connect: { scopes: ["operator.admin"] } },
+    respond,
+  }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    await childrenStopped.promise;
+    expect(parent.input.abortSignal.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(respond).not.toHaveBeenCalled();
+    terminalWrite.reject(new Error("Original parent terminal write failed"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await stopping).toBeUndefined();
+    expect(respond.mock.calls).toEqual([
+      [
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringMatching(
+            /Parent run stopped, but descendant cancellation was incomplete: .*original session incarnation is unresolved or changed/,
+          ),
         }),
-      ).toThrow("already active");
-    } finally {
-      raw.resolve();
-      await producer;
-      await claim.settlement.promise;
-      await stopping;
-      vi.useRealTimers();
-    }
-  },
-);
+      ],
+    ]);
+    const message: unknown = respond.mock.calls[0]?.[2]?.message;
+    expect(message).toContain("Original parent terminal write failed");
+    expect(message).not.toContain("cleanup is still pending");
+    expect(sourceSettled).not.toHaveBeenCalled();
+    expect(rpcSourceTesting.get(runId)).toBe(parent);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: childKey })).toEqual(replacement);
+  } finally {
+    parent.adapter.projectSessionTerminalPersistence = undefined;
+    raw.resolve();
+    terminalWrite.resolve();
+    await parent.input.settlement.promise;
+    await stopping;
+    observed.mockRestore();
+    vi.useRealTimers();
+  }
+  expect(sourceSettled).toHaveBeenCalledOnce();
+  expect(rpcSourceTesting.get(runId)).toBeUndefined();
+});

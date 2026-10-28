@@ -45,6 +45,7 @@ export class DraftGatewayState {
   private environmentsValue: DraftEnvironment[] | null = null;
   private cloudProfilesReadyValue = false;
   private catalogRetryingValue = false;
+  private catalogRevalidation: Promise<void> | undefined;
   private catalogRevalidationPending = false;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClientValue: ApplicationContext["gateway"]["snapshot"]["client"] = null;
@@ -117,7 +118,7 @@ export class DraftGatewayState {
     }
     const request = new AbortController();
     this.gatewayNameRequest = request;
-    void readSystemInfo(gateway, request.signal, { fresh: true })
+    void readSystemInfo(gateway, request.signal)
       .then(({ value: result }) => {
         if (!request.signal.aborted) {
           this.gatewayNameValue =
@@ -160,8 +161,8 @@ export class DraftGatewayState {
     const request = {};
     this.cloudProfileRequest = request;
     this.cloudProfileStatus = client && policy ? "pending" : "initial";
-    this.callbacks.changed();
     if (!client || !policy) {
+      this.callbacks.changed();
       return Promise.resolve();
     }
     const required = policy.requiredProfile;
@@ -204,6 +205,7 @@ export class DraftGatewayState {
           this.callbacks.changed();
         }
       });
+    this.callbacks.changed();
     return this.cloudProfileComplete;
   }
 
@@ -281,6 +283,10 @@ export class DraftGatewayState {
     return this.cloudProfilesReadyValue;
   }
 
+  get cloudProfilesRead(): Promise<void> | undefined {
+    return this.cloudProfileStatus === "initial" ? undefined : this.cloudProfileComplete;
+  }
+
   get cloudProfilesPending(): boolean {
     return this.cloudProfileStatus === "pending";
   }
@@ -294,6 +300,10 @@ export class DraftGatewayState {
 
   get catalogRetrying(): boolean {
     return this.catalogRetryingValue;
+  }
+
+  get catalogRetryRead(): Promise<void> | undefined {
+    return this.catalogRevalidation;
   }
 
   get client(): ApplicationContext["gateway"]["snapshot"]["client"] {
@@ -541,6 +551,8 @@ export class DraftGatewayState {
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
     this.catalogRetryingValue = true;
+    // Readiness excludes updateComplete: rendering must not await its own completion.
+    this.catalogRevalidation = revalidation;
     this.callbacks.changed();
     void revalidation
       .catch(() => undefined)

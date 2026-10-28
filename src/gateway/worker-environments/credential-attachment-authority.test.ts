@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -68,14 +69,10 @@ function bundleGate(error?: Error) {
   return { entered, release };
 }
 
-async function reach(gate: Promise<void>, operation: Promise<unknown>) {
-  await Promise.race([
-    gate,
-    operation.then(() => {
-      throw new Error("Attachment fixture settled before its gate");
-    }),
-  ]);
-}
+const reach = (gate: Promise<void>, operation: Promise<unknown>) =>
+  awaitGateBeforeSettlement(gate, operation, "Attachment fixture settled before its gate");
+const captureRejection = (operation: Promise<unknown>) =>
+  operation.catch((error: unknown) => error);
 
 function binding(environmentId: string, source: ReturnType<typeof caller>) {
   return {
@@ -90,11 +87,9 @@ async function expectUnchangedAfterReopen(
   environmentId: string,
   previous: ReturnType<typeof snapshot>,
 ) {
-  expect(support.testState.store.get(environmentId)).toEqual(previous.environment);
-  expect(support.testState.store.getCredential(environmentId)).toEqual(previous.credential);
+  expect(snapshot(environmentId)).toEqual(previous);
   await support.reopenWorkerEnvironmentStore();
-  expect(support.testState.store.get(environmentId)).toEqual(previous.environment);
-  expect(support.testState.store.getCredential(environmentId)).toEqual(previous.credential);
+  expect(snapshot(environmentId)).toEqual(previous);
 }
 
 function snapshot(environmentId: string) {
@@ -104,135 +99,99 @@ function snapshot(environmentId: string) {
   };
 }
 
+async function attachmentFixture(environmentId: string) {
+  await support.seedReady(environmentId);
+  const previous = snapshot(environmentId);
+  const source = caller(environmentId);
+  const generate = vi.fn(() => support.CREDENTIAL);
+  const service = support.createService(support.createProvider(), {
+    generateWorkerCredential: generate,
+  });
+  return { source, generate, service, previous };
+}
+
 describe("attachment precommit authority and committed custody", () => {
   support.setupWorkerEnvironmentServiceSuite();
   afterEach(() => {
     nativeAdmission.before = undefined;
   });
 
-  it("rejects a closed caller after the real per-environment queue wait", async () => {
-    const environmentId = "attachment-queue";
-    await support.seedReady(environmentId);
-    const previous = snapshot(environmentId);
-    const source = caller(environmentId);
-    const generate = vi.fn(() => support.CREDENTIAL);
-    const service = support.createService(support.createProvider(), {
-      generateWorkerCredential: generate,
-    });
-    // This earlier request owns the queue, not the later caller. Its failed
-    // packaging releases the queue without changing attachment ownership.
-    const gate = bundleGate(new Error("predecessor build unavailable"));
-    const predecessor = service
-      .attachSession({ environmentId, ownerEpoch: 1, sessionId: "predecessor" })
-      .catch((error: unknown) => error);
-    await reach(gate.entered.promise, predecessor);
-    const attaching = service
-      .attachSession(binding(environmentId, source))
-      .catch((error: unknown) => error);
-    try {
-      source.close();
-      expect(source.signal.aborted).toBe(false);
-    } finally {
-      gate.release.resolve();
-      await predecessor;
-      await attaching;
-    }
-    expect(await predecessor).toMatchObject({
-      message: "Current worker build identity is unavailable",
-    });
-    expect(await attaching).toMatchObject({ message: "Attachment caller closed" });
-    expect(support.testState.prepareInstallation).toHaveBeenCalledOnce();
-    expect(generate).not.toHaveBeenCalled();
-    await expectUnchangedAfterReopen(environmentId, previous);
-  });
-
-  it.each(["caller", "service"] as const)(
-    "does not mint after %s closure during packaging",
-    async (closedOwner) => {
-      const environmentId = `attachment-bundle-${closedOwner}`;
-      await support.seedReady(environmentId);
-      const previous = snapshot(environmentId);
-      const source = caller(environmentId);
-      const generate = vi.fn(() => support.CREDENTIAL);
-      const service = support.createService(support.createProvider(), {
-        generateWorkerCredential: generate,
-      });
-      const gate = bundleGate();
-      const attaching = service
-        .attachSession(binding(environmentId, source))
-        .catch((error: unknown) => error);
+  it.each(["queue", "caller", "service", "commit"] as const)(
+    "preserves durable attachment state after authority closes at %s",
+    async (phase) => {
+      const environmentId = `attachment-${phase}`;
+      const { previous, source, generate, service } = await attachmentFixture(environmentId);
+      const mintedWhileLive: boolean[] = [];
+      const gate =
+        phase === "commit"
+          ? undefined
+          : bundleGate(phase === "queue" ? new Error("predecessor build unavailable") : undefined);
+      let predecessor: Promise<unknown> | undefined;
+      if (phase === "queue") {
+        // The predecessor owns the queue and fails packaging without changing ownership.
+        predecessor = captureRejection(
+          service.attachSession({ environmentId, ownerEpoch: 1, sessionId: "predecessor" }),
+        );
+        await reach(gate!.entered.promise, predecessor);
+      } else if (phase === "commit") {
+        generate.mockImplementation(() => {
+          mintedWhileLive.push(source.isCurrent());
+          return support.CREDENTIAL;
+        });
+        // Exclude startup recovery from the native admission interception.
+        await service.ready();
+        nativeAdmission.before = (stage) => {
+          if (stage === "commit") {
+            nativeAdmission.before = undefined;
+            source.close();
+          }
+        };
+      }
+      const attaching = captureRejection(service.attachSession(binding(environmentId, source)));
       let stopping: Promise<void> | undefined;
       try {
-        await reach(gate.entered.promise, attaching);
-        if (closedOwner === "caller") {
-          source.close();
-        } else {
-          stopping = service.stop();
+        if (phase === "caller" || phase === "service") {
+          await reach(gate!.entered.promise, attaching);
         }
-        expect(source.signal.aborted).toBe(false);
+        if (phase === "service") {
+          stopping = service.stop();
+        } else if (phase !== "commit") {
+          source.close();
+        }
       } finally {
-        gate.release.resolve();
+        gate?.release.resolve();
+        await predecessor;
         await attaching;
         await stopping;
       }
+      expect(source.signal.aborted).toBe(false);
+      if (predecessor) {
+        expect(await predecessor).toMatchObject({
+          message: "Current worker build identity is unavailable",
+        });
+      }
       expect(await attaching).toMatchObject({
         message:
-          closedOwner === "caller"
-            ? "Attachment caller closed"
-            : "Worker environment service is stopping",
+          phase === "service"
+            ? "Worker environment service is stopping"
+            : "Attachment caller closed",
       });
-      expect(generate).not.toHaveBeenCalled();
+      if (phase === "commit") {
+        // Minting precedes the native wait; revocation must prevent persistence.
+        expect(mintedWhileLive).toEqual([true]);
+      } else {
+        expect(generate).not.toHaveBeenCalled();
+      }
       await expectUnchangedAfterReopen(environmentId, previous);
     },
   );
 
-  it("refuses closed source at actual native commit admission", async () => {
-    const environmentId = "attachment-native-commit";
-    await support.seedReady(environmentId);
-    const previous = snapshot(environmentId);
-    const source = caller(environmentId);
-    const mintedWhileLive: boolean[] = [];
-    const service = support.createService(support.createProvider(), {
-      generateWorkerCredential: () => {
-        mintedWhileLive.push(source.isCurrent());
-        return support.CREDENTIAL;
-      },
-    });
-    // Startup inference recovery uses the same native admission factory.
-    await service.ready();
-    const reached: string[] = [];
-    nativeAdmission.before = (current) => {
-      reached.push(current);
-      if (current === "commit") {
-        nativeAdmission.before = undefined;
-        source.close();
-      }
-    };
-    const outcome = await service
-      .attachSession(binding(environmentId, source))
-      .catch((error: unknown) => error);
-    expect(reached).toContain("commit");
-    expect(outcome).toMatchObject({ message: "Attachment caller closed" });
-    expect(source.signal.aborted).toBe(false);
-    // Material was prepared before the native wait, while the source was live.
-    // Revocation must prevent persistence, not pretend that prior mint never ran.
-    expect(mintedWhileLive).toEqual([true]);
-    await expectUnchangedAfterReopen(environmentId, previous);
-  });
-
   it("does not lend one queued request another caller's authority", async () => {
     const environmentId = "attachment-independent-callers";
-    await support.seedReady(environmentId);
-    const first = caller(`${environmentId}:first`);
+    const { source: first, generate, service } = await attachmentFixture(environmentId);
     const second = caller(`${environmentId}:second`);
-    const generate = vi.fn(() => support.CREDENTIAL);
-    const service = support.createService(support.createProvider(), {
-      generateWorkerCredential: generate,
-    });
     const gate = bundleGate();
-    const original = service
-      .attachSession(binding(environmentId, first))
-      .catch((error: unknown) => error);
+    const original = captureRejection(service.attachSession(binding(environmentId, first)));
     let successor: ReturnType<typeof service.attachSession> | undefined;
     try {
       await reach(gate.entered.promise, original);
@@ -271,9 +230,9 @@ describe("attachment precommit authority and committed custody", () => {
     await support.seedReady(harness.ready.environmentId);
     vi.mocked(harness.environments.attachSession).mockImplementation(service.attachSession);
     const gate = bundleGate();
-    const dispatching = harness.service
-      .dispatch(REQUEST, undefined, source.assertCurrent, source.signal)
-      .catch((error: unknown) => error);
+    const dispatching = captureRejection(
+      harness.service.dispatch(REQUEST, undefined, source.assertCurrent, source.signal),
+    );
     try {
       await reach(gate.entered.promise, dispatching);
       source.close();
@@ -303,7 +262,7 @@ describe("attachment precommit authority and committed custody", () => {
     const stop = vi.spyOn(manager, "stop");
     const service = support.createService(support.createProvider(), { tunnelManager: manager });
     const handle = await startTestTunnel(manager, environmentId, 1);
-    const command = handle.runWorkspaceCommand(PWD_COMMAND).catch((error: unknown) => error);
+    const command = captureRejection(handle.runWorkspaceCommand(PWD_COMMAND));
     await reach(commandEntered.promise, command);
     const settled = vi.fn();
     const attaching = service.attachSession(binding(environmentId, source)).finally(settled);

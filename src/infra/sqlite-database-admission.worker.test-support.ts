@@ -85,15 +85,6 @@ function observeAdmission(database: DatabaseSync): string[] {
   return sql;
 }
 
-function withDatabase<T>(location: string, readOnly: boolean, run: (db: DatabaseSync) => T): T {
-  const database = openNodeSqliteDatabase(location, { readOnly });
-  try {
-    return run(database);
-  } finally {
-    database.close();
-  }
-}
-
 function countAbsentHostLookups(database: DatabaseSync): number {
   return countLookupMessages(() => {
     if (getSqliteDatabaseAdmission(database, absentHostFactKey) !== undefined) {
@@ -155,35 +146,34 @@ export function createSqliteWorkerBackend(
     ) {
       requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: undefined });
     }
-    const location = command.input.path;
-    const readOnly = command.type !== "mutateAfterHostAdmission";
-    return withDatabase(location, readOnly, (reader) => {
-      if (command.type === "hostFacts") {
-        admitSqliteSchema(reader);
-        const before = captureSqliteDatabaseAdmissions();
-        requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: undefined });
-        // Relaying local knowledge cannot certify the host publication that just happened.
-        installSqliteDatabaseAdmissions(captureSqliteDatabaseAdmissions());
-        const value = getSqliteDatabaseAdmission(reader, hostFactKey);
-        // An older complete snapshot cannot revoke newer completeness already received.
-        installSqliteDatabaseAdmissions(before);
-        return { value, lookupMessages: countAbsentHostLookups(reader) };
-      }
-      if (command.type === "mutateAfterHostAdmission") {
-        reader.exec("CREATE TABLE worker_publication (value)");
-        admitSqliteSchema(reader);
-        return {
-          native:
-            reader
-              .prepare("SELECT name FROM sqlite_schema WHERE name=?")
-              .get("worker_publication") !== undefined,
-          admitted: getAdmittedSqliteSchemaFacts(reader)?.tables.has("worker_publication") === true,
-        };
-      }
-      const admissionSql = observeAdmission(reader);
-      const values = reader.prepare("SELECT value FROM proof").all() as { value: number }[];
-      return { values: values.map((row) => row.value), sql: admissionSql, threadId };
+    using reader = openNodeSqliteDatabase(command.input.path, {
+      readOnly: command.type !== "mutateAfterHostAdmission",
     });
+    if (command.type === "hostFacts") {
+      admitSqliteSchema(reader);
+      const before = captureSqliteDatabaseAdmissions();
+      requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: undefined });
+      // Relaying local knowledge cannot certify the host publication that just happened.
+      installSqliteDatabaseAdmissions(captureSqliteDatabaseAdmissions());
+      const value = getSqliteDatabaseAdmission(reader, hostFactKey);
+      // An older complete snapshot cannot revoke newer completeness already received.
+      installSqliteDatabaseAdmissions(before);
+      return { value, lookupMessages: countAbsentHostLookups(reader) };
+    }
+    if (command.type === "mutateAfterHostAdmission") {
+      reader.exec("CREATE TABLE worker_publication (value)");
+      admitSqliteSchema(reader);
+      return {
+        native:
+          reader
+            .prepare("SELECT name FROM sqlite_schema WHERE name=?")
+            .get("worker_publication") !== undefined,
+        admitted: getAdmittedSqliteSchemaFacts(reader)?.tables.has("worker_publication") === true,
+      };
+    }
+    const admissionSql = observeAdmission(reader);
+    const values = reader.prepare("SELECT value FROM proof").all() as { value: number }[];
+    return { values: values.map((row) => row.value), sql: admissionSql, threadId };
   }
   return {
     execute,

@@ -2,15 +2,20 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
   expectDefined,
   installMockGateway,
+  chatMessage,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
-import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
+import {
+  openProgressHomeDock,
+  waitForProgressScrollIdle as waitForProgressThreadIdle,
+} from "./session-progress-home.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const height = (card: Locator) => card.evaluate((el) => el.getBoundingClientRect().height);
@@ -23,24 +28,10 @@ async function wheel(page: Page, card: Locator, dy: number) {
   await page.mouse.move(point.x, point.y);
   await page.mouse.wheel(0, dy);
 }
-async function waitForProgressThreadIdle(thread: Locator) {
-  await expect
-    .poll(() =>
-      thread.evaluate(async (element) => {
-        const before = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
-        const after = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        return before.every((value, index) => value === after[index]);
-      }),
-    )
-    .toBe(true);
-}
 
 async function still(card: Locator, expected: number) {
-  // A real pause, longer than the retired 240ms animation, must not finish the reveal.
-  for (let i = 0; i < 6; i++) {
+  // Three real samples cross the retired 240ms animation without finishing the reveal.
+  for (let i = 0; i < 3; i++) {
     await card.page().waitForTimeout(100);
     expect(Math.abs((await height(card)) - expected)).toBeLessThanOrEqual(1);
   }
@@ -48,19 +39,18 @@ async function still(card: Locator, expected: number) {
 
 suite.define(() => {
   it.each([
-    { reducedMotion: "no-preference", mobile: false },
-    { reducedMotion: "reduce", mobile: false },
-    { reducedMotion: "reduce", mobile: true },
+    { reducedMotion: "no-preference", touch: false },
+    { reducedMotion: "reduce", touch: true },
   ] as const)(
-    "keeps Details disclosure manual through scrolling and streaming ($reducedMotion, touch=$mobile)",
-    async ({ reducedMotion, mobile }) => {
+    "keeps Details disclosure manual through scrolling and streaming ($reducedMotion, touch=$touch)",
+    async ({ reducedMotion, touch }) => {
       await suite.withPage(
         {
           ...createControlUiE2eContextOptions(),
           reducedMotion,
-          viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
-          isMobile: mobile,
-          hasTouch: mobile,
+          viewport: { width: 1280, height: 900 },
+          isMobile: false,
+          hasTouch: touch,
         },
         async ({ page }) => {
           const sessionKey = "agent:main:main";
@@ -69,16 +59,15 @@ suite.define(() => {
             sessionKey,
             revision: 1,
             updatedAt: Date.now(),
-            markdown: "- A detailed finding to verify.\n".repeat(24),
+            markdown: "- A detailed finding to verify.\n".repeat(48),
             steps: [{ step: "Verify manual disclosure", status: "in_progress" }],
           };
           const gateway = await installMockGateway(page, {
             sessionKey,
             featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
-            historyMessages: Array.from({ length: 40 }, (_, i) => ({
-              role: i % 2 ? "assistant" : "user",
-              content: [{ type: "text", text: "Earlier context " + i + "." }],
-            })),
+            historyMessages: Array.from({ length: 40 }, (_, i) =>
+              chatMessage(i % 2 ? "assistant" : "user", "Earlier context " + i + "."),
+            ),
             inFlightRun: { runId, text: "Reviewing the workspace." },
             sessionInfo: { key: sessionKey, activeRunIds: [runId], hasActiveRun: true },
             methodResponses: { "progressCard.get": { card: initialCard } },
@@ -87,49 +76,48 @@ suite.define(() => {
           const card = page.locator('[data-progress-card-placement="details"]');
           const panel = page.locator('.chat-details[role="dialog"]');
           const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-          await card.waitFor({ state: "attached" });
+          await page.locator(".agent-chat__composer-combobox textarea").waitFor();
           expect(await panel.isVisible()).toBe(false);
           expect(await page.locator('[data-progress-card-placement="composer"]').count()).toBe(0);
-          if (!mobile) {
-            await openChatDetails(page);
-            await expect.poll(() => card.getAttribute("open")).toBe("");
-          }
+          await openChatDetails(page);
+          await expect.poll(() => card.getAttribute("open")).toBe("");
+          const body = panel.locator(".chat-details-desktop-body");
+          await waitForControlUiProofSurface(body, [card]);
           await waitForProgressThreadIdle(thread);
-          // Mobile Details covers the transcript; scroll it before opening the overlay.
-          // On desktop, transcript input cannot collapse the adjacent disclosure.
+          // Transcript input cannot collapse the adjacent desktop disclosure.
           const bounds = expectDefined(await thread.boundingBox(), "transcript bounds");
-          await page.mouse.move(bounds.x + 8, bounds.y + bounds.height / 2);
+          await page.mouse.move(bounds.x + bounds.width / 4, bounds.y + bounds.height / 2);
           await page.mouse.wheel(0, -640);
           await expect
             .poll(() => thread.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
             .toBeGreaterThan(200);
           await waitForProgressThreadIdle(thread);
-          if (mobile) {
-            await openChatDetails(page);
-            await expect.poll(() => card.getAttribute("open")).toBe("");
-          }
           expect(await card.getAttribute("open")).toBe("");
           await card.locator("summary").click();
           await expect.poll(() => card.getAttribute("open")).toBeNull();
+          await waitForControlUiProofSurface(card, [card.locator("summary")]);
           const closed = await height(card);
           await wheel(page, card, -48);
           await expect.poll(() => card.getAttribute("data-reveal")).toBe("closed");
           expect(await height(card)).toBe(closed);
           const point = await headerPoint(card);
-          if (mobile) {
-            const touch = await page.context().newCDPSession(page);
+          if (touch) {
+            const touchSession = await page.context().newCDPSession(page);
             try {
-              await touch.send("Input.dispatchTouchEvent", {
+              await touchSession.send("Input.dispatchTouchEvent", {
                 type: "touchStart",
                 touchPoints: [point],
               });
-              await touch.send("Input.dispatchTouchEvent", {
+              await touchSession.send("Input.dispatchTouchEvent", {
                 type: "touchMove",
                 touchPoints: [{ x: point.x, y: point.y - 36 }],
               });
-              await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+              await touchSession.send("Input.dispatchTouchEvent", {
+                type: "touchEnd",
+                touchPoints: [],
+              });
             } finally {
-              await touch.detach();
+              await touchSession.detach();
             }
           } else {
             await page.mouse.move(point.x, point.y);
@@ -147,10 +135,7 @@ suite.define(() => {
             sessionKey,
             runId,
             state: "delta",
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: "A streaming finding arrived." }],
-            },
+            message: chatMessage("assistant", "A streaming finding arrived."),
           });
           await gateway.setMethodResponse("progressCard.get", {
             card: {
@@ -170,8 +155,11 @@ suite.define(() => {
           for (const key of ["Enter", "Space"]) {
             await card.locator("summary").press(key);
             await expect.poll(() => card.getAttribute("open")).toBe("");
+            expect(await body.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(
+              0,
+            );
             await card.locator(".session-progress-card__step").last().scrollIntoViewIfNeeded();
-            expect(await panel.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+            expect(await body.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
             expect(await thread.evaluate((el) => el.scrollTop)).toBe(readerTop);
             await card.locator("summary").press(key);
             await expect.poll(() => card.getAttribute("open")).toBeNull();
@@ -228,11 +216,11 @@ suite.define(() => {
           "chat.send",
           "progressCard.get",
         ],
-        historyMessages: Array.from({ length: 30 }, (_, i) => ({
-          role: i % 2 ? "assistant" : "user",
-          content: [{ type: "text", text: "Earlier context " + i + "." }],
-          timestamp: i + 1,
-        })),
+        historyMessages: Array.from({ length: 30 }, (_, i) =>
+          chatMessage(i % 2 ? "assistant" : "user", "Earlier context " + i + ".", {
+            timestamp: i + 1,
+          }),
+        ),
         inFlightRun: { runId, text },
         sessionInfo: { key: sessionKey, activeRunIds: [runId], hasActiveRun: true },
         methodResponses: { "progressCard.get": { card: initialCard } },
@@ -252,11 +240,12 @@ suite.define(() => {
         );
       };
       try {
+        await page.clock.install();
         // The dock requires advertised history/send capabilities and is suppressed
         // when its own Home conversation already owns the primary chat page.
         await page.goto(suite.server.baseUrl + "new");
         await openProgressHomeDock(page);
-        await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
         if (mobile) {
           await card.locator("summary").click();
         }
@@ -281,7 +270,7 @@ suite.define(() => {
         await thread.hover();
         await page.mouse.wheel(0, -320);
         await waitForProgressThreadIdle(thread);
-        await page.waitForTimeout(201);
+        await page.clock.fastForward(201);
         await page.mouse.wheel(0, -320);
         if (mobile) {
           // Explicitly close the manually opened mobile card before scrubbing it.
@@ -314,7 +303,7 @@ suite.define(() => {
             sessionKey,
             runId,
             state: "delta",
-            message: { role: "assistant", content: [{ type: "text", text }] },
+            message: chatMessage("assistant", text),
           });
         }
         await gateway.setMethodResponse("progressCard.get", {

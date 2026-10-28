@@ -4,7 +4,6 @@ import {
   isAcpSessionKey,
   isCronSessionKey,
   isIncognitoSessionKey,
-  isSubagentSessionKey,
 } from "../routing/session-key.js";
 import { isAgentHarnessSessionKey } from "../sessions/agent-harness-session-key.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -48,7 +47,7 @@ export function createOperatorInputRecoverySource(
       : {}),
     sourceRunId: params.sourceRunId,
     snapshot: {
-      ...structuredClone(snapshot),
+      ...snapshot,
       scopes: intersectOperatorScopes(snapshot.scopes, authority.scopes),
     },
   };
@@ -57,7 +56,7 @@ export function createOperatorInputRecoverySource(
     : undefined;
 }
 
-/** Main-turn recovery excludes execution lineage that has a different continuation owner. */
+/** Capture the admitted turn; restart ownership is selected from its exact active run. */
 export function createRestartRecoveryOperatorSource(
   params: OperatorInputRecoverySourceParams & {
     inputProvenance?: InputProvenance;
@@ -71,26 +70,24 @@ export function createRestartRecoveryOperatorSource(
     params.inputProvenance.sourceChannel === "internal" &&
     params.sourceRunId.startsWith("announce:requester-settle:") &&
     Boolean(params.inputProvenance.sourceSessionKey?.trim());
-  // Dashboard roots link to main for grouping; only execution lineage excludes
-  // recovery. Treating parentSessionKey as delegation strips real operator turns.
+  // Native child sessions can admit later independent turns under this source.
+  // Cron, ACP, plugins, and harnesses retain their own continuation contracts.
   if (
-    entry.spawnedBy ||
-    entry.subagentRole ||
-    (entry.spawnDepth ?? 0) > 0 ||
-    entry.completionOwnerSessionKey ||
     entry.acp ||
     entry.pluginOwnerId ||
     entry.cronRunContinuation ||
     (params.inputProvenance &&
       params.inputProvenance.kind !== "external_user" &&
       !(
-        params.inputProvenance.kind === "inter_session" &&
+        (params.inputProvenance.kind === "inter_session" ||
+          (params.inputProvenance.kind === "internal_system" &&
+            (params.inputProvenance.sourceTool === "session_goal_continue" ||
+              params.inputProvenance.sourceTool === "tool_handoff"))) &&
         (params.requesterOrigin
           ? params.requesterOrigin.operatorProfileId === params.authority?.profileId
           : requesterSettle)
       )) ||
     isCronSessionKey(sessionKey) ||
-    isSubagentSessionKey(sessionKey) ||
     isAcpSessionKey(sessionKey) ||
     isAgentHarnessSessionKey(sessionKey)
   ) {

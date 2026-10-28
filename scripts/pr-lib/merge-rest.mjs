@@ -168,31 +168,10 @@ export function readMergePolicyAsync(repo) {
 }
 
 function* mergePolicySteps(repo) {
-  const [protectionResult, rulesResult] = yield [
-    request(repo, "/branches/main/protection", false, true),
-    request(repo, "/rules/branches/main?per_page=100", true),
-  ];
-  let response;
-  try {
-    response = requestResult(protectionResult);
-  } catch (error) {
-    // A missing classic protection rule is authoritative only with its HTTP body;
-    // stderr, inaccessible repositories, and generic 404s do not prove absence.
-    response = String(error.stdout ?? "");
-    const parsed = parseGithubResponse(response);
-    requireEvidence(
-      !(parsed.status === "404" && parsed.body?.message === "Not Found"),
-      "classic branch-protection policy is unavailable to this writer; a generic 404 or hidden GraphQL rule cannot prove absence. The CI exception requires an authoritative policy read. Repair failed CI and use ordinary green-CI landing when its normal admission succeeds; do not change credentials or supply a policy snapshot. This refusal does not establish environment approval or production deployment authority",
-    );
-    if (parsed.status !== "404" || parsed.body?.message !== "Branch not protected") {
-      throw error;
-    }
-  }
-  const protection = parseGithubResponse(response);
-  requireRestSupport(
-    protection.status === "404" && protection.body?.message === "Branch not protected",
-    "classic branch protection is not supported",
-  );
+  // GitHub enforces classic protection at the pinned merge request. Its
+  // admin-only discovery endpoint is not a prerequisite for maintainer landing.
+  // Applicable rules still supply required-check and delegated CI evidence.
+  const [rulesResult] = yield [request(repo, "/rules/branches/main?per_page=100", true)];
   const rules = pageArrays(requestResult(rulesResult));
   for (const rule of rules) {
     requireEvidence(nonemptyString(rule?.type), "missing effective branch rule");
@@ -218,6 +197,7 @@ function* mergePolicySteps(repo) {
       }
     }
   }
+  // Preserve retained snapshot/hash shape; null is not an absence attestation.
   return canonical({ classicProtection: null, rules });
 }
 
@@ -308,10 +288,10 @@ function repositoryAuthority(repo, response) {
   return authority;
 }
 
-function beginRead(repo, pr, observe, priorCiObservation) {
+function beginRead(repo, pr, observe) {
   const startedAtMs = Date.now();
   // Included headers select the protected writer route, so pooled-reader
-  // permissions cannot establish the actor's access to branch policy.
+  // permissions cannot establish the actor's repository write access.
   const response = parseGithubResponse(
     execPrGh(apiArgs(repo, "", ["--include"]), { encoding: "utf8" }, "plain"),
   );
@@ -322,10 +302,8 @@ function beginRead(repo, pr, observe, priorCiObservation) {
   // reduced privileges cannot invalidate the retained head and tree proof.
   const receipt = observe && record.merged;
   requireRestSupport(
-    receipt ||
-      authority.permissions?.admin === true ||
-      (priorCiObservation && authority.permissions?.push === true),
-    "policy-reader admin access changed",
+    receipt || authority.permissions?.admin === true || authority.permissions?.push === true,
+    "repository write access changed",
   );
   const policy = receipt ? null : readMergePolicy(repo);
   return { authority, main: mainSha, record, policy, startedAtMs };
@@ -726,7 +704,7 @@ export async function withPriorCiObservation(repo, pr, { prepare, finish }) {
   const policy = record.merged ? null : requestResult(policyResult);
   requireRestSupport(
     record.merged || authority.permissions?.admin === true || authority.permissions?.push === true,
-    "policy-reader admin access changed",
+    "repository write access changed",
   );
   const shared = {
     policy,
@@ -964,7 +942,7 @@ async function main([
     process.stdout.write(`${JSON.stringify(observation)}\n`);
     return;
   }
-  const snapshot = beginRead(repo, pr, observing, priorCiObservation);
+  const snapshot = beginRead(repo, pr, observing);
   const checks =
     mode === "checks" || ((observing || mode === "merge") && snapshot.record.state === "open")
       ? readRequiredMergeChecks(repo, snapshot.record.head.sha, snapshot.policy)

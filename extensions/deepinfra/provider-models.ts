@@ -1,3 +1,4 @@
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { fetchLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -36,15 +37,13 @@ type DeepInfraDiscoveredModel = Pick<
   "id" | "name" | "tags" | "contextWindow" | "maxTokens"
 >;
 
-interface DeepInfraAgentModelMetadata {
-  context_length?: number | null;
-  max_tokens?: number | null;
-  tags?: string[];
-}
-
 interface DeepInfraAgentModelEntry {
   id: string;
-  metadata: DeepInfraAgentModelMetadata | null;
+  metadata: {
+    context_length?: number | null;
+    max_tokens?: number | null;
+    tags?: string[];
+  } | null;
 }
 
 interface DeepInfraDiscoveredCatalog {
@@ -63,11 +62,7 @@ function entryToSurfaceModel(entry: DeepInfraAgentModelEntry): DeepInfraDiscover
   if (metadata === null) {
     return null;
   }
-  if (
-    !isRecord(metadata) ||
-    !Array.isArray(metadata.tags) ||
-    metadata.tags.some((tag) => typeof tag !== "string")
-  ) {
+  if (!isRecord(metadata) || !isStringArray(metadata.tags)) {
     throw new Error("DeepInfra model metadata discovery unavailable.");
   }
   return {
@@ -77,27 +72,6 @@ function entryToSurfaceModel(entry: DeepInfraAgentModelEntry): DeepInfraDiscover
     contextWindow: asPositiveSafeInteger(metadata.context_length),
     maxTokens: asPositiveSafeInteger(metadata.max_tokens),
   };
-}
-
-function bucketBySurface(models: DeepInfraDiscoveredModel[]): DeepInfraDiscoveredCatalog {
-  const catalog: DeepInfraDiscoveredCatalog = {
-    chat: [],
-    vlm: [],
-    imageGen: [],
-    videoGen: [],
-  };
-  const buckets = new Map<string, DeepInfraDiscoveredModel[]>([
-    ["chat", catalog.chat],
-    ["vlm", catalog.vlm],
-    ["image-gen", catalog.imageGen],
-    ["video-gen", catalog.videoGen],
-  ]);
-  for (const model of models) {
-    for (const tag of new Set(model.tags)) {
-      buckets.get(tag)?.push(model);
-    }
-  }
-  return catalog;
 }
 
 function chatSurfaceModelToModelDefinition(
@@ -168,7 +142,24 @@ async function loadDeepInfraSurfaces(): Promise<DeepInfraDiscoveredCatalog> {
       if (data.length > 0 && surfaceModels.length === 0) {
         throw new Error("DeepInfra model metadata discovery unavailable.");
       }
-      return bucketBySurface(surfaceModels);
+      const catalog: DeepInfraDiscoveredCatalog = {
+        chat: [],
+        vlm: [],
+        imageGen: [],
+        videoGen: [],
+      };
+      const buckets = new Map<string, DeepInfraDiscoveredModel[]>([
+        ["chat", catalog.chat],
+        ["vlm", catalog.vlm],
+        ["image-gen", catalog.imageGen],
+        ["video-gen", catalog.videoGen],
+      ]);
+      for (const model of surfaceModels) {
+        for (const tag of new Set(model.tags)) {
+          buckets.get(tag)?.push(model);
+        }
+      }
+      return catalog;
     },
   });
 }

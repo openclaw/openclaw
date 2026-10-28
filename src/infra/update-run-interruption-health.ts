@@ -3,6 +3,7 @@ import {
   type GatewayRestartCleanup,
   type GatewayRestartDeadline,
 } from "../cli/daemon-cli/restart-health-deadline.js";
+import { getGatewayChannelWarnings } from "../cli/daemon-cli/restart-health-diagnostics.js";
 import {
   resolveGatewayRestartProbeContext,
   waitForGatewayHttpReadiness,
@@ -24,6 +25,7 @@ export type InterruptedUpdateGatewayObservation = {
   phase: string;
   waitOutcome?: GatewayRestartWaitOutcome;
   verification?: UpdateRunRecord["verification"];
+  channelWarnings?: string[];
   cleanup?: GatewayRestartCleanup;
   timeout?: { elapsedMs: number; phase: string };
 };
@@ -72,6 +74,7 @@ export async function observeInterruptedUpdateGateway(
       expectedVersion: candidate.version,
       expectedBuildId: candidate.buildId,
       requirePluginHealth: true,
+      requireChannelHealth: false,
     };
     const servingMatches = (health: Awaited<ReturnType<typeof waitForGatewayHealthyRestart>>) =>
       health.healthy &&
@@ -91,6 +94,7 @@ export async function observeInterruptedUpdateGateway(
     }
     const http = await deadline.read("reconciliation:http", () =>
       waitForGatewayHttpReadiness({
+        requireChannelHealth: false,
         config: context.config,
         port,
         attempts: 1,
@@ -100,13 +104,14 @@ export async function observeInterruptedUpdateGateway(
         signal: deadline.signal,
       }),
     );
-    if (http.healthz !== 200 || http.readyz !== 200) {
+    if (!(http.coreReady ?? (http.healthz === 200 && http.readyz === 200))) {
       return result("unverified");
     }
     deadline.signal.throwIfAborted();
     // Another restart during observation is best effort; the writer still checks run ownership.
     return {
       ...result("settled"),
+      channelWarnings: getGatewayChannelWarnings(before, http).map(({ id }) => id),
       verification: {
         booted: true,
         serviceRunning: true,
@@ -115,9 +120,10 @@ export async function observeInterruptedUpdateGateway(
         runningVersion: candidate.version,
         runningBuildId: candidate.buildId,
         versionMatch: true,
-        readyz: true,
+        readyz: http.readyz === 200,
+        ...(http.coreReady !== undefined ? { coreReady: http.coreReady } : {}),
         settled: true,
-        channelsReady: true,
+        channelsReady: http.readyz === 200 && getGatewayChannelWarnings(before, http).length === 0,
         pluginErrors: before.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? [],
       },
     };

@@ -8,10 +8,10 @@ import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadat
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   clearPluginMetadataLifecycleCaches();
   vi.resetModules();
   vi.doUnmock("../../plugins/bundled-channel-runtime.js");
-  vi.doUnmock("./bundled-root.js");
 });
 
 it("does not reevaluate a bundled source entry after an initialization error", async () => {
@@ -30,9 +30,8 @@ it("does not reevaluate a bundled source entry after an initialization error", a
     ].join("\n"),
     "utf8",
   );
-  vi.doMock("./bundled-root.js", () => ({
-    resolveBundledChannelRootScope: () => ({ packageRoot: root, cacheKey: root }),
-  }));
+  vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(root, "extensions"));
   vi.doMock("../../plugins/bundled-channel-runtime.js", () => ({
     listBundledChannelPluginMetadata: () => [
       {

@@ -1,176 +1,110 @@
 import type { Message, MessageEntity } from "grammy/types";
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { getTelegramTextParts, joinTelegramTextParts } from "./body-helpers.js";
 import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
-function asTelegramMessage(message: unknown): Message {
-  return message as Message;
+function joinParts(...parts: Parameters<typeof getTelegramTextParts>[0][]) {
+  const messages = parts.map((part) => part as Message);
+  return joinTelegramTextParts(messages, "\n");
 }
 
-describe("getTelegramTextParts", () => {
-  it("projects native Telegram polls into bounded, accurate inbound text", () => {
-    const result = getTelegramTextParts(
-      asTelegramMessage({
-        poll: {
-          id: "poll-1",
-          question: "Ship the release?",
-          options: [
-            { persistent_id: "yes", text: "Yes", voter_count: 2 },
-            { persistent_id: "no", text: "No", voter_count: 1 },
-          ],
-          total_voter_count: 3,
-          is_closed: false,
-          is_anonymous: false,
-          type: "quiz",
-          allows_multiple_answers: false,
-          correct_option_ids: [0],
-          description: "Read docs",
-          description_entities: [
-            { type: "text_link", offset: 5, length: 4, url: "https://docs.example" },
-          ],
-          explanation: "All checks passed.",
-          explanation_entities: [{ type: "bold", offset: 0, length: 3 }],
-        },
-      }),
-    );
+function span(type: "bold" | "code" | "blockquote", text: string, content = text): MessageEntity {
+  return { type, offset: text.indexOf(content), length: content.length };
+}
 
-    expect(result).toEqual({
-      text: [
-        "[Poll] Ship the release?",
-        "Read [docs](https://docs.example)",
-        "1. Yes — 2 votes (correct)",
-        "2. No — 1 vote",
-        "Total voters: 3",
-        "Type: quiz",
-        "Visibility: public",
-        "Selection: single answer",
-        "Status: open",
-        "Explanation: **All** checks passed.",
-      ].join("\n"),
-      entities: [],
-    });
-  });
-
-  it("preserves native poll links with Markdown-sensitive labels and destinations", () => {
-    const label = "docs]more";
-    const url = "https://example.com/report)final";
-    const result = getTelegramTextParts(
-      asTelegramMessage({
-        poll: {
-          id: "poll-links",
-          question: "Review the report?",
-          options: [{ text: "Yes", voter_count: 1 }],
-          total_voter_count: 1,
-          is_closed: false,
-          is_anonymous: true,
-          type: "regular",
-          allows_multiple_answers: false,
-          description: `Read ${label}`,
-          description_entities: [{ type: "text_link", offset: 5, length: label.length, url }],
-        },
-      }),
-    );
-
-    const parsed = markdownToIR(result.text);
-    expect(parsed.text).toContain(`Read ${label}`);
-    expect(parsed.links.map((link) => link.href)).toEqual([url]);
-  });
-});
-
-describe("joinTelegramTextParts", () => {
-  it("skips empty segments without shifting later entity offsets", () => {
-    const result = joinTelegramTextParts(
-      [
-        asTelegramMessage({ text: "" }),
-        asTelegramMessage({
-          text: "bold",
-          entities: [{ type: "bold", offset: 0, length: 4 }],
-        }),
+it.each<"regular" | "quiz">(["regular", "quiz"])("renders %s polls with escaped links", (type) => {
+  const quiz = type === "quiz";
+  const label = "docs]more";
+  const url = "https://example.com/report)final";
+  const result = getTelegramTextParts({
+    poll: {
+      id: "poll-1",
+      question: "Ship the release?",
+      options: [
+        { persistent_id: "yes", text: "Yes", voter_count: 2 },
+        { persistent_id: "no", text: "No", voter_count: 1 },
       ],
-      "\n",
-    );
-
-    expect(result).toEqual({
-      text: "bold",
-      entities: [{ type: "bold", offset: 0, length: 4 }],
-    });
-  });
-
-  it.each(["a`b", "npm`", " npm ", " "])(
-    "preserves literal inline code %j from joined text and captions",
-    (code) => {
-      const prefix = "😀 Code: ";
-      const text = `${prefix}${code} end`;
-      const entities: MessageEntity[] = [
-        { type: "code", offset: prefix.length, length: code.length },
-      ];
-      const result = joinTelegramTextParts(
-        [
-          asTelegramMessage({ text, entities }),
-          asTelegramMessage({ caption: text, caption_entities: entities }),
-        ],
-        "\n",
-      );
-
-      const parsed = markdownToIR(renderTelegramTextEntities(result.text, result.entities));
-
-      expect(parsed.text).toBe(result.text);
-      expect(
-        parsed.styles
-          .filter((span) => span.style === "code")
-          .map((span) => parsed.text.slice(span.start, span.end)),
-      ).toEqual([code, code]);
+      total_voter_count: 3,
+      is_closed: false,
+      is_anonymous: !quiz,
+      type,
+      allows_multiple_answers: false,
+      allows_revoting: false,
+      members_only: false,
+      correct_option_ids: quiz ? [0] : undefined,
+      description: `Read ${label}`,
+      description_entities: [{ type: "text_link", offset: 5, length: label.length, url }],
+      explanation: quiz ? "All checks passed." : undefined,
+      explanation_entities: [{ type: "bold", offset: 0, length: 3 }],
     },
-  );
+  });
+  expect(result).toEqual({
+    text: `[Poll] Ship the release?
+Read [docs\\]more](https://example.com/report\\)final)
+1. Yes — 2 votes${quiz ? " (correct)" : ""}
+2. No — 1 vote
+Total voters: 3
+Type: ${type}
+Visibility: ${quiz ? "public" : "anonymous"}
+Selection: single answer
+Status: open${quiz ? "\nExplanation: **All** checks passed." : ""}`,
+    entities: [],
+  });
+  const parsed = markdownToIR(result.text);
+  expect(parsed.text).toContain(`Read ${label}`);
+  expect(parsed.links.map((link) => link.href)).toEqual([url]);
 });
 
-describe("renderTelegramTextEntities inline code normalization", () => {
-  it.each([[" \r\n ", "   "]])("preserves normalized spaces in %j", (code, normalized) => {
-    const prefix = "Code: ";
-    const text = `${prefix}${code} end`;
-    const parsed = markdownToIR(
-      renderTelegramTextEntities(text, [
-        { type: "code", offset: prefix.length, length: code.length },
-      ]),
-    );
+it("skips empty segments without shifting later entity offsets", () => {
+  const result = joinParts({ text: "" }, { text: "bold", entities: [span("bold", "bold")] });
 
-    expect(parsed.text).toBe(`${prefix}${normalized} end`);
-    expect(parsed.styles).toEqual([
-      { start: prefix.length, end: prefix.length + normalized.length, style: "code" },
-    ]);
+  expect(result).toEqual({
+    text: "bold",
+    entities: [{ type: "bold", offset: 0, length: 4 }],
   });
 });
 
-describe("renderTelegramTextEntities quoted blocks", () => {
-  it.each(["blockquote"] as const)(
-    "preserves multiline %s entities and nested formatting",
-    (type) => {
-      const text = "Before\n😀 quoted\nsecond link\nAfter";
-      const quote = "😀 quoted\nsecond link";
-      const quoteOffset = text.indexOf(quote);
+it.each(["a`b", "npm`", " npm ", " "])("round-trips inline code %j", (code) => {
+  const prefix = "😀 Code: ";
+  const text = `${prefix}${code} end`;
+  const entities = [{ ...span("code", code), offset: prefix.length }];
+  const result = joinParts({ text, entities }, { caption: text, caption_entities: entities });
 
-      const entities: MessageEntity[] = [
-        { type, offset: quoteOffset, length: quote.length },
-        { type: "bold", offset: quoteOffset + "😀 ".length, length: "quoted".length },
-      ];
+  const parsed = markdownToIR(renderTelegramTextEntities(result.text, result.entities));
 
-      expect(renderTelegramTextEntities(text, entities)).toBe(
-        "Before\n> 😀 **quoted**\n> second link\n\nAfter",
-      );
-    },
+  expect(parsed.text).toBe(result.text);
+  expect(
+    parsed.styles
+      .filter((style) => style.style === "code")
+      .map((style) => parsed.text.slice(style.start, style.end)),
+  ).toEqual([code, code]);
+});
+
+it("preserves normalized spaces in inline code", () => {
+  const parsed = markdownToIR(
+    renderTelegramTextEntities("Code:  \r\n  end", [{ type: "code", offset: 6, length: 4 }]),
   );
 
-  it("reopens enclosing formatting across a quote block", () => {
-    const text = "bold before\nquoted\nbold after";
-    const quoteOffset = text.indexOf("quoted");
-    const entities: MessageEntity[] = [
-      { type: "bold", offset: 0, length: text.length },
-      { type: "blockquote", offset: quoteOffset, length: "quoted".length },
-    ];
+  expect(parsed.text).toBe("Code:     end");
+  expect(parsed.styles).toEqual([{ start: 6, end: 9, style: "code" }]);
+});
 
-    expect(renderTelegramTextEntities(text, entities)).toBe(
-      "**bold before**\n> **quoted**\n\n**bold after**",
-    );
-  });
+it("preserves multiline blockquote entities and nested formatting", () => {
+  const text = "Before\n😀 quoted\nsecond link\nAfter";
+  const quote = "😀 quoted\nsecond link";
+  const entities: MessageEntity[] = [span("blockquote", text, quote), span("bold", text, "quoted")];
+
+  expect(renderTelegramTextEntities(text, entities)).toBe(
+    "Before\n> 😀 **quoted**\n> second link\n\nAfter",
+  );
+});
+
+it("reopens enclosing formatting across a quote block", () => {
+  const text = "bold before\nquoted\nbold after";
+  const entities = [span("bold", text), span("blockquote", text, "quoted")];
+
+  expect(renderTelegramTextEntities(text, entities)).toBe(
+    "**bold before**\n> **quoted**\n\n**bold after**",
+  );
 });

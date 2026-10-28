@@ -14,10 +14,7 @@ import type { ConfigFileSnapshot } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 import { captureConfigWriteLockGuard, withConfigWriteLock } from "./write-lock.js";
 
-function findJsonRootSuffix(
-  raw: string,
-  json5: { parse: (value: string) => unknown },
-): { raw: string; parsed: unknown } | null {
+function findJsonRootSuffix(raw: string): { raw: string; parsed: unknown } | null {
   if (/^\s*(?:\{|\[)/.test(raw)) {
     return null;
   }
@@ -28,7 +25,7 @@ function findJsonRootSuffix(
     const line = raw.slice(offset, lineEnd);
     if (/^\s*(?:\{|\[)/.test(line)) {
       const candidate = raw.slice(offset);
-      const parsed = parseConfigJson5(candidate, json5);
+      const parsed = parseConfigJson5(candidate);
       return parsed.ok ? { raw: candidate, parsed: parsed.parsed } : null;
     }
     offset = lineEnd;
@@ -41,7 +38,7 @@ export function inspectConfigJsonRootSuffixWithContext(
   raw: string,
   assertRecoveryCandidate?: (config: unknown) => void,
 ) {
-  const suffixRecovery = findJsonRootSuffix(raw, context.deps.json5);
+  const suffixRecovery = findJsonRootSuffix(raw);
   if (!suffixRecovery) {
     return null;
   }

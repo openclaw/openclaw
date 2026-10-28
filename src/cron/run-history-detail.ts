@@ -10,6 +10,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
+import { parseAutomationResult } from "./automation-result.js";
 import { resolveCronCompletionStatus } from "./completion-status.js";
 import { isCronTimeoutErrorText } from "./execution-error-constants.js";
 import { normalizeCronRunDiagnosticsCore } from "./run-diagnostics-normalize.js";
@@ -75,6 +76,7 @@ const cronRunLogEntrySchema = z.looseObject({
   error: optionalCronStringSchema,
   errorReason: z.enum(FAILOVER_REASONS).optional().catch(undefined),
   summary: optionalCronStringSchema,
+  result: z.unknown().optional().transform(parseAutomationResult),
   runId: optionalNonBlankCronStringSchema,
   diagnostics: z.unknown().optional(),
   runAtMs: optionalCronTimestampSchema,
@@ -158,6 +160,7 @@ export function parseCronRunLogEntryObject(
     error: entryObj.error,
     errorReason: entryObj.errorReason,
     summary: entryObj.summary,
+    result: entryObj.result,
     runId: entryObj.runId,
     diagnostics: normalizeCronRunDiagnosticsCore(entryObj.diagnostics),
     runAtMs: entryObj.runAtMs,
@@ -193,6 +196,7 @@ export function cronRunLogEntryToDetail(
     completionStatus: entry.completionStatus,
     error: entry.error ?? null,
     summary: entry.summary ?? null,
+    result: entry.result,
     storeKey: options.storeKey,
     errorReason: entry.errorReason,
     diagnostics: entry.diagnostics,

@@ -10,16 +10,13 @@ const RESEED_PREFIX = `${RESEED_HEADER}\n`;
 const RESEED_USER_BOUNDARY = "\n</conversation_history>\n\n<next_user_message>\n";
 const RESEED_USER_CLOSE = "\n</next_user_message>";
 
-type ParsedCliReseedPrompt =
-  | { kind: "none" }
-  | { kind: "legacy"; userMessage: string }
-  | { kind: "invalid" };
-
 export function hashCliReseedPrompt(text: string): string {
   return sha256Hex(text);
 }
 
-export function parseCliReseedPrompt(text: string): ParsedCliReseedPrompt {
+export function parseCliReseedPrompt(
+  text: string,
+): { kind: "none" } | { kind: "legacy"; userMessage: string } | { kind: "invalid" } {
   if (!text.startsWith(RESEED_PREFIX)) {
     return text.startsWith(RESEED_HEADER) ? { kind: "invalid" } : { kind: "none" };
   }

@@ -7,6 +7,8 @@ import { STORAGE_FIELD_HELP } from "./zod-schema.storage.js";
 import { TELEMETRY_FIELD_HELP } from "./zod-schema.telemetry.js";
 
 export const CORE_FIELD_HELP: Record<string, string> = {
+  "security.preset":
+    'Security defaults: "personal" (default) keeps trusted full-access execution and collaborative steering; "corporate" enables per-session sandboxing, workspace file limits, strict steering, narrower session/messaging reach, and host escalation approvals. Explicit settings override preset defaults. Host policy, access controls, and live approval gates remain authoritative.',
   worktreeRoot:
     "Global directory for new managed worktrees. Use an absolute path or ~ for your home directory; defaults to <state-dir>/worktrees. Existing worktrees keep their recorded paths when this changes.",
   worktreeAcceleration:
@@ -310,7 +312,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   agents:
     "Agent runtime configuration root. Root siblings own infrastructure and cross-agent defaults; agents.defaults owns agent-loop behavior; agent entries may override either where supported.",
   "agents.ownership":
-    'Durable multi-agent ownership generation marker. "explicit" means ambient channels, heartbeat, system-agent consults, Talk, cron, and bare CLI operations must resolve a surface-specific owner or stop when no owner can be identified. OpenClaw stamps this automatically when creating or migrating a fleet; omit it for a sole agent.',
+    'Durable multi-agent ownership generation marker. "explicit" means ambient channels, system-agent consults, Talk, cron, and bare CLI operations must resolve a surface-specific owner or stop when no owner can be identified. OpenClaw stamps this automatically when creating or migrating a fleet; omit it for a sole agent.',
   "agents.defaults":
     "Shared default settings inherited by agents unless overridden per entry in agents.entries. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
   "agents.defaults.skills":
@@ -373,14 +375,6 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Optional ACP session mode default for this agent (persistent or oneshot).",
   "agents.entries.*.runtime.acp.cwd":
     "Optional default working directory for this agent's ACP sessions.",
-  "agents.entries.*.identity.avatar":
-    "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
-  "agents.defaults.heartbeat.timeoutSeconds":
-    "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
-  "agents.defaults.heartbeat.agentId":
-    "Agent that owns ambient heartbeat runs when no per-agent heartbeat configuration exists. Leave unset to preserve configured-default routing.",
-  "agents.entries.*.heartbeat.timeoutSeconds":
-    "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat timeout, then agents.defaults.timeoutSeconds when set, otherwise the heartbeat cadence capped at 600 seconds.",
   "agents.defaults.systemAgent":
     "Target settings for ambient OpenClaw system-agent and Custodian inference plus selected unscoped operator reads.",
   "agents.defaults.systemAgent.agentId":

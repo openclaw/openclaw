@@ -40,6 +40,8 @@ type DirectoryState = {
 };
 
 const directories = new Map<string, DirectoryState>();
+// Directories discovered after startup share the current Gateway's host binding.
+let gatewayFileChangePublisher: DirectoryState["publishChange"] | undefined;
 export const authProfileFileChanges: {
   onChange?: (change: FileChange) => void | Promise<void>;
 } = {};
@@ -160,10 +162,12 @@ function captureFileChangePublisher(): DirectoryState["publishChange"] {
   };
 }
 
-/** Retained shared state survives a restart; its observers must use the new Gateway readers. */
+/** Retained observers must use the current Gateway's host bindings after a restart. */
 export function bindAuthProfileFileObservationReaders(): void {
+  const publishChange = captureFileChangePublisher();
+  gatewayFileChangePublisher = publishChange;
   for (const state of directories.values()) {
-    state.publishChange = captureFileChangePublisher();
+    state.publishChange = publishChange;
   }
 }
 
@@ -177,14 +181,20 @@ function directoryState(directory: string): DirectoryState {
     identities,
     presence: new Map(),
     dirty: false,
-    publishChange: captureFileChangePublisher(),
-    observation: observeOwnedDirectory(directory, (filename) => {
-      if (
-        filename === undefined ||
-        legacyNames.has(filename) ||
-        [...identities.keys()].some((databasePath) => filename === path.basename(databasePath))
-      ) {
+    publishChange: gatewayFileChangePublisher ?? captureFileChangePublisher(),
+    observation: observeOwnedDirectory(directory, (filename, event) => {
+      if (event === "change" && filename !== undefined) {
+        return;
+      }
+      if (filename === undefined || legacyNames.has(filename)) {
         void refreshDirectory(directory, state);
+        return;
+      }
+      for (const databasePath of identities.keys()) {
+        if (filename === path.basename(databasePath)) {
+          void refreshDirectory(directory, state);
+          return;
+        }
       }
     }),
   };
@@ -268,6 +278,7 @@ export async function refreshAuthProfileFileState(): Promise<void> {
 }
 
 function closeAuthProfileFileState(): void {
+  gatewayFileChangePublisher = undefined;
   for (const [directory, state] of directories) {
     retireDirectory(directory, state);
   }

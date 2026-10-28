@@ -1,23 +1,10 @@
 import fs from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  observeHostDataSql,
-  trackSqliteStatementExecutions,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { ensureOpenClawAgentBoardSchemaInTransaction } from "../../state/openclaw-agent-board-schema.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../../state/openclaw-agent-db.js";
-import {
-  ensureSessionInputCompletionsSchema,
-  ensureSessionPendingInputsSchema,
-} from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { prepareComparisonClaimsFromStores } from "./legacy-main-session-key-scan.js";
-import { readClaim, readComparisonClaim } from "./legacy-main-session-migration-claims.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import {
   databasePath,
@@ -59,54 +46,6 @@ function setup() {
   const list = () => listSessionEntryKeysReadOnly({ ...options(), storePath: store().path });
   return { ...fixture, store, options, seed, reader, list };
 }
-
-it("compares retained history without acquiring Doctor deletion custody", () => {
-  const fixture = setup();
-  const key = "agent:main:chat";
-  fixture.seed(key, "main");
-  const options = fixture.options("main");
-  runOpenClawAgentWriteTransaction(({ db }) => {
-    ensureOpenClawAgentBoardSchemaInTransaction(db);
-    ensureSessionPendingInputsSchema(db);
-    ensureSessionInputCompletionsSchema(db);
-  }, options);
-  const database = openOpenClawAgentDatabase(options);
-  const store = fixture.store("main");
-  const observed = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(database.db),
-    ["node", "input"],
-    (sql) => {
-      if (!/^select /i.test(sql)) {
-        return null;
-      }
-      if (/\b(?:session_pending_inputs|session_input_completions)\b/.test(sql)) {
-        return "input";
-      }
-      const node =
-        /\b(?:board_widgets|board_tabs|session_members|session_participants|session_progress_cards|session_suggestions|session_reactions|heartbeat_outcomes)\b/;
-      return node.test(sql) || sql.startsWith('select "legacy_acp_migration_json" ')
-        ? "node"
-        : null;
-    },
-  );
-  restorers.push(observed.restore);
-  const comparison = readComparisonClaim(database, store, key, "agent:ops:chat");
-  expect(comparison).toMatchObject({
-    canonicalKey: "agent:ops:chat",
-    key,
-    entry: { sessionId: "session-agent-main-chat" },
-    generations: [expect.anything()],
-  });
-  expect(observed.counts).toEqual({ node: 0, input: 0 });
-  const custody = readClaim(database, store, key, "agent:ops:chat");
-  expect(custody?.generations[0]?.contentFingerprint).toBe(
-    comparison?.generations[0]?.contentFingerprint,
-  );
-  expect(custody?.nodeArtifactFingerprint).toMatch(/^[a-f0-9]{64}$/);
-  expect(custody?.generations[0]?.fingerprint).toMatch(/^[a-f0-9]{64}$/);
-  expect(observed.counts.node).toBeGreaterThan(0);
-  expect(observed.counts.input).toBe(2);
-});
 
 it("keeps detailed legacy detection current after a foreign transcript commit", async () => {
   const fixture = setup();

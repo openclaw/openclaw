@@ -1,14 +1,18 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
+import { createTestTranscript, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
+  requireElement,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
@@ -17,6 +21,128 @@ beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
 describe("mounted pane run settlement", () => {
+  it("retains the watched recap while a terminal descriptor outlives the status mask", async () => {
+    const startedAt = Date.now();
+    const runId = "managed-media-run";
+    const running: GatewaySessionRow = {
+      key: "agent:main:managed-media-recap",
+      agentId: "main",
+      sessionId: "managed-media-recap",
+      kind: "direct",
+      updatedAt: startedAt,
+      lastRunId: runId,
+      status: "running",
+      hasActiveRun: true,
+    };
+    const prompt = {
+      role: "user",
+      content: "Show the generated image.",
+      timestamp: startedAt,
+      __openclaw: { id: "managed-media-prompt", idempotencyKey: `${runId}:user` },
+    };
+    const finalMessage = {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Here is the generated image." },
+        {
+          type: "image",
+          data: "cG5n",
+          mimeType: "image/png",
+          artifactId: "artifact_managed_image_recap-proof",
+        },
+      ],
+      timestamp: startedAt + 1_000,
+      stopReason: "stop",
+      __openclaw: { id: "managed-media-answer", seq: 2, runId, runTerminal: true },
+    };
+    const done: GatewaySessionRow = {
+      ...running,
+      updatedAt: startedAt + 1_000,
+      status: "done",
+      hasActiveRun: false,
+      activeRunIds: [],
+      endedAt: startedAt + 1_000,
+      runtimeMs: 1_000,
+    };
+    const terminalDescriptor = createDeferred<{ session: GatewaySessionRow }>();
+    let delayDescriptor = false;
+    const history = () => ({
+      messages: [prompt],
+      sessionInfo: running,
+      sessionId: running.sessionId,
+      inFlightRun: { runId, text: "Preparing the image.", startedAt },
+    });
+    const { sessions, mount, emitGatewayEvent } = createMountedPanes([running], "main", undefined, {
+      "sessions.describe": () =>
+        delayDescriptor ? terminalDescriptor.promise : { session: running },
+      "chat.startup": history,
+      "chat.history": history,
+    });
+    await sessions.refresh({ agentId: "main", force: true });
+    const pane = mount(running.key);
+    await refreshPane(pane);
+    const transcript = createTestTranscript(pane.presentationId);
+    const container = document.createElement("div");
+    const draw = () =>
+      renderChatPropsInto(
+        container,
+        {
+          ...expectDefined(pane.render().layout?.primary.chat, "mounted chat pane"),
+          transcript,
+          presented: true,
+          transcriptVisible: true,
+        },
+        pane.context,
+      );
+    onTestFinished(() => {
+      vi.useRealTimers();
+      terminalDescriptor.resolve({ session: done });
+    });
+    draw();
+    await flushDeferredRowPrune();
+    expect(pane.state.chatRunId).toBe(runId);
+    expect(container.querySelector(".chat-working-indicator")).not.toBeNull();
+
+    // History's terminal-persistence view can be active without an exact run set.
+    const observation = sessions.observeRow({ key: running.key, agentId: "main" }, () => {});
+    onTestFinished(observation.dispose);
+    const reconcileDescriptor = observation.captureReconcile();
+    delayDescriptor = true;
+    const descriptorRead = sessions
+      .describe({ key: running.key, agentId: "main" }, { refresh: true })
+      .then(({ session }) => reconcileDescriptor(session ?? undefined));
+    vi.useFakeTimers({ now: startedAt + 1_000 });
+    emitGatewayEvent("chat", {
+      sessionKey: running.key,
+      agentId: "main",
+      runId,
+      seq: 2,
+      state: "final",
+      message: finalMessage,
+    });
+    await vi.waitFor(() => expect(pane.state.chatRunId).toBeNull());
+    draw();
+    expect(pane.state.chatRunId).toBeNull();
+    expect(container.querySelector(".chat-working-indicator")).toBeNull();
+    const bubble = requireElement(container, '[data-entry-id="managed-media-answer"]');
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(5_001);
+    draw();
+    expect(pane.state.chatRunId).toBeNull();
+    expect(container.querySelector(".chat-working-indicator")).not.toBeNull();
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
+
+    terminalDescriptor.resolve({ session: done });
+    await descriptorRead;
+    draw();
+    expect(container.querySelector('[data-entry-id="managed-media-answer"]')).toBe(bubble);
+    expect(container.querySelector(".chat-working-indicator")).toBeNull();
+    expect(
+      requireElement(container, ".chat-group.assistant .chat-turn-recap").textContent,
+    ).toContain("Done in 1 second");
+  });
+
   it.each(["session.message", "sessions.changed"] as const)(
     "reconciles a missed earlier terminal from %s without navigating",
     async (event) => {

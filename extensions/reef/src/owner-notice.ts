@@ -29,12 +29,6 @@ interface ReefRejectionNotice {
 const MAX_REJECTION_TRACKED = 1_024;
 const REJECTION_RESEND_COOLDOWN_MS = 15 * 60 * 1_000;
 
-interface ReefReceiptNotifierOptions {
-  now?: () => number;
-  scheduler: PluginServiceSchedulerV1;
-  onError?: (error: unknown, receiptId: string) => void;
-}
-
 interface ReefRejectionNoticeStore {
   loadState(
     rejection: ReefDeliveryRejection,
@@ -55,11 +49,6 @@ interface ReefPeerNoticeState {
   resendBlocked?: boolean;
 }
 
-interface ReefNoticePlan {
-  notice: ReefRejectionNotice;
-  state: ReefRejectionNoticeState;
-}
-
 export class ReefReceiptNotifier {
   private readonly completed = new Set<string>();
   private readonly peerStates = new Map<string, ReefPeerNoticeState>();
@@ -68,7 +57,10 @@ export class ReefReceiptNotifier {
   constructor(
     private readonly notify: (notice: ReefRejectionNotice) => Promise<void>,
     private readonly store: ReefRejectionNoticeStore,
-    private readonly options: ReefReceiptNotifierOptions,
+    private readonly options: {
+      scheduler: PluginServiceSchedulerV1;
+      onError?: (error: unknown, receiptId: string) => void;
+    },
   ) {}
 
   async notifyRejections(rejections: readonly ReefDeliveryRejection[]): Promise<void> {
@@ -150,7 +142,10 @@ export class ReefReceiptNotifier {
     previous: ReefRejectionNoticeState | undefined,
     reserved: ReefRejectionNoticeState | undefined,
     resendBlocked: boolean,
-  ): ReefNoticePlan {
+  ): {
+    notice: ReefRejectionNotice;
+    state: ReefRejectionNoticeState;
+  } {
     if (reserved) {
       const state = mergeReefRejectionNotice(previous, reserved);
       return {
@@ -158,7 +153,7 @@ export class ReefReceiptNotifier {
         state,
       };
     }
-    const now = this.now();
+    const now = Date.now();
     const rejectionCooldownActive =
       previous !== undefined && now - previous.lastRejectionAt < REJECTION_RESEND_COOLDOWN_MS;
     const resendCooldownActive =
@@ -181,10 +176,6 @@ export class ReefReceiptNotifier {
             : {}),
       },
     };
-  }
-
-  private now(): number {
-    return this.options.now?.() ?? Date.now();
   }
 
   private async touchPeerState(rejection: ReefDeliveryRejection): Promise<ReefPeerNoticeState> {
@@ -315,11 +306,10 @@ export async function notifyOverdueReefDeliveries(params: {
   )) {
     const elapsedMs = Date.now() - overdue.sentAt;
     const minutes = Math.max(1, Math.round(elapsedMs / 60_000));
-    // Dispatch before marking: a crash in between re-sends one deduped notice
-    // on the next tick, whereas marking first could silence it permanently —
-    // the exact failure this sweep exists to report. The context key keeps
-    // redispatch idempotent while the event is still queued, and a receipt
-    // only sees overdueNotifiedAt after the notice really went out.
+    // Mark after admission so a refused notice can retry. Once accepted,
+    // later execution failure must not resubmit potentially delivered work.
+    // A crash before marking can still repeat the notice after adoption;
+    // queued duplicates are suppressed by the context key.
     await params.ownerNotice({
       text: `Reef message ${overdue.id} to @${overdue.peer} has not been confirmed delivered after ${minutes} minute${minutes === 1 ? "" : "s"}; the peer's claw looks offline or unreachable. The relay keeps it queued and you will get a follow-up if it is delivered or rejected. If your owner was waiting on this, let them know now.`,
       peer: overdue.peer,
@@ -348,19 +338,34 @@ export function createReefOwnerNoticeHandler(params: {
       accountId: "default",
       peer: { kind: "direct", id: notice.peer ?? params.handle },
     });
-    const queued = params.runtime.system.enqueueSystemEvent(notice.text, {
-      sessionKey: route.sessionKey,
-      contextKey: notice.contextKey,
-    });
-    if (!queued || !notice.wakeAgent) {
+    if (!notice.wakeAgent) {
+      params.runtime.system.enqueueSystemEvent(notice.text, {
+        sessionKey: route.sessionKey,
+        contextKey: notice.contextKey,
+      });
       return;
     }
-    params.runtime.system.requestHeartbeat({
-      source: "other",
-      intent: "immediate",
-      reason: "reef:delivery-rejected",
+    const expectedTarget = await params.runtime.system.captureSessionEventTarget(
+      route.agentId,
+      route.sessionKey,
+    );
+    const receipt = params.runtime.system.enqueueSessionEvent(notice.text, {
       agentId: route.agentId,
       sessionKey: route.sessionKey,
+      contextKey: notice.contextKey,
+      expectedTarget,
+      createIfMissing: true,
+    });
+    const accepted = await receipt.accepted;
+    if (!accepted.ok) {
+      throw new Error(accepted.error);
+    }
+    void receipt.settled.then((outcome) => {
+      if (outcome.status !== "completed") {
+        params.runtime.logging
+          .getChildLogger({ module: "reef-owner-notice" })
+          .warn(`Reef owner notice ${outcome.status}`, { error: outcome.error });
+      }
     });
   };
 }

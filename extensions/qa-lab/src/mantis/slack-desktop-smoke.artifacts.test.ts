@@ -1,37 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandRunner } from "./crabbox-runtime.js";
+import { createMantisCommandRunner, writeMantisArtifacts } from "./run.test-support.js";
 import { runMantisSlackDesktopSmoke } from "./slack-desktop-smoke.runtime.js";
 import {
   SLACK_ARTIFACT_TEST_CHANNEL,
   writeApprovalCheckpointArtifacts,
 } from "./slack-desktop-smoke.test-support.js";
 
-vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@openclaw/crabbox-provider/cli-runtime-api.js")>();
-  return {
-    ...actual,
-    ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
-      binary,
-      version: "999.0.0",
-    })),
-  };
-});
+// mock-isolation: Preserve actual module exports and create a fresh managed-binary mock per suite.
+vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async () =>
+  (await import("./run.test-support.js")).mockManagedCrabboxBinary(),
+);
 
 const selected = "slack-approval-plugin-native";
 const unselected = "slack-approval-exec-native";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createBarrier() {
-  let complete: () => void;
-  const promise = new Promise<void>((resolve) => {
-    complete = resolve;
-  });
-  return { promise, resolve: () => complete() };
-}
 
 function createRunner(
   copy: (outputDir: string, run: number) => Promise<void>,
@@ -39,39 +26,36 @@ function createRunner(
 ) {
   let run = 0;
   let remoteRuns = 0;
-  return vi.fn<CommandRunner>(async (command, args) => {
-    if (command === "/tmp/crabbox" && args[0] === "run") {
-      if (++remoteRuns === 2 && failSecondRemoteRun) {
-        throw new Error("current remote failure");
+  return createMantisCommandRunner(
+    {
+      host: "203.0.113.10",
+      id: "cbx_abc123",
+      sshKey: "/tmp/synthetic-key",
+      sshPort: "2222",
+      sshUser: "crabbox",
+    },
+    async (command, args) => {
+      if (command === "/tmp/crabbox" && args[0] === "run") {
+        if (++remoteRuns === 2 && failSecondRemoteRun) {
+          throw new Error("current remote failure");
+        }
       }
-    }
-    if (command === "/tmp/crabbox" && args[0] === "inspect") {
-      return {
-        stdout: JSON.stringify({
-          host: "203.0.113.10",
-          id: "cbx_abc123",
-          sshKey: "/tmp/synthetic-key",
-          sshPort: "2222",
-          sshUser: "crabbox",
-        }),
-        stderr: "",
-      };
-    }
-    if (command === "rsync") {
-      const outputDir = args.at(-1);
-      if (!outputDir) {
-        throw new Error("Missing artifact copy destination");
+      if (command === "rsync") {
+        const outputDir = args.at(-1);
+        if (!outputDir) {
+          throw new Error("Missing artifact copy destination");
+        }
+        await copy(outputDir, ++run);
       }
-      await copy(outputDir, ++run);
-    }
-    return { stdout: "", stderr: "" };
-  });
+    },
+  ).runner;
 }
 
 async function writeRunArtifacts(outputDir: string, scenarioIds = [selected]) {
-  await fs.mkdir(outputDir, { recursive: true });
-  await fs.writeFile(path.join(outputDir, "slack-desktop-smoke.png"), "fresh screenshot");
-  await fs.writeFile(path.join(outputDir, "remote-metadata.json"), '{"qaExitCode":0}');
+  await writeMantisArtifacts(outputDir, {
+    "slack-desktop-smoke.png": "fresh screenshot",
+    "remote-metadata.json": '{"qaExitCode":0}',
+  });
   await writeApprovalCheckpointArtifacts(outputDir, scenarioIds);
 }
 
@@ -109,8 +93,8 @@ describe("Mantis Slack artifact ownership", () => {
   }
 
   it("keeps overlapping runs from accepting each other's artifacts", async () => {
-    const copied = createBarrier();
-    const release = createBarrier();
+    const copied = createDeferred<void>();
+    const release = createDeferred<void>();
     const firstRun = runMantisSlackDesktopSmoke(
       options(
         createRunner(async (outputDir) => {

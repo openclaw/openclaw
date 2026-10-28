@@ -17,6 +17,7 @@ import { normalizeCardPayload, normalizeCardsPayload } from "./normalization.ts"
 import {
   getWorkboardRuntime,
   getWorkboardState,
+  notifyWorkboard,
   invalidateWorkboardLoads,
   workboardHasActiveWrites,
   workboardMutationsReady,
@@ -58,14 +59,14 @@ export async function saveWorkboardCardDraft(params: WorkboardClientContext) {
   }
   if (cardId && (!base || base.id !== cardId)) {
     state.error = "This card changed before editing began. Cancel and reopen it to continue.";
-    params.requestUpdate?.();
+    notifyWorkboard(params.host);
     return;
   }
   invalidateWorkboardLoads(params.host);
   state.draftSaving = true;
   state.loading = true;
   state.error = null;
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   try {
     let payload: unknown;
     if (base) {
@@ -98,7 +99,7 @@ export async function saveWorkboardCardDraft(params: WorkboardClientContext) {
   } finally {
     state.draftSaving = false;
     state.loading = false;
-    params.requestUpdate?.();
+    notifyWorkboard(params.host);
   }
 }
 
@@ -234,7 +235,6 @@ export async function moveWorkboardCard(
     await loadWorkboard({
       host: params.host,
       client: params.client,
-      requestUpdate: params.requestUpdate,
       force: true,
       preserveError: true,
     });
@@ -267,7 +267,7 @@ export async function runWorkboardCardMutation<T>(
     state.busyCardIds.add(id);
   }
   state.error = null;
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   try {
     return await mutate(state, params.client);
   } catch (error) {
@@ -280,7 +280,7 @@ export async function runWorkboardCardMutation<T>(
     for (const id of cardIds) {
       state.busyCardIds.delete(id);
     }
-    params.requestUpdate?.();
+    notifyWorkboard(params.host);
   }
 }
 
@@ -357,7 +357,7 @@ export async function dispatchWorkboard(params: WorkboardClientContext) {
   state.error = null;
   state.lastDispatchSummary = null;
   state.bulkResult = null;
-  params.requestUpdate?.();
+  notifyWorkboard(params.host);
   try {
     const dispatchResult = await params.client.request(
       "workboard.cards.dispatch",
@@ -377,6 +377,6 @@ export async function dispatchWorkboard(params: WorkboardClientContext) {
     state.error = formatError(error);
   } finally {
     state.dispatching = false;
-    params.requestUpdate?.();
+    notifyWorkboard(params.host);
   }
 }

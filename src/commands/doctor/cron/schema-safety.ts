@@ -1,4 +1,6 @@
+import { assertCronStateReadSchemaReadOnly } from "../../../cron/store/read-only.js";
 import { isSqliteSchemaVersionError } from "../../../infra/sqlite-user-version.js";
+import { isStatePostgres } from "../../../state/openclaw-state-db-engine.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
@@ -9,6 +11,10 @@ export function assertCronStateSchemaSupported(env?: NodeJS.ProcessEnv): void {
 }
 
 export async function assertCronStateSchemaSupportedAsync(env?: NodeJS.ProcessEnv): Promise<void> {
+  if (isStatePostgres()) {
+    await assertCronStateReadSchemaReadOnly(env);
+    return;
+  }
   await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(() => undefined, { env });
 }
 

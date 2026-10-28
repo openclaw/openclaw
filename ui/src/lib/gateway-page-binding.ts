@@ -28,11 +28,6 @@ export type GatewayPageBindingOptions = {
   onPageActivation?: () => void;
 };
 
-type GatewayRouteDataIdentity = {
-  gateway: ApplicationContext["gateway"];
-  gatewaySnapshot: ApplicationGatewaySnapshot;
-};
-
 export class GatewayPageBinding {
   private readonly lifecycle = createGatewayConnectionLifecycle({
     client: null,
@@ -118,7 +113,10 @@ export class GatewayPageBinding {
     this.lifecycle.invalidate();
   }
 
-  isRouteDataCurrent(data: GatewayRouteDataIdentity): boolean {
+  isRouteDataCurrent(data: {
+    gateway: ApplicationContext["gateway"];
+    gatewaySnapshot: ApplicationGatewaySnapshot;
+  }): boolean {
     const gateway = this.options.getGateway();
     if (!gateway || data.gateway !== gateway) {
       return false;

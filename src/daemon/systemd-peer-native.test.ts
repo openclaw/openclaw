@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { SystemdBus } from "@openclaw/proc-safe/systemd";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -70,14 +71,6 @@ async function usingPeer(work: (peer: Peer) => Promise<void>, open = openBroker)
     await peer.close();
   }
 }
-function requireCurrent(current: () => boolean, failure: Error) {
-  return () => {
-    if (!current()) {
-      throw failure;
-    }
-  };
-}
-
 it.each([
   { name: "UID", change: { uid: 2001 }, ownership: true },
   { name: "PID", change: { pid: 4321 }, ownership: true },
@@ -127,7 +120,7 @@ it("checks update authority before opening transport", async () => {
     error instanceof GatewayServiceAuthorityError && error.cause === denied;
   let active = true;
   const work = withAuthority(
-    requireCurrent(() => active, denied),
+    () => assert(active, denied),
     async () => {
       active = false;
       await expect(openBroker()).rejects.toSatisfy(isAuthorityRevocation);
@@ -147,7 +140,7 @@ it.each(["queued", "dispatched"])("checks effect custody only before dispatch: %
       };
     }
     const failure = new Error("effect custody expired");
-    const guard = vi.fn(requireCurrent(() => current, failure));
+    const guard = vi.fn(() => assert(current, failure));
     const work = peer.query(resetFailed, [], deadline(), () => {}, guard);
     if (phase === "queued") {
       current = false;

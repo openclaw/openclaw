@@ -22,7 +22,9 @@ import {
   resolveOpenClawCliInvocation,
 } from "../../cli-invocation.mjs";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { resolveOpenClawCliEntryPath } from "../infra/openclaw-cli-invocation.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -89,15 +91,18 @@ function resolveSelfEntryPath(): string | null {
   // Prefer a path relative to the built module location (dist/acp/client.js -> dist/entry.js).
   try {
     const here = fileURLToPath(import.meta.url);
-    const candidate = path.resolve(path.dirname(here), "..", "entry.js");
-    if (fs.existsSync(candidate)) {
+    const packageRoot = path.resolve(path.dirname(here), "..", "..");
+    const candidate = fileURLToPath(
+      resolveExternalPackageRuntimeEntrypointUrl("gatewayEntry", packageRoot),
+    );
+    if (path.basename(path.dirname(path.dirname(here))) === "dist" && fs.existsSync(candidate)) {
       return candidate;
     }
   } catch {
     // ignore
   }
 
-  const argv1 = normalizeOptionalString(process.argv[1]);
+  const argv1 = resolveOpenClawCliEntryPath(process.argv[1]);
   if (argv1) {
     return path.isAbsolute(argv1) ? argv1 : path.resolve(process.cwd(), argv1);
   }

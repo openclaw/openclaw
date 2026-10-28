@@ -198,8 +198,7 @@ export class RequestClient {
     }
     const body = serializeRequestBody(params.data, headers);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.options.timeout);
-    timeout.unref?.();
+    const timeout = setTimeout(() => controller.abort(), this.options.timeout).unref();
     const signal = this.options.signal
       ? AbortSignal.any([this.options.signal, controller.signal])
       : controller.signal;
@@ -232,7 +231,7 @@ export class RequestClient {
         const rateLimitBody = isDiscordRateLimitBody(parsed) ? parsed : undefined;
         throw new RateLimitError(response, {
           message: readDiscordMessage(rateLimitBody, "Rate limited"),
-          retry_after: readRetryAfter(rateLimitBody, response, 1),
+          retry_after: readRetryAfter(rateLimitBody, response),
           code: readDiscordCode(rateLimitBody),
           global: Boolean(rateLimitBody?.global),
         });
@@ -244,10 +243,6 @@ export class RequestClient {
     } finally {
       clearTimeout(timeout);
     }
-  }
-
-  clearQueue(): void {
-    this.scheduler.clearQueue();
   }
 }
 

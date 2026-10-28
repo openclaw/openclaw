@@ -7,8 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ACTIONLINT_REVISION = "011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7";
-const PRE_COMMIT_VERSION = "4.6.2";
-// pre-commit 4.6.2 declares requires-python >=3.10, so an older interpreter only
+const PRE_COMMIT_VERSION = "4.7.0";
+// pre-commit 4.7.0 declares requires-python >=3.10, so an older interpreter only
 // fails after a venv build and a network pip install.
 const PRE_COMMIT_PYTHON_FLOOR = "3.10";
 const WORKFLOW_DIR = ".github/workflows";

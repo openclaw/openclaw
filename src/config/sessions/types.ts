@@ -57,6 +57,24 @@ export type SessionChatType = ChatType;
 export type PersistedSessionRunStatus = Exclude<SessionRunStatus, "running" | "queued">;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 
+type SessionGitHubPullRequestSource = {
+  repository: string;
+  repositoryId: number;
+  branch: string;
+  commit: string;
+};
+
+/** Original PR selection for one managed workspace; never a publication receipt or permission grant. */
+export type SessionGitHubPullRequestBinding = {
+  url: string;
+  host: string;
+  number: number;
+  base: SessionGitHubPullRequestSource;
+  head: SessionGitHubPullRequestSource;
+  /** Prepared initial PR head; absence means its first import is incomplete. */
+  preparedHeadCommit?: string;
+};
+
 export type SessionOrigin = {
   label?: string;
   provider?: string;
@@ -149,6 +167,13 @@ export type CliSessionBinding = {
   mcpResumeHash?: string;
   /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
   reseedReceipt?: CliSessionReseedReceipt;
+  /** Last input snapshot supplied to this native session, independent of recovery authority. */
+  transcriptCursor?: {
+    localSessionId: string;
+    entryId: string | null;
+    runId: string;
+    userEntryId?: string;
+  };
 };
 
 type AcpSessionBinding = {
@@ -285,6 +310,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Durable one-shot prompt additions drained before the next agent turn. */
     pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
     sessionId: string;
+    /** Latest operator client declaration; retained across internal turns and restart. */
+    clientCapabilities?: string[];
     updatedAt: number;
     /** Process-lifetime session whose entry and transcript stay in the in-memory agent database. */
     incognito?: true;
@@ -349,6 +376,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
       repoRoot: string;
       /** Durable skill workspace prepared when this session runs from a managed worktree. */
       canonicalWorkspaceDir?: string;
+      githubPullRequest?: SessionGitHubPullRequestBinding;
     };
     /** Project registry id selected when this logical session node was created. */
     projectId?: string;
@@ -388,6 +416,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     subagentRole?: "orchestrator" | "leaf";
     /** Explicit control scope assigned at spawn time for subagent control decisions. */
     subagentControlScope?: "children" | "none";
+    /** Spawn-time blind child: its rendered prompt omits its model, identity and workspace path. */
+    blindPrompt?: true;
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
     /** Sender/channel restriction provenance retained with the inherited tool snapshot. */
@@ -477,6 +507,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
         requireExplicitMessageTarget?: boolean;
       };
     };
+    /** Explicit requested access program; omission follows the model/project default. */
+    cyberAccessProgram?: SessionRow["cyberAccessProgram"];
     fastMode?: FastMode;
     toolOverrides?: SessionToolOverrides;
     /** Swarm group for collector-mode child sessions. */
@@ -501,6 +533,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     responseUsage?: "on" | "off" | "tokens" | "full";
     providerOverride?: string;
     modelOverride?: string;
+    /** Last submitted selection, retained when picker edits clear runtime fields. */
+    lastSubmittedModel?: { provider: string; model: string };
     /** Session-scoped agent runtime/harness override selected with the model picker. */
     agentRuntimeOverride?: string;
     /**
@@ -635,6 +669,14 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Original unbound files, private to this conversation's adopted workspace. */
+  priorWorkspace?: {
+    worktreeId: string;
+    sessionId: string;
+    workspaceDir: string;
+    fileRoot: string;
+    through: { generation: string | null; maxSeq: number | null };
+  };
   /** Personal discovery state, never participation, attribution, or sharing authority. */
   profileInvolvement?: { key: string; profiles: Record<string, SessionProfileInvolvement> };
   /** Transcript-wide account provenance; native binding replacement must not replace it. */

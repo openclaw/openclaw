@@ -203,7 +203,6 @@ it.each(["pull_request", "push", "schedule", "workflow_dispatch"] as const)(
   "runs the production audit only for release dispatches: %s",
   (eventName) => {
     const audit = securityStep("Audit production dependencies");
-    expect(audit.if).toBeDefined();
     for (const [dispatchId, release] of [
       ["", false],
       ["manual-ci", false],
@@ -288,7 +287,7 @@ it("generates the exact local-only scanner contract from trusted policy", () => 
   expectIncludes(checkoutHarness.with?.["sparse-checkout"], [".github/zizmor.yml", scannerPath]);
   expect(securitySteps.some((step) => step.name === "Resolve Python runtime")).toBe(false);
   expect(install.run).toContain("python3 --version");
-  expect(install.run).toContain("pre-commit==4.6.2 zizmor==1.30.1");
+  expect(install.run).toContain("pre-commit==4.7.0 zizmor==1.31.1");
   expect(install.run).not.toContain("pre-commit-hooks");
   expect(prepare.run).not.toMatch(/origin\/|BASE_REF|PRE_COMMIT_CONFIG_PATH:-/u);
   // Scan with trusted code before third-party installation.

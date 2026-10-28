@@ -3,7 +3,7 @@ import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import type { MessageGroup, NormalizedMessage } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel, type SenderIdentity } from "../../../lib/chat/sender-label.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import type { ReplyPreview, ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 
 /**

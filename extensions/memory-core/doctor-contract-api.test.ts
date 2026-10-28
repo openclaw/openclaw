@@ -9,12 +9,11 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { readMemoryHostEventRecords } from "openclaw/plugin-sdk/memory-host-events";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import {
-  createDoctorContext,
   resetDoctorPluginState,
+  useDoctorWorkspace,
   type RawLegacyDoctorConfig,
 } from "./doctor-contract-api.test-support.js";
 import { runVectorKnnQuery } from "./src/memory/manager-search-knn.test-support.js";
@@ -320,46 +319,27 @@ describe("memory-core doctor dreaming migration", () => {
   let eventPath = "";
   let env: NodeJS.ProcessEnv;
 
-  beforeEach(async () => {
-    await resetDoctorPluginState();
-    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-core-doctor-"));
-    workspaceDir = path.join(rootDir, "workspace");
-    stateDir = path.join(rootDir, "state");
+  const {
+    fixture,
+    context,
+    params: migrationParams,
+  } = useDoctorWorkspace("openclaw-memory-core-doctor-", resetMemoryCoreDreamingStateForTests);
+
+  beforeEach(() => {
+    ({ rootDir, workspaceDir, stateDir, env } = fixture);
     legacyPath = path.join(stateDir, "memory", "main.sqlite");
     agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     eventPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
-    await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
-    env = { ...process.env, OPENCLAW_STATE_DIR: path.join(rootDir, "state") };
-  });
-
-  afterEach(async () => {
-    await resetDoctorPluginState();
-    resetMemoryCoreDreamingStateForTests();
-    await fs.rm(rootDir, { recursive: true, force: true });
   });
 
   function mainAgents(): NonNullable<RawLegacyDoctorConfig["agents"]> {
     return { defaults: {}, list: [{ id: "main", workspace: workspaceDir }] };
   }
 
-  function context(): PluginDoctorStateMigrationContext {
-    return createDoctorContext(env);
-  }
-
-  function migrationParams(
-    config: RawLegacyDoctorConfig = {
-      agents: {
-        list: [{ id: "main", workspace: workspaceDir }],
-      },
-    },
-  ) {
-    return {
-      config,
-      env,
-      stateDir: path.join(rootDir, "state"),
-      oauthDir: path.join(rootDir, "oauth"),
-      context: context(),
-    };
+  function legacyMemorySearchConfig(
+    search: NonNullable<NonNullable<RawLegacyDoctorConfig["memory"]>["search"]>,
+  ): RawLegacyDoctorConfig {
+    return { memory: { search }, agents: mainAgents() };
   }
 
   it("imports legacy memory host events into plugin state", async () => {
@@ -891,17 +871,11 @@ describe("memory-core doctor dreaming migration", () => {
 
   it("creates migrated FTS tables with the configured legacy tokenizer", async () => {
     await writeLegacyMemorySidecar(legacyPath);
-    const config: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          store: {
-            fts: { tokenizer: "trigram" },
-          },
-        },
+    const config: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      store: {
+        fts: { tokenizer: "trigram" },
       },
-
-      agents: mainAgents(),
-    };
+    });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
 
@@ -1054,19 +1028,13 @@ describe("memory-core doctor dreaming migration", () => {
 
   it("keeps legacy vector sidecars retryable when sqlite-vec cannot load", async () => {
     await writeLegacyMemorySidecar(legacyPath, { vector: "vec0" });
-    const config: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          store: {
-            vector: {
-              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-            },
-          },
+    const config: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      store: {
+        vector: {
+          extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
         },
       },
-
-      agents: mainAgents(),
-    };
+    });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
 
@@ -1091,20 +1059,14 @@ describe("memory-core doctor dreaming migration", () => {
 
   it("archives legacy vector sidecars when memory search is disabled", async () => {
     await writeLegacyMemorySidecar(legacyPath, { vector: "vec0" });
-    const config: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          provider: "none",
-          store: {
-            vector: {
-              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-            },
-          },
+    const config: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      provider: "none",
+      store: {
+        vector: {
+          extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
         },
       },
-
-      agents: mainAgents(),
-    };
+    });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
 
@@ -1119,20 +1081,14 @@ describe("memory-core doctor dreaming migration", () => {
     const retryPath = path.join(stateDir, "memory", "main.sqlite");
     await writeLegacyMemorySidecar(legacyPath, { vector: "vec0" });
     await writeLegacyMemorySidecar(retryPath, { vector: "vec0" });
-    const config: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          store: {
-            path: legacyPath,
-            vector: {
-              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-            },
-          },
+    const config: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      store: {
+        path: legacyPath,
+        vector: {
+          extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
         },
       },
-
-      agents: mainAgents(),
-    };
+    });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
     const retryEntries = await fs.readdir(path.join(stateDir, "memory"));
@@ -1141,19 +1097,13 @@ describe("memory-core doctor dreaming migration", () => {
     );
     expect(alternateRetry).toBeDefined();
     const alternateRetryPath = path.join(stateDir, "memory", alternateRetry ?? "");
-    const repairedConfig: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          store: {
-            vector: {
-              extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
-            },
-          },
+    const repairedConfig: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      store: {
+        vector: {
+          extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
         },
       },
-
-      agents: mainAgents(),
-    };
+    });
     const retryPreview = await legacyMemoryIndexMigration().detectLegacyState(
       migrationParams(repairedConfig),
     );
@@ -1195,17 +1145,11 @@ describe("memory-core doctor dreaming migration", () => {
     const retryPath = path.join(stateDir, "memory", "main.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
     await createCanonicalMemoryIndex(agentPath, env, "conflicting");
-    const config: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          store: {
-            path: legacyPath,
-          },
-        },
+    const config: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      store: {
+        path: legacyPath,
       },
-
-      agents: mainAgents(),
-    };
+    });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
     const repairedConfig: RawLegacyDoctorConfig = {
@@ -1234,17 +1178,11 @@ describe("memory-core doctor dreaming migration", () => {
     const retryPath = path.join(stateDir, "memory", "main.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
     await fs.mkdir(agentPath, { recursive: true });
-    const config: RawLegacyDoctorConfig = {
-      memory: {
-        search: {
-          store: {
-            path: legacyPath,
-          },
-        },
+    const config: RawLegacyDoctorConfig = legacyMemorySearchConfig({
+      store: {
+        path: legacyPath,
       },
-
-      agents: mainAgents(),
-    };
+    });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
     const repairedConfig: RawLegacyDoctorConfig = {

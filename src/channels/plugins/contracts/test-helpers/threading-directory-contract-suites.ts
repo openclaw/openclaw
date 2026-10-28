@@ -1,19 +1,9 @@
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../../../../config/config.js";
 import type { RuntimeEnv } from "../../../../runtime.js";
-import type {
-  ChannelDirectoryEntry,
-  ChannelThreadingAdapter,
-  ChannelThreadingToolContext,
-} from "../../types.core.js";
-import type { ChannelPlugin } from "../../types.plugin.js";
-
-type ChannelReplyTransport = NonNullable<
-  ReturnType<NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>>
->;
-type ChannelFocusedBindingContext = NonNullable<
-  ReturnType<NonNullable<ChannelThreadingAdapter["resolveFocusedBinding"]>>
->;
+import type { ChannelDirectoryEntry } from "../../types.core.js";
+import type { AnyChannelPlugin, ChannelPlugin } from "../../types.plugin.js";
+import type { channelPluginSurfaceKeys } from "./manifest.js";
 
 const contractRuntime = new Proxy(Object.create(null), {
   get(_target, property) {
@@ -21,50 +11,35 @@ const contractRuntime = new Proxy(Object.create(null), {
   },
 }) as RuntimeEnv;
 
-function expectOptionalType(value: unknown, type: string | string[]) {
-  if (value !== undefined) {
-    expect(typeof type === "string" ? [type] : type).toContain(typeof value);
+type Check = (value: unknown) => boolean;
+function optional(check: Check): Check {
+  return (value) => value === undefined || check(value);
+}
+function optionalType(...types: string[]): Check {
+  return optional((value) => types.includes(typeof value));
+}
+const nonempty: Check = (value) => typeof value === "string" && value.trim() !== "";
+function oneOf(...values: unknown[]): Check {
+  return (value) => values.includes(value);
+}
+const replyMode = oneOf("off", "first", "all");
+export function expectContractFields<T extends object, K extends keyof T>(
+  value: T,
+  fields: Record<K, Check>,
+) {
+  for (const key in fields) {
+    expect(fields[key](value[key]), key).toBe(true);
   }
 }
-
 function expectDirectoryEntryShape(entry: ChannelDirectoryEntry) {
-  expect(["user", "group", "channel"]).toContain(entry.kind);
-  expect(typeof entry.id).toBe("string");
-  expect(entry.id.trim()).not.toBe("");
-  for (const value of [entry.name, entry.handle, entry.avatarUrl]) {
-    expectOptionalType(value, "string");
-  }
-  expectOptionalType(entry.rank, "number");
-}
-
-function expectThreadingToolContextShape(context: ChannelThreadingToolContext) {
-  for (const value of [
-    context.currentChannelId,
-    context.currentChannelProvider,
-    context.currentThreadTs,
-  ]) {
-    expectOptionalType(value, "string");
-  }
-  expectOptionalType(context.currentMessageId, ["string", "number"]);
-  if (context.replyToMode !== undefined) {
-    expect(["off", "first", "all"]).toContain(context.replyToMode);
-  }
-  expectOptionalType(context.hasRepliedRef, "object");
-  expectOptionalType(context.skipCrossContextDecoration, "boolean");
-}
-
-function expectReplyTransportShape(transport: ChannelReplyTransport) {
-  expectOptionalType(transport.replyToId ?? undefined, "string");
-  expectOptionalType(transport.threadId ?? undefined, ["string", "number"]);
-}
-
-function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
-  expect(typeof binding.conversationId).toBe("string");
-  expect(binding.conversationId.trim()).not.toBe("");
-  expectOptionalType(binding.parentConversationId, "string");
-  expect(["current", "child"]).toContain(binding.placement);
-  expect(typeof binding.labelNoun).toBe("string");
-  expect(binding.labelNoun.trim()).not.toBe("");
+  expectContractFields(entry, {
+    kind: oneOf("user", "group", "channel"),
+    id: nonempty,
+    name: optionalType("string"),
+    handle: optionalType("string"),
+    avatarUrl: optionalType("string"),
+    rank: optionalType("number"),
+  });
 }
 
 export function expectChannelThreadingReturnValuesNormalized(
@@ -72,7 +47,7 @@ export function expectChannelThreadingReturnValuesNormalized(
 ) {
   const threading = plugin.threading;
   expect(threading).toBeDefined();
-  const account = () => ({ cfg: {} satisfies OpenClawConfig, accountId: "default" });
+  const account = <const T>(extra: T) => ({ cfg: {}, accountId: "default", ...extra });
   const context = () =>
     ({
       Channel: "group:test",
@@ -88,50 +63,54 @@ export function expectChannelThreadingReturnValuesNormalized(
 
   if (threading?.resolveReplyToMode) {
     expect(["off", "first", "all"]).toContain(
-      threading.resolveReplyToMode({ ...account(), chatType: "group" }),
+      threading.resolveReplyToMode(account({ chatType: "group" })),
     );
   }
 
   const repliedRef = { value: false };
-  const toolContext = threading?.buildToolContext?.({
-    ...account(),
-    context: context(),
-    hasRepliedRef: repliedRef,
-  });
+  const toolContext = threading?.buildToolContext?.(
+    account({ context: context(), hasRepliedRef: repliedRef }),
+  );
 
   if (toolContext) {
-    expectThreadingToolContextShape(toolContext);
-    if (toolContext.hasRepliedRef) {
-      expect(toolContext.hasRepliedRef).toBe(repliedRef);
-    }
+    expectContractFields(toolContext, {
+      currentChannelId: optionalType("string"),
+      currentChannelProvider: optionalType("string"),
+      currentThreadTs: optionalType("string"),
+      currentMessageId: optionalType("string", "number"),
+      replyToMode: optional(replyMode),
+      hasRepliedRef: optional(
+        (value) => typeof value === "object" && (!value || value === repliedRef),
+      ),
+      skipCrossContextDecoration: optionalType("boolean"),
+    });
   }
 
-  const autoThreadId = threading?.resolveAutoThreadId?.({
-    ...account(),
-    to: "group:test",
-    toolContext,
-    replyToId: null,
-  });
+  const autoThreadId = threading?.resolveAutoThreadId?.(
+    account({ to: "group:test", toolContext, replyToId: null }),
+  );
   if (autoThreadId !== undefined) {
-    expect(typeof autoThreadId).toBe("string");
-    expect(autoThreadId.trim()).not.toBe("");
+    expect(nonempty(autoThreadId)).toBe(true);
   }
 
-  const replyTransport = threading?.resolveReplyTransport?.({
-    ...account(),
-    threadId: "thread-0",
-    replyToId: "msg-0",
-  });
+  const replyTransport = threading?.resolveReplyTransport?.(
+    account({ threadId: "thread-0", replyToId: "msg-0" }),
+  );
   if (replyTransport) {
-    expectReplyTransportShape(replyTransport);
+    expectContractFields(replyTransport, {
+      replyToId: (value) => value == null || typeof value === "string",
+      threadId: (value) => value === null || optionalType("string", "number")(value),
+    });
   }
 
-  const focusedBinding = threading?.resolveFocusedBinding?.({
-    ...account(),
-    context: context(),
-  });
+  const focusedBinding = threading?.resolveFocusedBinding?.(account({ context: context() }));
   if (focusedBinding) {
-    expectFocusedBindingShape(focusedBinding);
+    expectContractFields(focusedBinding, {
+      conversationId: nonempty,
+      parentConversationId: optionalType("string"),
+      placement: oneOf("current", "child"),
+      labelNoun: nonempty,
+    });
   }
 }
 
@@ -143,13 +122,7 @@ export async function expectChannelDirectoryBaseContract(params: {
 }) {
   const directory = params.plugin.directory;
   expect(directory).toBeDefined();
-  const cfg =
-    params.cfg ??
-    ({
-      channels: {
-        [params.plugin.id]: { enabled: false },
-      },
-    } as unknown as OpenClawConfig);
+  const cfg = params.cfg ?? { channels: { [params.plugin.id]: { enabled: false } } };
   const accountId = params.accountId ?? "default";
   const lookup = { cfg, accountId, runtime: contractRuntime };
 
@@ -181,4 +154,71 @@ export async function expectChannelDirectoryBaseContract(params: {
     });
     checkEntries(members);
   }
+}
+
+type Surface = (typeof channelPluginSurfaceKeys)[number];
+const hooks = {
+  actions: ["describeMessageTool"],
+  setup: ["applyAccountConfig"],
+  status: ["buildAccountSnapshot"],
+  outbound: [
+    "sendPayload",
+    "sendFormattedText",
+    "sendFormattedMedia",
+    "sendText",
+    "sendMedia",
+    "sendPoll",
+  ],
+  messaging: [
+    "normalizeTarget",
+    "inferTargetChatType",
+    "buildCrossContextPresentation",
+    "hasStructuredReplyPayload",
+    "formatTargetDisplay",
+    "resolveOutboundSessionRoute",
+  ],
+  // Target matching also supports source-reply mirroring without reply-shaping hooks.
+  threading: [
+    "resolveReplyToMode",
+    "buildToolContext",
+    "resolveAutoThreadId",
+    "resolveReplyTransport",
+    "resolveFocusedBinding",
+    "matchesToolContextTarget",
+  ],
+  directory: [
+    "self",
+    "listPeers",
+    "listPeersLive",
+    "listGroups",
+    "listGroupsLive",
+    "listGroupMembers",
+  ],
+  gateway: ["startAccount", "stopAccount", "loginWithQrStart", "loginWithQrWait", "logoutAccount"],
+} satisfies { [S in Surface]: (keyof NonNullable<AnyChannelPlugin[S]>)[] };
+
+export function expectChannelSurfaceContract({
+  plugin,
+  surface,
+}: {
+  plugin: Pick<AnyChannelPlugin, "id" | "setupContract" | Surface>;
+  surface: Surface;
+}) {
+  const adapter = surface === "setup" ? (plugin.setupContract ?? plugin.setup) : plugin[surface];
+  expect(
+    hooks[surface].some((key) => adapter && typeof Reflect.get(adapter, key) === "function"),
+  ).toBe(true);
+  if (surface === "outbound") {
+    expect(["direct", "gateway", "hybrid"]).toContain(plugin.outbound?.deliveryMode);
+  }
+  const resolver = surface === "messaging" ? plugin.messaging?.targetResolver : undefined;
+  if (!resolver) {
+    return;
+  }
+  expectContractFields(resolver, {
+    looksLikeId: (value) => !value || typeof value === "function",
+    resolveTarget: (value) => !value || typeof value === "function",
+    hint: optional(nonempty),
+    reservedLiterals: optional((value) => Array.isArray(value) && value.every(nonempty)),
+  });
 }

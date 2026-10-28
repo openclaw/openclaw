@@ -1,7 +1,7 @@
 import {
   formatDurationParts,
-  formatSingleUnitDuration,
   resolveCompactDurationParts,
+  resolveSingleUnitDurationParts,
 } from "./format-duration-internal.js";
 
 export type FormatDurationSecondsOptions = {
@@ -72,5 +72,5 @@ export function formatDurationHuman(ms?: number | null, fallback = "n/a"): strin
   if (ms == null || !Number.isFinite(ms) || ms < 0) {
     return fallback;
   }
-  return formatSingleUnitDuration(ms);
+  return formatDurationParts(resolveSingleUnitDurationParts(ms));
 }

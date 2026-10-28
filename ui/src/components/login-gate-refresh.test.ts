@@ -74,18 +74,25 @@ it.each(["bounded wait", "rejected retry"])("returns to Retry after %s", async (
     vi.mocked(recovery.retryStaleChunkReloadWhenReachable).mockRejectedValueOnce(new Error());
   }
   const element = await mountMismatch();
-  refresh(element).click();
+  const button = refresh(element);
+  button.focus();
+  button.click();
   await vi.advanceTimersByTimeAsync(failure === "bounded wait" ? 30_000 : 0);
   await element.updateComplete;
   expect(reload).not.toHaveBeenCalled();
   expect(refresh(element).disabled).toBe(false);
   expect(refresh(element).textContent?.trim()).toBe("Retry");
-  if (failure === "bounded wait") {
-    probe.mockResolvedValue({ ok: true });
-    refresh(element).click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(reload).toHaveBeenCalledOnce();
-  }
+  expect(refresh(element)).toBe(button);
+  expect(document.activeElement).toBe(button);
+  const finish = deferredProbe();
+  button.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(refresh(element)).toBe(button);
+  expect(button.disabled).toBe(true);
+  expect(button.textContent?.trim()).toBe("Refreshing…");
+  finish();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(reload).toHaveBeenCalledOnce();
 });
 it.each([
   ["connected", { connected: true }],

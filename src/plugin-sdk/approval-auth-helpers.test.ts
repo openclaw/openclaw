@@ -1,12 +1,22 @@
-/**
- * Tests approval auth helper decisions and implicit same-chat authorization markers.
- */
 import { describe, expect, it } from "vitest";
 import {
   createChannelApprovalAuth,
   createResolvedApproverActionAuthAdapter,
   isImplicitSameChatApprovalAuthorization,
 } from "./approval-auth-helpers.js";
+
+type ApprovalAuth = ReturnType<typeof createResolvedApproverActionAuthAdapter>;
+const authorize = (
+  auth: ApprovalAuth,
+  senderId: string,
+  approvalKind: "exec" | "plugin" = "exec",
+) => auth.authorizeActorAction({ cfg: {}, senderId, action: "approve", approvalKind });
+const signalAuth = (approvers: string[], normalizeSenderId?: (value: string) => string) =>
+  createResolvedApproverActionAuthAdapter({
+    channelLabel: "Signal",
+    resolveApprovers: () => approvers,
+    normalizeSenderId,
+  });
 
 describe("createChannelApprovalAuth", () => {
   it("shares resolution, sender checks, and action authorization", () => {
@@ -18,14 +28,7 @@ describe("createChannelApprovalAuth", () => {
 
     expect(auth.resolveApprovers({ cfg: {} })).toEqual(["owner", "backup"]);
     expect(auth.isAuthorizedSender({ cfg: {}, senderId: "OWNER" })).toBe(true);
-    expect(
-      auth.approvalAuth.authorizeActorAction({
-        cfg: {},
-        senderId: "attacker",
-        action: "approve",
-        approvalKind: "plugin",
-      }),
-    ).toEqual({
+    expect(authorize(auth.approvalAuth, "attacker", "plugin")).toEqual({
       authorized: false,
       reason: "❌ You are not authorized to approve plugin requests on Example.",
     });
@@ -43,63 +46,30 @@ describe("createChannelApprovalAuth", () => {
     expect(auth.resolveApprovers({ cfg: {} })).toEqual([]);
     expect(auth.isAuthorizedSender({ cfg: {}, senderId: "anyone" })).toBe(true);
     expect(auth.isAuthorizedSender({ cfg: {} })).toBe(false);
-    expect(
-      auth.approvalAuth.authorizeActorAction({
-        cfg: {},
-        senderId: "anyone",
-        action: "approve",
-        approvalKind: "exec",
-      }),
-    ).toEqual({ authorized: true });
+    expect(authorize(auth.approvalAuth, "anyone")).toEqual({ authorized: true });
   });
 });
 
 describe("createResolvedApproverActionAuthAdapter", () => {
   it("allows matching normalized approvers and rejects others", () => {
-    const auth = createResolvedApproverActionAuthAdapter({
-      channelLabel: "Signal",
-      resolveApprovers: () => ["uuid:owner"],
-      normalizeSenderId: (value) => value.trim().toLowerCase(),
-    });
-    const authorize = (senderId: string) =>
-      auth.authorizeActorAction({ cfg: {}, senderId, action: "approve", approvalKind: "plugin" });
+    const auth = signalAuth(["uuid:owner"], (value) => value.trim().toLowerCase());
 
-    expect(authorize(" UUID:OWNER ")).toEqual({ authorized: true });
-    expect(authorize("uuid:attacker")).toEqual({
+    expect(authorize(auth, " UUID:OWNER ", "plugin")).toEqual({ authorized: true });
+    expect(authorize(auth, "uuid:attacker", "plugin")).toEqual({
       authorized: false,
       reason: "❌ You are not authorized to approve plugin requests on Signal.",
     });
   });
 
-  it("marks empty-approver fallback auth as implicit", () => {
-    const auth = createResolvedApproverActionAuthAdapter({
-      channelLabel: "Signal",
-      resolveApprovers: () => [],
-    });
-    const result = auth.authorizeActorAction({
-      cfg: {},
-      senderId: "uuid:attacker",
-      action: "approve",
-      approvalKind: "exec",
-    });
-
-    expect(result).toEqual({ authorized: true });
-    expect(isImplicitSameChatApprovalAuthorization(result)).toBe(true);
-  });
-
-  it("does not mark configured-approver auth as implicit", () => {
-    const auth = createResolvedApproverActionAuthAdapter({
-      channelLabel: "Signal",
-      resolveApprovers: () => ["uuid:owner"],
-    });
-    const result = auth.authorizeActorAction({
-      cfg: {},
-      senderId: "uuid:owner",
-      action: "approve",
-      approvalKind: "exec",
-    });
-
-    expect(result).toEqual({ authorized: true });
-    expect(isImplicitSameChatApprovalAuthorization(result)).toBe(false);
-  });
+  it.each([
+    [[], "uuid:attacker", true],
+    [["uuid:owner"], "uuid:owner", false],
+  ] satisfies Array<[string[], string, boolean]>)(
+    "marks %j approvers / %s sender as implicit: %s",
+    (approvers, sender, implicit) => {
+      const result = authorize(signalAuth(approvers), sender);
+      expect(result).toEqual({ authorized: true });
+      expect(isImplicitSameChatApprovalAuthorization(result)).toBe(implicit);
+    },
+  );
 });

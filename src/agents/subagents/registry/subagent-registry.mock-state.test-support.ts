@@ -13,19 +13,43 @@ import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-
 import type { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import type {
   SessionIdentityMutation,
   SessionIdentityMutationListener,
 } from "../../../sessions/session-lifecycle-events.js";
 import { notifyListeners, registerListener } from "../../../shared/listeners.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.test-support.js";
 import type { MockSubagentRegistryRows } from "../../subagent-test-fixtures.test-helpers.js";
 import type { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const noop = () => {};
 const snapshotRuns = (runs: Map<string, SubagentRunRecord>) => new Map(runs);
+
+export function createSessionEntryReadMocks(sessionStore: Record<string, SessionEntry>) {
+  return {
+    readSessionEntryReadOnlyInWorker: vi.fn<
+      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
+    >(async (scope, assertCurrent) => {
+      assertCurrent?.();
+      const entry = await Promise.resolve(sessionStore[scope.sessionKey]);
+      assertCurrent?.();
+      return entry;
+    }),
+    withSessionEntryReadOnlyInWorker: vi.fn<typeof withSessionEntryReadOnlyInWorker>(
+      async (scope, assertCurrent, consume) => {
+        assertCurrent();
+        const result = await consume(
+          { ok: true, value: sessionStore[scope.sessionKey] },
+          { kind: "file", assertCurrent },
+        );
+        assertCurrent();
+        return result;
+      },
+    ),
+  };
+}
 
 export function createSubagentRegistryMockState() {
   const sessionIdentityMutationListeners = new Set<SessionIdentityMutationListener>();
@@ -41,6 +65,7 @@ export function createSubagentRegistryMockState() {
       >(),
     onAgentEvent: vi.fn<(_handler: (event: AgentEventPayload) => void) => typeof noop>(() => noop),
     getAgentRunContext: vi.fn<(_runId: string) => unknown>(() => undefined),
+    hasLiveAgentRunContext: vi.fn<(_runId: string) => boolean>(() => false),
     getRuntimeConfig: vi.fn<() => OpenClawConfig>(() => ({
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" as const },
@@ -128,7 +153,7 @@ export function createSubagentRegistryMockState() {
     runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
     getGlobalHookRunner: vi.fn(() => null),
     ensureContextEnginesInitialized: vi.fn(),
-    loadAgentRuntimePluginRegistryHandle: vi.fn(),
+    loadAgentRuntimePluginRegistryHandle,
     resolveContextEngine: vi.fn(),
     onSubagentEnded: vi.fn<
       (params: { childSessionKey?: string }, context?: unknown) => Promise<void>
@@ -137,11 +162,6 @@ export function createSubagentRegistryMockState() {
     removeInternalSessionEffectsSession: vi.fn(async () => {}),
     resolveAgentTimeoutMs: vi.fn(() => 1_000),
     dispatchRecoveryAgent: vi.fn(),
-    getGatewayRecoveryRuntime: vi.fn(() => ({
-      dispatchAgent: mocks.dispatchRecoveryAgent as GatewayRecoveryRuntime["dispatchAgent"],
-      waitForAgent: vi.fn(),
-      sendRecoveryNotice: vi.fn(),
-    })),
     lifecycleGeneration: "test-generation",
   };
   return Object.assign(mocks, {

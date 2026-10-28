@@ -1,10 +1,8 @@
-/** Tests image asset parsing, MIME sniffing, and OpenAI-compatible response conversion. */
 import { describe, expect, it } from "vitest";
 import {
   generatedImageAssetFromDataUrl,
   imageFileExtensionForMimeType,
   imageSourceUploadFileName,
-  parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
   resolveImageSourceUrl,
@@ -12,55 +10,33 @@ import {
   toImageDataUrl,
 } from "./image-assets.js";
 
-const DEFAULT_TEST_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+const malformedDataUrl = "data:image/png;base64,not-base64!";
+const missingImage = "missing image";
+const sourceUrl = (image: Parameters<typeof resolveImageSourceUrl>[0]) =>
+  resolveImageSourceUrl(image, missingImage);
 
 describe("image asset helpers", () => {
   it("preserves omitted images, URL precedence, and inline image MIME defaults", () => {
-    expect(resolveImageSourceUrl(undefined, "missing image")).toBeUndefined();
-    expect(
-      resolveImageSourceUrl(
-        { url: " https://example.com/frame.png ", buffer: Buffer.from("unused") },
-        "missing image",
-      ),
-    ).toBe("https://example.com/frame.png");
-    expect(resolveImageSourceUrl({ url: " ", buffer: Buffer.from("png") }, "missing image")).toBe(
-      "data:image/png;base64,cG5n",
+    const source = { url: " https://example.com/frame.png ", buffer: Buffer.from("unused") };
+    expect(sourceUrl(undefined)).toBeUndefined();
+    expect(sourceUrl(source)).toBe("https://example.com/frame.png");
+    expect(sourceUrl({ url: " ", buffer: Buffer.from("png") })).toBe("data:image/png;base64,cG5n");
+    expect(sourceUrl({ buffer: Buffer.from("jpeg"), mimeType: " image/jpeg " })).toBe(
+      "data:image/jpeg;base64,anBlZw==",
     );
-    expect(
-      resolveImageSourceUrl(
-        { buffer: Buffer.from("jpeg"), mimeType: " image/jpeg " },
-        "missing image",
-      ),
-    ).toBe("data:image/jpeg;base64,anBlZw==");
-    expect(() => resolveImageSourceUrl({}, "missing image")).toThrow("missing image");
+    expect(() => sourceUrl({})).toThrow(missingImage);
   });
 
   it("converts buffers to image data URLs and parses them back", () => {
     const buffer = Buffer.from("png-bytes");
-    const dataUrl = toImageDataUrl({ buffer, mimeType: "image/png" });
-
-    expect(dataUrl).toBe(`data:image/png;base64,${buffer.toString("base64")}`);
-    expect(parseImageDataUrl(dataUrl)).toEqual({
-      mimeType: "image/png",
-      base64: buffer.toString("base64"),
-    });
-    const asset = generatedImageAssetFromDataUrl({ dataUrl, index: 1 });
-    if (!asset) {
-      throw new Error("Expected generated image asset");
-    }
-    expect(asset.buffer).toEqual(buffer);
-    expect(asset.mimeType).toBe("image/png");
-    expect(asset.fileName).toBe("image-2.png");
+    const asset = { buffer, mimeType: "image/png", fileName: "image-2.png" };
+    const dataUrl = toImageDataUrl(asset);
+    expect(dataUrl).toBe("data:image/png;base64,cG5nLWJ5dGVz");
+    expect(generatedImageAssetFromDataUrl({ dataUrl, index: 1 })).toEqual(asset);
   });
 
   it("rejects malformed base64 image data URLs", () => {
-    expect(parseImageDataUrl("data:image/png;base64,not-base64!")).toBeUndefined();
-    expect(
-      generatedImageAssetFromDataUrl({
-        dataUrl: "data:image/png;base64,not-base64!",
-        index: 0,
-      }),
-    ).toBeUndefined();
+    expect(generatedImageAssetFromDataUrl({ dataUrl: malformedDataUrl, index: 0 })).toBeUndefined();
   });
 
   it("normalizes image file extensions", () => {
@@ -71,73 +47,39 @@ describe("image asset helpers", () => {
   });
 
   it("sizes inline image JSON caps from decoded image payload limits", () => {
-    expect(resolveInlineImageJsonResponseMaxBytes(4, DEFAULT_TEST_IMAGE_MAX_BYTES)).toBe(
-      34_603_008,
-    );
-    expect(resolveInlineImageJsonResponseMaxBytes(Number.NaN, DEFAULT_TEST_IMAGE_MAX_BYTES)).toBe(
-      9_437_184,
-    );
+    const cap = (count: number) => resolveInlineImageJsonResponseMaxBytes(count, 6 * 1024 * 1024);
+    expect(cap(4)).toBe(34_603_008);
+    expect(cap(Number.NaN)).toBe(9_437_184);
     expect(resolveInlineImageJsonResponseMaxBytes(2, 8 * 1024 * 1024)).toBe(23_418_198);
   });
 
   it("sniffs generated PNG images", () => {
-    expect(sniffImageMimeType(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]))).toEqual({
-      mimeType: "image/png",
-      extension: "png",
-    });
+    const buffer = Buffer.from("89504e4700000000", "hex");
+    expect(sniffImageMimeType(buffer)).toEqual({ mimeType: "image/png", extension: "png" });
   });
 
   it("parses OpenAI-compatible base64 image responses", () => {
-    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xdb]);
-    const images = parseOpenAiCompatibleImageResponse(
-      {
-        data: [
-          {
-            b64_json: jpegBytes.toString("base64"),
-            revised_prompt: "revised",
-          },
-          { b64_json: "" },
-        ],
-      },
-      { defaultMimeType: "image/png", sniffMimeType: true },
-    );
-
+    const buffer = Buffer.from([0xff, 0xd8, 0xff, 0xdb]);
+    const revisedPrompt = "revised";
+    const data = [{ b64_json: "/9j/2w==", revised_prompt: revisedPrompt }, { b64_json: "" }];
+    const options = { defaultMimeType: "image/png", sniffMimeType: true };
+    const images = parseOpenAiCompatibleImageResponse({ data }, options);
     expect(images).toEqual([
-      {
-        buffer: jpegBytes,
-        mimeType: "image/jpeg",
-        fileName: "image-1.jpg",
-        revisedPrompt: "revised",
-      },
+      { buffer, mimeType: "image/jpeg", fileName: "image-1.jpg", revisedPrompt },
     ]);
   });
 
   it("rejects malformed OpenAI-compatible image responses in strict mode", () => {
-    expect(() =>
-      parseOpenAiCompatibleImageResponse(
-        {
-          data: [{ b64_json: "not-base64!" }],
-        },
-        {
-          defaultMimeType: "image/png",
-          malformedResponseError: "Sample image response malformed",
-        },
-      ),
-    ).toThrow("Sample image response malformed");
+    const payload = { data: [{ b64_json: "not-base64!" }] };
+    const error = "Sample image response malformed";
+    const options = { malformedResponseError: error };
+    expect(() => parseOpenAiCompatibleImageResponse(payload, options)).toThrow(error);
   });
 
   it("resolves source upload filenames from explicit names or MIME types", () => {
-    expect(
-      imageSourceUploadFileName({
-        image: { buffer: Buffer.from("x"), mimeType: "image/webp" },
-        index: 2,
-      }),
-    ).toBe("image-3.webp");
-    expect(
-      imageSourceUploadFileName({
-        image: { buffer: Buffer.from("x"), mimeType: "image/png", fileName: "source.png" },
-        index: 0,
-      }),
-    ).toBe("source.png");
+    const image = { buffer: Buffer.from("x"), mimeType: "image/webp" };
+    const namedImage = { ...image, mimeType: "image/png", fileName: "source.png" };
+    expect(imageSourceUploadFileName({ image, index: 2 })).toBe("image-3.webp");
+    expect(imageSourceUploadFileName({ image: namedImage, index: 0 })).toBe("source.png");
   });
 });

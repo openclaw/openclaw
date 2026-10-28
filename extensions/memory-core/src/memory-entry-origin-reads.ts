@@ -1,6 +1,6 @@
 import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import { withOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import { readMemoryEntryOriginsInDatabase } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { withOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/sqlite-runtime";
 import { tableExists } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
   MEMORY_SESSION_TOMBSTONE_BATCH_SIZE,

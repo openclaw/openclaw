@@ -24,6 +24,11 @@ export function createConnectionBootstrapCoordinator() {
     | { owner: object; sessionKey: string; client: object | null; ready: boolean }
     | undefined;
   const tasks = new Map<string | object, QueuedBootstrapTask>();
+  const foregroundPending = () =>
+    foregroundRoute !== null &&
+    (!foregroundPane?.ready ||
+      foregroundPane.client !== client ||
+      foregroundPane.sessionKey !== foregroundRoute);
 
   const drain = () => {
     // The map owns both ordering and deduplication; route prerequisites can pass held bulk jobs.
@@ -31,12 +36,7 @@ export function createConnectionBootstrapCoordinator() {
       if (!client || active >= MAX_CONNECTION_BOOTSTRAP_CONCURRENCY) {
         return;
       }
-      const foregroundPending =
-        foregroundRoute !== null &&
-        (!foregroundPane?.ready ||
-          foregroundPane.client !== client ||
-          foregroundPane.sessionKey !== foregroundRoute);
-      if (task.started || (foregroundPending && task.background)) {
+      if (task.started || (foregroundPending() && task.background)) {
         continue;
       }
       task.started = true;
@@ -71,6 +71,17 @@ export function createConnectionBootstrapCoordinator() {
 
   return {
     reset,
+    /** Retiring a caller releases only its unstarted work, never an active slot. */
+    cancelQueued(this: void, key: string | object) {
+      const task = tasks.get(key);
+      if (task && !task.started) {
+        tasks.delete(key);
+        task.resolve();
+      }
+    },
+    get foregroundReady() {
+      return !foregroundPending();
+    },
     synchronize(this: void, params: { client: object | null; connected: boolean }) {
       const nextClient = params.connected ? params.client : null;
       if (!nextClient || (client && client !== nextClient)) {

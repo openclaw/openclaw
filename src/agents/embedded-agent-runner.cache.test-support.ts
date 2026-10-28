@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { iterateSseFrames } from "@openclaw/ai/internal/shared";
 import { supportsClaudeInHistorySystemMessages } from "@openclaw/llm-core/model-contracts/anthropic";
 import { stableStringify } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
@@ -20,11 +21,7 @@ import { createPluginCache, retirePluginCache, withPluginCache } from "../plugin
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import { omitWireFields } from "./embedded-agent-runner.wire.test-support.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
-import {
-  buildStableCachePrefix,
-  logLiveCache,
-  type LiveResolvedModel,
-} from "./live-cache-test-support.js";
+import { buildStableCachePrefix, type LiveResolvedModel } from "./live-cache-test-support.js";
 import { buildUsageWithNoCost } from "./stream-message-shared.js";
 
 export function buildEmbeddedCachePrompt(suffix: string, sections = 48): string {
@@ -86,13 +83,9 @@ function resolveEmbeddedModelApi(
 export function normalizeLiveUsage(
   usage:
     | AssistantMessage["usage"]
-    | {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
+    | (Partial<Pick<AssistantMessage["usage"], "input" | "output" | "cacheRead" | "cacheWrite">> & {
         total?: number;
-      }
+      })
     | undefined,
 ): AssistantMessage["usage"] {
   if (!usage) {
@@ -123,30 +116,26 @@ export function buildEmbeddedRunnerConfig(
 ): OpenClawConfig {
   const provider = params.model.provider;
   const modelKey = `${provider}/${params.model.id}`;
-  return {
-    models: {
-      providers: {
-        [provider]: {
-          api: resolveEmbeddedModelApi(params.model),
-          auth: "api-key",
-          apiKey: params.apiKey,
-          baseUrl: resolveProviderBaseUrl(params.model),
-          models: [buildEmbeddedModelDefinition(params.model)],
-        },
-      },
+  const providerConfig = {
+    api: resolveEmbeddedModelApi(params.model),
+    auth: "api-key" as const,
+    apiKey: params.apiKey,
+    baseUrl: resolveProviderBaseUrl(params.model),
+    models: [buildEmbeddedModelDefinition(params.model)],
+  };
+  const modelConfig = {
+    ...(params.modelAlias ? { alias: params.modelAlias } : {}),
+    params: {
+      cacheRetention: params.cacheRetention,
+      ...(params.transport ? { transport: params.transport } : {}),
     },
+  };
+  return {
+    models: { providers: { [provider]: providerConfig } },
     agents: {
       entries: { main: { agentDir: params.agentDir } },
       defaults: {
-        models: {
-          [modelKey]: {
-            ...(params.modelAlias ? { alias: params.modelAlias } : {}),
-            params: {
-              cacheRetention: params.cacheRetention,
-              ...(params.transport ? { transport: params.transport } : {}),
-            },
-          },
-        },
+        models: { [modelKey]: modelConfig },
         ...(params.compactionModel ? { compaction: { model: params.compactionModel } } : {}),
       },
     },
@@ -162,16 +151,12 @@ export async function runEmbeddedReleasePrefixScenario(
     probe: (config: OpenClawConfig, suffix: string) => Promise<AssistantMessage["usage"]>;
     readTraceEvents: () => Promise<
       Array<{
-        runId?: string;
         stage?: string;
         options?: {
           input?: number;
           cacheRead?: number;
           cacheWrite?: number;
-          requestIndex?: number;
-          requestGapMs?: number;
-          providerPrefix?: string;
-          changes?: Array<{ code?: string; detail?: string }>;
+          changes?: Array<{ code?: string }>;
         };
       }>
     >;
@@ -317,17 +302,10 @@ export async function runEmbeddedReleasePrefixScenario(
           const capture = (async () => {
             const reader = response.clone().body?.getReader();
             assert(reader, "provider response has an event stream");
-            const decoder = new TextDecoder();
-            let pending = "";
             try {
-              for (;;) {
-                const chunk = await reader.read();
-                assert(!chunk.done, "provider stream ended before response.completed");
-                pending += decoder.decode(chunk.value, { stream: true });
-                let newline: number;
-                while ((newline = pending.indexOf("\n")) >= 0) {
-                  const line = pending.slice(0, newline).trimEnd();
-                  pending = pending.slice(newline + 1);
+              for await (const { frame } of iterateSseFrames(() => reader.read())) {
+                for (const rawLine of frame.split("\n")) {
+                  const line = rawLine.trimEnd();
                   if (!line.startsWith("data: ") || line === "data: [DONE]") {
                     continue;
                   }
@@ -344,29 +322,25 @@ export async function runEmbeddedReleasePrefixScenario(
                     if (!isRecord(item)) {
                       return item;
                     }
-                    if (item.type === "function_call") {
-                      const call = omitWireFields(item, ["status"]);
-                      return {
-                        ...call,
-                        ...(typeof call.arguments === "string"
-                          ? { arguments: JSON.stringify(JSON.parse(call.arguments)) }
-                          : {}),
-                      };
+                    const replayItem = omitWireFields(
+                      item,
+                      item.type === "function_call" ? ["status"] : [],
+                    );
+                    if (item.type === "function_call" && typeof item.arguments === "string") {
+                      replayItem.arguments = JSON.stringify(JSON.parse(item.arguments));
                     }
                     if (item.type === "message" && Array.isArray(item.content)) {
-                      return {
-                        ...item,
-                        content: item.content.map((block: unknown) =>
-                          isRecord(block) ? omitWireFields(block, ["logprobs"]) : block,
-                        ),
-                      };
+                      replayItem.content = item.content.map((block: unknown) =>
+                        isRecord(block) ? omitWireFields(block, ["logprobs"]) : block,
+                      );
                     }
-                    return item;
+                    return replayItem;
                   });
                   responseHistory.set(completed.id, [...inheritedInput, ...output]);
                   return;
                 }
               }
+              assert.fail("provider stream ended before response.completed");
             } finally {
               // Tee cancellation can await the transport branch; terminal capture must not.
               void reader.cancel().catch(() => {});
@@ -423,27 +397,9 @@ export async function runEmbeddedReleasePrefixScenario(
     const results = events.filter((event) => event.stage === "cache:result");
     expect(results, "one cache diagnostic per provider request").toHaveLength(4 * requestsPerTurn);
     let previousPromptTokens: number | undefined;
-    for (const [index, result] of results.entries()) {
+    for (const result of results) {
       const usage = result.options;
       const promptTokens = (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0);
-      logLiveCache(
-        JSON.stringify({
-          scenario: "release-prefix-diagnostic",
-          provider,
-          turn: Math.floor(index / requestsPerTurn) + 1,
-          request: index + 1,
-          runId: result.runId,
-          input: usage?.input,
-          cacheRead: usage?.cacheRead,
-          cacheWrite: usage?.cacheWrite,
-          output: runs[Math.floor(index / requestsPerTurn)]?.output,
-          promptTokens,
-          cachedTokenRatio: promptTokens > 0 ? (usage?.cacheRead ?? 0) / promptTokens : 0,
-          requestGapMs: result.options?.requestGapMs,
-          providerPrefix: result.options?.providerPrefix ?? "no-cache-drop",
-          changes: result.options?.changes?.map((change) => change.code) ?? [],
-        }),
-      );
       if (previousPromptTokens !== undefined) {
         expect(
           usage?.cacheRead,

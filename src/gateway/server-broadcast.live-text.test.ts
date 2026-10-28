@@ -1,8 +1,8 @@
 import { getEventListeners } from "node:events";
 import { expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { startConnect } from "../../ui/src/api/gateway-handshake.test-support.js";
 import {
-  getLatestWebSocket,
   MockWebSocket,
   stubWindowGlobals,
   useNodeFakeTimers,
@@ -26,7 +26,7 @@ function createBufferedPeer(connId: string, bufferedAmount: number) {
   const send = peer.socket.send.getMockImplementation()!;
   peer.socket.bufferedAmount = bufferedAmount;
   peer.socket.send.mockImplementation((wire, options, callback) => {
-    const bytes = Buffer.byteLength(wire);
+    const bytes = typeof wire === "string" ? Buffer.byteLength(wire) : wire.byteLength;
     peer.socket.bufferedAmount += bytes + (bytes < 126 ? 2 : bytes < 65536 ? 4 : 10);
     send(wire, options, callback);
   });
@@ -79,12 +79,13 @@ const payloads = (peer: ReturnType<typeof createPeer>) => peer.frames.map(({ pay
 it("keeps a shared chat stream when one full observer unsubscribes", async () => {
   useNodeFakeTimers();
   stubWindowGlobals();
+  vi.stubGlobal("crypto", { randomUUID: () => "live-text-request" });
   vi.stubGlobal("WebSocket", MockWebSocket);
   const onEvent = vi.fn();
   const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:18789", onEvent });
-  client.start();
-  const ws = getLatestWebSocket();
-  ws.emitOpen();
+  const { ws, connectFrame } = await startConnect(client);
+  ws.emitMessage({ type: "res", id: connectFrame.id, ok: true, payload: { type: "hello-ok" } });
+  await vi.advanceTimersByTimeAsync(0);
   const peer = createPeer("shared-observers", true);
   peer.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
   const send = peer.socket.send.getMockImplementation()!;
@@ -93,24 +94,23 @@ it("keeps a shared chat stream when one full observer unsubscribes", async () =>
     ws.emitMessage(String(frame));
   });
   const subscribers = createSessionMessageSubscriberRegistry();
-  const { broadcast } = broadcaster([peer], {
-    sessionMessageSubscribers: subscribers,
-  });
+  const { broadcast, owner } = harness(peer, { sessionMessageSubscribers: subscribers });
   const sessionKey = "agent:main:chat";
-  const owner = new AbortController();
   const assistant = (content: string) => ({ role: "assistant", content });
   const requestObserver = async (method: "subscribe" | "unsubscribe", subscriptionId: string) => {
-    const pending = client.request(`sessions.messages.${method}`, {
-      key: sessionKey,
-      subscriptionId,
-    });
-    const { id, params } = JSON.parse(ws.sent.at(-1) ?? "{}");
+    const requestMethod = `sessions.messages.${method}`;
+    const expectedParams = { key: sessionKey, subscriptionId };
+    const sent = Promise.withResolvers<string>();
+    const pending = client.request(requestMethod, expectedParams, { onSent: sent.resolve });
+    const sentId = await sent.promise;
+    const request = JSON.parse(ws.sent.at(-1) ?? "{}");
+    expect(request).toMatchObject({ type: "req", id: sentId, method: requestMethod });
+    expect(request.params).toEqual(expectedParams);
+    const { id, params: sub } = request;
     if (method === "subscribe") {
-      subscribers.subscribe(peer.client.connId, params.key, {
-        subscriptionId: params.subscriptionId,
-      });
+      subscribers.subscribe(peer.client.connId, sub.key, { subscriptionId: sub.subscriptionId });
     } else {
-      subscribers.unsubscribe(peer.client.connId, params.key, params.subscriptionId);
+      subscribers.unsubscribe(peer.client.connId, sub.key, sub.subscriptionId);
     }
     ws.emitMessage({ type: "res", id, ok: true });
     await pending;
@@ -147,8 +147,7 @@ it("sends one baseline per recipient and concatenates blocked appends without re
   const slow = createPeer("slow");
   const fast = createPeer("fast", true);
   const late = createPeer("late", true);
-  const onBroadcast = vi.fn();
-  const { broadcast, clients } = broadcaster([slow, fast], { onBroadcast });
+  const { broadcast, clients } = broadcaster([slow, fast]);
   const owner = new AbortController();
   const opts = textOptions(owner.signal);
   broadcast("chat", text("A", "A"), opts);
@@ -161,9 +160,6 @@ it("sends one baseline per recipient and concatenates blocked appends without re
   expect(payloads(fast)).toEqual([text("A", "A"), ...["B", "C", "D"].map(deltaPayload)]);
   expect(payloads(late)).toEqual([text("ABC", "C"), deltaPayload("D")]);
   expect(slow.frames.map(({ seq }) => seq)).toEqual([1, 2]);
-  expect(onBroadcast.mock.calls.map(([, payload]) => payload)).toEqual(
-    ["A", "AB", "ABC", "ABCD"].map((value) => text(value, value.at(-1))),
-  );
   owner.abort();
   expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
 });

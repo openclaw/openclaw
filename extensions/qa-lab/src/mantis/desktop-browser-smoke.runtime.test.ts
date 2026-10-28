@@ -11,18 +11,12 @@ import {
   defaultCommandRunner,
 } from "./crabbox-runtime.js";
 import { runMantisDesktopBrowserSmoke } from "./desktop-browser-smoke.runtime.js";
+import { writeMantisArtifacts } from "./run.test-support.js";
 
-vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@openclaw/crabbox-provider/cli-runtime-api.js")>();
-  return {
-    ...actual,
-    ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
-      binary,
-      version: "999.0.0",
-    })),
-  };
-});
+// mock-isolation: Preserve actual module exports and create a fresh managed-binary mock per suite.
+vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async () =>
+  (await import("./run.test-support.js")).mockManagedCrabboxBinary(),
+);
 
 const execFileAsync = promisify(execFile);
 const readText = (file: string) => fs.readFile(file, "utf8");
@@ -52,10 +46,7 @@ describe("mantis desktop browser smoke runtime", () => {
     if (!outputDir) {
       throw new Error("Missing artifact destination");
     }
-    await fs.mkdir(outputDir, { recursive: true });
-    for (const [name, content] of Object.entries(artifacts)) {
-      await fs.writeFile(path.join(outputDir, name), content);
-    }
+    await writeMantisArtifacts(outputDir, artifacts);
   }
 
   beforeEach(async () => {
@@ -215,11 +206,18 @@ describe("mantis desktop browser smoke runtime", () => {
       htmlFile: "qa-artifacts/timeline.html",
       leaseId,
       now: () => new Date("2026-05-04T12:00:00.000Z"),
-      outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-test",
+      outputDir: leaseId ? ".artifacts/qa-e2e/mantis/desktop-browser-test" : undefined,
     });
     const commands = runner.mock.calls.map(([command, args, { env }]) => ({ command, args, env }));
 
     expect(result.status).toBe("pass");
+    expect(result.outputDir).toBe(
+      path.join(
+        repoRoot,
+        ".artifacts/qa-e2e/mantis",
+        leaseId ? "desktop-browser-test" : "desktop-browser-2026-05-04T12-00-00-000Z",
+      ),
+    );
     expect(ensureManagedCrabboxBinary).toHaveBeenCalledWith({
       binary: "/tmp/outdated-crabbox",
       cwd: repoRoot,

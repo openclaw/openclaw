@@ -10,7 +10,7 @@ import type {
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
 import { sanitizeTranscriptMessage } from "./transcript-sanitize.js";
 
-const DEFAULT_LIMITS = {
+const TRANSCRIPT_LIMITS = {
   userAssistantChars: 4_000,
   toolChars: 1_000,
   nonUserEntries: 40,
@@ -70,21 +70,7 @@ function userOrigin(message: AgentMessage): ExecAutoReviewTranscriptEntry["origi
 export function buildExecAutoReviewTranscript(params: {
   messages: readonly AgentMessage[];
   userTurnOrigins?: ReadonlyMap<AgentMessage, AgentMessage>;
-  limits?: Partial<Record<keyof typeof DEFAULT_LIMITS, number>>;
 }): ExecAutoReviewTranscript {
-  const limit = (key: keyof typeof DEFAULT_LIMITS, minimum = 0) => {
-    const value = params.limits?.[key];
-    return value === undefined || !Number.isFinite(value)
-      ? DEFAULT_LIMITS[key]
-      : Math.max(minimum, Math.min(DEFAULT_LIMITS[key], Math.floor(value)));
-  };
-  const limits = {
-    userAssistantChars: limit("userAssistantChars"),
-    toolChars: limit("toolChars"),
-    nonUserEntries: limit("nonUserEntries"),
-    // Two empty user anchors and the envelope must always fit.
-    totalChars: limit("totalChars", 256),
-  };
   const messages = params.messages.map((message) =>
     message.role === "user" ? (params.userTurnOrigins?.get(message) ?? message) : message,
   );
@@ -119,8 +105,8 @@ export function buildExecAutoReviewTranscript(params: {
   const add = (entry: ExecAutoReviewTranscriptEntry) => {
     const cap =
       entry.kind === "user" || entry.kind === "assistant"
-        ? limits.userAssistantChars
-        : limits.toolChars;
+        ? TRANSCRIPT_LIMITS.userAssistantChars
+        : TRANSCRIPT_LIMITS.toolChars;
     const text = scrubIdentifiers(textOnly(entry.text));
     if (entry.toolCallId) {
       let alias = toolIds.get(entry.toolCallId);
@@ -183,7 +169,7 @@ export function buildExecAutoReviewTranscript(params: {
       truncated: false,
     }),
   );
-  const budget = Math.max(0, limits.totalChars - envelopeChars);
+  const budget = Math.max(0, TRANSCRIPT_LIMITS.totalChars - envelopeChars);
   const candidates = entries.map((entry) => ({
     entry,
     cost: estimateStringChars(JSON.stringify(entry)) + 1,
@@ -247,7 +233,7 @@ export function buildExecAutoReviewTranscript(params: {
     group.forEach((member) => visited.add(member));
     const nonUserCount = group.filter(({ entry }) => entry.kind !== "user").length;
     const cost = group.reduce((sum, member) => sum + member.cost, 0);
-    if (used + cost > budget || nonUsers + nonUserCount > limits.nonUserEntries) {
+    if (used + cost > budget || nonUsers + nonUserCount > TRANSCRIPT_LIMITS.nonUserEntries) {
       continue;
     }
     group.forEach((member) => selected.add(member));

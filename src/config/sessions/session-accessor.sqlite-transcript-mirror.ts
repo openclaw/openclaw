@@ -86,6 +86,7 @@ export function readTranscriptMirrorFacts(
   resolved: ResolvedTranscriptScope,
   params: {
     idempotencyKeys: readonly string[];
+    activeBranchOnly?: boolean;
     sourceRunId?: string;
   },
 ): TranscriptMirrorFacts {
@@ -100,7 +101,7 @@ export function readTranscriptMirrorFacts(
       );
       if (fallbackEvents !== undefined) {
         return readMirrorFactsFromEvents(
-          fallbackEvents,
+          params.activeBranchOnly ? selectVisibleTranscriptEvents(fallbackEvents) : fallbackEvents,
           new Set(idempotencyKeys),
           params.sourceRunId,
         );
@@ -148,6 +149,9 @@ export function readTranscriptMirrorFacts(
           .where("identity.session_id", "=", resolved.sessionId)
           .where("identity.message_idempotency_key", "in", batch)
           .select((eb) => eb.val(0).as("is_source"));
+        if (params.activeBranchOnly) {
+          query = query.where("active.event_seq", "is not", null);
+        }
         const sourceRunId = batch === batches[0] ? params.sourceRunId : undefined;
         if (sourceRunId) {
           // UNION keeps each branch independently indexable; an OR here scans

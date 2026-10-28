@@ -23,14 +23,13 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
       const stateDir = path.join(home, ".openclaw");
       const configPath = path.join(stateDir, "openclaw.json");
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-      const retained = {
+      const baseConfig = { gateway: { mode: "local" }, plugins: { enabled: false } };
+      const raw = JSON.stringify({
+        ...baseConfig,
         meta: { migrations: { webhookListeners: true } },
-        gateway: { mode: "local" },
-        plugins: { enabled: false },
         ...(gateway ? {} : { legacyFixture: "retained" }),
-      };
-      const raw = JSON.stringify(retained);
-      const backup = JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } });
+      });
+      const backup = JSON.stringify(baseConfig);
       await fs.mkdir(stateDir, { recursive: true });
       await fs.writeFile(configPath, raw);
       await fs.writeFile(`${configPath}.bak`, backup);
@@ -109,17 +108,15 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
         const result = await operation;
         expect(snapshotsClosedAtReadiness.length > 0).toBe(gateway);
         expect(snapshotsClosedAtReadiness).not.toContain(false);
-        if (gateway) {
-          expect(pendingRead).not.toHaveBeenCalled();
-        } else {
-          expect(pendingRead).toHaveBeenCalled();
-        }
+        expect(pendingRead.mock.calls.length > 0).toBe(!gateway);
         expect(snapshotClosed).toBe(true);
-        expect(result.snapshot.valid).toBe(true);
-        expect(result.snapshot.sourceConfig.gateway?.mode).toBe("local");
-        if (!gateway) {
-          expect(result.snapshot.sourceConfig).toHaveProperty("legacyFixture", "retained");
-        }
+        expect(result.snapshot).toMatchObject({
+          valid: true,
+          sourceConfig: {
+            gateway: { mode: "local" },
+            ...(!gateway ? { legacyFixture: "retained" } : {}),
+          },
+        });
         expect(pendingMigrations.readDeferredPluginMigrations({ path: databasePath })).toEqual([
           pending,
         ]);

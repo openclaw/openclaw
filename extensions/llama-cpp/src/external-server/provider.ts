@@ -91,8 +91,5 @@ export async function prepareLlamaServerDynamicModel(
     provider: LLAMA_CPP_PROVIDER_ID,
     api: ctx.providerConfig?.api ?? "openai-completions",
     baseUrl: resolveLlamaServerEndpoint(ctx.providerConfig?.baseUrl).inferenceBaseUrl,
-    input: model.config.input.filter(
-      (entry): entry is "text" | "image" => entry === "text" || entry === "image",
-    ),
   };
 }

@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import {
@@ -20,6 +21,22 @@ import type { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 type MarkMainSessionsAbortedForRestart = NonNullable<
   GatewayCloseParams["markMainSessionsAbortedForRestart"]
 >;
+
+export function recoveryRun(
+  runId: string,
+  sessionKey: string,
+  sessionId: string,
+  lifecycleGeneration = getAgentEventLifecycleGeneration(),
+) {
+  return {
+    storePath: "/synthetic/gateway-close/sessions.sqlite",
+    agentId: "main",
+    runId,
+    lifecycleGeneration,
+    sessionKey,
+    sessionId,
+  };
+}
 
 export function registerGatewayCancellationTests({
   createClose,
@@ -81,7 +98,32 @@ export function registerGatewayCancellationTests({
     expect(rpcSourceTesting.size).toBe(0);
   });
 
-  it("settles aborted sources and effects while retaining unfinished source cleanup", async () => {
+  it.each([-60_000, 60_000])(
+    "honors the reply drain budget when the wall clock moves by %s ms",
+    async (clockShift) => {
+      const { source } = await createSource("clock-shift");
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(100_000);
+      const closing = createClose()({ reason: "clock-shift shutdown", drainTimeoutMs: 1_000 });
+      try {
+        await vi.advanceTimersByTimeAsync(100);
+        vi.setSystemTime(Date.now() + clockShift);
+        await vi.advanceTimersByTimeAsync(899);
+        expect(source.input.abortSignal.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(source.input.abortSignal.aborted).toBe(true);
+        expect((await closing).warnings).toContain("restart-reply-drain");
+        expect(rpcSourceTesting.size).toBe(0);
+      } finally {
+        // Release the original wall-clock implementation too when proving the regression red.
+        vi.setSystemTime(102_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await closing;
+      }
+    },
+  );
+
+  it("reports remaining effect custody after aborted sources settle", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const active = [];
     for (let index = 0; index < 5; index++) {
@@ -98,6 +140,18 @@ export function registerGatewayCancellationTests({
       onInterrupt: () => background.release(),
     });
     const cleanup = createDeferredCore();
+    const effectCleanup = createDeferredCore();
+    const retainedEffect = await beginSessionEffect({
+      target: captureSessionTarget({
+        storeScope: "/synthetic/gateway-close/sessions.sqlite",
+        sessionKey: "agent:main:retained-effect",
+        incarnation: "retained-effect",
+      }),
+      run: { runId: "retained-effect-run" },
+      resolveGatewayContext: resolveClosingGatewayContext,
+      onInterrupt: () => retainedEffect.release(),
+    });
+    const effectWork = retainedEffect.run(() => effectCleanup.promise);
     const retained = active[0]!.source;
     trackSessionControllerSourceWork(retained.input, cleanup.promise);
     const sourcesSettled = Promise.all([
@@ -118,10 +172,20 @@ export function registerGatewayCancellationTests({
       expect(formatGatewayPendingCloseSteps()).toMatch(
         /session-sources=\d+ms sources=1.0 operations=0.0 sourceWork=1.0/,
       );
-      expect(formatGatewayPendingCloseSteps()).not.toContain("session-effects=");
+      expect(formatGatewayPendingCloseSteps()).toMatch(
+        /session-effects=\d+ms effects=1.0 phase=acquired sessionKey=agent:main:retained-effect runId=retained-effect-run interrupted=true/,
+      );
+      cleanup.resolve();
+      await retained.input.settlement.promise;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(formatGatewayPendingCloseSteps()).not.toContain("session-sources=");
+      expect(formatGatewayPendingCloseSteps()).toContain("effects=1.0");
       expect(closed).not.toHaveBeenCalled();
     } finally {
       cleanup.resolve();
+      effectCleanup.resolve();
+      await effectWork;
+      retainedEffect.release();
       background.release();
       await closing;
     }

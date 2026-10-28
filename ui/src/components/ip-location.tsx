@@ -3,12 +3,10 @@ import { createMemo, Loading, onCleanup, Show } from "solid-js";
 import { lookupClientGeolocation, type ClientGeolocation } from "../lib/geolocation-lookup.ts";
 import { Icon } from "./solid/icon.tsx";
 
-type IpLocationProps = { ip?: string };
-
 // The first lookup can wait for a database download; unavailable answers retry.
 const RETRY_DELAYS_MS = [5_000, 15_000, 45_000];
 
-export function IpLocation(props: IpLocationProps) {
+export function IpLocation(props: { ip?: string }) {
   let host!: HTMLElement;
   const ip = createMemo(() => props.ip?.trim());
   const location = createMemo(async (): Promise<ClientGeolocation | null> => {

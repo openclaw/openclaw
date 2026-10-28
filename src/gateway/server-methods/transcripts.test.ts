@@ -39,6 +39,7 @@ import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/s
 import { summarizeTranscripts, type TranscriptsSummary } from "../../transcripts/summary.js";
 import type { OperatorScope } from "../operator-scopes.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { transcriptsHandlers } from "./transcripts.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -52,21 +53,10 @@ const logGateway = { warn: vi.fn() };
 
 function client(profileId?: string, scopes = ["operator.read"]): GatewayClient {
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes,
-    },
+    connect: gatewayConnect(scopes),
     ...(profileId
       ? {
-          authenticatedUserProfile: {
-            profileId,
-            displayName: null,
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          authenticatedUserProfile: gatewayProfile(profileId),
         }
       : {}),
   };

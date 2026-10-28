@@ -17,7 +17,7 @@ export const guestCodeModeExecTool = {
 };
 
 export const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
-  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Do not call tools in this step. Summarize the recorded results in plain text.";
 
 export function createMockServerTestHarness() {
   const cleanups: Array<() => Promise<void>> = [];

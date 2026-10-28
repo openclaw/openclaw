@@ -1,6 +1,7 @@
 import { createServer, IncomingMessage, ServerResponse, type Server } from "node:http";
 import { Socket } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveControlUiAuthCandidates } from "../../ui/src/app/control-ui-auth.ts";
 import { setAvatarGatewayOrigin } from "../../ui/src/lib/identity-avatar-context.ts";
@@ -15,16 +16,18 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   linkEmail,
   setAvatar,
+  setDisplayName,
   setUserProfileRole,
   syncGitHubIdentity,
 } from "../state/user-profile-writes.worker.js";
 import * as profileAvatars from "../state/user-profiles-avatar.js";
-import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { authorizeGatewayHttpRequestOrReply } from "./http-auth-utils.js";
+import { finishGatewayHttpAuthorityError } from "./http-request-authority.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
@@ -74,14 +77,7 @@ describe("personal avatar HTTP authentication", () => {
         }
       });
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected an HTTP listener");
-    }
-    origin = "http://127.0.0.1:" + address.port;
+    origin = await listenLoopback(server);
   });
 
   afterAll(async () => {
@@ -246,123 +242,186 @@ describe("personal avatar HTTP authentication", () => {
     },
   );
 
-  it("checks linked-account authority before avatar I/O, including revocation and alias reassignment", async () => {
-    vi.stubEnv("GH_TOKEN", undefined);
-    vi.stubEnv("GITHUB_TOKEN", undefined);
-    const accessOrigin = "https://team.cloudflareaccess.com";
-    const identity = { id: 510, email: "personal@example.test" };
-    const trustedProxy = {
-      userHeader: "cf-access-authenticated-user-email",
-      requiredHeaders: ["cf-access-jwt-assertion"],
-      allowLoopback: true,
-    };
-    auth = { mode: "trusted-proxy", trustedProxy, allowTailscale: false };
-    cfg = {
-      gateway: {
-        auth: { mode: "trusted-proxy", trustedProxy },
-        trustedProxies: ["127.0.0.1"],
-        roles: {
-          default: "guest",
-          definitions: {
-            reader: { agents: "*", sessions: { others: "view" }, scopes: ["operator.read"] },
-            guest: { agents: [], sessions: { others: "none" }, scopes: [] },
+  it.each(["operator.read", "operator.sessions.read"] as const)(
+    "checks linked-account avatar authority with %s, including revocation and alias reassignment",
+    async (scope) => {
+      vi.stubEnv("GH_TOKEN", undefined);
+      vi.stubEnv("GITHUB_TOKEN", undefined);
+      const accessOrigin = "https://team.cloudflareaccess.com";
+      const identity = { id: 510, email: "personal@example.test" };
+      const trustedProxy = {
+        userHeader: "cf-access-authenticated-user-email",
+        requiredHeaders: ["cf-access-jwt-assertion"],
+        allowLoopback: true,
+      };
+      auth = { mode: "trusted-proxy", trustedProxy, allowTailscale: false };
+      cfg = {
+        gateway: {
+          auth: { mode: "trusted-proxy", trustedProxy },
+          trustedProxies: ["127.0.0.1"],
+          roles: {
+            default: "guest",
+            definitions: {
+              reader: { agents: "*", sessions: { others: "view" }, scopes: [scope] },
+              guest: { agents: [], sessions: { others: "none" }, scopes: [] },
+            },
           },
         },
-      },
-    };
-    const nativeFetch = globalThis.fetch;
-    const metadata = vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            id: identity.id,
-            login: identity.id === 510 ? "person" : "person-work",
-          }),
-        ),
-    );
-    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (url.startsWith(accessOrigin)) {
-        return Promise.resolve(
-          new Response(JSON.stringify({ ...identity, idp: { type: "github" } })),
-        );
-      }
-      if (url.startsWith("https://api.github.com/")) {
-        return metadata();
-      }
-      return nativeFetch(input, init);
-    });
-    const primary = syncGitHubIdentity({
-      identity: { accountId: 510, login: "person" },
-      authenticationAlias: { kind: "email", email: "personal@example.test" },
-    });
-    syncGitHubIdentity({
-      identity: { accountId: 511, login: "person-work" },
-      authenticationAlias: { kind: "email", email: "work@example.test" },
-    });
-    linkEmail("work@example.test", primary.id);
-    setAvatar(primary.id, PNG, "image/png");
-    setUserProfileRole(primary.id, "reader");
-    avatarPath = "/api/users/" + primary.id + "/avatar";
-    const readAvatar = vi.spyOn(profileAvatars, "createProfileAvatarReader");
-    const send = async (email = identity.email) => {
-      const req = new IncomingMessage(new Socket());
-      Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
-      req.method = "GET";
-      req.url = avatarPath;
-      req.headers = {
-        "cf-access-authenticated-user-email": email,
-        "cf-access-jwt-assertion":
-          "header." +
-          Buffer.from(JSON.stringify({ iss: accessOrigin })).toString("base64url") +
-          ".signature",
-        "x-forwarded-for": "203.0.113.10",
-        "x-openclaw-scopes": "operator.read,operator.admin",
       };
-      const res = new ServerResponse(req);
-      let bytes = Buffer.alloc(0);
-      vi.spyOn(res, "end").mockImplementation((chunk?: unknown) => {
-        if (typeof chunk === "string") {
-          bytes = Buffer.from(chunk);
-        } else if (chunk instanceof Uint8Array) {
-          bytes = Buffer.from(chunk);
+      const nativeFetch = globalThis.fetch;
+      const metadata = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              id: identity.id,
+              login: identity.id === 510 ? "person" : "person-work",
+            }),
+          ),
+      );
+      vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.startsWith(accessOrigin)) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ ...identity, idp: { type: "github" } })),
+          );
         }
-        return res;
+        if (url.startsWith("https://api.github.com/")) {
+          return metadata();
+        }
+        return nativeFetch(input, init);
       });
-      try {
-        await handleUserProfileAvatarHttpRequest(req, res, avatarPath, { auth });
-        return { status: res.statusCode, bytes };
-      } finally {
-        req.destroy();
+      const primary = syncGitHubIdentity({
+        identity: { accountId: 510, login: "person" },
+        authenticationAlias: { kind: "email", email: "personal@example.test" },
+      });
+      syncGitHubIdentity({
+        identity: { accountId: 511, login: "person-work" },
+        authenticationAlias: { kind: "email", email: "work@example.test" },
+      });
+      linkEmail("work@example.test", primary.id);
+      setAvatar(primary.id, PNG, "image/png");
+      setUserProfileRole(primary.id, "reader");
+      avatarPath = "/api/users/" + primary.id + "/avatar";
+      const originalAvatarReader = profileAvatars.createProfileAvatarReader;
+      const readAvatar = vi.spyOn(profileAvatars, "createProfileAvatarReader");
+      let beforeAvatarBytes: (() => void) | undefined;
+      readAvatar.mockImplementation((id, options) => {
+        const reader = originalAvatarReader(id, options);
+        return {
+          async inspect() {
+            const prepared = await reader.inspect();
+            return {
+              ...prepared,
+              async loadBytes() {
+                const bytes = await prepared.loadBytes();
+                beforeAvatarBytes?.();
+                return bytes;
+              },
+            };
+          },
+        };
+      });
+      const send = async (email = identity.email) => {
+        const req = new IncomingMessage(new Socket());
+        Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
+        req.method = "GET";
+        req.url = avatarPath;
+        req.headers = {
+          "cf-access-authenticated-user-email": email,
+          "cf-access-jwt-assertion":
+            "header." +
+            Buffer.from(JSON.stringify({ iss: accessOrigin })).toString("base64url") +
+            ".signature",
+          "x-forwarded-for": "203.0.113.10",
+          "x-openclaw-scopes": scope,
+        };
+        const res = new ServerResponse(req);
+        let bytes = Buffer.alloc(0);
+        vi.spyOn(res, "end").mockImplementation((chunk?: unknown) => {
+          if (typeof chunk === "string") {
+            bytes = Buffer.from(chunk);
+          } else if (chunk instanceof Uint8Array) {
+            bytes = Buffer.from(chunk);
+          }
+          return res;
+        });
+        try {
+          try {
+            await handleUserProfileAvatarHttpRequest(req, res, avatarPath, { auth });
+          } catch (error) {
+            if (!finishGatewayHttpAuthorityError(res, error)) {
+              throw error;
+            }
+          }
+          return { status: res.statusCode, bytes, contentType: res.getHeader("content-type") };
+        } finally {
+          req.destroy();
+        }
+      };
+      for (const account of [
+        { id: 510, email: "personal@example.test" },
+        { id: 511, email: "work@example.test" },
+      ]) {
+        Object.assign(identity, account);
+        const response = await send();
+        expect(response.status, response.bytes.toString()).toBe(200);
+        expect(response.bytes).toEqual(PNG);
       }
-    };
-    for (const account of [
-      { id: 510, email: "personal@example.test" },
-      { id: 511, email: "work@example.test" },
-    ]) {
-      Object.assign(identity, account);
-      const response = await send();
-      expect(response.status, response.bytes.toString()).toBe(200);
-      expect(response.bytes).toEqual(PNG);
-    }
-    expect(metadata).toHaveBeenCalledTimes(2);
-    expect(readAvatar).toHaveBeenCalledTimes(2);
-    readAvatar.mockClear();
-    setUserProfileRole(primary.id, null);
-    invalidateOperatorRolePolicy(primary.id);
-    expect((await send()).status).toBe(403);
-    expect(metadata).toHaveBeenCalledTimes(2);
-    expect(readAvatar).not.toHaveBeenCalled();
-    setUserProfileRole(primary.id, "reader");
-    invalidateOperatorRolePolicy(primary.id);
-    identity.id = 512;
-    expect((await send()).status).toBe(403);
-    expect(metadata).toHaveBeenCalledTimes(3);
-    expect(readAvatar).not.toHaveBeenCalled();
-    identity.email = "mismatched@example.test";
-    expect((await send("work@example.test")).status).toBe(401);
-    expect(readAvatar).not.toHaveBeenCalled();
-  });
+      expect(metadata).toHaveBeenCalledTimes(2);
+      expect(readAvatar).toHaveBeenCalledTimes(2);
+      const ownAvatarPath = avatarPath;
+      avatarPath = "/api/users/gateway-owner/avatar";
+      expect((await send()).status).toBe(scope === "operator.read" ? 200 : 403);
+      avatarPath = ownAvatarPath;
+      readAvatar.mockClear();
+      setUserProfileRole(primary.id, null);
+      invalidateOperatorRolePolicy(primary.id);
+      expect((await send()).status).toBe(403);
+      expect(metadata).toHaveBeenCalledTimes(2);
+      expect(readAvatar).not.toHaveBeenCalled();
+      setUserProfileRole(primary.id, "reader");
+      invalidateOperatorRolePolicy(primary.id);
+      identity.id = 512;
+      expect((await send()).status).toBe(403);
+      expect(metadata).toHaveBeenCalledTimes(3);
+      expect(readAvatar).not.toHaveBeenCalled();
+      identity.email = "mismatched@example.test";
+      expect((await send("work@example.test")).status).toBe(401);
+      expect(readAvatar).not.toHaveBeenCalled();
+
+      Object.assign(identity, { id: 511, email: "work@example.test" });
+      const replacement = ensureProfileForEmail("image-replacement@example.test");
+      for (const change of ["cosmetic", "role", "alias"] as const) {
+        let boundaryReached = false;
+        beforeAvatarBytes = () => {
+          beforeAvatarBytes = undefined;
+          boundaryReached = true;
+          if (change === "role") {
+            setUserProfileRole(primary.id, null);
+            invalidateOperatorRolePolicy(primary.id);
+          } else if (change === "alias") {
+            linkEmail("work@example.test", replacement.id);
+          } else {
+            setDisplayName(primary.id, "Cosmetic update");
+          }
+        };
+        const refused = await send();
+        expect(boundaryReached).toBe(true);
+        if (change === "cosmetic") {
+          expect(refused.status).toBe(200);
+          expect(refused.bytes).toEqual(PNG);
+        } else {
+          expect(refused.status, change).toBe(401);
+          expect(refused.contentType).not.toMatch(/^image\//);
+          expect(refused.bytes).not.toEqual(PNG);
+        }
+        setUserProfileRole(primary.id, "reader");
+        invalidateOperatorRolePolicy(primary.id);
+        linkEmail("work@example.test", primary.id);
+      }
+    },
+  );
 
   it("allows device-only clients and authenticates HEAD and ETag revalidation", async () => {
     const { token } = await pairDevice();

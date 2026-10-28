@@ -1,25 +1,20 @@
 import type { Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { makeProviderModel } from "../../ai/src/providers/provider-model.test-support.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 
 function makeModel(
   thinkingLevelMap?: Model["thinkingLevelMap"],
   overrides: Partial<Model> = {},
 ): Model {
-  return {
-    id: "test-model",
+  return makeProviderModel("anthropic-messages", "anthropic", "test-model", {
     name: "Test Model",
-    api: "anthropic-messages",
-    provider: "anthropic",
     baseUrl: "https://example.test",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 1000,
     maxTokens: 100,
     thinkingLevelMap,
     ...overrides,
-  };
+  });
 }
 
 describe("resolveAgentReasoningOption", () => {

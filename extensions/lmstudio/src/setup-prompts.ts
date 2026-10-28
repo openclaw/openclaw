@@ -10,8 +10,9 @@ export type ProviderPromptText = (params: {
 export type ProviderPromptNote = (message: string, title?: string) => Promise<void> | void;
 
 export function validateLmstudioSetupUrl(value: string | undefined): string | undefined {
+  // Blank input keeps the default base URL.
   if (!value?.trim()) {
-    return "Required";
+    return undefined;
   }
   const invalidUrl =
     "Enter a valid HTTP or HTTPS URL without embedded credentials (e.g. http://localhost:1234).";

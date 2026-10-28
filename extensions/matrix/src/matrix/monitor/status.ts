@@ -25,8 +25,6 @@ function formatSyncError(error: unknown): string | null {
   return formatErrorMessage(error);
 }
 
-export type MatrixMonitorStatusController = ReturnType<typeof createMatrixMonitorStatusController>;
-
 export function createMatrixMonitorStatusController(params: {
   accountId: string;
   baseUrl?: string;

@@ -916,6 +916,11 @@ prepare_suspension() {
 				printf 'WAITING transient write custody activeCount=%s blockers=%s\n' \
 					"$suspension_active_count" "$suspension_blockers"
 				sleep "$custody_wait_interval"
+				if ((SECONDS >= custody_wait_deadline)); then
+					printf 'DEFERRED bounded interruption write custody wait expired activeCount=%s blockers=%s\n' \
+						"$suspension_active_count" "$suspension_blockers"
+					return 75
+				fi
 				continue
 			fi
 			if ((${waive_terminal_persistence:-0} && !${terminal_persistence_waiver_armed:-0})) &&
@@ -3053,8 +3058,42 @@ cleanup_releases() {
 			printf 'RETAIN replacement-safe quarantine refused release=%s\n' "$sha" >&2
 		fi
 	done
+	retire_settled_native_updates
 	# A release removed in this pass must not leave a stale verification claim.
 	verified_markers list >/dev/null
+}
+
+# Without a journal, an earlier transaction's pre-migration snapshot can only undo state that
+# was since accepted. Its receipt shows whether Doctor's work settled: no receipt means Doctor
+# never ran. The runtime account owns these trees, so it removes their contents; root removes
+# only the emptied directory. This invocation's own root stays so `update finish` can be retried.
+retire_settled_native_updates() {
+	local updates="$runtime_home/.openclaw-update" root name status
+	[[ -d "$updates" && ! -L "$updates" && ! -e "$journal_file" ]] || return 0
+	for root in "$updates"/update-*; do
+		name="$(basename "$root")"
+		[[ "$name" =~ ^update-[a-f0-9]{40}-[0-9a-f-]{36}$ && -d "$root" && ! -L "$root" ]] || continue
+		[[ -z "$native_update_root" || "$root" != "$(dirname "$native_update_root")" ]] || continue
+		status="$(bounded 60 "$runuser_bin" -u openclaw -- env -i PATH=/usr/bin:/bin "$node_bin" -e '
+const fs = require("node:fs");
+let status;
+try { status = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).status; }
+catch (error) { status = error.code === "ENOENT" ? "absent" : "unreadable"; }
+process.stdout.write(/^[a-z-]{1,32}$/.test(String(status)) ? status : "unreadable");
+' "$root/native.receipt.json")" || status=unreadable
+		case "$status" in
+		absent | migrated | restored | finished)
+			# GNU find refuses to run from a working directory the runtime account cannot enter.
+			if (cd / && bounded 1800 "$runuser_bin" -u openclaw -- env -i PATH=/usr/bin:/bin \
+				find "$root" -mindepth 1 -maxdepth 1 -exec rm -rf --one-file-system -- {} +) && rmdir -- "$root"; then
+				printf 'RETIRED_NATIVE_UPDATE=%s status=%s\n' "$name" "$status"
+			else
+				printf 'RETAIN native update removal failed root=%s\n' "$name" >&2
+			fi
+			;;
+		*) printf 'RETAIN unsettled native update root=%s status=%s\n' "$name" "$status" >&2 ;;
+		esac
+	done
 }
 
 activate_release() {

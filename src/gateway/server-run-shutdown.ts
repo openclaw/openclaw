@@ -450,7 +450,11 @@ export async function prepareGatewayRunShutdown(
           return custody;
         },
       ),
-      measureGatewayCloseStep("restart.close.session-effects", () => effects.released),
+      measureGatewayCloseStep(
+        "restart.close.session-effects",
+        () => effects.released,
+        effects.inspectPending,
+      ),
     ]).then(() => undefined),
   };
 }

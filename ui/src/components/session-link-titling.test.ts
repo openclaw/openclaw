@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { MarkdownDomReconciler } from "../lib/markdown-dom-reconciler.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
@@ -29,12 +30,12 @@ function registerTargets(titler: SessionLinkTitler, host: HTMLElement) {
   }
 }
 
-function decorate(titler: SessionLinkTitler, element: HTMLElement, load = false) {
+function decorate(titler: SessionLinkTitler, element: HTMLElement) {
   titler.register(
     element,
     element.querySelector<HTMLElement>(".session-label") ?? document.createElement("span"),
   );
-  return titler.decorate(element, load);
+  return titler.decorate(element);
 }
 
 function renderMarkdown(
@@ -85,7 +86,11 @@ function sessionContext(rows: GatewaySessionRow[] = [], origin?: string): Applic
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: {
       connectionRevision: 0,
-      snapshot: { hello: null, phase: "connected", selfUser: { id: "first-profile" } },
+      snapshot: {
+        hello: gatewayHelloForMethods(["controlUi.sessionPreview", "sessions.resolve"]),
+        phase: "connected",
+        selfUser: { id: "first-profile" },
+      },
     },
   } as unknown as ApplicationContext;
 }
@@ -117,6 +122,19 @@ function createTitler(rows: GatewaySessionRow[] = [], request = vi.fn()) {
 }
 
 describe("SessionLinkTitler", () => {
+  it("keeps a plain session link when the connection cannot read previews", async () => {
+    const { titler, request } = createTitler();
+    titler.context!.gateway.snapshot.hello = gatewayHelloForMethods(
+      ["controlUi.sessionPreview", "sessions.resolve"],
+      ["operator.sessions.read"],
+    );
+    const anchor = sessionAnchor();
+    await decorate(titler, anchor);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await refresh(titler);
+    expect(request).not.toHaveBeenCalled();
+    expect(anchor.textContent).toBe(SESSION_KEY);
+  });
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-16T12:00:00Z"));
@@ -159,12 +177,12 @@ describe("SessionLinkTitler", () => {
     label.textContent = SESSION_KEY;
     first.replaceChildren(label);
 
-    await decorate(titler, first, true);
-    await decorate(titler, second, true);
+    await decorate(titler, first);
+    await decorate(titler, second);
 
     expectTitle(first, "Research plan");
     expectTitle(second, "Research plan");
-    await decorate(titler, first, true);
+    await decorate(titler, first);
     expectTitle(first, "Research plan");
     expect(first.getAttribute("href")).toBe("/chat/main/research");
     expect(request).toHaveBeenCalledExactlyOnceWith("controlUi.sessionPreview", {
@@ -174,7 +192,7 @@ describe("SessionLinkTitler", () => {
     label.textContent = "Updated by the producer";
     expect(first.textContent).toBe("Updated by the producer");
     titler.context = sessionContext([row("Replacement Gateway")]);
-    await decorate(titler, first, true);
+    await decorate(titler, first);
     expect(first.firstElementChild).toBe(label);
     expect(first.textContent).toBe("Updated by the producer");
   });
@@ -188,7 +206,7 @@ describe("SessionLinkTitler", () => {
     const request = vi.fn().mockImplementation(() => oldPreview.promise);
     const { titler } = createTitler([], request);
     const previous = sessionAnchor();
-    const decorating = decorate(titler, previous, true);
+    const decorating = decorate(titler, previous);
     await Promise.resolve();
     if (state === "cached") {
       oldPreview.resolve(previewResponse({ title: "Previous Gateway" }));
@@ -212,7 +230,7 @@ describe("SessionLinkTitler", () => {
     await decorating;
     expect(previous.textContent).toBe(state === "cached" ? "Previous Gateway" : SESSION_KEY);
     const current = state === "cached" ? previous : sessionAnchor();
-    await decorate(titler, current, true);
+    await decorate(titler, current);
 
     expect(current.textContent).toBe("Current Gateway");
     expect(request).toHaveBeenCalledTimes(2);
@@ -226,14 +244,14 @@ describe("SessionLinkTitler", () => {
       .mockResolvedValueOnce(previewResponse());
     const { titler } = createTitler([], request);
 
-    await decorate(titler, sessionAnchor(), true);
+    await decorate(titler, sessionAnchor());
     await vi.advanceTimersByTimeAsync(5 * 60_000);
-    await decorate(titler, sessionAnchor(), true);
-    await decorate(titler, sessionAnchor(), true);
+    await decorate(titler, sessionAnchor());
+    await decorate(titler, sessionAnchor());
     expect(request).toHaveBeenCalledTimes(2);
 
     await vi.advanceTimersByTimeAsync(30_000);
-    await decorate(titler, sessionAnchor(), true);
+    await decorate(titler, sessionAnchor());
     expect(request).toHaveBeenCalledTimes(3);
   });
 

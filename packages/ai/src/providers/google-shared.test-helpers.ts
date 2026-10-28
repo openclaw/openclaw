@@ -1,6 +1,7 @@
 // Google provider test helpers assert converted message and stream payloads.
 import type { Model } from "../types.js";
 import { buildGoogleGenerateContentParams } from "./google-shared.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
 export function convertMessages(
   model: Parameters<typeof buildGoogleGenerateContentParams>[0],
@@ -46,32 +47,18 @@ export const getFirstToolParameters = (converted: ConvertedTools): Record<string
 };
 
 export const makeModel = (id: string): Model<"google-generative-ai"> =>
-  ({
-    id,
-    name: id,
-    api: "google-generative-ai",
-    provider: "google",
-    baseUrl: "https://example.invalid",
+  makeProviderModel("google-generative-ai", "google", id, {
     reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 1,
     maxTokens: 1,
-  }) as Model<"google-generative-ai">;
+  });
 
 export const makeGeminiCliModel = (id: string): Model<"google-gemini-cli"> =>
-  ({
-    id,
-    name: id,
-    api: "google-gemini-cli",
-    provider: "google-gemini-cli",
-    baseUrl: "https://example.invalid",
+  makeProviderModel("google-gemini-cli", "google-gemini-cli", id, {
     reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 1,
     maxTokens: 1,
-  }) as Model<"google-gemini-cli">;
+  });
 
 export function makeGoogleAssistantMessage(model: string, content: unknown) {
   return {

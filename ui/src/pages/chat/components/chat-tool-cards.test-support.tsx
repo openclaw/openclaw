@@ -3,7 +3,8 @@ import { onTestFinished, vi } from "vitest";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ChatToolCard, type ToolCardOptions } from "./chat-tool-cards.solid.tsx";
+import type { ToolCardOptions } from "./chat-tool-card-types.ts";
+import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { ToolPreview } from "./widget-card-view.tsx";
 

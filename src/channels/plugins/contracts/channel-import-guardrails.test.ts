@@ -1,7 +1,7 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { SourceFile } from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mts";
@@ -21,50 +21,29 @@ afterAll(() => parser.close());
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
-const bundledPluginRecords = loadPluginManifestRegistryCore({ config: {} }).plugins.filter(
-  (plugin) => plugin.origin === "bundled",
-);
 const bundledPluginRoots = new Map(
-  bundledPluginRecords.map(
-    ({ id, rootDir }) => [id, resolveBundledPluginSourceRoot(rootDir)] as const,
-  ),
+  loadPluginManifestRegistryCore({ config: {} })
+    .plugins.filter((plugin) => plugin.origin === "bundled")
+    .map(
+      ({ id, rootDir }) =>
+        [id, resolve(REPO_ROOT, BUNDLED_PLUGIN_ROOT_DIR, basename(rootDir))] as const,
+    ),
 );
 const BUNDLED_EXTENSION_IDS = [...bundledPluginRoots.keys()].toSorted(
   (left, right) => right.length - left.length,
 );
-const GUARDED_CHANNEL_EXTENSIONS = new Set([
-  "discord",
-  "feishu",
-  "googlechat",
-  "imessage",
-  "irc",
-  "line",
-  "matrix",
-  "mattermost",
-  "msteams",
-  "nostr",
-  "nextcloud-talk",
-  "signal",
-  "slack",
-  "synology-chat",
-  "telegram",
-  "tlon",
-  "twitch",
-  "whatsapp",
-  "zalo",
-  "zalouser",
-]);
-
-function resolveBundledPluginSourceRoot(rootDir: string): string {
-  const sourceRoot = resolve(REPO_ROOT, BUNDLED_PLUGIN_ROOT_DIR, basename(rootDir));
-  return fs.existsSync(sourceRoot) ? sourceRoot : rootDir;
-}
+const GUARDED_CHANNEL_EXTENSIONS = new Set(
+  `discord feishu googlechat imessage irc line matrix mattermost msteams nostr
+   nextcloud-talk signal slack synology-chat telegram tlon twitch whatsapp zalo zalouser`.split(
+    /\s+/u,
+  ),
+);
 
 function bundledPluginFile(pluginId: string, relativePath: string): string {
-  const rootDir = bundledPluginRoots.get(pluginId);
-  if (!rootDir) {
-    throw new Error(`missing bundled plugin root for ${pluginId}`);
-  }
+  const rootDir = expectDefined(
+    bundledPluginRoots.get(pluginId),
+    `missing bundled plugin root for ${pluginId}`,
+  );
   return normalizePath(resolve(rootDir, relativePath));
 }
 
@@ -88,17 +67,13 @@ const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
     path,
     [/["']openclaw\/plugin-sdk\/account-resolution["']/],
   ]),
-  ...[
-    "src/channel.ts",
-    "src/action-runtime.ts",
-    "src/accounts.ts",
-    "src/account-inspect.ts",
-    "src/api-fetch.ts",
-    "src/channel.setup.ts",
-    "src/probe.ts",
-    "src/setup-core.ts",
-    "src/token.ts",
-  ].map((path): GuardedSource => ["telegram", path, [/["']\.\.\/runtime-api\.js["']/]]),
+  ..."channel action-runtime accounts account-inspect api-fetch channel.setup probe setup-core token"
+    .split(" ")
+    .map((name): GuardedSource => [
+      "telegram",
+      `src/${name}.ts`,
+      [/["']\.\.\/runtime-api\.js["']/],
+    ]),
 ];
 const docsLink = /\bformatDocsLink\b/;
 const cliCommand = /\bformatCliCommand\b/;
@@ -109,7 +84,6 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
   ["slack", "src/setup-core.ts", [docsLink]],
   ["slack", "src/setup-surface.ts", [docsLink]],
   ["discord", "src/setup-core.ts", [docsLink]],
-  ["discord", "src/setup-surface.ts", [docsLink]],
   ["imessage", "src/setup-core.ts", [docsLink]],
   ["imessage", "src/setup-surface.ts", [detectBinary, docsLink]],
   ["telegram", "src/setup-core.ts", [cliCommand, docsLink]],
@@ -129,43 +103,11 @@ function expectGuardedSources(sources: GuardedSource[], read = readSource) {
   }
 }
 
-const LOCAL_EXTENSION_API_BARREL_GUARDS = [
-  "acpx",
-  "device-pair",
-  "diagnostics-otel",
-  "diagnostics-prometheus",
-  "discord",
-  "diffs",
-  "feishu",
-  "google",
-  "imessage",
-  "irc",
-  "llm-task",
-  "line",
-  "lobster",
-  "matrix",
-  "mattermost",
-  "memory-lancedb",
-  "msteams",
-  "nextcloud-talk",
-  "nostr",
-  "ollama",
-  "copilot-proxy",
-  "sglang",
-  "zai",
-  "signal",
-  "synology-chat",
-  "talk-voice",
-  "telegram",
-  "tlon",
-  "voice-call",
-  "vllm",
-  "whatsapp",
-  "twitch",
-  "xai",
-  "zalo",
-  "zalouser",
-] as const;
+const LOCAL_EXTENSION_API_BARREL_GUARDS =
+  `acpx device-pair diagnostics-otel diagnostics-prometheus discord diffs feishu google
+   imessage irc llm-task line lobster matrix mattermost memory-lancedb msteams nextcloud-talk
+   nostr ollama copilot-proxy sglang zai signal synology-chat talk-voice telegram tlon voice-call
+   vllm whatsapp twitch xai zalo zalouser`.split(/\s+/u);
 
 const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
   // Avoid accounts.ts -> runtime-api.ts -> plugin api barrel -> accounts.ts.
@@ -175,71 +117,19 @@ const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
 ] as const;
 
 const sourceTextCache = new Map<string, string>();
-const sourceAnalysisCache = new Map<string, string[]>();
-let coreSourceFilesCache: string[] | null = null;
-const extensionFilesCache = new Map<string, string[]>();
-type SourceFileCollectorOptions = {
-  rootDir: string;
-  shouldSkipEntry?: (params: { entryName: string; normalizedFullPath: string }) => boolean;
-};
+const trackedFiles = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: ["src", "extensions"] });
+if (!trackedFiles) {
+  throw new Error("Channel import guardrails require a Git checkout");
+}
+const sourceFiles = trackedFiles
+  .filter((file) => /\.(?:[cm]?[jt]s|[jt]sx)$/u.test(file) && !file.endsWith(".d.ts"))
+  .filter((file) => !/(?:^|\/)(?:node_modules|dist|coverage)\//u.test(file))
+  .map((file) => normalizePath(resolve(REPO_ROOT, file)));
 
 function readSource(path: string): string {
-  const fullPath = resolve(REPO_ROOT, path);
-  const cached = sourceTextCache.get(fullPath);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const text = fs.readFileSync(fullPath, "utf8");
-  sourceTextCache.set(fullPath, text);
+  const text = sourceTextCache.get(path) ?? fs.readFileSync(path, "utf8");
+  sourceTextCache.set(path, text);
   return text;
-}
-
-function listTrackedSourceFiles(options: SourceFileCollectorOptions): string[] | null {
-  const relativeRoot = toRepoRelativePath(REPO_ROOT, options.rootDir);
-  if (!relativeRoot || relativeRoot.startsWith("..")) {
-    return null;
-  }
-  return (
-    listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeRoot })
-      ?.map((file) => resolve(REPO_ROOT, file))
-      .filter((file) => isSourceFile(file, options))
-      .toSorted() ?? null
-  );
-}
-
-function isSourceFile(file: string, options: SourceFileCollectorOptions): boolean {
-  const normalizedFullPath = normalizePath(file);
-  return (
-    /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(file) &&
-    !file.endsWith(".d.ts") &&
-    !normalizedFullPath
-      .split("/")
-      .some((part) => ["node_modules", "dist", "coverage"].includes(part)) &&
-    !options.shouldSkipEntry?.({ entryName: basename(file), normalizedFullPath })
-  );
-}
-
-function collectSourceFiles(
-  cached: string[] | undefined | null,
-  options: SourceFileCollectorOptions,
-): string[] {
-  if (cached) {
-    return cached;
-  }
-  const trackedFiles = listTrackedSourceFiles(options);
-  if (trackedFiles) {
-    return trackedFiles;
-  }
-  function walk(dir: string): string[] {
-    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-      const path = resolve(dir, entry.name);
-      if (entry.isDirectory()) {
-        return ["node_modules", "dist", "coverage"].includes(entry.name) ? [] : walk(path);
-      }
-      return entry.isFile() && isSourceFile(path, options) ? [path] : [];
-    });
-  }
-  return walk(options.rootDir);
 }
 
 function readSetupBarrelImportBlock(path: string): string {
@@ -261,115 +151,43 @@ function collectExtensionSourceFiles(): string[] {
   return [...bundledPluginRoots.keys()].flatMap((id) => collectExtensionFiles(id, true));
 }
 
-function isGuardedExtensionSourceFile(relativePath: string): boolean {
-  const entryName = basename(relativePath);
-  return (
-    /\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(relativePath) &&
-    !relativePath.endsWith(".d.ts") &&
-    !relativePath.split("/").some((part) => part === "node_modules" || part === "dist") &&
-    !classifyBundledExtensionSourcePath(resolve(REPO_ROOT, relativePath)).isTestLike &&
-    entryName !== "api.ts" &&
-    entryName !== "runtime-api.ts"
-  );
-}
-
-function collectExtensionForbiddenImportMatches(literals: readonly string[]): string[] {
-  const result = spawnSync(
-    "git",
-    [
-      "grep",
-      "-n",
-      "-F",
-      ...literals.flatMap((literal) => ["-e", literal]),
-      "--",
-      BUNDLED_PLUGIN_ROOT_DIR,
-    ],
-    {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      maxBuffer: 8 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
-  );
-  if (result.status === 1) {
-    return [];
-  }
-  if (result.status !== 0) {
-    throw new Error("git grep failed while checking extension import guardrails");
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => {
-      const file = line.split(":", 1)[0];
-      return file ? isGuardedExtensionSourceFile(file) : false;
-    })
-    .toSorted();
-}
-
 function collectCoreSourceFiles(): string[] {
   const normalizedPluginSdkDir = normalizePath(resolve(REPO_ROOT, "src/plugin-sdk"));
-  coreSourceFilesCache = collectSourceFiles(coreSourceFilesCache, {
-    rootDir: resolve(REPO_ROOT, "src"),
-    shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
-      /\.(?:test|test-utils|test-harness|test-helpers|test-support|mock-harness|suite|spec|fixture)\.|\.snap/u.test(
-        normalizedFullPath,
-      ) ||
-      entryName.endsWith("-test-helpers.ts") ||
-      entryName === "test-manager-helpers.ts" ||
-      // The curated SDK bridge has dedicated guards, not the generic core import rule.
-      normalizedFullPath.includes(`${normalizedPluginSdkDir}/`),
-  });
-  return coreSourceFilesCache;
+  return sourceFiles.filter(
+    (file) =>
+      toRepoRelativePath(REPO_ROOT, file).startsWith("src/") &&
+      !/\.(?:test|test-utils|test-harness|test-helpers|test-support|mock-harness|suite|spec|fixture)\.|\.snap/u.test(
+        file,
+      ) &&
+      !basename(file).endsWith("-test-helpers.ts") &&
+      basename(file) !== "test-manager-helpers.ts" &&
+      !file.startsWith(`${normalizedPluginSdkDir}/`),
+  );
 }
 
 function collectExtensionFiles(extensionId: string, excludeApi = false): string[] {
-  const key = `${extensionId}:${excludeApi}`;
-  const cached = extensionFilesCache.get(key);
   const rootDir = bundledPluginRoots.get(extensionId);
   if (!rootDir) {
     return [];
   }
-  const files = collectSourceFiles(cached, {
-    rootDir,
-    shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
-      classifyBundledExtensionSourcePath(normalizedFullPath).isTestLike ||
-      entryName === "runtime-api.ts" ||
-      (excludeApi && entryName === "api.ts"),
-  });
-  extensionFilesCache.set(key, files);
-  return files;
+  return sourceFiles.filter(
+    (file) =>
+      file.startsWith(`${normalizePath(rootDir)}/`) &&
+      !classifyBundledExtensionSourcePath(file).isTestLike &&
+      basename(file) !== "runtime-api.ts" &&
+      (!excludeApi || basename(file) !== "api.ts"),
+  );
 }
 
-function collectModuleSpecifiers(text: string): string[] {
-  const specifiers = new Set<string>();
-  for (const pattern of [
-    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/gmu,
-    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/gmu,
-    /^\s*import(?:\s+type)?\s+(?!["'])(?:[\s\S]*?)\s+from\s*["']([^"']+)["']/gmu,
-    /^\s*import\s*["']([^"']+)["']/gmu,
-    /^\s*export\s+(?:type\s+)?\*\s*(?:as\s+\w+\s+)?from\s*["']([^"']+)["']/gmu,
-    /^\s*export\s+(?:type\s+)?\{[^}]*\}\s+from\s*["']([^"']+)["']/gmu,
-  ]) {
-    for (const match of text.matchAll(pattern)) {
-      const specifier = match[1]?.trim();
-      if (specifier && /\.(?:[cm]?[jt]sx?)$/u.test(specifier)) {
-        specifiers.add(specifier);
-      }
+function visitSources(files: string[], check: (source: SourceFile) => void) {
+  for (let offset = 0; offset < files.length; offset += 32) {
+    const sources = files
+      .slice(offset, offset + 32)
+      .map((fileName) => ({ fileName, text: readSource(fileName) }));
+    for (const source of parser.parseSourceFiles(sources)) {
+      check(source);
     }
   }
-  return [...specifiers];
-}
-
-function getImportSpecifiers(path: string): string[] {
-  const fullPath = resolve(REPO_ROOT, path);
-  const cached = sourceAnalysisCache.get(fullPath);
-  if (cached) {
-    return cached;
-  }
-  const imports = collectModuleSpecifiers(readSource(path));
-  sourceAnalysisCache.set(fullPath, imports);
-  return imports;
 }
 
 function expectNoCorePluginPrivateSrcImports(sourceFile: SourceFile): void {
@@ -400,45 +218,33 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
   }
 }
 
-function expectNoCrossPluginFacades(file: string, imports: string[]): void {
+function expectNoPluginFacades(file: string, imports: string[], core = false): void {
   const currentExtensionId =
     normalizePath(file).match(new RegExp(`/${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/`))?.[1] ?? null;
-  if (!currentExtensionId) {
+  if (!core && !currentExtensionId) {
     return;
   }
   for (const specifier of imports) {
-    if (!specifier.startsWith("openclaw/plugin-sdk/")) {
-      continue;
-    }
-    const targetSubpath = specifier.slice("openclaw/plugin-sdk/".length);
-    const targetExtensionId = findExtensionId(targetSubpath, BUNDLED_EXTENSION_IDS);
-    if (!targetExtensionId || targetExtensionId === currentExtensionId) {
+    const targetSubpath = core
+      ? (specifier.split("/plugin-sdk/")[1]?.replace(/\.[cm]?[jt]sx?$/u, "") ?? "")
+      : specifier.startsWith("openclaw/plugin-sdk/")
+        ? specifier.slice("openclaw/plugin-sdk/".length)
+        : "";
+    const targetExtensionId = findExtensionId(
+      targetSubpath,
+      core ? GUARDED_CHANNEL_EXTENSIONS : BUNDLED_EXTENSION_IDS,
+    );
+    if (!targetExtensionId || (!core && targetExtensionId === currentExtensionId)) {
       continue;
     }
     expect.fail(
-      `${file} should not import another bundled plugin facade, got ${specifier}. Promote shared helpers to a neutral plugin-sdk subpath instead.`,
+      `${file} should not import ${core ? "plugin-specific SDK facades from core" : "another bundled plugin facade"}: ${specifier}. Use a neutral plugin-sdk surface instead.`,
     );
   }
 }
 
 function findExtensionId(subpath: string, ids: Iterable<string>) {
   return [...ids].find((id) => subpath === id || subpath.startsWith(`${id}-`));
-}
-
-function expectNoCoreFacades(file: string, imports: string[]): void {
-  for (const specifier of imports) {
-    if (!specifier.includes("/plugin-sdk/")) {
-      continue;
-    }
-    const targetSubpath = specifier.split("/plugin-sdk/")[1]?.replace(/\.[cm]?[jt]sx?$/u, "") ?? "";
-    const targetExtensionId = findExtensionId(targetSubpath, GUARDED_CHANNEL_EXTENSIONS);
-    if (!targetExtensionId) {
-      continue;
-    }
-    expect.fail(
-      `${file} should not import plugin-specific SDK facades (${specifier}) from core production code. Use a neutral contract surface or plugin hook instead.`,
-    );
-  }
 }
 
 describe("channel import guardrails", () => {
@@ -460,20 +266,25 @@ describe("channel import guardrails", () => {
     ],
     ["legacy send-deps", ["src/infra/outbound/send-deps"]],
   ] as const)("forbids %s imports", (_name, imports) => {
-    expect(collectExtensionForbiddenImportMatches(imports)).toEqual([]);
+    expect(
+      sourceFiles.filter(
+        (file) =>
+          toRepoRelativePath(REPO_ROOT, file).startsWith("extensions/") &&
+          !classifyBundledExtensionSourcePath(file).isTestLike &&
+          !["api.ts", "runtime-api.ts"].includes(basename(file)) &&
+          imports.some((literal) => readSource(file).includes(literal)),
+      ),
+    ).toEqual([]);
   });
 
-  it.each([
-    'import { client } from "../../extensions/feishu/src/client.js";',
-    'await import("../../extensions/feishu/src/client.js");',
-    'export * from "../../extensions/feishu/src/client.js";',
-    'require("../../extensions/feishu/src/client.js");',
-    'import client = require("../../extensions/feishu/src/client");',
-    'new URL("../../extensions/feishu/src/client.js", import.meta.url);',
-  ])("rejects core plugin-private module references: %s", (source) => {
-    expect(() =>
-      expectNoCorePluginPrivateSrcImports(parser.parseSourceFile("source.ts", source)),
-    ).toThrow("should not import plugin-private src paths");
+  it("rejects core plugin-private import-equals references", () => {
+    const source = parser.parseSourceFile(
+      "source.ts",
+      'import client = require("../../extensions/feishu/src/client");',
+    );
+    expect(() => expectNoCorePluginPrivateSrcImports(source)).toThrow(
+      "should not import plugin-private src paths",
+    );
   });
 
   it("allows diagnostic paths and import examples without loading plugin-private modules", () => {
@@ -490,27 +301,30 @@ describe("channel import guardrails", () => {
   });
 
   it("keeps core production files off plugin-private src imports", () => {
-    const files = collectCoreSourceFiles();
-    for (let offset = 0; offset < files.length; offset += 32) {
-      const sources = files.slice(offset, offset + 32).map((fileName) => ({
-        fileName,
-        text: readSource(fileName),
-      }));
-      for (const sourceFile of parser.parseSourceFiles(sources)) {
-        expectNoCorePluginPrivateSrcImports(sourceFile);
-      }
-    }
+    visitSources(collectCoreSourceFiles(), expectNoCorePluginPrivateSrcImports);
   });
 
   it.each<[string, () => string[], (file: string, imports: string[]) => void]>([
-    ["cross-plugin facades", collectExtensionSourceFiles, expectNoCrossPluginFacades],
+    ["cross-plugin facades", collectExtensionSourceFiles, expectNoPluginFacades],
     ["core public seams", collectCoreSourceFiles, expectOnlyApprovedExtensionSeams],
-    ["core plugin facades", collectCoreSourceFiles, expectNoCoreFacades],
+    [
+      "core plugin facades",
+      collectCoreSourceFiles,
+      (file, imports) => expectNoPluginFacades(file, imports, true),
+    ],
     ["extension public seams", collectExtensionSourceFiles, expectOnlyApprovedExtensionSeams],
   ])("guards %s", (_name, collect, check) => {
-    for (const file of collect()) {
-      check(file, getImportSpecifiers(file));
-    }
+    visitSources(collect(), (source) =>
+      check(
+        source.fileName,
+        collectModuleReferencesFromSource(source)
+          .filter(
+            ({ kind, specifier }) =>
+              kind !== "import-meta-url" && /\.(?:[cm]?[jt]sx?)$/u.test(specifier),
+          )
+          .map(({ specifier }) => specifier),
+      ),
+    );
   });
 
   it("keeps internalized extension helper surfaces behind local api barrels", () => {

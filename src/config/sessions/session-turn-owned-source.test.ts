@@ -27,34 +27,29 @@ it.each([
   { replay: false, revoke: false, fallback: true },
 ])(
   "retains owned authority (replay $replay, revoke $revoke, native $fallback)",
-  async ({ replay, revoke, fallback }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  ({ replay, revoke, fallback }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();
       const scope = {
         ...f.scope,
-        storePath: path.join(
-          path.dirname(path.dirname(f.scope.storePath)),
-          "sessions",
-          "sessions.json",
-        ),
+        storePath: path.resolve(f.scope.storePath, "../../sessions/sessions.json"),
       };
       const nativeGuard = Object.assign(() => {}, {
         async prepareSessionSource() {
           return { nativeSource: true, assertCurrent() {}, checks: [] };
         },
       });
-      const messages = [
-        {
-          eventId: "owned-source-turn",
-          message: { role: "assistant", content: "owned completion" },
-          ...(fallback ? { workerPreparation: { beforeFreshMessageCommit: nativeGuard } } : {}),
-        },
-      ];
       const options = {
         expectedSessionId: f.scope.sessionId,
         sessionFile: "synthetic-session.jsonl",
         touchSessionEntry: true,
-        messages,
+        messages: [
+          {
+            eventId: "owned-source-turn",
+            message: { role: "assistant", content: "owned completion" },
+            ...(fallback ? { workerPreparation: { beforeFreshMessageCommit: nativeGuard } } : {}),
+          },
+        ],
       };
       if (replay) {
         await appendExpectedSessionTranscriptTurn(f.scope, options);
@@ -105,14 +100,12 @@ it.each([
         );
         if (fallback) {
           await expect(work).rejects.toThrow("requires worker-compatible message preparation");
-          expect(committed).not.toHaveBeenCalled();
         } else if (revoke) {
           await expect(work).rejects.toBe(refusal);
-          expect(committed).not.toHaveBeenCalled();
         } else {
           expect((await work).appendedMessages[0]).toMatchObject({ appended: true });
-          expect(committed).toHaveBeenCalledOnce();
         }
+        expect(committed).toHaveBeenCalledTimes(fallback || revoke ? 0 : 1);
         expect(reachedGrant).toBe(!fallback);
         if (!fallback) {
           expect(sql.queries).toEqual([]);
@@ -126,6 +119,5 @@ it.each([
         expect(f.read()).toEqual(before);
         expect(f.events()).toEqual(eventsBefore);
       }
-    });
-  },
+    }),
 );

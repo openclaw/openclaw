@@ -379,7 +379,7 @@ export function registerManagedUpdateHandoffTriageTests(
       ).toBe(false);
       expect(state.triageInput).toHaveProperty(
         "error",
-        expect.stringContaining("Service recovery outcome was not recorded"),
+        expect.stringContaining("Service recovery failed."),
       );
       expect(helperLog).toContain("update triage completed");
     },

@@ -31,10 +31,7 @@ import {
 } from "./update-command-database-context.js";
 import { settleMutableUpdateResult } from "./update-command-execution-settlement.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
-import {
-  admitSourceUpdateArtifacts,
-  recordInspectedGitTarget,
-} from "./update-command-git-admission.js";
+import { admitSourceUpdateArtifacts } from "./update-command-git-admission.js";
 import { updateGitInstall } from "./update-command-git.js";
 import {
   formatUpdateAncestryBlockMessage,
@@ -55,7 +52,6 @@ import {
 } from "./update-command-package.js";
 import { readOriginalUpdateRecovery } from "./update-command-recovery.js";
 import {
-  recordServiceReconciliationWarning,
   resolveMutableUpdateFailure,
   type MutableUpdateExecutionResult,
 } from "./update-command-result.js";
@@ -126,6 +122,7 @@ export async function executeMutableUpdate(
     params.updateInstallKind === "package" &&
     !canResolveRegistryVersionForPackageTarget(params.packageInstallSpec ?? params.tag);
   let preManagedServiceStop: PreManagedServiceStop | undefined;
+  let gatewayStartupRuntime: string | undefined;
   let ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
   let admission: Awaited<ReturnType<typeof inspectUpdateDatabaseContexts>> | undefined;
   let gitContextPrepared = false;
@@ -220,6 +217,7 @@ export async function executeMutableUpdate(
     mutationRoots: readonly string[] = [params.root],
     phase: "inspect" | "prepare" = "prepare",
   ) => {
+    gatewayStartupRuntime = undefined;
     if (admission?.foreground) {
       return;
     }
@@ -245,6 +243,12 @@ export async function executeMutableUpdate(
           onStopped: (state) => {
             preManagedServiceStop = { ...state, ...(serviceIdentity ? { serviceIdentity } : {}) };
           },
+          onOwnedStartupRuntime:
+            params.updateInstallKind === "git"
+              ? (executable) => {
+                  gatewayStartupRuntime = executable;
+                }
+              : undefined,
           handoffFromGateway: (state) =>
             handoffUpdateFromGateway({
               state,
@@ -414,6 +418,7 @@ export async function executeMutableUpdate(
         env,
         assertCurrent: assertExecutionCurrent,
         writeOptions: captureWriteOptions(),
+        gatewayStartupRuntime,
       },
       params,
       originalRun,
@@ -618,7 +623,12 @@ export async function executeMutableUpdate(
             target.postgresFamilies,
           );
           retentionInstallTarget = installTarget;
-          await recordInspectedGitTarget(target, recordPhase, waitForCurrent);
+          await waitForCurrent();
+          await recordPhase("staging", {
+            target: { kind: "git", sha: target.sha, version: target.version },
+          });
+          await waitForCurrent();
+          assertReadableGitMetadata(target.metadataUnreadable);
           assertExecutionCurrent();
           admittedTargetSchemaVersions = target.schemaVersions;
           if (!gitContextPrepared && !deferredFamilyPreparation) {
@@ -675,14 +685,8 @@ export async function executeMutableUpdate(
     }));
   }
 
-  if (originalManagedServiceRuntime && !originalManagedServiceRuntime.definition.runtimePin) {
-    recordServiceReconciliationWarning(
-      result,
-      originalManagedServiceRuntime.service.serviceEnv ?? {},
-      "runtime pins not yet migrated; preserved the current runtime; the post-update Doctor step migrates them",
-    );
-  }
   result = await settleMutableUpdateResult(params, {
+    originalManagedServiceRuntime,
     result,
     failure,
     candidateFailureReason,

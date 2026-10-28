@@ -8,19 +8,19 @@
 // failure in place. It is mounted on `document.body`, outside the shell, so the
 // Gateway restart that tears down the connection cannot unmount it.
 import { render } from "@solidjs/web";
-import { createSignal, Show } from "solid-js";
+import { createMemo, createStore, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
-import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
+import { isReportableUpdateRun } from "../../../src/shared/update-outcome-classification.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { UpdateGitRevisions } from "../components/solid/update-git-revisions.tsx";
 import { UpdateRunView } from "../components/update-run-view.tsx";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
-import "../components/modal-dialog.ts";
+import "../components/modal-dialog.tsx";
 import { formatUiError } from "../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { hasNativeUpdateBridge, postNativeUpdate } from "./native-link-routing.ts";
 import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
-import { formatUpdateTargetLabel } from "./update-schedule-projection.ts";
+import { formatUpdateTargetLabel, getUpdateGitComparison } from "./update-schedule-projection.ts";
 
 registerEnglishCatalog(registerUpdateActionsEnglish);
 
@@ -32,6 +32,8 @@ type DialogPhase =
   | { kind: "confirm" | "working" }
   | { kind: "run"; run: UpdateRunRecord }
   | { kind: "failed"; message: string };
+
+type StatusRead = { promise: Promise<"idle" | "success"> } | { error: string };
 
 let updateDialogOpen = false;
 
@@ -47,24 +49,13 @@ function formatInstalledAndAvailable(
   if (installed && available) {
     // A commit count already reads as a distance, so "Available 246 commits
     // behind" would double the framing; only a version needs the label.
-    const git = updateSchedule?.install?.git;
-    const behind =
-      git?.status === "behind" ||
-      git?.status === "diverged" ||
-      updateSchedule?.target?.kind === "git" ||
-      updateAvailable?.commitsBehind !== undefined;
+    const behind = getUpdateGitComparison(updateSchedule, updateAvailable) !== null;
     return t(behind ? "updates.confirm.versionsBehind" : "updates.confirm.versions", {
       available,
       installed,
     });
   }
   return installed ?? available ?? undefined;
-}
-
-function workingMessage(connected: boolean): string {
-  // A disconnect alone does not prove a restart. Keep update recovery guidance
-  // separate from flows that have an explicit restart result.
-  return connected ? t("updates.dialog.installing") : t("updates.dialog.disconnected");
 }
 
 export async function confirmAndStartUpdateRuntime(
@@ -92,7 +83,9 @@ export async function confirmAndStartUpdateRuntime(
     let acceptTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
     let sawBusy = false;
     let latestProgress: UpdateProgress | undefined;
-    let statusCheck: "idle" | "pending" | "success" | { error: string } = "idle";
+    // Admission stays synchronous while the native boundary observes completion.
+    let checkingStatus = false;
+    let statusRead: StatusRead | null = null;
     let dispose: (() => void) | undefined;
     let updateView: ((view: ReturnType<typeof readView>) => void) | undefined;
 
@@ -159,7 +152,11 @@ export async function confirmAndStartUpdateRuntime(
           }
         : {
             confirmLabel: t("updates.confirm.action"),
-            message: t("updates.confirm.message"),
+            message: t(
+              formatUpdateTargetLabel(updateSchedule, updateAvailable)
+                ? "updates.confirm.message"
+                : "updates.confirm.noKnownUpdateMessage",
+            ),
             title: t("chat.sidebar.updateGateway"),
           };
 
@@ -169,10 +166,8 @@ export async function confirmAndStartUpdateRuntime(
       const working = current.kind === "working" || run?.status === "running";
       const finished = run !== null && run.status !== "running";
       const failed = current.kind === "failed" || (run !== null && isReportableUpdateRun(run));
-      const checkingStatus = statusCheck === "pending";
-      const statusCheckError = typeof statusCheck === "object" ? statusCheck.error : null;
       const showRecovery =
-        failed || Boolean(readError) || (current.kind !== "confirm" && statusCheck !== "idle");
+        failed || Boolean(readError) || (current.kind !== "confirm" && statusRead !== null);
       const disconnected = latestProgress?.connected === false;
       const body =
         current.kind === "run"
@@ -180,7 +175,7 @@ export async function confirmAndStartUpdateRuntime(
           : current.kind === "failed"
             ? current.message
             : current.kind === "working"
-              ? workingMessage(!disconnected)
+              ? t(disconnected ? "updates.dialog.disconnected" : "updates.dialog.installing")
               : `${route.message} ${t("updates.confirm.impact")}`;
       return {
         route,
@@ -189,13 +184,12 @@ export async function confirmAndStartUpdateRuntime(
         working,
         finished,
         failed,
-        checkingStatus,
-        statusCheckError,
+        statusRead,
+        readError,
         showRecovery,
         disconnected,
         body,
         confirmed: current.kind === "confirm",
-        statusRefreshed: statusCheck === "success" && !readError,
         updateAvailable,
         updateSchedule,
       };
@@ -211,82 +205,88 @@ export async function confirmAndStartUpdateRuntime(
         return;
       }
       dispose = render(() => {
-        const [view, setView] = createSignal(snapshot);
+        // Run and schedule records retain the identity published by their owner.
+        const [view, setView] = createStore(snapshot, { shallow: true });
+        // Controls retain their idle read while each status receipt gets its own boundary.
+        const statusCompletion = createMemo(() => {
+          const read = view.statusRead;
+          return read && "promise" in read ? read.promise : "idle";
+        });
+        const statusPending = () => isPending(statusCompletion);
         let cancelButton!: HTMLButtonElement;
         let closeButton: HTMLButtonElement | undefined;
-        updateView = setView;
+        updateView = (next) => setView(() => next);
         return (
           <openclaw-modal-dialog
             prop:initialFocus={() => (closeButton?.isConnected ? closeButton : cancelButton)}
-            label={view().route.title}
-            description={view().body}
+            label={view.route.title}
+            description={view.body}
             onModal-cancel={finish}
           >
             <div class="exec-approval-card update-run-dialog">
               <div class="exec-approval-header">
                 <div>
-                  <div class="exec-approval-title">{view().route.title}</div>
+                  <div class="exec-approval-title">{view.route.title}</div>
                   <div class="exec-approval-sub" style="white-space: pre-line">
-                    {view().body}
+                    {view.body}
                   </div>
                 </div>
               </div>
-              <div role="status" aria-live="polite" class="exec-approval-sub">
-                {view().disconnected && view().showRecovery
-                  ? t("updates.dialog.checkStatusDisconnected")
-                  : view().statusRefreshed
-                    ? t("updates.dialog.statusRefreshed")
-                    : null}
-              </div>
-              <Show when={view().statusCheckError}>
-                <div role="alert" class="exec-approval-sub">
-                  {view().statusCheckError}
-                </div>
-              </Show>
-              <Show
-                when={
-                  view().details &&
-                  view().confirmed &&
-                  !view().checkingStatus &&
-                  !view().statusCheckError
-                }
-              >
-                <div class="exec-approval-command mono update-confirmation-details">
-                  <div>{view().details}</div>
-                  <UpdateGitRevisions
-                    schedule={view().updateSchedule}
-                    updateAvailable={view().updateAvailable}
-                  />
-                </div>
-              </Show>
-              <Show when={view().run}>
-                {(run) => <UpdateRunView run={run()} connected={!view().disconnected} />}
+              <For each={[view.statusRead]}>
+                {(read) => {
+                  const statusMessage = (refreshed = false) => (
+                    <div role="status" aria-live="polite" class="exec-approval-sub">
+                      {view.disconnected && view.showRecovery
+                        ? t("updates.dialog.checkStatusDisconnected")
+                        : refreshed && !view.readError
+                          ? t("updates.dialog.statusRefreshed")
+                          : null}
+                    </div>
+                  );
+                  const statusError = (message: () => string) => (
+                    <>
+                      {statusMessage()}
+                      <div role="alert" class="exec-approval-sub">
+                        {message()}
+                      </div>
+                    </>
+                  );
+                  if (read && "error" in read) {
+                    return statusError(() => read.error);
+                  }
+                  const completion = createMemo(() => read?.promise ?? "idle");
+                  return (
+                    <Errored fallback={(error) => statusError(() => formatUiError(error()))}>
+                      <Loading fallback={statusMessage()}>
+                        <Show when={completion()}>
+                          {(status) => (
+                            <>
+                              {statusMessage(status() === "success")}
+                              <Show when={view.details && view.confirmed && !statusPending()}>
+                                <div class="exec-approval-command mono update-confirmation-details">
+                                  <div>{view.details}</div>
+                                  <UpdateGitRevisions
+                                    schedule={view.updateSchedule}
+                                    updateAvailable={view.updateAvailable}
+                                  />
+                                </div>
+                              </Show>
+                            </>
+                          )}
+                        </Show>
+                      </Loading>
+                    </Errored>
+                  );
+                }}
+              </For>
+              <Show when={view.run}>
+                {(run) => <UpdateRunView run={run()} connected={!view.disconnected} />}
               </Show>
               <openclaw-modal-actions class="exec-approval-actions">
                 <Show
-                  when={view().finished || view().showRecovery}
+                  when={view.finished || view.showRecovery}
                   fallback={
                     <>
-                      <button
-                        type="button"
-                        class={[
-                          "btn danger",
-                          { "btn--busy": view().working || view().checkingStatus },
-                        ]}
-                        disabled={view().working || view().checkingStatus}
-                        onClick={() => void confirm()}
-                      >
-                        {view().checkingStatus ? (
-                          t("updates.dialog.checkingStatus")
-                        ) : view().working ? (
-                          <>
-                            <span class="btn__spinner" aria-hidden="true" />
-                            {t("chat.updating")}
-                          </>
-                        ) : (
-                          view().route.confirmLabel
-                        )}
-                      </button>
                       <button
                         ref={(element) => {
                           cancelButton = element;
@@ -296,50 +296,28 @@ export async function confirmAndStartUpdateRuntime(
                         autofocus
                         onClick={finish}
                       >
-                        {view().working ? t("common.close") : t("common.cancel")}
+                        {view.working ? t("common.close") : t("common.cancel")}
+                      </button>
+                      <button
+                        type="button"
+                        class={["btn danger", { "btn--busy": view.working || statusPending() }]}
+                        disabled={view.working || statusPending()}
+                        onClick={() => void confirm()}
+                      >
+                        {statusPending() ? (
+                          t("updates.dialog.checkingStatus")
+                        ) : view.working ? (
+                          <>
+                            <span class="btn__spinner" aria-hidden="true" />
+                            {t("chat.updating")}
+                          </>
+                        ) : (
+                          view.route.confirmLabel
+                        )}
                       </button>
                     </>
                   }
                 >
-                  <Show when={view().showRecovery && params.onCheckStatus}>
-                    <button
-                      type="button"
-                      class={["btn", { "btn--busy": view().checkingStatus }]}
-                      disabled={view().checkingStatus || view().disconnected}
-                      onClick={() => void checkStatus()}
-                    >
-                      {view().checkingStatus ? (
-                        <>
-                          <span class="btn__spinner" aria-hidden="true" />
-                          {t("updates.dialog.checkingStatus")}
-                        </>
-                      ) : (
-                        t("updates.dialog.checkStatus")
-                      )}
-                    </button>
-                  </Show>
-                  <Show when={view().failed}>
-                    <button
-                      type="button"
-                      class="btn primary"
-                      disabled={view().checkingStatus || view().disconnected}
-                      onClick={() => void retry()}
-                    >
-                      {t("updates.dialog.retryUpdate")}
-                    </button>
-                  </Show>
-                  <Show when={view().failed && params.onReviewUpdate}>
-                    <button
-                      type="button"
-                      class="btn"
-                      onClick={() => {
-                        finish();
-                        params.onReviewUpdate?.();
-                      }}
-                    >
-                      {t("updates.reviewUpdate")}
-                    </button>
-                  </Show>
                   <button
                     ref={(element) => {
                       closeButton = element;
@@ -351,6 +329,45 @@ export async function confirmAndStartUpdateRuntime(
                   >
                     {t("common.close")}
                   </button>
+                  <Show when={view.failed && params.onReviewUpdate}>
+                    <button
+                      type="button"
+                      class="btn"
+                      onClick={() => {
+                        finish();
+                        params.onReviewUpdate?.();
+                      }}
+                    >
+                      {t("updates.reviewUpdate")}
+                    </button>
+                  </Show>
+                  <Show when={view.showRecovery && params.onCheckStatus}>
+                    <button
+                      type="button"
+                      class={["btn", { "btn--busy": statusPending() }]}
+                      disabled={statusPending() || view.disconnected}
+                      onClick={() => void checkStatus()}
+                    >
+                      {statusPending() ? (
+                        <>
+                          <span class="btn__spinner" aria-hidden="true" />
+                          {t("updates.dialog.checkingStatus")}
+                        </>
+                      ) : (
+                        t("updates.dialog.checkStatus")
+                      )}
+                    </button>
+                  </Show>
+                  <Show when={view.failed}>
+                    <button
+                      type="button"
+                      class="btn primary"
+                      disabled={statusPending() || view.disconnected}
+                      onClick={() => void retry()}
+                    >
+                      {t("updates.dialog.retryUpdate")}
+                    </button>
+                  </Show>
                 </Show>
               </openclaw-modal-actions>
             </div>
@@ -359,37 +376,47 @@ export async function confirmAndStartUpdateRuntime(
       }, host);
     };
 
+    function observeStatus(promise: Promise<"idle" | "success">) {
+      statusRead = { promise };
+      // Closing the dialog retires its boundary before an admitted read may settle.
+      void promise.catch(() => undefined);
+      draw();
+    }
+
     async function refreshTarget(
       prepare: NonNullable<ConfirmAndStartUpdateParams["prepareRetry"]>,
     ) {
       if (!retainTarget()) {
         return false;
       }
-      statusCheck = "pending";
-      draw();
-      try {
+      checkingStatus = true;
+      const request = (async () => {
         const target = await prepare();
         if (settled || !retainTarget()) {
           return false;
         }
         if (!target) {
-          statusCheck = { error: t("updates.dialog.statusNotRefreshed") };
-          draw();
-          return false;
+          throw new Error(t("updates.dialog.statusNotRefreshed"));
         }
         ({ updateAvailable, updateSchedule } = target);
-        statusCheck = "idle";
         return true;
-      } catch (error) {
-        statusCheck = { error: formatUiError(error) };
-        draw();
+      })();
+      observeStatus(request.then(() => "idle"));
+      try {
+        const refreshed = await request;
+        statusRead = null;
+        return refreshed;
+      } catch {
         return false;
+      } finally {
+        checkingStatus = false;
+        draw();
       }
     }
 
     function checkNativePermission(): boolean {
       if (params.canStartNativeUpdate?.() !== true) {
-        statusCheck = { error: t("updates.adminRequired") };
+        statusRead = { error: t("updates.adminRequired") };
         draw();
         return false;
       }
@@ -413,7 +440,7 @@ export async function confirmAndStartUpdateRuntime(
     }
 
     async function retry() {
-      if (statusCheck === "pending" || latestProgress?.connected === false || !retainTarget()) {
+      if (checkingStatus || latestProgress?.connected === false || !retainTarget()) {
         return;
       }
       if (restoreNativeOwner() === "denied") {
@@ -423,43 +450,47 @@ export async function confirmAndStartUpdateRuntime(
         return;
       }
       phase = { kind: "confirm" };
-      statusCheck = "idle";
+      statusRead = null;
       stopWatching?.();
       draw();
     }
 
     async function checkStatus() {
-      if (
-        statusCheck === "pending" ||
-        latestProgress?.connected === false ||
-        !params.onCheckStatus ||
-        !retainTarget()
-      ) {
+      const check = params.onCheckStatus;
+      if (checkingStatus || latestProgress?.connected === false || !check || !retainTarget()) {
         return;
       }
-      statusCheck = "pending";
-      draw();
+      checkingStatus = true;
+      const request = (async (): Promise<"idle" | "success"> => {
+        if (await check()) {
+          return "success";
+        }
+        if (latestProgress?.readError) {
+          return "idle";
+        }
+        throw new Error(t("updates.dialog.statusNotRefreshed"));
+      })();
+      observeStatus(request);
       try {
-        statusCheck = (await params.onCheckStatus())
-          ? "success"
-          : latestProgress?.readError
-            ? "idle"
-            : { error: t("updates.dialog.statusNotRefreshed") };
-      } catch (error) {
-        statusCheck = { error: formatUiError(error) };
+        if ((await request) === "idle") {
+          statusRead = null;
+        }
+      } catch {
+        // The status boundary owns this read's visible error.
       } finally {
+        checkingStatus = false;
         draw();
       }
     }
 
     async function confirm() {
-      if (phase.kind !== "confirm" || statusCheck === "pending" || !retainTarget()) {
+      if (phase.kind !== "confirm" || checkingStatus || !retainTarget()) {
         return;
       }
       const nativeOwner = restoreNativeOwner();
       if (nativeOwner !== "unchanged") {
         if (nativeOwner === "restored") {
-          statusCheck = "idle";
+          statusRead = null;
           draw();
         }
         return;

@@ -4,6 +4,12 @@ import {
   normalizeStringifiedOptionalString,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { note } from "../../../../packages/terminal-core/src/note.js";
+import { modelKey } from "../../../agents/model-ref-shared.js";
+import { resolveDefaultModelForAgent } from "../../../agents/model-selection-config.js";
+import {
+  buildModelAliasIndex,
+  resolveModelRefFromString,
+} from "../../../agents/model-selection-shared.js";
 import { normalizeChatChannelId } from "../../../channels/ids.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../../channels/plugins/read-only.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
@@ -20,20 +26,6 @@ const LEGACY_WHATSAPP_HEALTH_SCRIPT_RE =
   /(?:^|\s)(?:"[^"]*ensure-whatsapp\.sh"|'[^']*ensure-whatsapp\.sh'|[^\s#;|&]*ensure-whatsapp\.sh)\b/u;
 const CRON_ADVISORY_EXAMPLE_LIMIT = 3;
 const CRONTAB_READ_TIMEOUT_MS = 5_000;
-
-function normalizeModelRef(value: unknown): string | undefined {
-  const raw = normalizeOptionalString(value);
-  if (!raw) {
-    return undefined;
-  }
-  const slash = raw.indexOf("/");
-  if (slash <= 0 || slash >= raw.length - 1) {
-    return undefined;
-  }
-  const provider = raw.slice(0, slash).trim().toLowerCase();
-  const model = raw.slice(slash + 1).trim();
-  return provider && model ? `${provider}/${model}` : undefined;
-}
 
 function formatSortedCounts(counts: Map<string, number>): string {
   return [...counts.entries()]
@@ -55,8 +47,14 @@ export function noteCronModelOverrides(params: {
   jobs: Array<Record<string, unknown>>;
 }) {
   const defaultModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
-  const defaultKey =
-    normalizeModelRef(defaultModel) ?? normalizeOptionalString(defaultModel)?.toLowerCase();
+  const selection = {
+    cfg: params.cfg,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
+  };
+  const defaultRef = defaultModel ? resolveDefaultModelForAgent(selection) : undefined;
+  const defaultKey = defaultRef && modelKey(defaultRef.provider, defaultRef.model);
+  let aliasIndex: ReturnType<typeof buildModelAliasIndex> | undefined;
   const providerCounts = new Map<string, number>();
   const mismatchExamples: string[] = [];
   let overrideCount = 0;
@@ -76,11 +74,21 @@ export function noteCronModelOverrides(params: {
       continue;
     }
     overrideCount += 1;
-    const modelRef = normalizeModelRef(model);
-    const provider = modelRef?.split("/", 1)[0] ?? "bare/alias";
+    const slash = model.indexOf("/");
+    const provider =
+      slash > 0 && slash < model.length - 1
+        ? model.slice(0, slash).trim().toLowerCase()
+        : "bare/alias";
     providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + 1);
-    const modelKey = modelRef ?? model.toLowerCase();
-    if (defaultKey && modelKey && modelKey !== defaultKey) {
+    const options = defaultRef && { ...selection, defaultProvider: defaultRef.provider };
+    const ref =
+      options &&
+      resolveModelRefFromString({
+        ...options,
+        raw: model,
+        aliasIndex: (aliasIndex ??= buildModelAliasIndex(options)),
+      })?.ref;
+    if (defaultKey && ref && modelKey(ref.provider, ref.model) !== defaultKey) {
       mismatchCount += 1;
       addJobExample(mismatchExamples, rawJob, model);
     }

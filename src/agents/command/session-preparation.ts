@@ -12,6 +12,7 @@ import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-st
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import {
+  buildRestartRecoveryClaimCleanupPatch,
   isMainRestartRecoveryCandidate,
   normalizeMainSessionRecoveryRunFences,
 } from "../../config/sessions/restart-recovery-state.js";
@@ -35,6 +36,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
+  canReplaceTerminalCommandRecoveryClaim,
   prepareCommandHarnessCompletionRecovery,
 } from "../agent-command-restart-recovery.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
@@ -57,10 +59,20 @@ export function prepareCommandSessionRecoveryEntry(
     isSessionRollover: boolean;
   },
 ) {
-  const { entry, sessionId, runId, opts, now, isSessionRollover } = params;
+  const { sessionId, runId, opts, now, isSessionRollover } = params;
+  const entry = canReplaceTerminalCommandRecoveryClaim(params.entry, runId)
+    ? {
+        ...params.entry,
+        ...buildRestartRecoveryClaimCleanupPatch({
+          entry: params.entry,
+          recordTerminalSource: false,
+        }),
+      }
+    : params.entry;
   const { harnessCompletion, guardedHarnessCompletion, sourceOptions, isCompletionCurrent } =
     prepareCommandHarnessCompletionRecovery({
       ...params,
+      entry,
       hasDeliveryContext: Boolean(params.deliveryContext),
     });
   const operatorSource =
@@ -120,6 +132,11 @@ export function prepareCommandSessionRecoveryEntry(
         forceRestartSafeTools: opts.forceRestartSafeTools,
         runId,
         harnessCompletion,
+        sourceMessageChannel:
+          resolveMessageChannel(
+            opts.runContext?.messageChannel ?? opts.messageChannel,
+            opts.replyChannel ?? opts.channel,
+          ) ?? null,
         ...sourceOptions,
         ...(requesterSource
           ? {
@@ -413,20 +430,37 @@ export async function prepareEmbeddedSessionState(params: {
         .join("\n\n");
     }
   }
-  const preparedOpts =
-    conversationPrompt || deliveryFormat
-      ? {
-          ...opts,
-          extraSystemPrompt: [
-            conversationPrompt,
-            opts.extraSystemPrompt,
-            !conversationPrompt && deliveryFormat,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-          ...(conversationPrompt ? { silentReplyPromptMode: "none" as const } : {}),
-        }
-      : opts;
+  // Returned-result intake instructions belong to this turn. Ordinary peer
+  // requests and existing producer-marked policy spans retain their placement.
+  const returnedResultPrompt =
+    !opts.extraSystemPromptTurnContext &&
+    opts.extraSystemPrompt &&
+    (opts.replyExpectation === "optional" || opts.privateCompletion === true) &&
+    opts.inputProvenance?.kind === "inter_session" &&
+    (opts.inputProvenance.sourceTool === "sessions_send" ||
+      opts.inputProvenance.sourceTool === "subagent_announce");
+  let preparedOpts = opts;
+  if (conversationPrompt || deliveryFormat || returnedResultPrompt) {
+    const extraSystemPrompt = [
+      conversationPrompt,
+      opts.extraSystemPrompt,
+      !conversationPrompt && deliveryFormat,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    preparedOpts = {
+      ...opts,
+      extraSystemPrompt,
+      ...(conversationPrompt ? { silentReplyPromptMode: "none" as const } : {}),
+      extraSystemPromptTurnContext: {
+        start:
+          returnedResultPrompt || conversationPrompt || !opts.extraSystemPrompt
+            ? 0
+            : opts.extraSystemPrompt.length + 2,
+        text: returnedResultPrompt ? extraSystemPrompt : conversationPrompt || deliveryFormat || "",
+      },
+    };
+  }
   prepareGoalContinuationContext({ runId: params.runId, sessionKey, sessionEntry });
   return {
     sessionEntry,

@@ -1,6 +1,4 @@
-import { afterEach, describe, expect, it, onTestFinished } from "vitest";
-import { runPluginRegisterSyncInRegistry } from "../plugins/loader-module-runtime.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
+import { afterEach, expect, it, onTestFinished } from "vitest";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -8,64 +6,29 @@ import {
   markPluginRegistryActive,
   markPluginRegistryRetired,
 } from "../plugins/registry-lifecycle.js";
-import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { createToolLoadContext } from "../plugins/tools.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createDecisionRegistry, unavailable, waitForAbort } from "./contract.test-support.js";
 import { DecisionProviderHost } from "./provider-host.js";
 import { adoptRuntimeDecisionProviders } from "./registry-adoption.js";
 import {
   evaluateDecisionInRegistry,
-  inspectDecisionProviders,
+  inspectDecisionProviders as inspect,
   prepareDecisionProviderReload,
 } from "./runtime.js";
-import type { DecisionProviderV1, ProviderDecisionOutcome } from "./types.js";
+import { answer, batch, config as baseConfig, options } from "./runtime.test-support.js";
+import type { DecisionProviderV1 } from "./types.js";
 
 const config = {
-  agents: { defaults: { decisionModel: "fixture/synthetic" } },
+  ...baseConfig,
   plugins: { entries: { owner: { enabled: true, config: { model: "synthetic" } } } },
 };
-const batch = { state: "synthetic", questions: { check: { type: "boolean" as const } } };
-const answer: ProviderDecisionOutcome = {
-  status: "ok",
-  result: { model: "synthetic", answers: { check: { type: "boolean", probabilityTrue: 1 } } },
-};
-const options = () => ({
-  purpose: "test",
-  rubricVersion: "1",
-  timeoutMs: 1_000,
-  signal: new AbortController().signal,
-});
-
 function fixture(evaluate: DecisionProviderV1["evaluate"] = async () => answer) {
-  const builder = createTestPluginRegistry();
-  const record = createPluginRecord({
-    id: "owner",
-    source: "/synthetic/index.ts",
-    origin: "global",
-    enabled: true,
-    configSchema: false,
-    contracts: { decisionProviders: ["fixture"] },
-  });
-  const api = builder.createApi(record, { config });
-  runPluginRegisterSyncInRegistry(
-    (registration) =>
-      registration.registerDecisionProvider({ id: "fixture", contractVersion: 1, evaluate }),
-    api,
-    builder.registry,
-    record.id,
-  );
-  builder.registry.plugins.push(record);
-  setActivePluginRegistry(builder.registry);
-  setPluginRuntimeLoadContext(builder.registry, {
-    rawConfig: config,
-    config,
-    activationSourceConfig: config,
-    autoEnabledReasons: {},
-    workspaceDir: "/synthetic",
-    env: process.env,
-    logger: { info() {}, warn() {}, error() {} },
-  });
+  const provider = { id: "fixture", contractVersion: 1 as const, evaluate };
+  const { registry: root, record } = createDecisionRegistry(config, provider);
+  setPluginRuntimeLoadContext(root, createToolLoadContext(config, "/synthetic"));
   onTestFinished(async () => {
     await getPluginInstance(record)?.dispose();
   });
@@ -74,91 +37,61 @@ function fixture(evaluate: DecisionProviderV1["evaluate"] = async () => answer) 
   target.plugins.push(localRecord);
   target.decisionProviders.push({
     pluginId: record.id,
-    host: new DecisionProviderHost(
-      { id: "fixture", contractVersion: 1, evaluate: async () => answer },
-      localRecord,
-    ),
+    host: new DecisionProviderHost(provider, localRecord),
   });
   const view = bindPluginRegistryResourceOwner(
-    adoptRuntimeDecisionProviders(target, builder.registry, config),
+    adoptRuntimeDecisionProviders(target, root, config),
     target,
   );
-  const run = () => evaluateDecisionInRegistry(batch, options(), view, config);
-  return { root: builder.registry, target, view, record, run };
+  const run = (registry = view) => evaluateDecisionInRegistry(batch, options(), registry, config);
+  return { root, target, record, run };
 }
 
 afterEach(() => resetPluginRuntimeStateForTest());
+const expectRootReady = (root: Parameters<typeof inspect>[1]) =>
+  expect(inspect(config, root)[0]).toMatchObject({ callable: true, activeRequests: 0 });
 
-describe("prepared decision provider ownership", () => {
-  it("releases a prepared consumer without retiring the shared Gateway provider", async () => {
-    let settled = false;
-    const entered = createDeferredCore();
-    const { root, target, view, run } = fixture(async (_batch, { signal }) => {
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
-        entered.resolve();
-      });
-      settled = true;
-      signal.throwIfAborted();
-      return answer;
-    });
-    // Prepared generation custody activates its finite primary registry without making it root.
-    markPluginRegistryActive(target);
-    const pending = run();
-    await Promise.race([entered.promise, pending]);
-    markPluginRegistryRetired(target);
-    await expect(pending).rejects.toBeDefined();
-    expect(settled).toBe(true);
-    await expect(evaluateDecisionInRegistry(batch, options(), view, config)).rejects.toThrow(
-      "consumer authority closed",
-    );
-    expect(inspectDecisionProviders(config, root)[0]).toMatchObject({
-      callable: true,
-      activeRequests: 0,
-    });
+it("releases a prepared consumer without retiring the shared Gateway provider", async () => {
+  let settled = false;
+  const entered = createDeferredCore();
+  const { root, target, run } = fixture(async (_batch, { signal }) => {
+    await waitForAbort(signal, () => entered.resolve());
+    settled = true;
+    signal.throwIfAborted();
+    return answer;
   });
+  // Prepared generation custody activates its finite primary registry without making it root.
+  markPluginRegistryActive(target);
+  const pending = run();
+  await Promise.race([entered.promise, pending]);
+  markPluginRegistryRetired(target);
+  await expect(pending).rejects.toBeDefined();
+  expect(settled).toBe(true);
+  await expect(run()).rejects.toThrow("consumer authority closed");
+  expectRootReady(root);
+});
 
-  it("shares the concurrency bound and joins provider retirement before fallback", async () => {
-    const { root, record, run } = fixture(async (_batch, { signal }) => {
-      await new Promise<void>((resolve) => {
-        signal.addEventListener("abort", () => resolve(), { once: true });
-      });
-      signal.throwIfAborted();
-      return answer;
-    });
-    const pending = [
-      run(),
-      run(),
-      evaluateDecisionInRegistry(batch, options(), root, config),
-      run(),
-    ];
-    expect(await evaluateDecisionInRegistry(batch, options(), root, config)).toEqual({
-      status: "unavailable",
-      reason: "overloaded",
-    });
-    const pause = prepareDecisionProviderReload(root, new Set([record.id]));
-    expect(await Promise.all(pending)).toEqual(
-      Array.from({ length: 4 }, () => ({ status: "unavailable", reason: "retiring" })),
-    );
-    await pause.rollback(new AbortController().signal);
-    expect(inspectDecisionProviders(config, root)[0]).toMatchObject({
-      callable: true,
-      activeRequests: 0,
-    });
+it("shares the concurrency bound and joins provider retirement before fallback", async () => {
+  const { root, record, run } = fixture(async (_batch, { signal }) => {
+    await waitForAbort(signal);
+    signal.throwIfAborted();
+    return answer;
   });
+  const pending = [run(), run(), run(root), run()];
+  expect(await run(root)).toEqual(unavailable("overloaded"));
+  const pause = prepareDecisionProviderReload(root, new Set([record.id]));
+  expect(await Promise.all(pending)).toEqual(Array(4).fill(unavailable("retiring")));
+  await pause.rollback(new AbortController().signal);
+  expectRootReady(root);
+});
 
-  it("never adopts across a shadowed source, changed config, or retired owner", () => {
-    const { root, target } = fixture();
-    expect(
-      adoptRuntimeDecisionProviders(target, root, {
-        ...config,
-        plugins: { entries: { owner: { config: { model: "other" } } } },
-      }),
-    ).toBe(target);
-    target.plugins[0]!.source = "/workspace/shadow.ts";
-    expect(adoptRuntimeDecisionProviders(target, root, config)).toBe(target);
-    target.plugins[0]!.source = root.plugins[0]!.source;
-    markPluginRegistryRetired(root);
-    expect(adoptRuntimeDecisionProviders(target, root, config)).toBe(target);
-  });
+it("never adopts across a shadowed source, changed config, or retired owner", () => {
+  const { root, target } = fixture();
+  const changed = { ...config, plugins: { entries: { owner: { config: { model: "other" } } } } };
+  expect(adoptRuntimeDecisionProviders(target, root, changed)).toBe(target);
+  target.plugins[0]!.source = "/workspace/shadow.ts";
+  expect(adoptRuntimeDecisionProviders(target, root, config)).toBe(target);
+  target.plugins[0]!.source = root.plugins[0]!.source;
+  markPluginRegistryRetired(root);
+  expect(adoptRuntimeDecisionProviders(target, root, config)).toBe(target);
 });

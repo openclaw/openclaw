@@ -1,6 +1,6 @@
 import { isOpenAIGpt56Model } from "@openclaw/ai/internal/openai";
 import { projectRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import { streamSimple } from "../../stream.js";
@@ -40,9 +40,7 @@ function projectJsonObjectSchema(
   const { properties, required } = normalizedSchema;
   if (
     (properties !== undefined && properties !== null && !isRecord(properties)) ||
-    (required !== undefined &&
-      required !== null &&
-      (!Array.isArray(required) || required.some((entry) => typeof entry !== "string")))
+    (required !== undefined && required !== null && !isStringArray(required))
   ) {
     return undefined;
   }

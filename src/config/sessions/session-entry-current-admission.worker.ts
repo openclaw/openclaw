@@ -33,6 +33,7 @@ import type {
   SessionEntryCurrentFacts,
   SessionEntryCurrentSource,
 } from "./session-entry-current.types.js";
+import { captureSessionExecutionPolicy } from "./session-entry-execution-policy.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 
 // One last-key/read-policy projection per native handle; the revision owner invalidates its facts.
@@ -83,9 +84,13 @@ function createCurrentEntryRead(
           ? {}
           : { repositoryWorkspaceId: current.repositoryWorkspaceId }),
         ...(current.deviceFolder ? { deviceFolder: { ...current.deviceFolder } } : {}),
+        goal: current.goal,
         lifecycleRevision: current.lifecycleRevision,
         lifecycleRunId: current.lifecycleRunId,
+        lastRunId: current.lastRunId,
         activeWriterRunId: current.activeWriterRunId,
+        skillLibrarySelections: current.skillLibrarySelections,
+        executionPolicy: captureSessionExecutionPolicy(current),
         ...(current.subagentRecovery
           ? {
               subagentRecovery: {

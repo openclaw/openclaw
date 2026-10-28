@@ -11,9 +11,11 @@ import { prepareSessionTranscriptHydration } from "../../config/sessions/session
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { SessionManager, type SessionEntry } from "../../plugin-sdk/agent-sessions.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { stateNativeProcessEntrypoints } from "../../state/native-process-runtime.test-support.js";
 import { recordOpenClawAgentDatabaseOpenFailure } from "../../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -23,12 +25,15 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { execNodeEvalSync } from "../../test-utils/node-process.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
-import { withSessionState } from "./session-manager-fixtures.test-support.js";
+import { agentProcessTestEntrypoints } from "../process-runtime.test-support.js";
+import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
+import { sessionScope, withSessionState } from "./session-manager-fixtures.test-support.js";
 
 function canonicalTarget(
   state: OpenClawTestState,
@@ -36,10 +41,8 @@ function canonicalTarget(
   sessionKey = `agent:main:${sessionId}`,
 ) {
   return {
-    agentId: "main",
-    sessionId,
+    ...sessionScope(path.join(state.agentDir("main"), "openclaw-agent.sqlite"), sessionId),
     sessionKey,
-    storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
   };
 }
 
@@ -51,6 +54,92 @@ async function seedHistory(target: ReturnType<typeof canonicalTarget>, text: str
 function expectMessages(manager: SessionManager, ...messages: unknown[]) {
   expect(manager.buildSessionContext().messages).toEqual(messages);
 }
+
+it("shares physical text strings with active history across reloads without sharing mutable messages", async () => {
+  await withOpenClawTestState({ label: "reload-text-sharing" }, async (state) => {
+    const target = canonicalTarget(state, "reload-text-sharing");
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const seed = await SessionManager.openAsync(target);
+    await seed.appendMessageAsync(makeUserMessage("Read both files", 1));
+    const ids = [];
+    for (const prefix of ["unchanged", "before rewrite"]) {
+      ids.push(
+        await seed.appendMessageAsync({
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: prefix,
+          content: [{ type: "text", text: prefix.padEnd(65536, "x") }],
+          isError: false,
+          timestamp: 2,
+        }),
+      );
+    }
+    await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+    // Value equality cannot distinguish physical string copies. Keep V8 diagnostics
+    // in a fresh Node isolate, including when the suite runs under Bun.
+    const output = execNodeEvalSync(
+      `
+      import assert from "node:assert/strict";
+      import { setFlagsFromString } from "node:v8";
+      import { replaceTranscriptEvents } from ${JSON.stringify(resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.transcriptWrite).href)};
+      import { closeOpenClawAgentDatabaseByPathAsync } from ${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.agentDatabase).href)};
+      import { SessionManager } from ${JSON.stringify(resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.sessionManager).href)};
+      const sessionManagerReadInitialContext = Symbol.for(${JSON.stringify(Symbol.keyFor(sessionManagerReadInitialContext))});
+      setFlagsFromString("--allow-natives-syntax");
+      const same = new Function("a", "b", "return %IsSameHeapObject(a, b)");
+      const control = Buffer.alloc(65536, 120).toString();
+      const copy = Buffer.from(control).toString();
+      assert.equal(control, copy);
+      assert(same(control, control) && !same(control, copy), "V8 physical string oracle failed");
+      const retained = {};
+      const target = ${JSON.stringify(target)};
+      const ids = ${JSON.stringify(ids)};
+      const manager = await SessionManager.openAsync(target, undefined, { maxBytes: 1024 * 1024, maxEvents: 20 });
+      const context = await manager[sessionManagerReadInitialContext]();
+      const active = context.messages.find((message) => message.role === "toolResult");
+      assert(active);
+      retained.active = active.content[0].text;
+      const before = manager.getEntry(ids[0]);
+      assert.notEqual(active, before.message);
+      assert.notEqual(active.content, before.message.content);
+      await manager.reloadPersistedTranscriptAsync();
+      const reloaded = manager.getEntry(ids[0]);
+      assert.notEqual(reloaded, before);
+      assert.notEqual(reloaded.message, before.message);
+      assert.notEqual(reloaded.message.content, before.message.content);
+      assert.deepEqual(reloaded.message.content, active.content);
+      retained.firstReload = reloaded.message.content[0].text;
+      active.content.push({ type: "text", text: "runtime-only mutation" });
+      assert.equal(reloaded.message.content.length, 1);
+      reloaded.message.content.push({ type: "text", text: "manager-only mutation" });
+      assert.equal(active.content.at(-1).text, "runtime-only mutation");
+      await manager.reloadPersistedTranscriptAsync();
+      assert.equal(manager.getEntry(ids[0]).message.content.length, 1);
+      assert.equal(manager.getEntry(ids[0]).message.content[0].text, retained.active);
+
+      const events = manager.getPersistedEntries();
+      const changed = events.find((entry) => entry.id === ids[1]);
+      retained.oldChanged = changed.message.content[0].text;
+      const replacement = "after rewrite".padEnd(65536, "y");
+      await replaceTranscriptEvents(target, events.map((entry) => entry === changed
+        ? { ...entry, message: { ...entry.message, content: [{ type: "text", text: replacement }] } }
+        : entry));
+      await manager.reloadPersistedTranscriptAsync();
+      retained.afterRewrite = manager.getEntry(ids[0]).message.content[0].text;
+      retained.changed = manager.getEntry(ids[1]).message.content[0].text;
+      assert.equal(retained.changed, replacement);
+      assert.notEqual(retained.changed, retained.oldChanged);
+      await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+      assert(same(retained.active, retained.firstReload), "reload copied resident transcript text");
+      assert(same(retained.firstReload, retained.afterRewrite), "unchanged text lost sharing on rewrite");
+      assert(!same(retained.oldChanged, retained.changed));
+      console.log("shared reload text with isolated messages");
+    `,
+      { timeout: 30_000 },
+    );
+    expect(output.trim()).toBe("shared reload text with isolated messages");
+  });
+});
 
 function pauseRead(
   pool: Pick<WorkerTaskPool<unknown, unknown>, "run">,

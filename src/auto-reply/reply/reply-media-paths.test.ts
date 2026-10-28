@@ -204,36 +204,30 @@ it("drops sandbox-mapped media when staging fails instead of retrying the worksp
   expect(result.text).toBe("⚠️ photo.png: Delivery failed. Try sending this file again.");
 });
 
-it.each<{
-  name: string;
-  mediaUrl: string;
-  sandbox?: typeof sandboxWorkspace & { workspaceAccess?: "none" };
-  options?: Partial<NormalizerOptions>;
-}>([
-  {
-    name: "host file URL with sandbox",
-    mediaUrl: "file:///Users/peter/Documents/report.pdf",
-    sandbox: sandboxWorkspace,
-  },
-  {
-    name: "unmapped absolute host path",
-    mediaUrl: "/Users/peter/Documents/report.pdf",
-    sandbox: sandboxWorkspace,
-    options: { cfg: { tools: { fs: { workspaceOnly: false } } } },
-  },
-  {
-    name: "unmounted host workspace",
-    mediaUrl: "/Users/peter/.openclaw/workspace/reports/screenshot.png",
-    sandbox: { ...sandboxWorkspace, workspaceAccess: "none" },
-    options: { workspaceDir: "/Users/peter/.openclaw/workspace" },
-  },
-  { name: "workspace traversal", mediaUrl: "../../etc/passwd" },
-  {
-    name: "sandbox traversal",
-    mediaUrl: "../../etc/passwd",
-    sandbox: sandboxWorkspace,
-  },
-])("rejects $name before attachment loading", async ({ mediaUrl, sandbox, options }) => {
+it.each<
+  [
+    string,
+    string,
+    (typeof sandboxWorkspace & { workspaceAccess?: "none" })?,
+    Partial<NormalizerOptions>?,
+  ]
+>([
+  ["host file URL with sandbox", "file:///Users/peter/Documents/report.pdf", sandboxWorkspace],
+  [
+    "unmapped absolute host path",
+    "/Users/peter/Documents/report.pdf",
+    sandboxWorkspace,
+    { cfg: { tools: { fs: { workspaceOnly: false } } } },
+  ],
+  [
+    "unmounted host workspace",
+    "/Users/peter/.openclaw/workspace/reports/screenshot.png",
+    { ...sandboxWorkspace, workspaceAccess: "none" },
+    { workspaceDir: "/Users/peter/.openclaw/workspace" },
+  ],
+  ["workspace traversal", "../../etc/passwd"],
+  ["sandbox traversal", "../../etc/passwd", sandboxWorkspace],
+])("rejects %s before attachment loading", async (_name, mediaUrl, sandbox, options) => {
   ensureSandboxWorkspaceForSession.mockResolvedValue(sandbox ?? null);
   const result = await normalizeMedia([mediaUrl], options);
   expectNoMedia(result);

@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { modelSelectionShouldEnsureCopilotRuntimePlugin } from "../agents/copilot-routing.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
-import { modelSelectionShouldEnsureCodexPlugin } from "../agents/openai-routing.js";
+import {
+  modelSelectionShouldEnsureCodexPlugin,
+  parseModelRefProvider,
+} from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
 import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
@@ -15,6 +16,57 @@ import { resolveUserPath } from "../utils.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createNonInteractiveLoggingPrompter } from "./non-interactive-prompter.js";
+
+const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
+
+/**
+ * Canonical id of the Copilot agent runtime plugin.
+ */
+const COPILOT_RUNTIME_ID = "copilot";
+
+function parseModelRefId(model: string | undefined): string | undefined {
+  if (typeof model !== "string") {
+    return undefined;
+  }
+  const trimmed = model.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash === trimmed.length - 1) {
+    return undefined;
+  }
+  return trimmed.slice(slash + 1);
+}
+
+/**
+ * Returns true when the selected model should trigger the external
+ * `@openclaw/copilot` runtime plugin install.
+ *
+ * Gating contract (review #2, P1):
+ *   - Model ref must use the `github-copilot/*` provider prefix.
+ *   - The user's config must explicitly opt in by setting
+ *     `agentRuntime.id: "copilot"` at the provider, model, or agent scope
+ *     (resolved via `resolveModelRuntimePolicy`).
+ *
+ * Without the explicit opt-in we fall through to the built-in GitHub
+ * Copilot provider, which has shipped support for `github-copilot/*`
+ * models for a long time and must not install the runtime plugin for
+ * users who never asked for it.
+ */
+function modelSelectionShouldEnsureCopilotRuntimePlugin(params: {
+  model?: string;
+  config?: OpenClawConfig;
+}): boolean {
+  if (parseModelRefProvider(params.model) !== GITHUB_COPILOT_PROVIDER_ID) {
+    return false;
+  }
+  const modelId = parseModelRefId(params.model);
+  const resolved = resolveModelRuntimePolicy({
+    config: params.config,
+    provider: GITHUB_COPILOT_PROVIDER_ID,
+    modelId,
+  });
+  const runtimeId = resolved.policy?.id?.trim().toLowerCase();
+  return runtimeId === COPILOT_RUNTIME_ID;
+}
 
 type RuntimePluginInstallDescriptor = {
   pluginId: string;
@@ -86,17 +138,6 @@ const MUSE_RUNTIME_PLUGIN_DESCRIPTOR: RuntimePluginInstallDescriptor = {
     ),
 };
 
-function isInstalledRecordPresentOnDisk(
-  record: PluginInstallRecord | undefined,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  const installPath = record?.installPath?.trim();
-  if (!installPath) {
-    return false;
-  }
-  return existsSync(path.join(resolveUserPath(installPath, env), "package.json"));
-}
-
 function finalizeRequiredRuntimePluginInstall(
   descriptor: RuntimePluginInstallDescriptor,
   result: {
@@ -125,27 +166,6 @@ function finalizeRequiredRuntimePluginInstall(
   };
 }
 
-function adaptRuntimePluginInstallIo(params: RuntimePluginEnsureParams): {
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-} {
-  const silent = params.output === "silent";
-  const runtime = {
-    ...params.runtime,
-    error: () => {},
-    ...(silent ? { log: () => {} } : {}),
-  };
-  return {
-    prompter: silent
-      ? createNonInteractiveLoggingPrompter(
-          runtime,
-          (message) => `Runtime plugin install unexpectedly prompted: ${message}`,
-        )
-      : { ...params.prompter, note: async () => {} },
-    runtime,
-  };
-}
-
 async function ensureRuntimePluginForModelSelection(
   params: RuntimePluginEnsureParams,
   descriptor: RuntimePluginInstallDescriptor,
@@ -153,14 +173,29 @@ async function ensureRuntimePluginForModelSelection(
   if (!descriptor.shouldEnsure(params)) {
     return { ok: true, cfg: params.cfg, required: false };
   }
-  const io = adaptRuntimePluginInstallIo(params);
+  const silent = params.output === "silent";
+  const runtime = {
+    ...params.runtime,
+    error: () => {},
+    ...(silent ? { log: () => {} } : {}),
+  };
+  const prompter = silent
+    ? createNonInteractiveLoggingPrompter(
+        runtime,
+        (message) => `Runtime plugin install unexpectedly prompted: ${message}`,
+      )
+    : { ...params.prompter, note: async () => {} };
   const onCapabilityConsent =
     params.onCapabilityConsent ??
     (params.output === "silent"
       ? async () => undefined
       : createPluginCapabilityConsentPrompter(params.prompter));
   const existingRecords = await loadInstalledPluginIndexInstallRecords({ env: process.env });
-  if (isInstalledRecordPresentOnDisk(existingRecords[descriptor.pluginId], process.env)) {
+  const installPath = existingRecords[descriptor.pluginId]?.installPath?.trim();
+  if (
+    installPath &&
+    existsSync(path.join(resolveUserPath(installPath, process.env), "package.json"))
+  ) {
     // A recorded install with package.json on disk can be repaired/enabled
     // without re-downloading the plugin during setup.
     const repair = await repairRequiredRuntimePluginInstall(
@@ -173,10 +208,10 @@ async function ensureRuntimePluginForModelSelection(
       descriptor.pluginId,
     );
     for (const change of repair.changes) {
-      io.runtime.log?.(change);
+      runtime.log?.(change);
     }
     for (const warning of repair.warnings) {
-      io.runtime.log?.(`${descriptor.warningLabel} update warning: ${warning}`);
+      runtime.log?.(`${descriptor.warningLabel} update warning: ${warning}`);
     }
     const enableResult = await enablePluginWithCapabilityConsent(params.cfg, descriptor.pluginId, {
       workspaceDir: params.workspaceDir,
@@ -207,8 +242,8 @@ async function ensureRuntimePluginForModelSelection(
       trustedSourceLinkedOfficialInstall: true,
       ...(descriptor.versionBoundToOpenClaw ? { versionBoundToOpenClaw: true } : {}),
     },
-    prompter: io.prompter,
-    runtime: io.runtime,
+    prompter,
+    runtime,
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
     promptInstall: false,
     autoConfirmSingleSource: true,

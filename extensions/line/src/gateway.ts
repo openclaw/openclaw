@@ -30,7 +30,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
 
     let lineBotLabel = "";
     try {
-      const probe = await (await import("./probe.runtime.js")).probeLineBot(token, 2500);
+      const probe = await (await import("./probe.js")).probeLineBot(token, 2500);
       // Sent ids persist under this bot's user id; a failed probe keeps them memory-only.
       rememberLineBotUserId(account.accountId, probe.ok ? probe.bot?.userId : undefined);
       const displayName = probe.ok ? probe.bot?.displayName?.trim() : null;
@@ -55,7 +55,7 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
 
     ctx.log?.info(`[${account.accountId}] starting LINE provider${lineBotLabel}`);
 
-    const { monitorLineProvider } = await import("./monitor.runtime.js");
+    const { monitorLineProvider } = await import("./monitor.js");
 
     return await monitorLineProvider({
       channelAccessToken: token,

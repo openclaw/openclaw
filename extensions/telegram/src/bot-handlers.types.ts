@@ -51,10 +51,6 @@ type ProcessTelegramMessage = (
   options: ProcessTelegramMessageOptions,
 ) => Promise<TelegramMessageProcessingResult>;
 
-export type TelegramResolvedGroupConfig = ReturnType<
-  BuildTelegramMessageContextParams["resolveTelegramGroupConfig"]
->;
-
 export type TelegramNativeCommandCallbackDispatcher = (params: {
   botUser: Context["me"];
   callbackQuery: NonNullable<Context["callbackQuery"]>;

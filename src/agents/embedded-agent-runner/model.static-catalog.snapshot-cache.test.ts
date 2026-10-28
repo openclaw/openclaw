@@ -5,6 +5,7 @@ import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadat
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { setManifestPlugins } from "./model.static-catalog.test-helpers.js";
 
 const manifestMocks = vi.hoisted(() => ({
   getGatewayPluginMetadataSnapshot: vi.fn(),
@@ -79,23 +80,6 @@ function setCurrentManifestPlugins(
   return snapshot;
 }
 
-function setManifestPlugins(plugins: ReturnType<typeof createMistralManifestPlugin>[]) {
-  const byPluginDir = new Map(plugins.map((plugin) => [`/fixtures/${plugin.id}`, plugin]));
-  manifestMocks.listOpenClawPluginManifestMetadata.mockReturnValue(
-    [...byPluginDir].map(([pluginDir, plugin]) => ({
-      pluginDir,
-      manifest: plugin,
-      origin: plugin.origin,
-    })),
-  );
-  manifestMocks.loadPluginManifest.mockImplementation((pluginDir: string) => {
-    const plugin = byPluginDir.get(pluginDir);
-    return plugin
-      ? { ok: true, manifest: plugin }
-      : { ok: false, error: "missing manifest", manifestPath: `${pluginDir}/openclaw.plugin.json` };
-  });
-}
-
 function expectNoManifestReads() {
   expect(manifestMocks.listOpenClawPluginManifestMetadata).not.toHaveBeenCalled();
   expect(manifestMocks.loadPluginManifest).not.toHaveBeenCalled();
@@ -116,6 +100,18 @@ function personalProviderConfig(baseUrl: string) {
   };
 }
 
+function transportRegistry(transports: Record<string, () => undefined>) {
+  const registry = createEmptyPluginRegistry();
+  for (const [id, normalizeTransport] of Object.entries(transports)) {
+    registry.providers.push({
+      pluginId: id,
+      source: "test",
+      provider: { id, label: id, auth: [], normalizeTransport },
+    });
+  }
+  return registry;
+}
+
 beforeEach(() => {
   clearPluginMetadataLifecycleCaches();
   for (const mock of Object.values(manifestMocks)) {
@@ -133,24 +129,10 @@ it("caches native donor facts and misses without unrelated provider hooks", () =
   const unrelatedTransport = vi.fn(() => {
     throw new Error("Unrelated provider hook reached");
   });
-  const pluginRegistry = createEmptyPluginRegistry();
-  pluginRegistry.providers.push(
-    {
-      pluginId: "mistral",
-      source: "test",
-      provider: { id: "mistral", label: "Mistral", auth: [], normalizeTransport },
-    },
-    {
-      pluginId: "unrelated",
-      source: "test",
-      provider: {
-        id: "unrelated",
-        label: "Unrelated",
-        auth: [],
-        normalizeTransport: unrelatedTransport,
-      },
-    },
-  );
+  const pluginRegistry = transportRegistry({
+    mistral: normalizeTransport,
+    unrelated: unrelatedTransport,
+  });
   const nativeConfig = personalProviderConfig("https://api.mistral.ai/v1");
   const proxyConfig = personalProviderConfig("http://localhost:4000");
   const lookup = { provider: "personal", modelId: "mistral-medium-3-5" };
@@ -207,12 +189,7 @@ it("keeps a static donor miss separate from an allowed refreshable lookup", () =
   ]);
   const cfg = personalProviderConfig("https://api.mistral.ai/v1");
   const lookup = { provider: "personal", modelId: "mistral-medium-3-5", cfg, metadataSnapshot };
-  const pluginRegistry = createEmptyPluginRegistry();
-  pluginRegistry.providers.push({
-    pluginId: "mistral",
-    source: "test",
-    provider: { id: "mistral", label: "Mistral", auth: [], normalizeTransport: () => undefined },
-  });
+  const pluginRegistry = transportRegistry({ mistral: () => undefined });
   withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () => {
     expect(resolveBundledStaticCatalogModel(lookup)).toBeUndefined();
     expect(
@@ -284,7 +261,7 @@ describe("bundled static model catalog snapshot cache", () => {
   it("refreshes a retained no-snapshot resolver at the plugin metadata lifecycle boundary", () => {
     const env = { HOME: "/custom-home" };
     const firstPlugin = createMistralManifestPlugin();
-    setManifestPlugins([firstPlugin]);
+    setManifestPlugins(manifestMocks, [firstPlugin]);
     const resolveModel = createBundledStaticCatalogModelResolver({ env });
 
     expect(resolveModel(mistralLookup)?.id).toBe("mistral-medium-3-5");
@@ -293,7 +270,7 @@ describe("bundled static model catalog snapshot cache", () => {
       "mistral-medium-next",
       "Mistral Medium Next",
     );
-    setManifestPlugins([replacementPlugin]);
+    setManifestPlugins(manifestMocks, [replacementPlugin]);
     expect(resolveModel(mistralLookup)?.id).toBe("mistral-medium-3-5");
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })).toBeUndefined();
     clearPluginMetadataLifecycleCaches();

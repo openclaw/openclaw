@@ -13,7 +13,11 @@ vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({}));
 // mock-isolation: Keep byte-pressure admission independent of token estimates and database workers.
 vi.mock("./agent-runner-memory-transcript-context.js", () => ({
   estimatePromptTokensFromSessionTranscript: async () => undefined,
-  readSessionLogSnapshot: async () => ({ byteSize: 102_400 }),
+  readSessionLogSnapshot: async () => ({}),
+}));
+// mock-isolation: Supply raw accounting at the transcript reader boundary.
+vi.mock("../../gateway/session-transcript-readers.js", () => ({
+  readSessionTranscriptAccountingAsync: async () => ({ byteSize: 102_400 }),
 }));
 // mock-isolation: Observe admission accounting without starting database workers.
 vi.mock("./session-updates.js", () => ({ incrementCompactionCount: account }));
@@ -59,7 +63,7 @@ it.each([
         totalTokensVersion: 1,
       },
       agentHarnessId: runtime,
-      isHeartbeat: false,
+
       onCompactionNotice: notice,
     };
     const entry = await runSessionCompactionIfNeeded(params);

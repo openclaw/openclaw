@@ -21,6 +21,7 @@ import {
   readCapturedSessionActorEntry,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntrySnapshotField } from "../config/sessions/session-entry-snapshot-values.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
@@ -147,8 +148,11 @@ export async function prepareGitHubPublicationSession(
     assertCurrent?: () => void;
     target?: AgentRunSessionTarget;
     fields?: readonly (keyof NonNullable<PublicationSessionRead["entry"]>)[];
+    /** Saved snapshots a consumer compares; stored reads omit them by default. */
+    projection?: readonly SessionEntrySnapshotField[];
   } = {},
 ) {
+  const projection = options.projection ?? [];
   const fields = [
     ...(options.fields ??
       ([
@@ -202,7 +206,7 @@ export async function prepareGitHubPublicationSession(
       const agentId = options.target.agentId;
       const storedKey = options.target.sessionKey ?? sessionKey;
       loaded = await withSessionEntryReadOnlyInWorker(
-        { agentId, sessionKey: storedKey, storePath, projection: [] },
+        { agentId, sessionKey: storedKey, storePath, projection },
         () => options.assertCurrent?.(),
         async (read, owner) => {
           if (!read.ok) {
@@ -219,7 +223,7 @@ export async function prepareGitHubPublicationSession(
         cfg: options.cfg ?? getRuntimeConfig(),
         key: sessionKey,
         agentId: options.agentId,
-        projection: [],
+        projection,
         assertActive: options.assertCurrent,
         onSelected(target) {
           const source = target.capturedReadSource;
@@ -243,7 +247,7 @@ export async function prepareGitHubPublicationSession(
   };
   return {
     loaded,
-    readCurrent(): PublicationSessionRead {
+    readCurrent: (): PublicationSessionRead => {
       options.assertCurrent?.();
       if (!active || (retained && !retained.isCurrent())) {
         throw new GitHubPublicationSessionChangedError();
@@ -282,8 +286,22 @@ function requirePublicationWorktreeOwner(
   loaded: PublicationSessionOwner,
   worktree: ManagedWorktreeRecord | undefined,
   expected?: ExpectedWorktree,
+  allowExistingPullRequest = false,
 ) {
   const entry = loaded.entry;
+  const pullRequest = entry.worktree?.githubPullRequest;
+  if (
+    pullRequest &&
+    (!allowExistingPullRequest ||
+      !pullRequest.preparedHeadCommit ||
+      pullRequest.preparedHeadCommit !== pullRequest.head.commit)
+  ) {
+    throw new GitHubPublicationWorkspaceChangedError(
+      allowExistingPullRequest
+        ? "Finish preparing the original PR source before publication; saved work was preserved."
+        : "This publication path cannot update an imported PR; use shared publication after preparation.",
+    );
+  }
   if (
     !entry.worktree?.id ||
     !worktree ||
@@ -300,13 +318,13 @@ function requirePublicationWorktreeOwner(
     expected &&
     (worktree.id !== expected.worktreeId ||
       worktree.repoFingerprint !== expected.repositoryFingerprint ||
-      worktree.branch !== expected.branch)
+      (pullRequest?.head.branch ?? worktree.branch) !== expected.branch)
   ) {
     throw new GitHubPublicationWorkspaceChangedError(
       "GitHub publication workspace authority changed.",
     );
   }
-  return { loaded, worktree };
+  return { loaded, worktree, publicationBranch: pullRequest?.head.branch ?? worktree.branch };
 }
 
 function rejectChangedPublicationWorktree(error: unknown): never {
@@ -319,8 +337,9 @@ function rejectChangedPublicationWorktree(error: unknown): never {
 function preparePublicationWorktreeRead(
   loaded: PublicationSessionOwner,
   context: OpenClawStateWorkerContext,
-  session: Awaited<ReturnType<typeof prepareGitHubPublicationSession>>,
+  readSession: () => PublicationSessionRead,
   expected?: ExpectedWorktree,
+  allowExistingPullRequest = false,
 ) {
   const identity = {
     sessionId: loaded.entry.sessionId,
@@ -343,13 +362,13 @@ function preparePublicationWorktreeRead(
     if (!worktree) {
       throw new GitHubPublicationSessionChangedError();
     }
-    const current = requirePublicationSessionOwner(identity, session.readCurrent());
+    const current = requirePublicationSessionOwner(identity, readSession());
     if (current.entry.repositoryWorkspaceId !== workspaceId) {
       throw new GitHubPublicationSessionChangedError();
     }
     const assertCurrent = () => {
       context.admission.assertCurrent();
-      const latest = requirePublicationSessionOwner(identity, session.readCurrent());
+      const latest = requirePublicationSessionOwner(identity, readSession());
       if (latest.entry.repositoryWorkspaceId !== workspaceId) {
         throw new GitHubPublicationSessionChangedError();
       }
@@ -358,10 +377,10 @@ function preparePublicationWorktreeRead(
       } catch (error) {
         rejectChangedPublicationWorktree(error);
       }
-      return requirePublicationWorktreeOwner(latest, worktree, selection);
+      return requirePublicationWorktreeOwner(latest, worktree, selection, allowExistingPullRequest);
     };
     return {
-      ...requirePublicationWorktreeOwner(current, worktree, selection),
+      ...requirePublicationWorktreeOwner(current, worktree, selection, allowExistingPullRequest),
       assertCurrent,
       assertRegistryCurrent: assertRow,
     };
@@ -369,7 +388,10 @@ function preparePublicationWorktreeRead(
 }
 
 export async function readGitHubPublicationWorktreeOwner(
-  params: PublicationSessionIdentity & { expected?: ExpectedWorktree },
+  params: PublicationSessionIdentity & {
+    expected?: ExpectedWorktree;
+    allowExistingPullRequest?: boolean;
+  },
 ) {
   const context = captureOpenClawStateWorkerContext();
   const session = await prepareGitHubPublicationSession(params.sessionKey, {
@@ -380,8 +402,9 @@ export async function readGitHubPublicationWorktreeOwner(
     const owner = await preparePublicationWorktreeRead(
       requirePublicationSessionOwner(params, session.readCurrent()),
       context,
-      session,
+      session.readCurrent,
       params.expected,
+      params.allowExistingPullRequest,
     )();
     return { ...owner, release: session.release, [Symbol.dispose]: session.release };
   } catch (error) {
@@ -393,9 +416,9 @@ export async function readGitHubPublicationWorktreeOwner(
 function resolveGitHubPublicationWorkspaceOwner(
   params: PublicationSessionIdentity,
   prepared: PreparedRepositoryWorkspace | undefined,
-  session: Awaited<ReturnType<typeof prepareGitHubPublicationSession>>,
+  readSession: () => PublicationSessionRead,
 ) {
-  const loaded = requirePublicationSessionOwner(params, session.readCurrent());
+  const loaded = requirePublicationSessionOwner(params, readSession());
   const workspaceId = loaded.entry.repositoryWorkspaceId;
   if (!workspaceId) {
     throw new GitHubPublicationSessionChangedError();
@@ -414,7 +437,11 @@ function resolveGitHubPublicationWorkspaceOwner(
 
 export async function prepareGitHubPublicationWorkspaceOwner(
   params: PublicationSessionIdentity,
-  options: { sessionTarget?: AgentRunSessionTarget; assertCurrent?: () => void } = {},
+  options: {
+    sessionTarget?: AgentRunSessionTarget;
+    assertCurrent?: () => void;
+    allowExistingPullRequest?: boolean;
+  } = {},
 ) {
   const context = captureOpenClawStateWorkerContext();
   const assertCurrent = () => {
@@ -464,7 +491,13 @@ export async function prepareGitHubPublicationWorkspaceOwner(
       throw new GitHubPublicationSessionChangedError();
     }
     const identity = { ...params, lifecycleRevision: loaded.entry.lifecycleRevision ?? null };
-    const readWorktree = preparePublicationWorktreeRead(loaded, context, session);
+    const readWorktree = preparePublicationWorktreeRead(
+      loaded,
+      context,
+      session.readCurrent,
+      undefined,
+      options.allowExistingPullRequest,
+    );
     const prepared = workspaceId
       ? await getSessionRepositoryWorkspaceStore().prepare(workspaceId)
       : undefined;
@@ -483,7 +516,9 @@ export async function prepareGitHubPublicationWorkspaceOwner(
     let witness: Awaited<ReturnType<typeof readWorktree>> | undefined;
     const current = () => {
       if (workspaceId) {
-        return validate(resolveGitHubPublicationWorkspaceOwner(identity, prepared, session));
+        return validate(
+          resolveGitHubPublicationWorkspaceOwner(identity, prepared, session.readCurrent),
+        );
       }
       if (!witness) {
         throw new GitHubPublicationSessionChangedError();
@@ -502,7 +537,7 @@ export async function prepareGitHubPublicationWorkspaceOwner(
       current,
       // Only repository owners expose synchronous current facts; worktrees use the worker reader.
       currentRepository: () =>
-        validate(resolveGitHubPublicationWorkspaceOwner(identity, prepared, session)),
+        validate(resolveGitHubPublicationWorkspaceOwner(identity, prepared, session.readCurrent)),
       release: session.release,
       [Symbol.dispose]: session.release,
     };
@@ -513,7 +548,9 @@ export async function prepareGitHubPublicationWorkspaceOwner(
 }
 
 export async function hasGitHubPublicationRepositoryWorkspace(params: PublicationSessionIdentity) {
-  const prepared = await prepareGitHubPublicationWorkspaceOwner(params);
+  const prepared = await prepareGitHubPublicationWorkspaceOwner(params, {
+    allowExistingPullRequest: true,
+  });
   using _ = { [Symbol.dispose]: () => prepared.release() };
 
   return prepared.initial.kind === "repository";
@@ -589,7 +626,10 @@ export async function readLocalGitHubPublicationWorktreeOwner(
   row: Parameters<typeof localGitHubPublicationSessionIdentity>[0],
 ) {
   const identity = await localGitHubPublicationSessionIdentity(row);
-  const owner = await readGitHubPublicationWorktreeOwner(identity);
+  const owner = await readGitHubPublicationWorktreeOwner({
+    ...identity,
+    allowExistingPullRequest: row.identity_source !== "personal",
+  });
   return {
     ...owner,
     assertCurrent: () => {
@@ -631,16 +671,11 @@ function isSupportedGitHubOrigin(originUrl: string): boolean {
 export async function hasSupportedGitHubPublicationTarget(
   session: PublicationSessionIdentity,
   assertCurrent: () => void,
+  readSession: () => PublicationSessionRead,
 ): Promise<boolean> {
   assertCurrent();
   const context = captureOpenClawStateWorkerContext();
-  const sessionRead = await prepareGitHubPublicationSession(session.sessionKey, {
-    agentId: session.agentId,
-    assertCurrent,
-  });
-  using _ = { [Symbol.dispose]: () => sessionRead.release() };
-
-  const initial = requirePublicationSessionOwner(session, sessionRead.readCurrent(), true);
+  const initial = requirePublicationSessionOwner(session, readSession(), true);
   context.admission.assertCurrent();
   if (initial.entry.archivedAt !== undefined) {
     return false;
@@ -648,14 +683,23 @@ export async function hasSupportedGitHubPublicationTarget(
   const workspaceId = initial.entry.repositoryWorkspaceId;
   if (workspaceId) {
     const prepared = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
-    const owner = resolveGitHubPublicationWorkspaceOwner(session, prepared, sessionRead);
+    const owner = resolveGitHubPublicationWorkspaceOwner(session, prepared, readSession);
     return isSupportedGitHubOrigin(owner.workspace.url);
   }
   if (!initial.entry.worktree?.id) {
     return false;
   }
-  const owner = await preparePublicationWorktreeRead(initial, context, sessionRead)();
+  const owner = await preparePublicationWorktreeRead(
+    initial,
+    context,
+    readSession,
+    undefined,
+    true,
+  )();
   owner.assertCurrent();
+  if (initial.entry.worktree?.githubPullRequest) {
+    return true;
+  }
   const { repoRoot, repoFingerprint } = owner.worktree;
   const key = JSON.stringify([context.admission.identity.key, repoRoot, repoFingerprint]);
   const load = async () => {

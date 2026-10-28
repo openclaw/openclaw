@@ -120,38 +120,43 @@ the discovered models it saves to config.
 
 ## Configuration
 
-### Streaming usage compatibility
+<a id="thinking-compatibility" />
 
-LM Studio doesn't always emit an OpenAI-shaped `usage` object on streamed responses. OpenClaw
-recovers token counts from llama.cpp-style `timings.prompt_n` / `timings.predicted_n` metadata
-instead. Any OpenAI-compatible endpoint resolved as a local endpoint (loopback host) gets this same
-fallback, which covers other local backends such as vLLM, SGLang, llama.cpp, LocalAI, Jan, TabbyAPI,
-and text-generation-webui.
+### Chat transport and thinking
 
-### Gemma 4 tool-call recovery
+OpenClaw uses LM Studio's [Anthropic-compatible Messages API](https://lmstudio.ai/docs/developer/anthropic-compat/messages)
+for chat, including models saved with `api: "openai-completions"`. The shared Messages transport
+handles streaming text, thinking, images, tool calls, conversation replay, and token usage.
+Your server must provide `/v1/messages`. Embeddings continue to use the existing embeddings endpoint.
 
-For Gemma 4 models using `openai-completions`, OpenClaw recovers complete standalone
-`<|tool_call>call:...<tool_call|>` batches if the server returns them as text,
-including when the call is the last content before `finish_reason: "stop"`.
-Recovery preserves raw string arguments and requires complete argument objects;
-incomplete calls, prose, and code examples remain text. Truncated, filtered,
-cancelled, or unterminated streams do not authorize recovered calls. If native
-tool calls also appear in the stream, they remain authoritative and raw text is
-not promoted.
+Thinking `off` sends `thinking: { type: "disabled" }`. Enabled thinking levels send
+`thinking: { type: "enabled" }`; LM Studio controls the reasoning budget, so levels such as
+`medium` and `xhigh` do not set distinct budgets. This avoids sending graded
+`reasoning_effort` values to binary-thinking models, which can produce an unsupported-setting
+warning on Chat Completions. Explicit `thinkingLevelMap` and `reasoningEffortMap` entries still
+determine enabled/disabled intent, including in existing saved model configurations.
+When no thinking level is requested, LM Studio keeps its own default.
 
-### Thinking compatibility
+Requests with `responseFormat` (or the `response_format` model parameter, including
+`extra_body.response_format`) use
+[Chat Completions structured output](https://lmstudio.ai/docs/developer/openai-compat/structured-output)
+instead: Messages does not enforce a response schema. Routing happens before the request is sent.
+This path preserves saved reasoning settings and translates binary `off`/`on` wire values to
+`none`/`high`, which Chat Completions accepts. The endpoint may still warn about enabled graded
+effort on a binary model. Explicit API choices other than
+`openai-completions` and `anthropic-messages` retain their selected transport.
 
-When LM Studio's `/api/v1/models` discovery reports model-specific reasoning options, OpenClaw
-exposes matching `reasoning_effort` values (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`) in
-model compat metadata. Some LM Studio builds advertise a binary UI option (`allowed_options: ["off",
-"on"]`) while rejecting those literal values on `/v1/chat/completions`; OpenClaw normalizes that
-binary shape to the six-level scale before sending requests, including for older saved config that
-still has `off`/`on` reasoning maps.
+<a id="streaming-usage-compatibility" />
 
-For graded options, fresh discovery maps `max` (and Ultra's provider effort) to the highest
-advertised standard effort level, regardless of option order. For example, `off`, `low`, `medium`
-maps `max` to `medium`. Existing saved graded `reasoningEffortMap` values remain explicit
-configuration; rerun LM Studio setup to regenerate them from current server metadata.
+Both chat paths remove unsupported `pattern` constraints from tool schemas before sending them.
+Chat Completions requests include streaming usage; OpenClaw also recovers token counts from llama.cpp-style
+`timings.prompt_n` / `timings.predicted_n` metadata when necessary.
+
+<a id="gemma-4-tool-call-recovery" />
+
+For Gemma 4 models on the Chat Completions path, OpenClaw can recover complete standalone
+`<|tool_call>call:...<tool_call|>` batches returned as text. Native tool calls remain authoritative;
+truncated, cancelled, or incomplete textual calls are never executed.
 
 ### Explicit configuration
 
@@ -181,6 +186,10 @@ configuration; rerun LM Studio setup to regenerate them from current server meta
 ```
 
 ### Model instances and context
+
+Native discovery and preload support the same credentials as inference, including
+store-backed SecretRefs and explicit `Authorization` headers. You do not need to
+copy a store-backed API key into an auth profile to enable preload.
 
 With preload enabled, OpenClaw routes chat requests to a loaded instance with
 enough context for the selected model budget. A newly loaded instance is addressed by the

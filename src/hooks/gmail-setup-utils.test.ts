@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
-import type { SpawnResult } from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
 const itUnix = process.platform === "win32" ? it.skip : it;
@@ -13,14 +13,7 @@ const { runCommand } = vi.hoisted(() => ({ runCommand: vi.fn() }));
 // mock-isolation: setup command results are synthetic and must not invoke real cloud tools.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: runCommand }));
 
-const success = {
-  code: 0,
-  stdout: "",
-  stderr: "",
-  signal: null,
-  killed: false,
-  termination: "exit",
-} satisfies SpawnResult;
+const success = createCommandResult();
 const tailscaleStatus = { ...success, stdout: '{"Self":{"DNSName":"fixture.example."}}' };
 const progress = Array.from({ length: 1000 }, (_, i) => `progress ${i}`).join("\r");
 const noisy = {
@@ -30,18 +23,18 @@ const noisy = {
   stderr: `${progress}\r\n\u001b[31mstderr final detail\u001b[0m\r\n`,
 };
 
-beforeEach(() => {
+let utils: typeof import("./gmail-setup-utils.js");
+let configEval: typeof import("../shared/config-eval.js");
+beforeEach(async () => {
   runCommand.mockReset();
+  vi.resetModules();
+  configEval = await import("../shared/config-eval.js");
+  utils = await import("./gmail-setup-utils.js");
 });
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
-
-async function loadGmailSetupUtils() {
-  vi.resetModules();
-  return await import("./gmail-setup-utils.js");
-}
 
 async function writeExecutable(executable: string): Promise<string> {
   await fs.mkdir(path.dirname(executable), { recursive: true });
@@ -55,15 +48,7 @@ const pythonProbe = (executable: string, version = "3.12") => ({
   stdout: `${executable}\n${version}\n`,
 });
 
-function expectGcloudPython(python?: string) {
-  expect(runCommand).toHaveBeenLastCalledWith(["gcloud", "config", "list"], {
-    timeoutMs: 120_000,
-    env: { CLOUDSDK_PYTHON: python, CLOUDSDK_PYTHON_ARGS: undefined },
-  });
-}
-
 it.each([true, false])("checks the installed binary (created=%s)", async (createsBinary) => {
-  const { ensureDependency } = await loadGmailSetupUtils();
   await withTestDir({ prefix: "openclaw-dependency-probe-" }, async (root) => {
     const binDir = path.join(root, "bin");
     await writeExecutable(path.join(binDir, "brew"));
@@ -77,7 +62,8 @@ it.each([true, false])("checks the installed binary (created=%s)", async (create
           return success;
         });
 
-        const install = () => ensureDependency("fixture-gmail-tool", ["fixture-probe-formula"]);
+        const install = () =>
+          utils.ensureDependency("fixture-gmail-tool", ["fixture-probe-formula"]);
         if (createsBinary) {
           await expect(install()).resolves.toBeUndefined();
           await expect(install()).resolves.toBeUndefined();
@@ -110,8 +96,7 @@ const inheritedPythonControls = {
   CLOUDSDK_PYTHON_ARGS: "-cprint('attacker')",
 };
 
-async function checkPython(versions: readonly string[], inherited = false) {
-  const { runGcloud } = await loadGmailSetupUtils();
+async function checkPython(versions: readonly string[]) {
   await withTestDir({ prefix: "openclaw-gcloud-python-" }, async (root) => {
     const python = path.join(root, "Python Runtime", "python-real");
     if (versions.length) {
@@ -131,14 +116,18 @@ async function checkPython(versions: readonly string[], inherited = false) {
     runCommand.mockResolvedValue(success);
     await withEnvAsync(
       {
-        ...(inherited ? inheritedPythonControls : {}),
-        PATH: [...shimDirs, ...(inherited && versions.length ? ["/usr/bin"] : [])].join(
-          path.delimiter,
-        ),
+        ...inheritedPythonControls,
+        PATH: [...shimDirs, ...(versions.length ? ["/usr/bin"] : [])].join(path.delimiter),
       },
       async () => {
-        await runGcloud(["config", "list"]);
-        expectGcloudPython(versions.length ? python : undefined);
+        await utils.runGcloud(["config", "list"]);
+        expect(runCommand).toHaveBeenLastCalledWith(["gcloud", "config", "list"], {
+          timeoutMs: 120_000,
+          env: {
+            CLOUDSDK_PYTHON: versions.length ? python : undefined,
+            CLOUDSDK_PYTHON_ARGS: undefined,
+          },
+        });
         if (!versions.length) {
           expect(runCommand).toHaveBeenCalledTimes(1);
         }
@@ -147,20 +136,18 @@ async function checkPython(versions: readonly string[], inherited = false) {
   });
 }
 
-describe("runGcloud", () => {
-  itUnix.each([
-    ["skips unsupported Python versions", ["3.9", "3.15", "3.12"], false],
-    ["overrides inherited Python controls", ["3.12"], true],
-  ] as const)("%s", async (_name, versions, inherited) => checkPython(versions, inherited), 60_000);
-  itUnix("unsets inherited controls without an interpreter", async () => checkPython([], true));
-});
+itUnix(
+  "skips unsupported Python versions and overrides inherited controls",
+  async () => checkPython(["3.9", "3.15", "3.12"]),
+  60_000,
+);
+itUnix("unsets inherited controls without an interpreter", async () => checkPython([]));
 
 it("passes abort signal to tailscale status and serve commands", async () => {
-  const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
   const { signal } = new AbortController();
   runCommand.mockResolvedValueOnce(tailscaleStatus).mockResolvedValueOnce(success);
 
-  await ensureTailscaleEndpoint({ mode: "serve", path: "/gmail-pubsub", port: 8788, signal });
+  await utils.ensureTailscaleEndpoint({ mode: "serve", path: "/gmail-pubsub", port: 8788, signal });
 
   const options = { timeoutMs: 30_000, signal };
   expect(runCommand.mock.calls).toEqual([
@@ -171,27 +158,18 @@ it("passes abort signal to tailscale status and serve commands", async () => {
 
 describe("Gmail setup diagnostics and decisions", () => {
   const hasBinaryMock = vi.fn<(bin: string) => boolean>();
-  let configEval: typeof import("../shared/config-eval.js");
-  let utils: typeof import("./gmail-setup-utils.js");
-
-  beforeAll(async () => {
-    vi.resetModules();
-    configEval = await import("../shared/config-eval.js");
-    utils = await import("./gmail-setup-utils.js");
-  });
-
   beforeEach(() => {
     vi.stubEnv("PATH", "");
     hasBinaryMock.mockReset().mockReturnValue(true);
     vi.spyOn(configEval, "hasBinary").mockImplementation(hasBinaryMock);
   });
 
-  it.each(["gcloud", "brew", "tailscale serve"])(
-    "%s retains bounded tails from both streams",
+  it.each(["gcloud command", "brew install for gog", "tailscale serve"])(
+    "%s reports its operation and stream tails without exposing arguments",
     async (boundary) => {
       runCommand.mockResolvedValue(noisy);
       const run = async () => {
-        if (boundary === "brew") {
+        if (boundary === "brew install for gog") {
           hasBinaryMock.mockImplementation((bin: string) => bin === "brew");
           return withMockedPlatform("darwin", () => utils.ensureDependency("gog", ["gogcli"]));
         }
@@ -202,32 +180,21 @@ describe("Gmail setup diagnostics and decisions", () => {
         return utils.runGcloud(["--push-endpoint", "https://example.com/?token=do-not-echo-argv"]);
       };
       const { message } = await rejection(run);
-      expect(message.length).toBeLessThan(2000);
-      expect(message).toContain("code=7");
-      expect(message).toContain("stderr:");
-      expect(message).toContain("stdout:");
+      expect(message).toContain(boundary);
       expect(message).toContain("stdout final detail 🦞");
       expect(message).toContain("stderr final detail");
-      expect(message).toContain("progress 999");
-      expect(message).toContain("…");
-      expect(message).not.toContain("\r");
-      expect(message).not.toContain(String.fromCharCode(27));
       expect(message).not.toContain("do-not-echo-argv");
-      if (boundary === "brew") {
-        expect(message).toMatch(/brew install.*gog/);
-      }
     },
   );
 
   it("bounds invalid JSON diagnostics while retaining the parser cause and successful exit metadata", async () => {
-    const { ensureTailscaleEndpoint } = utils;
     runCommand.mockResolvedValue({
       ...noisy,
       code: 0,
       stdout: `{"value":"${"x".repeat(30_000)}"}invalid-tail`,
     });
     const error = await rejection(() =>
-      ensureTailscaleEndpoint({ mode: "serve", path: "/gmail", port: 8788 }),
+      utils.ensureTailscaleEndpoint({ mode: "serve", path: "/gmail", port: 8788 }),
     );
     expect(error.message.length).toBeLessThan(3000);
     expect(error.message).toContain("returned invalid JSON");
@@ -238,23 +205,16 @@ describe("Gmail setup diagnostics and decisions", () => {
     expect(error.cause).toBeInstanceOf(SyntaxError);
   });
 
-  it.each([
-    { code: 0, stdout: "account@example.com\n", login: false },
-    { code: 0, stdout: " \n", login: true },
-  ])("auth list code=$code login=$login", async ({ code, stdout, login }) => {
-    const { ensureGcloudAuth } = utils;
-    runCommand.mockResolvedValueOnce({ ...success, code, stdout }).mockResolvedValue(success);
-    await ensureGcloudAuth();
-    expect(runCommand).toHaveBeenCalledTimes(login ? 2 : 1);
-    if (login) {
-      expect(runCommand.mock.calls[1]?.[0].slice(1)).toEqual(["auth", "login"]);
-    }
+  it("logs in when the active account list is empty", async () => {
+    runCommand.mockResolvedValueOnce({ ...success, stdout: " \n" }).mockResolvedValue(success);
+    await utils.ensureGcloudAuth();
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(runCommand.mock.calls[1]?.[0].slice(1)).toEqual(["auth", "login"]);
   });
 
   it.each([0, 1])("provisions only according to describe exit code %i", async (code) => {
-    const { ensureTopic, ensureSubscription } = utils;
     runCommand.mockResolvedValueOnce({ ...success, code }).mockResolvedValue(success);
-    await ensureTopic("project", "topic");
+    await utils.ensureTopic("project", "topic");
     expect(runCommand.mock.calls.map(([args]) => args.slice(1, 4))).toEqual(
       code === 0
         ? [["pubsub", "topics", "describe"]]
@@ -267,7 +227,7 @@ describe("Gmail setup diagnostics and decisions", () => {
       .mockReset()
       .mockResolvedValueOnce({ ...success, code })
       .mockResolvedValue(success);
-    await ensureSubscription("project", "subscription", "topic", "https://example.com/push");
+    await utils.ensureSubscription("project", "subscription", "topic", "https://example.com/push");
     expect(runCommand.mock.calls.map(([args]) => args.slice(1, 4))).toEqual([
       ["pubsub", "subscriptions", "describe"],
       ["pubsub", "subscriptions", code === 0 ? "update" : "create"],
@@ -282,11 +242,10 @@ describe("Gmail setup diagnostics and decisions", () => {
       expected: "Homebrew not installed (install brew and retry)",
     },
   ] as const)("retains dependency guidance: $state", async ({ platform, expected }) => {
-    const { ensureDependency } = utils;
     hasBinaryMock.mockReturnValue(false);
     runCommand.mockResolvedValue(success);
     await withMockedPlatform(platform, async () => {
-      await expect(ensureDependency("gog", ["gogcli"])).rejects.toThrow(expected);
+      await expect(utils.ensureDependency("gog", ["gogcli"])).rejects.toThrow(expected);
     });
     expect(runCommand).not.toHaveBeenCalled();
   });

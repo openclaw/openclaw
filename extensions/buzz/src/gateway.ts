@@ -1,12 +1,13 @@
 import type { ChannelGatewayContextV2 } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
-import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { resolveBuzzAccountConfig } from "./account-config.js";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { handleBuzzInbound } from "./inbound.js";
 import { openBuzzRecoveryWatermarkStore, resolveBuzzRecoverySince } from "./recovery-watermark.js";
@@ -15,7 +16,6 @@ import { buildBuzzTarget, isConfiguredBuzzChannel, parseBuzzTarget } from "./tar
 import {
   assertBuzzAccountAvailable,
   resolveBuzzAccount,
-  resolveBuzzAccountConfig,
   type ResolvedBuzzAccount,
 } from "./types.js";
 
@@ -176,13 +176,8 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContextV2<Resol
       ctx.log?.info?.(
         `[${account.accountId}] Buzz connected to ${account.relayUrl} for ${bus.directory.activeRoomIds().length} channel(s)`,
       );
-      const fatalError = await Promise.race([
-        waitUntilAbort(ctx.abortSignal).then(() => undefined),
-        busFailure,
-      ]);
-      if (fatalError) {
-        throw fatalError;
-      }
+      const fatalError = await racePromiseWithAbortSignal(busFailure, ctx.abortSignal);
+      throw fatalError;
     } catch (error) {
       if (ctx.abortSignal.aborted) {
         return;

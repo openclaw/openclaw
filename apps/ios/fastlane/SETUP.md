@@ -6,9 +6,9 @@ Install the pinned Ruby bundle:
 cd apps/ios
 # Install Ruby 4.0.7 with mise or another .ruby-version-aware manager.
 ruby --version
-gem install bundler -v 4.0.22
-bundle _4.0.22_ install
-bundle _4.0.22_ check
+gem install bundler -v 4.0.23
+bundle _4.0.23_ install
+bundle _4.0.23_ check
 ```
 
 The expected runtime is recorded in `apps/ios/.ruby-version`, and the Gemfile
@@ -87,7 +87,7 @@ pnpm ios:release:signing:check
 pnpm ios:release:signing:setup
 ```
 
-`signing:setup` uses Fastlane `produce` and `modify_services` to create Developer Portal bundle IDs and enable required services before running `match`. The main app also requires App Attest, and the main app and share extension both require the shared App Group from `apps/ios/Config/AppStoreSigning.json`; associate that group with both bundle IDs in the Apple Developer Portal before regenerating profiles. If Fastlane does not already have a valid Apple Developer Portal session, run `cd apps/ios && BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane spaceauth` for a release-owner Apple ID and export the resulting `FASTLANE_SESSION`.
+`signing:setup` uses Fastlane `produce` and `modify_services` to create Developer Portal bundle IDs and enable required services before running `match`. The main app also requires App Attest, and the main app and share extension both require the shared App Group from `apps/ios/Config/AppStoreSigning.json`; associate that group with both bundle IDs in the Apple Developer Portal before regenerating profiles. If Fastlane does not already have a valid Apple Developer Portal session, run `cd apps/ios && BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.23_ exec fastlane spaceauth` for a release-owner Apple ID and export the resulting `FASTLANE_SESSION`.
 
 Shared encrypted signing storage:
 
@@ -104,7 +104,7 @@ Validate auth:
 
 ```bash
 cd apps/ios
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane ios auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.23_ exec fastlane ios auth_check
 ```
 
 App Store Connect API auth is required when:
@@ -128,9 +128,9 @@ pnpm ios:screenshots
 
 The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters the built-in connected screenshot fixture instead of pairing with a live gateway. By default it chooses an available large iPhone model and a 13-inch iPad model from the installed Xcode runtime; override the model selection with a comma-separated `OPENCLAW_SNAPSHOT_DEVICES` value when the requested simulators exist locally.
 
-The lane builds the UI-test products once, creates a fresh simulator for each selected model and runtime, and runs each screenshot in an independent `xcodebuild test-without-building` session against those products. It shuts down and deletes each owned simulator before creating the next, including the final Watch capture, and refuses to start while another simulator is running. Xcode command logs stay in `apps/ios/build/SnapshotLogs`; result bundles and the capture-attempt ledger stay in `apps/ios/build/SnapshotTestResults`. See [screenshot-only validation](../VERSIONING.md#screenshot-only-validation) for hosted branch runs and opt-in sanitized diagnostics.
+The lane builds the UI-test products once, creates a fresh simulator for each selected model and runtime, and runs all four screenshot tests in one `xcodebuild test-without-building` session per iPhone or iPad. Each test launches directly into its screenshot fixture and terminates the app afterward. It shuts down and deletes each owned simulator before creating the next, including the final Watch capture, and refuses to start while another simulator is running. Xcode command logs stay in `apps/ios/build/SnapshotLogs`; one result bundle and capture-attempt record per iPhone or iPad stay in `apps/ios/build/SnapshotTestResults`. See [screenshot-only validation](../VERSIONING.md#screenshot-only-validation) for hosted branch runs and opt-in sanitized diagnostics.
 
-Each screenshot gets one capture attempt. A failed capture or Xcode test result stops the lane, retaining its attempt record and any result bundle for diagnosis. CI rejects replacement captures as passing release evidence.
+Each iPhone or iPad gets one capture attempt containing all four tests. All four exact test identities must pass once, and every expected screenshot must be freshly captured. A failed capture or Xcode test result stops the lane, retaining its attempt record and any result bundle for diagnosis. CI rejects replacement captures as passing release evidence. Watch capture is unchanged.
 
 Screenshot tests disable Xcode's verbose failure diagnostics, such as sysdiagnose, while retaining command logs, screenshots, and per-attempt result bundles.
 
@@ -278,6 +278,103 @@ phase durations, setup RPC progress, and bounded exit/error diagnostics.
 Raw logs and setup codes are excluded. Setup-code timeouts are preparation failures
 and prevent native test execution.
 
+## Temporary resource investigation
+
+Qualification, screenshot-only runs, CI screenshot capture, and store/TestFlight uploads collect a
+bounded `ios-resource-timeline.jsonl` while their main command runs. This temporary
+instrumentation investigates runner contention; it does not change test deadlines,
+simulator services, build parallelism, or release admission.
+
+The collector takes one serial host sample approximately every 15 seconds. It records
+host CPU counters, load, memory compression and swap activity, memory-pressure
+level, and disk activity. It samples processes at most once a minute, recording
+at most twelve top CPU/RSS process rows. Process rows
+contain PIDs, parent PIDs and roles, state, CPU time, and RSS. Roles use a fixed
+allowlist plus bounded executable basenames from installed Apple simulator runtime
+system directories. Device data, app bundles, containers, and other unknown names
+remain `other`. Fixed origin categories distinguish runtime, Xcode,
+and host-system executable locations where recognizable. Grouped counts and CPU
+deltas cover every parsed process, including rows outside the top-process display.
+`cpuObservedCount` identifies rows with a previous observation. A failed `ps`
+probe leaves the summary null and resets that baseline. Intentionally skipped
+process samples retain the baseline for the next observation, with CPU deltas
+covering the full interval. They have empty process rows, a null summary and
+process interval, and an explicit `not-due` probe outcome. After the first `ps`
+timeout, process polling stops for the rest of the run with a
+`disabled-after-timeout` outcome; host metrics continue. The first stalled probe
+can still delay host samples until it returns.
+The collector never exports arguments, environment values, paths, or application
+content. Fixed phase labels correlate samples with builds, simulator startup,
+Gateway preparation, native tests, screenshots, archiving, and upload.
+
+Each native observation requests termination after two seconds. A starved runner
+can delay process termination and output closure beyond that deadline. Samples
+record their start/end timestamps and phases plus each probe's elapsed wall time;
+slow samples can span phases and must not be treated as instantaneous snapshots.
+Collection is independent of the workload, never overlaps or catches up after a
+slow sample, and stops at a 4 MiB output limit. Missing observations remain
+diagnostics, not release failures.
+The footer records collector Node CPU time and RSS; native observation subprocess
+CPU is excluded. RSS is not physical memory footprint, CPU deltas miss processes
+that start and exit between samples, and sparse sampling cannot establish a
+continuous peak. Interpret memory pressure and swap activity alongside free memory.
+
+The timeline is retained with the qualification proof or screenshot diagnostics,
+including after failures. Store runs also preserve the existing sanitized screenshot
+phase/startup/crash JSON before their temporary source checkout is removed.
+Screenshot phases do not run synchronous resource probes; the background timeline
+is the sole resource sampler. CI retains it alongside `screenshot-diagnostics.json`
+in the existing screenshot diagnostics artifact.
+Xcode build timing summaries appear in screenshot/archive logs; qualification
+exports recognized task totals as `buildTimings` in its proof. Task totals can
+overlap and must not be summed as wall time.
+
+For a non-publishing comparison on one fixed candidate branch:
+
+```bash
+gh workflow run ios-release-e2e.yml --ref YOUR_BRANCH -f mode=stock -f resource_diagnostics=false
+gh workflow run ios-release-e2e.yml --ref YOUR_BRANCH -f mode=stock -f resource_diagnostics=true
+gh workflow run ios-store-release.yml --ref YOUR_BRANCH -f operation=screenshots -f resource_diagnostics=true
+gh workflow run ios-store-release.yml --ref YOUR_BRANCH -f operation=screenshots -f resource_diagnostics=false
+```
+
+Wait for each arm of the same flow to finish before starting the next. Keep source,
+Gateway selection, runner resources, Xcode, and simulator runtime matched; a single
+pair checks integration, not a reliable performance percentile. The switch only
+affects non-publishing dispatches. Real store/TestFlight operations keep collection
+enabled. Locally the same wrapper accepts `OPENCLAW_IOS_RESOURCE_DIAGNOSTICS=0`:
+
+```bash
+node scripts/ios-resource-timeline.mjs --output /tmp/ios-resource-timeline.jsonl -- pnpm ios:screenshots
+```
+
+To distinguish simulator startup from OpenClaw and XCTest, the temporary startup
+probe captures only iPhone screenshots. It observes 60 seconds after the build with
+no simulator active, then 120 seconds after boot before app installation or tests:
+
+```bash
+gh workflow run ios-store-release.yml --ref YOUR_BRANCH -f operation=screenshots -f startup_probe=true
+```
+
+The probe enables the resource timeline even if `resource_diagnostics` is false.
+After simulator cleanup, it also runs a bounded Spotlight experiment: five
+interleaved pairs copy the built products into fresh ordinary and `.noindex`
+directories, observing each for 45 seconds. `ios-spotlight-probe.json` retains
+aggregate file/index counts, matched Spotlight CPU deltas, timing, and host load.
+Only task-owned copies are removed; machine-wide indexing settings are unchanged.
+Missing ordinary-directory positive controls make the result inconclusive. These
+fresh-directory observations do not measure cold-host or release performance.
+
+It is off by default and only configured by the screenshot job. These added waits
+are diagnostic observations, not a performance improvement; include them in any
+end-to-end comparison. Grouped process CPU is still a lower bound: newly observed
+and short-lived processes have no measured delta. Roles and origin categories
+can remain `other`; they are attribution hints, not a complete process inventory.
+
+Remove the collector, phase markers, and comparison switches after the contention
+cause and its improvement are verified. Do not make full Instruments recordings,
+allocation tracing, or automatic sysdiagnose part of normal release runs.
+
 ## GitHub Actions
 
 Run **iOS Store Release** from `main` with one of these operations:
@@ -353,7 +450,7 @@ APP_STORE_CONNECT_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
 
 ```bash
 cd apps/ios
-BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.22_ exec fastlane ios auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _4.0.23_ exec fastlane ios auth_check
 ```
 
 4. Inspect the live plan if needed, then run the release entry point:

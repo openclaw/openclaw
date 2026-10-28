@@ -62,41 +62,6 @@ async function sendBindingMessage(params: {
   return result.messageId || null;
 }
 
-async function sendFarewellMessage(params: {
-  cfg: OpenClawConfig;
-  client: MatrixClient;
-  accountId: string;
-  record: MatrixThreadBindingRecord;
-  defaultIdleTimeoutMs: number;
-  defaultMaxAgeMs: number;
-  reason?: string;
-}): Promise<void> {
-  const roomId = params.record.parentConversationId ?? params.record.conversationId;
-  const idleTimeoutMs =
-    typeof params.record.idleTimeoutMs === "number"
-      ? params.record.idleTimeoutMs
-      : params.defaultIdleTimeoutMs;
-  const maxAgeMs =
-    typeof params.record.maxAgeMs === "number" ? params.record.maxAgeMs : params.defaultMaxAgeMs;
-  const farewellText = resolveThreadBindingFarewellText({
-    reason: params.reason,
-    idleTimeoutMs,
-    maxAgeMs,
-  });
-  await sendBindingMessage({
-    cfg: params.cfg,
-    client: params.client,
-    accountId: params.accountId,
-    roomId,
-    threadId:
-      params.record.parentConversationId &&
-      params.record.parentConversationId !== params.record.conversationId
-        ? params.record.conversationId
-        : undefined,
-    text: farewellText,
-  }).catch(() => {});
-}
-
 export function createMatrixSessionBindingAdapter(
   params: { cfg: OpenClawConfig; accountId: string; client: MatrixClient },
   {
@@ -119,6 +84,24 @@ export function createMatrixSessionBindingAdapter(
   },
 ) {
   const { removeBindingsAsync, touchBindingAsync } = manager;
+  const sendFarewellMessage = async (record: MatrixThreadBindingRecord, reason?: string) => {
+    const roomId = record.parentConversationId ?? record.conversationId;
+    const idleTimeoutMs =
+      typeof record.idleTimeoutMs === "number" ? record.idleTimeoutMs : defaults.idleTimeoutMs;
+    const maxAgeMs = typeof record.maxAgeMs === "number" ? record.maxAgeMs : defaults.maxAgeMs;
+    const farewellText = resolveThreadBindingFarewellText({ reason, idleTimeoutMs, maxAgeMs });
+    await sendBindingMessage({
+      cfg: params.cfg,
+      client: params.client,
+      accountId: params.accountId,
+      roomId,
+      threadId:
+        record.parentConversationId && record.parentConversationId !== record.conversationId
+          ? record.conversationId
+          : undefined,
+      text: farewellText,
+    }).catch(() => {});
+  };
   const unbindRecords = async (
     records: MatrixThreadBindingRecord[],
     reason: string | ((record: MatrixThreadBindingRecord) => string | undefined),
@@ -131,15 +114,7 @@ export function createMatrixSessionBindingAdapter(
     removed.forEach((record) => onRemoved?.(record));
     await Promise.all(
       removed.map((record) =>
-        sendFarewellMessage({
-          cfg: params.cfg,
-          client: params.client,
-          accountId: params.accountId,
-          record,
-          defaultIdleTimeoutMs: defaults.idleTimeoutMs,
-          defaultMaxAgeMs: defaults.maxAgeMs,
-          reason: typeof reason === "function" ? reason(record) : reason,
-        }),
+        sendFarewellMessage(record, typeof reason === "function" ? reason(record) : reason),
       ),
     );
     return removed.map((record) => toSessionBindingRecord(record, defaults));

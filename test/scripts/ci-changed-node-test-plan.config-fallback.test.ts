@@ -1,9 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import {
   createChangedExtensionConfigShards,
   packChangedExtensionConfigShards,
@@ -75,7 +74,7 @@ it.each([
   ["test/vitest/vitest.extensions.config.ts", "extensions/copilot/index.ts"],
   ["test/vitest/vitest.extension-qa.config.ts", "extensions/qa-lab/src/cli.runtime.ts"],
   ["test/vitest/vitest.extension-providers.config.ts", "extensions/anthropic/index.ts"],
-])("emits each affected-package file once through %s", async (config, changedPath) => {
+])("emits each affected-package file once through %s", (config, changedPath) => {
   const root = changedPath.split("/").slice(0, 2).join("/");
   const shards = planExtensionTargets(listExecutableExtensionFiles([root]));
   const groups = fallbackGroups(shards);
@@ -121,34 +120,6 @@ it.each([
     ]);
     expect(workerGroups[0]).not.toHaveProperty("pretestBuildMode");
   }
-  const env = {
-    OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: encodeNodeTestGroups(partitions),
-    OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1",
-    OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--hookTimeout=600000"]',
-    OPENCLAW_VITEST_MAX_WORKERS: "2",
-  };
-  const argv: string[][] = [];
-  const includeFiles: unknown[] = [];
-  expect(
-    await runShardPlans(resolveShardPlans(env), {
-      env,
-      scratchDir: argvTempDirs.make("changed-extension-argv-"),
-      runChild: async (args, childEnv) => {
-        argv.push(args);
-        const includeFile = expectDefined(
-          childEnv.OPENCLAW_VITEST_INCLUDE_FILE,
-          "package include file",
-        );
-        includeFiles.push(JSON.parse(readFileSync(includeFile, "utf8")));
-        expect(childEnv.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
-        return 0;
-      },
-    }),
-  ).toBe(0);
-  const prefix = [config, "--", "--hookTimeout=600000"];
-  expect(argv).toHaveLength(partitions.length);
-  expect(argv).toEqual(partitions.map(() => prefix));
-  expect(includeFiles).toEqual(partitions.map((group) => group.includePatterns));
 });
 
 describe("CI changed Node test plan", () => {

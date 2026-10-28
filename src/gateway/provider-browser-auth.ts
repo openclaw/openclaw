@@ -39,9 +39,20 @@ export class ProviderBrowserSignInUnavailableError extends Error {
   }
 }
 
+export class ProviderBrowserSignInError extends Error {
+  constructor(readonly reason: "declined" | "expired") {
+    super(
+      reason === "expired"
+        ? "Browser sign-in expired. Retry /login."
+        : "Provider sign-in was declined. Retry /login when you are ready.",
+    );
+    this.name = "ProviderBrowserSignInError";
+  }
+}
+
 export function resolveBrowserAuthOrigin(
   browser: GatewayWsBrowserOrigin | undefined,
-  signal: AbortSignal,
+  signal: AbortSignal = getGatewayRestartDrainSignal(),
 ) {
   const published = getTailscalePublishedOrigin();
   if (!browser || browser.origin === published?.origin) {
@@ -87,7 +98,7 @@ export function createProviderBrowserAuthSession(params: {
     signal.throwIfAborted();
     origin?.signal.throwIfAborted();
     if (expiresAt !== undefined && Date.now() >= expiresAt) {
-      throw new Error("Browser sign-in expired. Retry /login.");
+      throw new ProviderBrowserSignInError("expired");
     }
   };
   const authorizePrepared = async <Result = never>({
@@ -113,7 +124,7 @@ export function createProviderBrowserAuthSession(params: {
     origin = published;
     origin.signal.addEventListener("abort", originClosed, { once: true });
     deadline = setTimeout(
-      () => lifetime.abort(new Error("Browser sign-in expired. Retry /login.")),
+      () => lifetime.abort(new ProviderBrowserSignInError("expired")),
       timeoutMs,
     );
     deadline.unref();
@@ -154,7 +165,7 @@ export function createProviderBrowserAuthSession(params: {
       ]);
       assertCurrent();
       if (!pending.isCurrent()) {
-        throw new Error("Browser sign-in expired. Retry /login.");
+        throw new ProviderBrowserSignInError("expired");
       }
       return result;
     } finally {
@@ -215,7 +226,7 @@ export function handleProviderOAuthCallback(req: IncomingMessage, res: ServerRes
   if (!state || !pending || !pending.isCurrent()) {
     if (state && pending) {
       pendingAuthorizations.delete(state);
-      pending.reject(new Error("Browser sign-in expired. Retry /login."));
+      pending.reject(new ProviderBrowserSignInError("expired"));
     }
     respond(res, 410, "This sign-in link expired or was already used.");
     return true;
@@ -224,6 +235,7 @@ export function handleProviderOAuthCallback(req: IncomingMessage, res: ServerRes
   const denied = url.searchParams.has("error");
   if (
     url.searchParams.getAll("state").length !== 1 ||
+    url.searchParams.getAll("iss").length > 1 ||
     (denied ? Boolean(code) : !code?.trim() || url.searchParams.getAll("code").length !== 1)
   ) {
     respond(res, 400, "Invalid sign-in response.");
@@ -231,10 +243,11 @@ export function handleProviderOAuthCallback(req: IncomingMessage, res: ServerRes
   }
   pendingAuthorizations.delete(state);
   if (denied) {
-    pending.reject(new Error("Provider sign-in was declined. Retry /login when you are ready."));
+    pending.reject(new ProviderBrowserSignInError("declined"));
     respond(res, 400, "Sign-in was not completed.");
   } else {
-    pending.accept({ code: code!, state });
+    const iss = url.searchParams.get("iss");
+    pending.accept({ code: code!, state, ...(iss === null ? {} : { iss }) });
     respond(res, 200, "Sign-in response received.");
   }
   return true;

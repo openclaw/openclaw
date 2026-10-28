@@ -1,15 +1,25 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { drainPendingDeliveries as drainPluginPendingDeliveries } from "../../plugin-sdk/delivery-queue-runtime.js";
+import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
 import {
   type DeliverFn,
   drainPendingDeliveriesCore,
   recoverPendingDeliveries,
   withActiveDeliveryClaim,
 } from "./delivery-queue-recovery.js";
-import { enqueueDelivery, failDelivery } from "./delivery-queue-storage.js";
+import {
+  enqueueDelivery,
+  failDelivery,
+  markDeliveryPlatformSendAttemptStarted,
+} from "./delivery-queue-storage.js";
 import {
   loadPendingDeliveries,
   createRecoveryLog,
@@ -107,6 +117,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     tmpDir = fixtures.tmpDir();
     log = createRecoveryLog();
     deliver.mockReset().mockResolvedValue(undefined);
+    resolveOutboundChannelMessageAdapterMock.mockReset();
     sleepMock.mockReset().mockResolvedValue(undefined);
   });
   afterEach(() => {
@@ -169,6 +180,64 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     expect(await pending()).toEqual([]);
     await drainAll();
     expect(deliver).toHaveBeenCalledTimes(channels.length);
+  });
+
+  it("keeps matching leased deliveries pending until reconciliation can resume", async () => {
+    const onPending = vi.fn();
+    const otherId = await enqueue({
+      accountId: "acct2",
+      initialProducerClaim: createInitialDeliveryProducerClaim(),
+    });
+    await drain({ onPending });
+    expect(onPending).not.toHaveBeenCalled();
+
+    const initialProducerClaim = createInitialDeliveryProducerClaim();
+    const id = await enqueue({ initialProducerClaim });
+    await markDeliveryPlatformSendAttemptStarted(
+      id,
+      tmpDir,
+      undefined,
+      initialProducerClaim.producerClaimId,
+    );
+    const before = await pending();
+    const leased = before.find((entry) => entry.id === id);
+    assert(leased, "Expected the active send lease to remain queued");
+    const reconcileUnknownSend = vi.fn(async () => ({ status: "not_sent" as const }));
+    resolveOutboundChannelMessageAdapterMock.mockResolvedValue({
+      durableFinal: { capabilities: { reconcileUnknownSend: true }, reconcileUnknownSend },
+    });
+    deliver.mockImplementation(async (params) => {
+      assert(params.deliveryProducerClaimId, "Expected recovered producer ownership");
+      await markDeliveryPlatformSendAttemptStarted(
+        id,
+        tmpDir,
+        undefined,
+        params.deliveryProducerClaimId,
+      );
+      return [{ channel: "directchat", messageId: "recovered" }];
+    });
+
+    await drain({ onPending });
+    expect(onPending).toHaveBeenCalledOnce();
+    expect(reconcileUnknownSend).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(await pending()).toEqual(before);
+
+    setQueuedEntryState(tmpDir, id, {
+      retryCount: leased.retryCount,
+      availableAt: Date.now() - 1,
+      recoveryState: "send_attempt_started",
+      platformSendStartedAt: leased.platformSendStartedAt,
+    });
+    await drain({ onPending });
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+    expect(deliver).toHaveBeenCalledOnce();
+    expect((await pending()).map((entry) => entry.id)).toEqual([otherId]);
+
+    onPending.mockClear();
+    await drain({ onPending });
+    expect(onPending).not.toHaveBeenCalled();
+    expect(deliver).toHaveBeenCalledOnce();
   });
 
   it("bounds stop admission independently of queued backlog size", async () => {
@@ -246,10 +315,12 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     expect(deliveryTimes).toEqual([startedAt, startedAt + RECOVERY_REPLAY_SPACING_MS]);
   });
 
-  it("does not re-deliver a stale startup snapshot after reconnect already acked it", async () => {
+  it("does not re-deliver an independent account recovered while another account is blocked", async ({
+    signal,
+  }) => {
     const startupLog = createRecoveryLog();
     const blocker = blockDelivery(({ to }) => to === "+1000");
-    await enqueue(
+    const blockedId = await enqueue(
       {
         channel: "demo-channel-a",
         to: "+1000",
@@ -257,13 +328,24 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
       },
       { retryCount: 0, enqueuedAt: 1 },
     );
-    await enqueue({}, { retryCount: 0, enqueuedAt: 2 });
+    const healthyId = await enqueue({}, { retryCount: 0, enqueuedAt: 2 });
+    const healthyRecovered = createDeferred();
+    startupLog.info.mockImplementation((message) => {
+      if (message.includes(`Recovered delivery ${healthyId}`)) {
+        healthyRecovered.resolve();
+      }
+    });
     const startupRecovery = recover(startupLog);
     try {
-      await Promise.race([blocker.entered, startupRecovery]);
-      expect(deliver).toHaveBeenCalledWith(
-        expect.objectContaining({ channel: "demo-channel-a", to: "+1000" }),
+      await withinTest(
+        awaitGateBeforeSettlement(
+          Promise.all([blocker.entered, healthyRecovered.promise]),
+          startupRecovery,
+          "Independent account must settle before blocked startup recovery",
+        ),
+        signal,
       );
+      expect((await pending()).map((entry) => entry.id)).toEqual([blockedId]);
       await drain();
     } finally {
       blocker.release();
@@ -271,7 +353,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     }
     expect(deliver).toHaveBeenCalledTimes(2);
     expect(deliver.mock.calls.filter(([entry]) => entry.to === "+1555")).toHaveLength(1);
-    expectInfo(startupLog, "Recovery skipped for delivery");
+    expect(await pending()).toEqual([]);
   });
   it("recomputes backoff bypass after rereading the claimed entry", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });

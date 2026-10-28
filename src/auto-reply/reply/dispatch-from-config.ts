@@ -61,7 +61,7 @@ async function dispatchReplyFromConfigWithQueuePolicy(
   inputParams: DispatchFromConfigParams,
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
-  const source = prepareReplySourceInput(
+  const source = await prepareReplySourceInput(
     inputParams.ctx,
     inputParams.cfg,
     prepareInternalGetReplyOptions(inputParams.replyOptions, inputParams.ctx),

@@ -9,7 +9,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
-import { isSessionDisplayMetadataPatch } from "./sessions/patch.ts";
+import { isSessionDeferredPatch } from "./sessions/patch.ts";
 
 type SessionAccessRow = Pick<GatewaySessionRow, "sharingRole">;
 
@@ -28,7 +28,7 @@ export type SessionMethodAccessRequest = {
   requiredScope?: OperatorScope;
   /** Only callers exposing a scoped action opt into the Gateway's narrow alternative. */
   sessionScope?: boolean;
-  /** Only display metadata can be admitted to the same-identity offline queue. */
+  /** Opt into the explicit desired-state mutation allowlist. */
   allowDeferred?: boolean;
   session?: SessionAccessRow;
 };
@@ -115,22 +115,23 @@ export function readSessionMethodAccess(
   request: SessionMethodAccessRequest,
 ): SessionMethodAccess {
   const access = readSessionMethodScopeAccess(snapshot?.hello?.auth, request);
-  const deferredMetadata =
+  const deferredMutation =
     request.allowDeferred &&
-    request.method === "sessions.patch" &&
     isRecord(request.params) &&
-    isSessionDisplayMetadataPatch(
-      Object.fromEntries(
-        Object.entries(request.params).filter(
-          ([key]) => key !== "key" && key !== "agentId" && key !== "expectedSessionId",
+    ((request.method === "sessions.patch" &&
+      isSessionDeferredPatch(
+        Object.fromEntries(
+          Object.entries(request.params).filter(
+            ([key]) => key !== "key" && key !== "agentId" && key !== "expectedSessionId",
+          ),
         ),
-      ),
-    ) &&
+      )) ||
+      request.method === "sessions.delete") &&
     snapshot?.hello &&
     snapshot.client &&
     snapshot.phase !== "stopped" &&
     !snapshot.client.offlineRecoveryRetired;
-  if ((!deferredMetadata && snapshot?.phase !== "connected") || !snapshot?.client) {
+  if ((!deferredMutation && snapshot?.phase !== "connected") || !snapshot?.client) {
     return deniedAccess(access.requiredScope, "disconnected");
   }
   if (isGatewayMethodAdvertised(snapshot, request.method) !== true) {

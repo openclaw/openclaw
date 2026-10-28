@@ -24,7 +24,6 @@ export function admitMediaHandle<
       requesterSessionKey: handle.requesterSessionKey,
       requesterAgentId: handle.requesterAgentId,
       task: handle.taskLabel,
-      createdAt: Date.now(),
       status: "running",
     });
   }
@@ -51,9 +50,16 @@ export function resetGeneratedMediaTaskActivityForTests(): void {
   if (!state || typeof state !== "object") {
     throw new Error("Media generation activity owner is not initialized");
   }
-  for (const key of ["operations", "active", "admissions", "owners", "drafts"] as const) {
+  for (const key of [
+    "operations",
+    "active",
+    "admissions",
+    "owners",
+    "drafts",
+    "listeners",
+  ] as const) {
     const value: unknown = Reflect.get(state, key);
-    if (!(value instanceof Map)) {
+    if (!(value instanceof Map || value instanceof Set)) {
       throw new Error(`Unexpected media generation activity fixture state: ${key}`);
     }
     value.clear();

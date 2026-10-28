@@ -1,5 +1,4 @@
 /** Public cron store load/save API backed entirely by shared SQLite state. */
-import path from "node:path";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
@@ -9,12 +8,18 @@ import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type { CronJobConfigRevisionResult } from "./config-revision.js";
 import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
 import { invalidateCronJobNames, publishCronJobNames } from "./store/job-name.js";
 import { readCronJobNamesInDatabase } from "./store/job-name.kernel.js";
-import { cronStoreKey } from "./store/key.js";
 import { restoreCronLoadError } from "./store/load-error.js";
-import { resolveCronJobsStorePath, resolveCronJobsStorePathAsync } from "./store/paths.js";
+import {
+  resolveCronJobsStorePath,
+  resolveCronJobsStorePathAsync,
+  resolveDefaultCronStorePath,
+  prepareMutableCronStoreKey,
+  resolveCronStoreKeyInDatabase,
+} from "./store/paths.js";
 import {
   assertCronStoreCanPersist,
   readCronJobsFingerprint,
@@ -57,12 +62,13 @@ const MAX_TRACKED_CRON_STORE_REVISIONS = 64;
 // Stale receipts must never equal a nonnegative publication fact, even after eviction.
 const STALE_CRON_STORE_REVISION = -1;
 const cronStoreRevisions = new Map<string, number>();
+const cronMutationListeners = new Map<string, Set<() => void>>();
 let nextCronStoreRevision = 0;
 
 /** Reads the process-local committed revision for one canonical SQLite partition. */
 export function getCronJobsStoreRevision(storePath: string): number {
   // Eviction must not resurrect a snapshot's earlier revision.
-  return cronStoreRevisions.get(cronStoreKey(storePath)) ?? nextCronStoreRevision;
+  return cronStoreRevisions.get(storePath) ?? nextCronStoreRevision;
 }
 
 export function noteCronJobsStoreCommit(storeKey?: string): void {
@@ -80,16 +86,65 @@ export function noteCronJobsStoreCommit(storeKey?: string): void {
   pruneMapToMaxSize(cronStoreRevisions, MAX_TRACKED_CRON_STORE_REVISIONS);
 }
 
+/** Empty schedulers have no next tick, so explicit provisioning publishes to their lifecycle. */
+export function subscribeCronJobsStoreMutations(
+  storePath: string,
+  listener: () => void,
+): () => void {
+  const storeKey = storePath;
+  const listeners = cronMutationListeners.get(storeKey) ?? new Set<() => void>();
+  cronMutationListeners.set(storeKey, listeners);
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0) {
+      cronMutationListeners.delete(storeKey);
+    }
+  };
+}
+
+/** Provisioning publishes after the outer commit; runtime saves only invalidate revisions. */
+export function publishCronJobsStoreMutation(storePath: string, db?: EngineConnection): void {
+  const storeKey = storePath;
+  const publish = () => {
+    noteCronJobsStoreCommit(storeKey);
+    for (const listener of cronMutationListeners.get(storeKey) ?? []) {
+      listener();
+    }
+  };
+  if (!db || !deferSqlitePostCommitPublication(db, publish)) {
+    publish();
+  }
+}
+
 /** Loads cron jobs plus config/runtime sidecars from the SQLite-backed store. */
 export async function loadCronJobsStoreWithConfigJobs(
   storePath?: string,
 ): Promise<LoadedCronStore> {
-  const storeKey = storePath === undefined ? undefined : cronStoreKey(storePath);
   const context = captureOpenClawStateWorkerContext();
+  const selectedPath = storePath?.trim();
+  const storeKey = selectedPath
+    ? await prepareMutableCronStoreKey(selectedPath, context)
+    : undefined;
+  return loadCronJobsStoreWithConfigJobsByKey(storeKey);
+}
+
+export async function loadCronJobsStoreWithConfigJobsByKey(
+  storeKey: string | undefined,
+  opts?: { includeConfigRevisions?: boolean },
+): Promise<LoadedCronStore & { configRevisions: Map<string, CronJobConfigRevisionResult> }> {
+  const context = captureOpenClawStateWorkerContext();
+  const input =
+    storeKey === undefined
+      ? { defaultStorePath: resolveDefaultCronStorePath(process.env) }
+      : { storeKey };
   let received = false;
   try {
     return await runOpenClawStateWorkerOperation(context, async (scope) => {
-      const result = await scope.execute({ type: "cron.loadMutable", input: { storeKey } });
+      const result = await scope.execute({
+        type: "cron.loadMutable",
+        input: { ...input, ...opts },
+      });
       received = true;
       for (let index = 0; index < result.repairCommits; index += 1) {
         noteCronJobsStoreCommit(result.storeKey);
@@ -117,19 +172,17 @@ export function assertCronJobsStoreUnchanged(
   storePath: string,
   expectedJobsFingerprint: string,
 ): undefined {
-  const resolvedStorePath = path.resolve(storePath);
-  if (readCronJobsFingerprint(db, cronStoreKey(resolvedStorePath)) !== expectedJobsFingerprint) {
-    throw new CronJobsStoreChangedError(resolvedStorePath);
+  const storeKey = resolveCronStoreKeyInDatabase(db, storePath);
+  if (readCronJobsFingerprint(db, storeKey) !== expectedJobsFingerprint) {
+    throw new CronJobsStoreChangedError(storePath);
   }
 }
 
-/** Removes an owned declarative job family left under obsolete absolute store keys. */
-export async function removeStaleCronJobFamilyRows(
-  storePath: string,
+export async function removeStaleCronJobFamilyRowsByKey(
+  storeKey: string,
   family: CronJobFamilyIdentity,
   opts?: { commitGuard?: () => void },
 ): Promise<number> {
-  const storeKey = cronStoreKey(path.resolve(storePath));
   const context = captureOpenClawStateWorkerContext();
   let removed = 0;
   await runCronRuntimeMutation({
@@ -232,8 +285,8 @@ async function saveCronStoreWithWorker<Value>(
     scope: Pick<SqliteWorkerStore<CronStoreSaveWorkerOperations>, "execute">,
   ) => Promise<CronStoreWriteResult<Value>>,
 ): Promise<CronStoreCommit<Value>> {
-  const observedRevision = getCronJobsStoreRevision(storeKey);
   const context = captureOpenClawStateWorkerContext();
+  const observedRevision = getCronJobsStoreRevision(storeKey);
   let received = false;
   try {
     return await runOpenClawStateWorkerOperation(context, async (scope) => {
@@ -270,10 +323,10 @@ function saveCronJobsStoreChangesNative(
   storePath: string,
   previous: CronStoreFile,
   next: CronStoreFile,
-  opts?: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
+  opts: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
 ): CronStoreFile {
   assertCronStoreCanPersist(next);
-  const storeKey = cronStoreKey(path.resolve(storePath));
+  const storeKey = storePath;
   const prepared = prepareCronStoreChanges(previous, next);
   if (prepared.changedIds.size === 0) {
     return previous;
@@ -303,17 +356,24 @@ export async function saveCronJobsStoreChanges(
   next: CronStoreFile,
   opts?: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
 ): Promise<CronStoreFile> {
-  if (opts?.transactionHooks) {
-    return saveCronJobsStoreChangesNative(storePath, previous, next, opts);
-  }
   assertCronStoreCanPersist(next);
-  const storeKey = cronStoreKey(path.resolve(storePath));
-  const prepared = prepareCronStoreChanges(previous, next);
+  const context = captureOpenClawStateWorkerContext();
+  const { transactionHooks, ...options } = opts ?? {};
+  const snapshot = transactionHooks
+    ? { previous, next, options }
+    : structuredClone({ previous, next, options });
+  const prepared = prepareCronStoreChanges(snapshot.previous, snapshot.next);
   if (prepared.changedIds.size === 0) {
     return previous;
   }
-  const { transactionHooks: _hooks, ...options } = opts ?? {};
-  const input = structuredClone({ storeKey, changes: prepared, options });
+  const storeKey = await prepareMutableCronStoreKey(storePath, context);
+  if (transactionHooks) {
+    return saveCronJobsStoreChangesNative(storeKey, snapshot.previous, snapshot.next, {
+      ...snapshot.options,
+      transactionHooks,
+    });
+  }
+  const input = { storeKey, changes: prepared, options: snapshot.options };
   const committed = await saveCronStoreWithWorker(storeKey, (scope) =>
     scope.execute({ type: "cron.saveChanges", input }),
   );
@@ -324,9 +384,9 @@ export async function saveCronJobsStoreChanges(
 function saveCronJobsStoreWithRevisionNative(
   storePath: string,
   store: CronStoreFile,
-  opts?: SaveCronJobsStoreOptions,
+  opts: SaveCronJobsStoreOptions | undefined,
 ): CronStoreCommit<undefined> {
-  const storeKey = cronStoreKey(path.resolve(storePath));
+  const storeKey = storePath;
   if (!isCronRuntimeOnlySave(opts)) {
     assertCronStoreCanPersist(store);
   }
@@ -338,19 +398,43 @@ function saveCronJobsStoreWithRevisionNative(
       return undefined;
     },
     transactionHooks,
+    undefined,
   );
 }
 
 /** Persist cron data and return only this operation's publication revision. */
-export async function saveCronJobsStoreWithRevision(
+async function saveCronJobsStoreWithRevision(
   storePath: string,
   store: CronStoreFile,
   opts?: SaveCronJobsStoreOptions,
 ): Promise<CronStoreCommit<undefined>> {
-  if (opts?.transactionHooks) {
-    return saveCronJobsStoreWithRevisionNative(storePath, store, opts);
+  if (!isCronRuntimeOnlySave(opts)) {
+    assertCronStoreCanPersist(store);
   }
-  const storeKey = cronStoreKey(path.resolve(storePath));
+  const context = captureOpenClawStateWorkerContext();
+  const { transactionHooks, ...options } = opts ?? {};
+  // Native hooks can edit the caller's jobs; only worker-bound saves need a snapshot.
+  const input = transactionHooks ? { store, options } : structuredClone({ store, options });
+  const storeKey = await prepareMutableCronStoreKey(storePath, context);
+  if (transactionHooks) {
+    return saveCronJobsStoreWithRevisionNative(storeKey, input.store, {
+      ...input.options,
+      transactionHooks,
+    });
+  }
+  return saveCronStoreWithWorker(storeKey, (scope) =>
+    scope.execute({ type: "cron.save", input: { storeKey, ...input } }),
+  );
+}
+
+export async function saveCronJobsStoreWithRevisionByKey(
+  storeKey: string,
+  store: CronStoreFile,
+  opts?: SaveCronJobsStoreOptions,
+): Promise<CronStoreCommit<undefined>> {
+  if (opts?.transactionHooks) {
+    return saveCronJobsStoreWithRevisionNative(storeKey, store, opts);
+  }
   if (!isCronRuntimeOnlySave(opts)) {
     assertCronStoreCanPersist(store);
   }

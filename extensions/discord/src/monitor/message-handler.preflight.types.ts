@@ -79,13 +79,11 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   // Keep one required receipt-time snapshot: queued processing must never
   // fall back to Discord's expiring attachment URLs.
   preparedMedia: DiscordMediaInfo[];
-  wasMentioned: boolean;
   conversationAvatar?: string;
 
   route: ReturnType<typeof resolveAgentRoute>;
   threadBinding?: SessionBindingRecord;
   boundSessionKey?: string;
-  boundAgentId?: string;
 
   guildInfo: DiscordGuildEntryResolved | null;
   guildSlug: string;

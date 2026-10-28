@@ -117,6 +117,8 @@ When `provider` is not set, OpenClaw uses OpenAI embeddings. Set `provider`
 explicitly to use Bedrock, DeepInfra, Gemini, GitHub Copilot, Mistral, Ollama,
 Voyage, a local GGUF model, or an OpenAI-compatible `/v1/embeddings` endpoint.
 Legacy configs that still say `provider: "auto"` resolve to `openai`.
+The provider sentinels `none` and `auto`, and fallback `none`, are case-insensitive.
+Custom provider IDs retain their spelling; config writes keep authored casing and environment references.
 
 For [oMLX](/providers/omlx), set `provider: "omlx"` and an explicit embedding
 model ID from the server's `/v1/models` endpoint. Chat and memory share
@@ -266,10 +268,99 @@ authentication.
 
 ---
 
+## Query instructions
+
+Set `memory.search.queryInstruction` when your embedding model requires a text
+prefix for retrieval queries, especially when a local server exposes the model
+under an alias that OpenClaw cannot recognize:
+
+```json5
+{
+  memory: {
+    search: {
+      provider: "openai-compatible",
+      model: "my-nomic-alias",
+      remote: { baseUrl: "http://127.0.0.1:1234/v1" },
+      queryInstruction: "search_query: ",
+    },
+  },
+}
+```
+
+The instruction is prepended literally to query text. Include any required
+spaces or newlines; OpenClaw does not trim it, add a separator, or expand
+placeholders. This changes query embeddings only. Document text, stored
+embeddings, and index identity stay unchanged, so changing the instruction does
+not require reindexing. The `queryInputType` setting is separate: it sends an
+API `input_type` label rather than changing text.
+
+A non-empty instruction replaces `inputFormat.query` and automatic query formatting,
+including native Ollama's model-family templates, so the prefix is applied once.
+When unset or empty, `inputFormat.query` applies if configured; otherwise existing
+provider behavior is preserved. Per-agent overrides use
+`agents.entries.<id>.memory.search.queryInstruction`; an empty string suppresses
+an inherited instruction.
+
+## Query and document prefixes
+
+OpenClaw automatically formats text for EmbeddingGemma and the Nemotron-3-Embed
+and Nemotron-3.5-Embed families when their model names are recognizable. NVIDIA's
+[Nemotron-3 model card](https://huggingface.co/nvidia/Nemotron-3-Embed-8B-BF16#usage)
+and [Nemotron-3.5 saved prompts](https://huggingface.co/nvidia/Nemotron-3.5-Embed-8B-BF16/blob/main/config_sentence_transformers.json)
+specify `"query: "` for queries and `"passage: "` for documents, each with one trailing
+space. Other Nemotron models can use different formats.
+
+Use `memory.search.inputFormat` to supply both prefixes when an embedding model
+runs under an alias or needs a different text format:
+
+```json5
+{
+  memory: {
+    search: {
+      provider: "ollama",
+      model: "my-embedding-alias:latest",
+      inputFormat: { query: "query: ", document: "passage: " },
+    },
+  },
+}
+```
+
+Both strings are required. OpenClaw prepends them literally, preserving spaces
+and newlines without adding a separator. An empty string selects raw text and
+disables automatic formatting for that side. A non-empty `queryInstruction`
+still takes precedence over `inputFormat.query`. A per-agent `inputFormat`
+replaces the complete inherited pair.
+
+Setting or changing the explicit document prefix changes the index and embedding-cache
+identity, including an empty prefix that disables provider formatting. Existing indexes pause semantic search until you run
+`openclaw memory index --force`; vectors from the previous format are not reused.
+Built-in model-format upgrades rebuild affected indexes automatically once.
+Changing only the query prefix does not require reindexing.
+
+These prefixes change the embedded text. The separate `inputType`,
+`queryInputType`, and `documentInputType` options send API `input_type` labels;
+they do not add text prefixes.
+
+Native Ollama checks the model digest from `/api/tags` when the embedding
+provider opens. A changed digest invalidates the index and embedding cache.
+On upgrade, compatible indexes built without a digest adopt the first observed
+digest and preserve cached vectors. Document-format changes still re-embed.
+The old index cannot establish whether an alias changed before that first
+observation; reset memory before indexing if it did.
+An already-open provider must reopen to detect an alias's new target. If the
+server does not expose tags or a digest, as with some embedding-only proxies,
+OpenClaw retains the configured model and endpoint identity. Run
+`openclaw memory reset` after retargeting an alias on those servers, then index
+again to avoid reusing vectors from the previous model.
+
 ## Provider-specific config
 
 <AccordionGroup>
   <Accordion title="Gemini">
+    Set `provider: "gemini"` or its alias `provider: "google"`. Both use the
+    same Google credentials and canonical Gemini index identity; switching
+    between these names does not require reindexing.
+
     | Key                    | Type     | Default                | Description                                |
     | ---------------------- | -------- | ---------------------- | ------------------------------------------- |
     | `model`                | `string` | `gemini-embedding-001` | Also supports `gemini-embedding-2`         |
@@ -324,6 +415,31 @@ authentication.
     ```
 
     Changing these values affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently.
+
+  </Accordion>
+  <Accordion title="OpenAI-compatible output dimensions">
+    Providers that use the OpenAI-compatible embeddings transport (`openai-compatible`, `omlx`, and custom `models.providers` entries with an OpenAI-compatible API) receive `outputDimensionality` as the `dimensions` request field. Set it only when the server supports that field for the configured model, for example a Matryoshka embedding model served by a runtime that shortens vectors server-side.
+
+    | Key                    | Type     | Default       | Description                                    |
+    | ---------------------- | -------- | ------------- | ---------------------------------------------- |
+    | `outputDimensionality` | `number` | model default | Requested vector size, sent as `dimensions`    |
+
+    ```json5
+    {
+      memory: {
+        search: {
+          provider: "openai-compatible",
+          remote: { baseUrl: "http://127.0.0.1:8000/v1" },
+          model: "local-embedder",
+          outputDimensionality: 512,
+        },
+      },
+    }
+    ```
+
+    OpenClaw checks every returned vector against the requested size. When an endpoint returns a different size, the request fails with `expected <requested> dimensions, got <returned>` instead of storing those vectors under the requested size. The failure is not retried or split into smaller batches. Some servers ignore `dimensions` and always return the model's native size; for those, remove `outputDimensionality` or use a runtime that honors it. The managed `local` provider instead truncates the native vector to the requested size and L2-normalizes it locally. Use a model that supports this projection; requesting more dimensions than the model returns fails.
+
+    `outputDimensionality` is part of the index identity. After changing or removing it, rebuild with `openclaw memory index --force --agent <id>`. Also rebuild existing managed-local indexes if they were created with `outputDimensionality` but still contain native-size vectors.
 
   </Accordion>
   <Accordion title="Bedrock">
@@ -590,8 +706,11 @@ Available for `gemini`, `openai`, and `voyage`. OpenAI batch is typically fastes
 Batch enablement is the only remote batching setting. Concurrency, polling, and timeout behavior are provider-owned.
 
 For ordinary embedding requests, a recognized error with one explicit item cap
-sizes the retry batches directly. Unusable or conflicting caps fall back to
-halving the rejected batch. Successful slices retain their input order and cache entries.
+sizes the retry batches directly. Unusable or conflicting caps, and aggregate
+limits reported without a count (Mistral's "Too many tokens overall, split into
+more batches."), fall back to halving the rejected batch. Successful slices
+retain their input order and cache entries. A single input that still exceeds a
+per-input limit fails the pass and is reported.
 
 ---
 

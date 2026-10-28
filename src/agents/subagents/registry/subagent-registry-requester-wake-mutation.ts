@@ -9,6 +9,7 @@ import type {
 import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { sameRequesterSettleRunIdentity } from "./subagent-requester-settle-identity.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export type RequesterWakeMutationReceipt = { committed?: RequesterWakeCommittedWrite };
@@ -26,6 +27,7 @@ export function isRetainedRequesterSettleWakeMember(
   }
   return (
     isSameSubagentRunOwner(current, entry) &&
+    sameRequesterSettleRunIdentity(current, entry) &&
     ((current.requesterSettleWake !== undefined &&
       current.requesterSettleWake.rearmGeneration === rearmGeneration) ||
       (receipt.committed !== undefined && current.requesterSettleWake === undefined))

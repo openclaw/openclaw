@@ -1,21 +1,15 @@
 import { AUTH_STORE_VERSION } from "./constants.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
-type AuthProfilePortabilityReason =
-  | "portable-static-credential"
-  | "non-portable-oauth-refresh-token"
-  | "credential-opted-out"
-  | "setup-inactive"
-  | "oauth-provider-opted-in";
-
-export type AuthProfilePortability = {
+export function resolveAuthProfilePortability(credential: AuthProfileCredential): {
   portable: boolean;
-  reason: AuthProfilePortabilityReason;
-};
-
-export function resolveAuthProfilePortability(
-  credential: AuthProfileCredential,
-): AuthProfilePortability {
+  reason:
+    | "portable-static-credential"
+    | "non-portable-oauth-refresh-token"
+    | "credential-opted-out"
+    | "setup-inactive"
+    | "oauth-provider-opted-in";
+} {
   if (credential.setup?.replacement) {
     return { portable: false, reason: "setup-inactive" };
   }

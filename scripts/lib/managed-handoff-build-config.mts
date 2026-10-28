@@ -25,7 +25,7 @@ function createSealedRecoveryBuildConfig(entry: typeof managedHandoffRuntimeEntr
   return {
     entry: {
       [entry.distWorkerPath.replace(/\.mjs$/u, "")]: fileURLToPath(
-        new URL(`./${entry.sourceWorkerName}.ts`, entry.currentModuleUrl),
+        new URL(`../../${entry.sourceModulePath}`, import.meta.url),
       ),
     },
     outDir: "dist",

@@ -161,23 +161,19 @@ test.for(["direct", "restart"] as const)(
                 ordinaryDispatched.resolve();
                 return;
               }
-              const result =
-                frame.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND
-                  ? (async () => {
-                      stopRequested.resolve();
-                      await releaseStopReply.promise;
-                      return respondToNodeShutdown(respondingNode, frame);
-                    })()
-                  : respondToNodeShutdown(respondingNode, frame);
-              if (!result) {
-                stopped.reject(new Error(`unexpected shutdown command: ${frame.command}`));
-                return;
-              }
               if (frame.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND) {
+                stopRequested.resolve();
                 stopRequests.push(JSON.parse(frame.paramsJSON));
-                void result.then(stopped.resolve, stopped.reject);
+                void releaseStopReply.promise
+                  .then(() => respondToNodeShutdown(respondingNode, frame))
+                  .then(stopped.resolve, stopped.reject);
               } else {
-                void result.catch(() => undefined);
+                const result = respondToNodeShutdown(respondingNode, frame);
+                if (!result) {
+                  stopped.reject(new Error(`unexpected shutdown command: ${frame.command}`));
+                } else {
+                  void result.catch(() => undefined);
+                }
               }
             },
           });

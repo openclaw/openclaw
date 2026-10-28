@@ -1,8 +1,37 @@
+/* The standalone page hands the shell's bounded content height down to the
+   rail + preview, so a tall window is used instead of stopping at the layout
+   minimum. Embedded presentation keeps its own full-height rules below. */
+main.content:where(.content--portals-page) {
+  display: flex;
+  flex-direction: column;
+}
+
+main.content:where(.content--portals-page) > openclaw-router-outlet,
+openclaw-portals-page:not([embedded]) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+main.content:where(.content--portals-page) > openclaw-router-outlet {
+  margin-top: 0;
+}
+
+main.content:where(.content--portals-page) .content-header {
+  flex: 0 0 auto;
+}
+
+main.content:where(.content--portals-page) .portals-empty {
+  flex: 1 1 auto;
+}
+
+/* The preview's own 480px frame floor keeps the layout tall enough to scroll in
+   short windows; there is no viewport-offset cap. */
 .portals-layout {
   display: grid;
   grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
   gap: var(--space-4);
-  min-height: min(720px, calc(100vh - 190px));
+  flex: 1 1 auto;
 }
 
 .portals-rail {
@@ -214,10 +243,111 @@ openclaw-portals-page[embedded],
   min-height: 0;
 }
 
+.portals-page--embedded .portals-embedded__mark {
+  display: flex;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.portals-page--embedded .portals-embedded__mark svg {
+  width: var(--session-rail-icon, var(--rail-header-action-glyph-size));
+  height: var(--session-rail-icon, var(--rail-header-action-glyph-size));
+}
+
+.portals-page--embedded .portals-embedded__identity.session-panel-rail__identity {
+  display: grid;
+  gap: 3px;
+}
+
+.portals-page--embedded .portals-embedded__name {
+  display: none;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 500;
+}
+
+.portals-page--embedded .portals-embedded__origin {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.portals-page--embedded:not([data-mobile]) .portals-embedded__origin {
+  font: inherit;
+}
+
+.portals-page--embedded .portals-embedded__name,
+.portals-page--embedded .portals-embedded__origin {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.portals-page--embedded .portals-embedded__identity > span > span {
+  display: block;
+  width: max-content;
+}
+
+.portals-page--embedded .portals-embedded__identity [data-overflow] {
+  mask-image: linear-gradient(to right, black calc(100% - 20px), transparent);
+}
+
+.portals-page--embedded .portals-embedded__action > span {
+  display: flex;
+}
+
+.portals-page--embedded[data-mobile] .portals-embedded__action svg {
+  width: 16px;
+  height: 16px;
+}
+
+.portals-page--embedded .portals-embedded__menu-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.portals-page--embedded .portals-embedded__recovery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.portals-page--embedded .portals-embedded__recovery .btn {
+  border-radius: 999px;
+}
+
+.portals-page--embedded .portals-embedded__recovery[data-external-primary] a {
+  order: -1;
+}
+
+.portals-page--embedded[data-mobile] .portals-embedded__header {
+  --session-rail-target: 32px;
+  min-height: 40px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.portals-page--embedded[data-mobile] .portals-embedded__mark {
+  display: none;
+}
+
+.portals-page--embedded[data-mobile] .portals-embedded__name {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.portals-page--embedded[data-mobile] .portals-preview__frame {
+  width: calc(100% - 24px);
+  margin: 0 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
 @media (max-width: 768px) {
   .portals-layout {
     grid-template-columns: minmax(0, 1fr);
-    min-height: auto;
   }
 
   .portals-rail {

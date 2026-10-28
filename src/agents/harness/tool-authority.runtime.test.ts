@@ -178,6 +178,23 @@ afterEach(() => {
 });
 
 describe("host-prepared embedded tool authority", () => {
+  it("keeps a host-prepared handle without loader provenance on the legacy question projection", () =>
+    published(async ({ handle, queue }) => {
+      const injection = await beginReplyMessageInjectionTarget(currentTarget(), "status control", {
+        isInboundUserMessage: true,
+        allowPendingUserInputAnswer: false,
+        toolAuthorityFingerprint: handle.toolAuthorityFingerprint,
+      });
+      await expect(injection.outcome).resolves.toMatchObject({ status: "accepted" });
+      expect(queue).toHaveBeenCalledExactlyOnceWith(
+        "status control",
+        expect.objectContaining({
+          isInboundUserMessage: false,
+          allowPendingUserInputAnswer: false,
+        }),
+      );
+    }));
+
   it.each([
     { change: "trace-only", outcome: { status: "accepted" } },
     { change: "result-required", outcome: { status: "accepted" } },

@@ -103,6 +103,22 @@ async function prepareRecall(
 }
 
 describe("memory consolidation", () => {
+  it("retains the bounded default when no timeout is supplied", async () => {
+    const promoted = candidate("owner");
+    const output = decisionOutput(promoted);
+
+    const fallback = createSubagent(output);
+    await consolidateMemory({
+      existingMemory: "# Memory\n",
+      candidates: [promoted],
+      maxPriorEntryLossFraction: 0.25,
+      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
+      logger,
+      subagent: fallback,
+    });
+    expect(fallback.complete).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
+  });
+
   it("hard-excludes untrusted and system candidates before prompt construction", async () => {
     const candidates = [
       candidate("owner"),

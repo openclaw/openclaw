@@ -1,6 +1,9 @@
 import path from "node:path";
 import type { Result } from "@openclaw/normalization-core/result";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import {
+  AgentDatabaseAdmissionError,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
 import { mergeAuthProfileStores } from "./persisted.js";
@@ -9,7 +12,7 @@ import { resolveAuthProfileDatabaseOwnerId, resolveAuthProfileDatabasePath } fro
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import type { AuthProfileStore } from "./types.js";
 
-/** An unreadable, refused inherited owner cannot make a healthy local store unavailable. */
+/** Keep local auth available while an inherited owner is pending or unreadable and refused. */
 export function loadInheritedAuthProfileStore(
   read: () => AuthProfileStore,
   agentDir?: string,
@@ -18,8 +21,15 @@ export function loadInheritedAuthProfileStore(
   try {
     return read();
   } catch (error) {
+    const failedPaths =
+      error instanceof AuthProfileStoreUnreadableError
+        ? [error.databasePath]
+        : error instanceof AgentDatabaseAdmissionError &&
+            error.refusal.code === "agent-database-inspection-pending"
+          ? error.refusal.paths
+          : undefined;
     if (
-      !(error instanceof AuthProfileStoreUnreadableError) ||
+      !failedPaths ||
       (!agentDir && resolveSharedAuthStoreOwnership(env).location !== "legacy-main")
     ) {
       throw error;
@@ -27,13 +37,15 @@ export function loadInheritedAuthProfileStore(
     const databasePath = agentDir
       ? resolveAuthProfileDatabasePath(agentDir)
       : resolveSharedAuthStorePath(env);
-    const refusal = readAgentDatabaseAdmissionRefusal(
-      resolveAuthProfileDatabaseOwnerId(agentDir ?? path.dirname(databasePath)),
-      { env },
-    );
+    const ownerId = resolveAuthProfileDatabaseOwnerId(agentDir ?? path.dirname(databasePath));
+    const refusal = readAgentDatabaseAdmissionRefusal(ownerId, { env });
+    const isOwnerPath = (pathname: string) =>
+      isSameOpenClawAgentDatabasePath(pathname, databasePath);
     if (
-      !isSameOpenClawAgentDatabasePath(error.databasePath, databasePath) ||
-      !refusal?.paths.some((pathname) => isSameOpenClawAgentDatabasePath(pathname, databasePath))
+      !failedPaths.some(isOwnerPath) ||
+      !refusal?.paths.some(isOwnerPath) ||
+      (error instanceof AgentDatabaseAdmissionError &&
+        (error.refusal.agentId !== ownerId || refusal.code !== "agent-database-inspection-pending"))
     ) {
       throw error;
     }

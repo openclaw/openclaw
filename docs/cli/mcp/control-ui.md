@@ -13,15 +13,23 @@ inventory.
 
 The browser Control UI includes a dedicated MCP settings page at `/settings/mcp`; the previous `/mcp` path remains an alias. The page shows configured server counts, enabled/OAuth/filter summaries, per-server transport rows, enable/disable controls, common CLI commands, and a scoped editor for the `mcp` config section.
 
-For a shorter setup walkthrough covering Settings, the composer path (**+** → **Connectors** → **Add MCP server…**) and its **This session** / **Everywhere** scopes, CLI, and direct config, see [Connect MCP servers](/tools/mcp).
+For a shorter setup walkthrough covering Settings, the composer path (**+** → **Plugins** → **Add MCP server…**) and its **This session** / **Everywhere** scopes, CLI, and direct config, see [Connect MCP servers](/tools/mcp).
 
 Use the page for operator edits and quick inventory. Use `openclaw mcp doctor --probe` or `openclaw mcp probe` when you need live server proof.
 
 Enabled plugin detail pages show **Accounts** for their declared HTTP MCP servers
-with `auth: "oauth"`. Choose **Connect**, complete the provider's sign-in and consent,
+with `auth: "oauth"`. Choose **Sign in**, complete the provider's sign-in and consent,
 then return to OpenClaw. The page refreshes its saved status and shows **Connected**
 after authorization is saved. **Edit** opens the MCP settings page. Sign-in requires
 an administrator connection.
+
+If sign-in fails, the dialog distinguishes an expired attempt, provider refusal,
+an unverifiable provider, rejected connection settings, and network failures.
+Close the dialog and follow its recovery message before starting sign-in again.
+Provider-supplied error descriptions, callback codes, and tokens are not shown.
+If credentials were saved before cleanup failed, the dialog says so; check the
+account status before repeating sign-in. Gateway logs record a bounded failure
+category without copying the provider's response into the message.
 
 Plugin declarations work directly after installation and enablement; no duplicate
 `mcp.servers` entry is needed. An explicit `mcp.servers.<name>` entry overrides the

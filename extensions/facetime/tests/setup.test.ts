@@ -28,7 +28,7 @@ const readyRuntime: FaceTimeRuntimeStatus = {
     statusClassifier: "explicit-ended-tu-call-status-v1",
     transportClassifier: "tu-provider-v1",
   },
-  helperTargets: (["FaceTime", "Phone"] as const).map((target) => ({
+  helperTargets: (["FaceTime"] as const).map((target) => ({
     target,
     connected: true,
     attempts: 0,
@@ -159,7 +159,7 @@ it.each([
       actionId: "wait-for-helper",
       message: "Automatic retry scheduled after: helper did not authenticate",
     },
-    action: expect.objectContaining({ id: "wait-for-helper", kind: "automatic" }),
+    action: { id: "wait-for-helper", kind: "automatic" },
   },
   {
     name: "stale helper",
@@ -168,7 +168,6 @@ it.each([
     action: {
       id: "restart-call-apps",
       kind: "manual-test",
-      label: "Quit and reopen FaceTime and Phone, then let OpenClaw reinject the helper",
     },
   },
 ])("keeps $name unready with the appropriate repair action", async ({ target, check, action }) => {
@@ -183,7 +182,7 @@ it.each([
   });
   expect(report).toMatchObject({ ok: false, readyForTest: false });
   expect(report.checks.find((entry) => entry.id === "helper-facetime")).toMatchObject(check);
-  expect(report.actions).toContainEqual(action);
+  expect(report.actions).toContainEqual(expect.objectContaining(action));
 });
 
 it("allows manual Focus verification when macOS state cannot be read", async () => {

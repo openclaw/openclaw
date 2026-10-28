@@ -1,6 +1,7 @@
 import { fork } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createAsyncLock } from "@openclaw/fs-safe/advanced";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -162,16 +163,7 @@ export type TailscaleRouteClaim = {
 
 // Foreground startups replace the daemon's shared Serve config using an ETag.
 // Serialize our starts and owned stops, not the lifetime of each claim.
-let tailscaleRouteOperation: Promise<void> = Promise.resolve();
-
-function serializeTailscaleRouteOperation<T>(operation: () => Promise<T>): Promise<T> {
-  const result = tailscaleRouteOperation.then(operation);
-  tailscaleRouteOperation = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  return result;
-}
+const serializeTailscaleRouteOperation = createAsyncLock();
 
 type TailscaleRouteOwnerFailure = Pick<
   Extract<TailscaleRouteOwnerMessage, { type: "failed" }>,
@@ -568,12 +560,9 @@ function isPermissionDeniedError(err: unknown): boolean {
   );
 }
 
-export async function hasTailscaleFunnelRouteForPort(
-  port: number,
-  exec: typeof runExec = runExec,
-): Promise<boolean> {
+export async function hasTailscaleFunnelRouteForPort(port: number): Promise<boolean> {
   const tailscaleBin = await getTailscaleBinary();
-  const { stdout } = await exec(tailscaleBin, ["funnel", "status", "--json"], {
+  const { stdout } = await runExec(tailscaleBin, ["funnel", "status", "--json"], {
     maxBuffer: 200_000,
     timeoutMs: 5_000,
   });

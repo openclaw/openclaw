@@ -1,4 +1,3 @@
-import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   ErrorCodes,
@@ -6,7 +5,16 @@ import {
   type ModelsProbeResult,
   validateModelsProbeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveNativeModelPrimary } from "../../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { modelKey } from "../../agents/model-ref-shared.js";
+import {
+  buildModelAliasIndex,
+  resolveConfiguredModelFallbacks,
+  resolveConfiguredModelRef,
+  resolveModelRefFromString,
+} from "../../agents/model-selection-resolve.js";
 import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
 import {
   type AuthProbeResult,
@@ -88,14 +96,26 @@ function safeProbeTargetError(result: AuthProbeResult): string | undefined {
 }
 
 function modelCandidatesFromConfig(cfg: OpenClawConfig, agentId: string): string[] {
+  const selection = {
+    cfg,
+    agentId,
+    defaultProvider: DEFAULT_PROVIDER,
+    allowPluginNormalization: false,
+  };
+  const aliasIndex = buildModelAliasIndex(selection);
+  const primary = resolveNativeModelPrimary(cfg, agentId)
+    ? resolveConfiguredModelRef({ ...selection, defaultModel: DEFAULT_MODEL })
+    : undefined;
   const utility = readUtilityModelSetting(cfg, agentId);
-  return [
-    ...listModelRefsFromConfigValue(cfg.agents?.defaults?.model),
+  const candidates = [
+    ...resolveConfiguredModelFallbacks(selection),
     ...(utility.kind === "explicit" ? [utility.modelRef] : []),
     ...(utility.kind !== "disabled" ? utility.fallbacks : []),
-  ]
-    .map((value) => value.trim())
-    .filter(Boolean);
+  ].flatMap((raw) => {
+    const resolved = resolveModelRefFromString({ ...selection, raw, aliasIndex });
+    return resolved ? [modelKey(resolved.ref.provider, resolved.ref.model)] : [];
+  });
+  return primary ? [modelKey(primary.provider, primary.model), ...candidates] : candidates;
 }
 
 function selectRollupStatus(results: AuthProbeResult[]): AuthProbeStatus {

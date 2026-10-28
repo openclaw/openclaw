@@ -16,7 +16,6 @@ import type { PluginManifestContractListKey, PluginManifestRecord } from "./mani
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type {
   PluginMetadataManifestView,
-  PluginMetadataRegistryView,
   PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.types.js";
 
@@ -154,16 +153,6 @@ export function loadManifestContractSnapshot(
     index: snapshot.index,
     plugins: snapshot.plugins,
     byPluginId: snapshot.byPluginId,
-  };
-}
-
-export function loadManifestMetadataRegistry(
-  params: Parameters<typeof loadManifestMetadataSnapshot>[0],
-): PluginMetadataRegistryView {
-  const snapshot = loadManifestMetadataSnapshot(params);
-  return {
-    index: snapshot.index,
-    manifestRegistry: snapshot.manifestRegistry,
   };
 }
 

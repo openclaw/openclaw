@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
-import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearFinishedSessionsForScopes } from "../agents/bash-process-registry.js";
@@ -12,6 +11,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   resetGatewayRestartStateForInProcessRestart,
   setGatewayRestartPolicy,
@@ -35,10 +35,9 @@ import { createChannelManager } from "./server-channels.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
-  createDefaultGatewayReloadState,
+  createManagedReloadTestParams,
   createDirectConfigWriteFixture,
   createConfigWriteNotification,
-  createTestConfigRevisionProjector,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
@@ -47,6 +46,7 @@ import {
   createTestRuntimeSecretsActivator,
   makePreparedSecretsSnapshot,
 } from "./server-startup-config.test-support.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -61,18 +61,6 @@ function resolveGeneration(config: OpenClawConfig) {
   );
 }
 
-// A write that lands while the previous reload finishes its tail is re-armed from that reload's
-// finally, after a single zero-delay tick has run. Zero-delay ticks never move the fake clock.
-async function tickUntilSettled(operation: Promise<unknown>): Promise<void> {
-  const settled = operation.then(
-    () => true,
-    () => true,
-  );
-  while (!(await Promise.race([settled, Promise.resolve(false)]))) {
-    await vi.advanceTimersByTimeAsync(0);
-  }
-}
-
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 const registry = createEmptyPluginRegistry();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -85,7 +73,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.useRealTimers();
   clearSecretsRuntimeSnapshot();
   clearRuntimeConfigSnapshot();
   restoreActivePluginRegistrySnapshot(registrySnapshot);
@@ -97,7 +84,6 @@ afterEach(() => {
 const revocations = ["scopes", "allowUsers", "origin"];
 it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const effectDir = tempDirs.make("openclaw-identity-scope-effects-");
     const effectScript = 'require("node:fs").writeFileSync(process.argv[1], "accepted effect");';
     const processes: ExecProcessHandle[] = [];
@@ -142,13 +128,7 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
       connectionSignal: connection.signal,
       sharedGatewaySessionGeneration: resolveGeneration(initialConfig),
       authenticatedUserId: identity,
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: null,
-        hasAvatar: false,
-        avatarRevision: "1",
-        updatedAt: 1,
-      },
+      authenticatedUserProfile: dispatchProfile(profile.id),
       authPolicy: captureGatewayAuthPolicy(initialConfig, {
         role: "operator",
         authMethod: "trusted-proxy",
@@ -161,7 +141,6 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
       current: resolveGeneration(initialConfig),
       required: null,
     });
-    let state = createDefaultGatewayReloadState();
     const channelManager = createChannelManager({
       scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => initialConfig,
@@ -169,58 +148,36 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
       channelLogs: {},
       channelRuntimeEnvs: {},
     });
-    const log = createInfoWarnErrorLogger();
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-    const reloader = startManagedGatewayConfigReloader({
-      scheduler: createTestGatewayScheduler("fake-timers"),
-      getPluginRegistry: () => registry,
-      configRevisionProjector: createTestConfigRevisionProjector(),
-      minimalTestGateway: false,
-      initialConfig,
-      initialCompareConfig: initialConfig,
-      initialSnapshotRawHash: null,
-      initialAuthoredConfig: {},
-      initialSnapshotValid: true,
-      initialSnapshotIssues: [],
-      initialPluginInstallRecords: {},
-      watchPath: "/tmp/openclaw.json",
-      promoteSnapshot: async () => true,
-      deps: {},
-      broadcast: vi.fn(),
-      getState: () => state,
-      setState: (next) => {
-        state = next;
-      },
-      channelManager,
-      startChannel: channelManager.startChannel,
-      stopChannel: channelManager.stopChannel,
-      reloadPlugins: async () => {
-        throw new Error("Unexpected plugin reload for identity scopes");
-      },
-      logHooks: log,
-      logChannels: log,
-      logCron: log,
-      logReload: log,
-      cronReconciliation: { arm: () => ({ complete: async () => {} }), invalidate: vi.fn() },
-      resolveSharedGatewaySessionGenerationForConfig: resolveGeneration,
-      sharedGatewaySessionGenerationState: generation,
-      clients,
-      prepareTerminalConfig: vi.fn(),
-      reconcileRuntimePolicy: (config, phase) => {
-        if (phase === "committed") {
-          disconnectDisallowedGatewayPolicyClients(clients, config);
-        }
-      },
-      commitRuntimePolicy: vi.fn(),
-      acceptTerminalConfig: vi.fn(),
-      readSnapshot: fixture.readSnapshot,
-      subscribeToWrites: fixture.subscribeToWrites,
-      resolveGatewayContext: () => context,
-      activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) =>
-        makePreparedSecretsSnapshot(config),
-      ),
-      requestRecoveryRestart,
-    });
+    const reloader = startManagedGatewayConfigReloader(
+      createManagedReloadTestParams({
+        // Real lease and subprocess I/O must be able to finish delayed retries.
+        scheduler: new GatewayScheduler(),
+        getPluginRegistry: () => registry,
+        initialConfig,
+        channelManager,
+        startChannel: channelManager.startChannel,
+        stopChannel: channelManager.stopChannel,
+        reloadPlugins: async () => {
+          throw new Error("Unexpected plugin reload for identity scopes");
+        },
+        resolveSharedGatewaySessionGenerationForConfig: resolveGeneration,
+        sharedGatewaySessionGenerationState: generation,
+        clients,
+        reconcileRuntimePolicy: (config, phase) => {
+          if (phase === "committed") {
+            disconnectDisallowedGatewayPolicyClients(clients, config);
+          }
+        },
+        readSnapshot: fixture.readSnapshot,
+        subscribeToWrites: fixture.subscribeToWrites,
+        resolveGatewayContext: () => context,
+        activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) =>
+          makePreparedSecretsSnapshot(config),
+        ),
+        requestRecoveryRestart,
+      }),
+    );
     const captures: NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>[] =
       [];
     let delegated: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
@@ -345,7 +302,6 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
             "source-" + revision,
           ),
         );
-        await tickUntilSettled(application);
         await expect(application).resolves.toBe("applied");
       };
       const allowedEffect = await prepareEffect("allowed.txt", original.authority);

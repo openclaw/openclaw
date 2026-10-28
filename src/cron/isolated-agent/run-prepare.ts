@@ -9,7 +9,7 @@ import {
   type PreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime.js";
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
+import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -23,7 +23,10 @@ import { withSessionTurn } from "../../sessions/session-controller.admission.js"
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
+import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import type { CronWorkspaceLease } from "../run-workspace.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { isDetachedCronSessionTarget } from "../session-target.js";
 import { resolveCronRunToolsAllow } from "../tools-allow.js";
@@ -32,16 +35,15 @@ import {
   resolveCronModelSelectionOwner,
   resolveCronThinkingSelection,
 } from "./model-selection.js";
+import { prepareCronAutomationPrompt } from "./run-automation-context.js";
 import { resolveCronCommandPromptPreflight } from "./run-command-preflight.js";
 import { resolveCronActiveRuntimeConfig, resolveCronAgentConfig } from "./run-config.js";
-import { buildCurrentConversationContextBlock } from "./run-current-context.js";
 import {
   createCronToolsAllowPreflightDiagnostics,
   resolveCronDeliveryContext,
 } from "./run-delivery-trace.js";
 import { resolveCronPreflight } from "./run-fallback-policy.js";
 import {
-  buildCronCommandBody,
   resolveCronAuthSelection,
   createCronSessionRowWriter,
   retireRolledCronSessionMcpRuntime,
@@ -49,7 +51,6 @@ import {
   type WithRunSession,
 } from "./run-prepare-runtime.js";
 import {
-  CronSessionLifecycleClaimError,
   beginCronPreparationEffect,
   withCronSessionPreparation,
   createCronRunContinuationSession,
@@ -58,7 +59,7 @@ import {
   setCronSessionAgentHarnessId,
 } from "./run-session-state.js";
 import { resolveCronRunTimeoutOverrideMs } from "./run-timeout.js";
-import { prepareCronSessionWorkspace, type CronWorkspaceLease } from "./run-workspace.js";
+import { prepareCronSessionWorkspace } from "./run-workspace.js";
 import {
   logWarn,
   normalizeAgentId,
@@ -134,6 +135,7 @@ export async function prepareCronRunContext(
 
 async function resolveCronRunPreparation(params: CronRunPreparationParams) {
   let { input } = params;
+  input.assertCurrent?.();
   const commandPromptPreflight = resolveCronCommandPromptPreflight(input.job);
   if (commandPromptPreflight) {
     return { ok: false as const, result: commandPromptPreflight };
@@ -181,6 +183,8 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
     agentConfigOverride,
   });
   const baseSessionKey = (input.sessionKey?.trim() || `cron:${input.job.id}`).trim();
+  // A `current` job is a child run of its creating conversation: it keeps its own
+  // `cron:<jobId>` run key, and the conversation's resources come from the admission.
   const currentBoundSourceKey =
     input.job.sessionTarget === "current" ? input.job.sessionKey?.trim() : undefined;
   const usesDetachedRunSession =
@@ -231,7 +235,10 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
 
   async function prepareAdmittedSession() {
     const now = Date.now();
-    const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
+    // A child run never runs looser than its parent.
+    const sandbox =
+      resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor }) ??
+      input.occurrence.childParent?.sandbox;
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
     const cronSession = await prepareCronSession({
       cfg: runtimeCfg,
@@ -243,6 +250,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       forceNew: usesDetachedRunSession,
       exactRunSession: usesExactRunSession,
       hookExternalContentSource,
+      inferenceCaptured: Boolean(input.job.inferenceBinding?.runtime),
     });
     const sourceEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
     const completionSource = input.job.sourceConversation ?? sourceEntry;
@@ -292,10 +300,15 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         defaultWorkspaceDir: modelOwner.workspaceDir,
         sessionPreparationEffect,
         isFastTestEnv: params.isFastTestEnv,
+        childParent: input.occurrence.childParent,
       });
       workspaceLease = selectedWorkspace.lease;
       const workspaceDir = selectedWorkspace.workspaceDir;
-      const persistCronSessionRow = createCronSessionRowWriter({ agentId, agentSessionKey });
+      const persistCronSessionRow = createCronSessionRowWriter({
+        agentId,
+        agentSessionKey,
+        assertCurrent: input.assertCurrent,
+      });
       const persistSessionEntry = createPersistCronSessionEntry({
         cronSession,
         agentSessionKey,
@@ -322,7 +335,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         owner: modelOwner,
         agentConfigOverride,
         sessionEntry: cronSession.sessionEntry,
-        payload: input.job.payload,
+        payloadModel: input.job.payload.kind === "agentTurn" ? input.job.payload.model : undefined,
         isGmailHook,
         agentId,
         agentDir,
@@ -342,16 +355,12 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         };
       }
       const cfgWithAgentDefaults = resolvedModelSelection.cfgWithAgentDefaults;
-      const ownerAgentConfig = resolveAgentConfig(modelOwner.config, modelOwner.agentId);
-      const matchesDefaultFallbackAgentStringModel =
-        typeof ownerAgentConfig?.model === "string" &&
-        resolveAgentModelPrimaryValue(ownerAgentConfig.model) ===
-          resolveAgentModelPrimaryValue(modelOwner.config.agents?.defaults?.model);
-      const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
-      const inheritDefaultFallbacksForAgentStringModel =
-        matchesDefaultFallbackAgentStringModel &&
-        (resolvedModelSelection.modelSource === "default" ||
-          resolvedModelSelection.modelSource === "agent");
+      const { useSubagentFallbacks, inheritDefaultFallbacksForAgentStringModel } =
+        resolvedModelSelection;
+      const sessionModelOverrideSource =
+        resolvedModelSelection.modelSource === "session"
+          ? (resolveSessionModelOverrideSource(cronSession.sessionEntry) ?? undefined)
+          : undefined;
 
       const preflight = await resolveCronPreflight({
         cfg: cfgWithAgentDefaults,
@@ -361,6 +370,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         model: resolvedModelSelection.model,
         useSubagentFallbacks,
         inheritDefaultFallbacksForAgentStringModel,
+        sessionModelOverrideSource,
       });
       if (!preflight.ok) {
         logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
@@ -378,13 +388,18 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         };
       }
       const { provider, model, modelFallbacksOverride, runtimePluginCandidates } = preflight;
+      // A captured runtime replaces the override the cron session copied from its source row.
+      const runtimeSessionEntry = resolveCronRuntimeSessionEntry(
+        input.job.inferenceBinding,
+        cronSession.sessionEntry,
+      );
       const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
         cfg: cfgWithAgentDefaults,
         provider,
         modelId: model,
         agentId: modelOwner.agentId,
         sessionKey: agentSessionKey,
-        sessionEntry: cronSession.sessionEntry,
+        sessionEntry: runtimeSessionEntry,
       });
       const thinkingSelection = await resolveCronThinkingSelection({
         cfg: cfgWithAgentDefaults,
@@ -428,7 +443,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           runtimePluginSelections: runtimePluginCandidates.map((candidate) => {
             const runtime = resolveSessionRuntimeOverrideForProvider({
               provider: candidate.provider,
-              entry: cronSession.sessionEntry,
+              entry: runtimeSessionEntry,
               cfg: cfgWithAgentDefaults,
             });
             return runtime
@@ -460,16 +475,20 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           ? { ...input.job.payload, toolsAllow: resolveCronRunToolsAllow(input.job) }
           : null;
       const configuredProvider = admittedConfig.models?.providers?.[provider];
-      const modelApi =
-        findModelInCatalog(thinkingSelection.catalog, provider, model)?.api ??
-        configuredProvider?.models?.find((candidate) => candidate.id === model)?.api ??
-        configuredProvider?.api;
+      const catalogModel = findModelInCatalog(thinkingSelection.catalog, provider, model);
+      const configuredModel = configuredProvider?.models?.find(
+        (candidate) => candidate.id === model,
+      );
+      const modelApi = catalogModel?.api ?? configuredModel?.api ?? configuredProvider?.api;
       const preflightDiagnostics = await createCronToolsAllowPreflightDiagnostics({
         cfg: admittedConfig,
         jobId: input.job.id,
         provider,
         model,
         modelApi,
+        modelBaseUrl:
+          catalogModel?.baseUrl ?? configuredModel?.baseUrl ?? configuredProvider?.baseUrl,
+        modelParams: catalogModel?.params ?? configuredModel?.params,
         agentId: modelOwner.agentId,
         agentDir: modelOwner.agentDir,
 
@@ -507,30 +526,32 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       };
 
       const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
-      // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
-      const currentConversationContext =
-        input.job.sessionTarget === "current" && agentPayload && sourceSessionKey && sourceEntry
-          ? await buildCurrentConversationContextBlock({
-              agentId,
-              sourceSessionEntry: sourceEntry,
-              sourceSessionKey,
-              storePath: cronSession.storePath,
-            })
-          : undefined;
-      const turnMessage =
-        input.job.payload.kind === "agentTurn" ? input.job.payload.message : input.message;
-      const message = currentConversationContext
-        ? `${currentConversationContext}\n\n${turnMessage}`
-        : turnMessage;
-      const { sourcePromptPrefix, isExternalHook, commandBody } = await buildCronCommandBody({
-        job: input.job,
-        message,
-        baseSessionKey,
-        hookExternalContentSource,
-        cfg: input.cfg,
-        formattedTime,
-        timeLine,
-      });
+      const assertPreparationCurrent = () => {
+        input.assertCurrent?.();
+        (input.abortSignal ?? input.signal)?.throwIfAborted();
+        if (!sessionPreparationEffect.isActive()) {
+          throw new CronSessionLifecycleClaimError(agentSessionKey);
+        }
+      };
+      const { sourcePromptPrefix, isExternalHook, commandBody } = await prepareCronAutomationPrompt(
+        {
+          cfg: admittedConfig,
+          job: input.job,
+          agentId,
+          runSessionKey,
+          message: input.message,
+          sourceSessionKey,
+          sourceEntry,
+          storePath: cronSession.storePath,
+          cronStorePath: input.cronStorePath,
+          assertCurrent: assertPreparationCurrent,
+          signal: input.abortSignal ?? input.signal,
+          baseSessionKey,
+          hookExternalContentSource,
+          formattedTime,
+          timeLine,
+        },
+      );
 
       const skillsSnapshot = await resolveCronSkillsSnapshot({
         workspaceDir,
@@ -543,7 +564,6 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       if (!params.isFastTestEnv && skillsSnapshot !== cronSession.sessionEntry.skillsSnapshot) {
         cronSession.sessionEntry = {
           ...cronSession.sessionEntry,
-          updatedAt: Date.now(),
           skillsSnapshot,
         };
       }
@@ -598,7 +618,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         model,
         agentRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
           provider,
-          entry: cronSession.sessionEntry,
+          entry: runtimeSessionEntry,
           cfg: admittedConfig,
         }),
         authProfileId,
@@ -679,6 +699,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           liveSelection,
           useSubagentFallbacks,
           inheritDefaultFallbacksForAgentStringModel,
+          sessionModelOverrideSource,
           modelFallbacksOverride,
           thinkingSelection,
           timeoutMs,

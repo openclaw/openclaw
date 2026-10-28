@@ -9,13 +9,14 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveXAccount } from "./accounts.js";
 import { openXAllowlist } from "./allowlist.js";
-import { createXApiClient } from "./api.js";
 import { xPlugin } from "./channel.js";
 import { getXApi } from "./client.js";
 import { createXGitHubReader } from "./github.js";
 import { formatXSenderLine } from "./guest-policy.js";
 import { resolveXIngress } from "./ingress.js";
 import { XBudgetExceededError } from "./spend.js";
+import { createXTestApi as createXApiClient } from "./test-support/api-client.js";
+import { setXTestFetch } from "./test-support/fetch.js";
 import { config, fixture, post } from "./test-support/monitor-fixture.js";
 import { createXTestSpend } from "./test-support/spend.js";
 import { createXGitHubService } from "./verified-github-service.js";
@@ -25,14 +26,6 @@ const network = vi.hoisted(() => ({
   github: vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(),
 }));
 
-vi.mock("./github.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./github.js")>();
-  return {
-    ...actual,
-    createXGitHubReader: (options: Parameters<typeof actual.createXGitHubReader>[0]) =>
-      actual.createXGitHubReader({ ...options, fetch: options.fetch ?? network.github }),
-  };
-});
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
   getXApi: vi.fn(),
@@ -43,6 +36,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-09T12:00:00Z"));
   network.github.mockReset();
+  setXTestFetch("api.github.com", network.github);
   vi.mocked(getXApi).mockReset();
 });
 afterEach(() => {
@@ -271,6 +265,24 @@ describe("X GitHub verification sync", () => {
 });
 
 describe("X GitHub verification service", () => {
+  it("names reauthorization when the X refresh token is rejected", async () => {
+    const test = githubFixture();
+    setXTestFetch("api.x.com", async () =>
+      Response.json(
+        { error: "invalid_grant", error_description: "private provider details" },
+        { status: 400 },
+      ),
+    );
+    await withService(test, test.cfg, async (clock) => {
+      await clock.wake();
+      expect(await test.status()).toMatchObject({
+        stale: true,
+        message: expect.stringContaining("reauthorize the X account"),
+      });
+      expect(test.logger.warn.mock.calls[0]?.[0]).not.toContain("private provider details");
+    });
+  });
+
   it("schedules no work when the feature is absent", async () => {
     const host = fixture({ posts: [] });
     await withService(host, config, async (clock) => {
@@ -318,6 +330,39 @@ describe("X GitHub verification service", () => {
       test.source.failing = true;
       await nextSync();
       expect(test.logger.warn).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("keeps sync status and the X client for mixed-case account keys under the runtime account id", async () => {
+    const test = githubFixture();
+    const { verifiedFromGitHub, ...credentials } = test.cfg.channels!.x!;
+    const cfg: OpenClawConfig = {
+      ...test.cfg,
+      channels: {
+        x: {
+          accounts: {
+            Work: { ...credentials, verifiedFromGitHub },
+            Ops: { ...credentials, userId: "200", verifiedFromGitHub: { repo: "test/repo" } },
+          },
+        },
+      },
+    };
+    await withService(test, cfg, async (clock) => {
+      await clock.wake();
+      const status = (key: string) => getXGitHubStatus(test.runtime, resolveXAccount(cfg, key));
+      expect({
+        lookupAccounts: vi.mocked(getXApi).mock.calls.map(([accountId]) => accountId),
+        work: await status("Work"),
+        ops: await status("Ops"),
+      }).toMatchObject({
+        lookupAccounts: ["work"],
+        work: { stale: false, entries: [{ xUserId: "101" }] },
+        ops: {
+          stale: true,
+          message:
+            "Configure verifiedFromGitHub.token with a GitHub credential that can list repository collaborators.",
+        },
+      });
     });
   });
 });

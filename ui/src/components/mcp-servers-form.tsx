@@ -20,20 +20,20 @@ export function McpServersForm(props: {
   const actions = () => (
     <>
       <button
-        type="submit"
-        class="btn btn--sm"
-        title={props.blockedReason ?? ""}
-        disabled={disabled()}
-      >
-        {props.busy ? t("mcpServers.adding") : t("mcpServers.add")}
-      </button>
-      <button
         type="button"
         class="btn btn--sm"
         disabled={props.busy}
         onClick={() => props.onCancel()}
       >
         {t("common.cancel")}
+      </button>
+      <button
+        type="submit"
+        class="btn btn--sm"
+        title={props.blockedReason ?? ""}
+        disabled={disabled()}
+      >
+        {props.busy ? t("mcpServers.adding") : t("mcpServers.add")}
       </button>
     </>
   );

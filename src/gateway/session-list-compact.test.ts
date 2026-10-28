@@ -52,8 +52,9 @@ it("reuses compact child rows through the real list handler and client decoder",
         ok: true,
         payload: result,
       });
-      bytes.push(Buffer.byteLength(encoded));
-      const decoded = JSON.parse(encoded.toString()).payload as SessionsListResult;
+      const wireText = encoded.toString();
+      bytes.push(Buffer.byteLength(wireText));
+      const decoded = JSON.parse(wireText).payload as SessionsListResult;
       wire.push(decoded);
       return decoded;
     });

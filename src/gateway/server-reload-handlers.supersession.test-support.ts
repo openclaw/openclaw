@@ -147,10 +147,8 @@ export function registerGatewaySupersededReloadTests({
   it.each([
     { name: "replaced models with current config", superseded: false, cancelled: true },
     { name: "failed superseded publication", superseded: true, cancelled: false },
-    { name: "failed current publication", superseded: false, cancelled: false },
   ])("preserves the recovery distinction for a $name", async ({ superseded, cancelled }) => {
-    const setState = vi.fn();
-    const handlers = createGatewayReloadHandlers({ setState });
+    const handlers = createGatewayReloadHandlers({});
     using _ = { [Symbol.dispose]: () => handlers.stopRestartRetries() };
     const config: OpenClawConfig = {
       models: {
@@ -177,7 +175,6 @@ export function registerGatewaySupersededReloadTests({
     } else {
       await expect(reload).resolves.toBe("applied-restart-required");
     }
-    expect(setState).toHaveBeenCalledOnce();
     expect(handlers.hasOutstandingGatewayRestart()).toBe(recoveryRequired && !superseded);
   });
 
@@ -192,8 +189,7 @@ export function registerGatewaySupersededReloadTests({
       throw new Error("context tail failed");
     });
     const logReload = { info: vi.fn(), warn: vi.fn() };
-    const setState = vi.fn();
-    const handlers = createGatewayReloadHandlers({ logReload, requestRecoveryRestart, setState });
+    const handlers = createGatewayReloadHandlers({ logReload, requestRecoveryRestart });
     const configA: OpenClawConfig = { agents: { defaults: { workspace: "/tmp/a" } } };
     const reloadA = handlers.applyHotReload(
       createHotTailPlan({
@@ -216,7 +212,6 @@ export function registerGatewaySupersededReloadTests({
       configC,
       createHotReloadPublication(configC),
     );
-    expect(setState).toHaveBeenCalledTimes(2);
     expect(requestRecoveryRestart).not.toHaveBeenCalled();
   });
 

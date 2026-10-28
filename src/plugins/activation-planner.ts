@@ -128,6 +128,10 @@ function matchesActivation(
       return Boolean(
         owns(activation?.onProviders, normalizeProviderId) ||
         owns(plugin.providers, normalizeProviderId) ||
+        (!capability &&
+          plugin.providerEndpoints?.some(
+            (endpoint) => normalizeProviderId(endpoint.endpointClass) === expected,
+          )) ||
         (capability
           ? plugin.setup?.providers?.length
           : plugin.setup?.providers?.some((entry) => normalizeProviderId(entry.id) === expected)),

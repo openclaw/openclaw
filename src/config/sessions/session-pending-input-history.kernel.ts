@@ -32,7 +32,7 @@ export function readPendingInputHistoryInDatabase(
     return { rows: [], total: 0 };
   }
   const hasConsumption = hasPendingInputConsumptionColumn(database.db);
-  if (query.includeTotal === false) {
+  if (query.includeTotal === false || query.id !== undefined) {
     return readPendingInputPageInDatabase(database, query, hasConsumption);
   }
   return runSqliteReadSnapshotSync(database.db, () => {
@@ -45,12 +45,10 @@ export function readPendingInputHistoryInDatabase(
       base = base.where("consumed_event_id", "is", null);
     }
     const total =
-      query.id === undefined
-        ? (executeSqliteQueryTakeFirstSync(
-            database.db,
-            base.select(db.fn.count<number>("input_id").as("total")),
-          )?.total ?? 0)
-        : undefined;
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        base.select(db.fn.count<number>("input_id").as("total")),
+      )?.total ?? 0;
     if (total === 0) {
       return { rows: [], total };
     }

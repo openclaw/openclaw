@@ -109,7 +109,7 @@ vi.mock("./server-startup-model-runtime.js", () => ({
 vi.mock("../auto-reply/reply/dispatch-from-config.runtime-loaders.js", () => ({
   loadGetReplyFromConfigRuntime: async () => ({ prewarmConfigDrivenReplyRuntime: async () => {} }),
 }));
-const { startGatewaySidecars } = await import("./server-startup-post-attach.js");
+const { startGatewaySidecars } = await import("./server-startup-sidecars.js");
 const sessionWorker = await vi.importActual<typeof SessionWorker>(
   "./session-utils-store-worker.js",
 );

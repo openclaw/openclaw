@@ -36,12 +36,19 @@ const expectMissing = async (file: string) => {
   await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
 };
 
-function successfulStep({ name, argv, cwd }: StepParams, packageRoot: string) {
+function successfulStep({ name, argv, cwd }: StepParams, packageRoot = fixture.packageRoot) {
   return { name, command: argv.join(" "), cwd: cwd ?? packageRoot, durationMs: 0, exitCode: 0 };
 }
 
-function failedStep(step: StepParams, packageRoot: string, stderrTail: string) {
+function failedStep(step: StepParams, stderrTail: string, packageRoot = fixture.packageRoot) {
   return { ...successfulStep(step, packageRoot), exitCode: 1, stderrTail };
+}
+
+async function completeLifecycleStep(step: StepParams) {
+  if (step.name === "npm-package-postinstall" && step.cwd) {
+    await fs.rm(path.join(step.cwd, pendingName));
+  }
+  return successfulStep(step);
 }
 
 async function readPackageBytes(packageRoot: string): Promise<string[]> {
@@ -104,16 +111,10 @@ async function runUpdate(
         await writeText(packageRoot, pendingName, pendingBytes);
         await prepareCandidate(packageRoot, prefix);
         stages.push({ prefix, packageRoot, bytes: await readPackageBytes(packageRoot) });
-        return successfulStep(step, fixture.packageRoot);
+        return successfulStep(step);
       }
       lifecycleCalls.push(step.name);
-      if (runLifecycleStep) {
-        return await runLifecycleStep(step);
-      }
-      if (step.name === "npm-package-postinstall" && step.cwd) {
-        await fs.rm(path.join(step.cwd, pendingName));
-      }
-      return successfulStep(step, fixture.packageRoot);
+      return await (runLifecycleStep ?? completeLifecycleStep)(step);
     },
   });
   expect(stages).toHaveLength(1);
@@ -169,9 +170,7 @@ function createLifecycleOwner() {
             entered.resolve();
             await finish.promise;
           } else {
-            if (postinstall) {
-              await postinstall();
-            }
+            await postinstall?.();
             await fs.rm(path.join(packageRoot, pendingName));
           }
         },
@@ -195,13 +194,12 @@ async function writeUncertainLock(
 
 describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
   it.each([
-    ["legacy", undefined, 1000, false],
-    ["unbounded", null, undefined, false],
-    ["explicit", 5000, 5000, false],
-    ["selected Node", undefined, 1000, true],
+    ["legacy", undefined, 1000],
+    ["unbounded", null, undefined],
+    ["explicit", 5000, 5000],
   ] as const)(
-    "carries %s admission settings to both lifecycle scripts",
-    async (_, workTimeoutMs, expectedTimeout, selectNode) => {
+    "carries %s admission settings and the selected Node to both lifecycle scripts",
+    async (_, workTimeoutMs, expectedTimeout) => {
       fixture.params.workTimeoutMs = workTimeoutMs;
       const scriptTimeouts: Array<number | undefined> = [];
       const selectedNode = path.join(fixture.globalRoot, "selected-node");
@@ -211,49 +209,38 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
         async () => {},
         async (step) => {
           scriptTimeouts.push(step.timeoutMs);
-          if (selectNode) {
-            expect(admitted).toBe(true);
-            expect(step.argv[0]).toBe(selectedNode);
-            expect(step.env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(selectedNode));
-          }
-          if (step.name === "npm-package-postinstall" && step.cwd) {
-            await fs.rm(path.join(step.cwd, pendingName));
-          }
-          return successfulStep(step, fixture.packageRoot);
+          expect(admitted).toBe(true);
+          expect(step.argv[0]).toBe(selectedNode);
+          expect(step.env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(selectedNode));
+          return completeLifecycleStep(step);
         },
-        selectNode
-          ? {
-              beforeVerifyCandidate: async (root) => {
-                await expect(readText(root, pendingName)).resolves.toBe(pendingBytes);
-                nodeRunner = selectedNode;
-                admitted = true;
-              },
-              resolveLifecycleNodeRunner: () => nodeRunner,
-            }
-          : {},
+        {
+          beforeVerifyCandidate: async (root) => {
+            await expect(readText(root, pendingName)).resolves.toBe(pendingBytes);
+            nodeRunner = selectedNode;
+            admitted = true;
+          },
+          resolveLifecycleNodeRunner: () => nodeRunner,
+        },
       );
-      expect(result.failedStep).toBeNull();
-      expect(result.afterVersion).toBe("2.0.0");
+      expect(result).toMatchObject({ failedStep: null, afterVersion: "2.0.0" });
       expect(lifecycleCalls).toEqual(["npm-package-preinstall", "npm-package-postinstall"]);
       expect(scriptTimeouts).toEqual([expectedTimeout, expectedTimeout]);
     },
   );
   it("does not activate after a zero-exit output-limited postinstall", async () => {
     const { result } = await runUpdate(undefined, async (step) => {
-      const outputLimitExceeded = step.name === "npm-package-postinstall";
-      if (outputLimitExceeded && step.cwd) {
-        await fs.rm(path.join(step.cwd, pendingName));
-      }
-      return { ...successfulStep(step, fixture.packageRoot), outputLimitExceeded };
+      return {
+        ...(await completeLifecycleStep(step)),
+        outputLimitExceeded: step.name === "npm-package-postinstall",
+      };
     });
     expect(result.failedStep).toMatchObject({
       name: "npm-package-postinstall",
       exitCode: 0,
       outputLimitExceeded: true,
     });
-    expectNoActivation();
-    expect(await readPackageBytes(fixture.packageRoot)).toEqual(fixture.originalBytes);
-    await expectSiblingUntouched();
+    await expectUnchanged(result);
   });
 
   it.each([
@@ -326,7 +313,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
         lockBytes = await readText(packageRoot, lockName);
         if (state === "completed") {
           lifecycle.finish();
-          expect(await owner).toBe(true);
+          expect(await owner).toBeUndefined();
         }
       });
       expect(lifecycleCalls).toEqual([]);
@@ -394,7 +381,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
           await writeText(observed.orphan, pendingName, pendingBytes);
           await fs.mkdir(path.join(observed.orphan, lockName));
         }
-        return failedStep(step, packageRoot, "ordinary settled install failure");
+        return failedStep(step, "ordinary settled install failure", packageRoot);
       });
       const result = await runGlobalPackageUpdateSteps({
         ...fixture.params,
@@ -487,8 +474,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
         expect(fixture.params.onTransaction).toHaveBeenCalledOnce();
         expect(await readText(fixture.packageRoot, "package.json")).toContain("2.0.0");
         await expectMissing(stage.packageRoot);
-        expect(result.afterVersion).toBe("2.0.0");
-        expect(result.failedStep).toBeNull();
+        expect(result).toMatchObject({ afterVersion: "2.0.0", failedStep: null });
         expect(result.recovery).toEqual({ serviceRestartSafe: true, version: "2.0.0" });
         expect(result.steps).toContainEqual(
           expect.objectContaining({
@@ -509,10 +495,10 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
       }
       await fs.mkdir(candidate, { recursive: true });
       await writeUncertainLock(candidate, "malformed file");
-      return successfulStep(
-        { name: "post-activation verification", argv: ["verify", "installed", "candidate"] },
-        fixture.packageRoot,
-      );
+      return successfulStep({
+        name: "post-activation verification",
+        argv: ["verify", "installed", "candidate"],
+      });
     };
     const { result, stage } = await runUpdate(async (packageRoot) => {
       candidate = packageRoot;
@@ -528,7 +514,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
 
   it("reverifies the candidate after another lifecycle owner completes", async () => {
     const lifecycle = createLifecycleOwner();
-    let owner: Promise<boolean> | undefined;
+    let owner: Promise<void> | undefined;
     let waitedForOwner = false;
     const isPidAlive = pidAlive.isPidAlive;
     const safetyRelease = setTimeout(() => lifecycle.finish(), 5000);
@@ -546,7 +532,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
         });
       });
       expect(waitedForOwner).toBe(true);
-      expect(await owner).toBe(true);
+      await owner;
       expect(lifecycleCalls).toEqual([]);
       expect(result.failedStep).toMatchObject({ name: "package-verify", exitCode: 1 });
       expect(result.failedStep?.stderrTail).toContain("3.0.0");
@@ -560,18 +546,15 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
   });
 
   it("retains a replacement generation when the former owner's script fails", async () => {
-    const { result, stage, lifecycleCalls } = await runUpdate(
-      async () => {},
-      async (step) => {
-        const { cwd } = step;
-        if (!cwd) {
-          throw new Error("expected the staged package root");
-        }
-        await fs.rename(path.join(cwd, lockName), path.join(cwd, "original-generation"));
-        await writeText(cwd, lockName, "replacement generation\n");
-        return failedStep(step, fixture.packageRoot, "former owner's script failed");
-      },
-    );
+    const { result, stage, lifecycleCalls } = await runUpdate(undefined, async (step) => {
+      const { cwd } = step;
+      if (!cwd) {
+        throw new Error("expected the staged package root");
+      }
+      await fs.rename(path.join(cwd, lockName), path.join(cwd, "original-generation"));
+      await writeText(cwd, lockName, "replacement generation\n");
+      return failedStep(step, "former owner's script failed");
+    });
     expect(result.failedStep).toMatchObject({ name: "npm-package-lifecycle", exitCode: 1 });
     expect(result.failedStep?.stderrTail).toContain("package lifecycle ownership is uncertain");
     expect(lifecycleCalls).toEqual(["npm-package-preinstall"]);
@@ -583,15 +566,12 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
   it.each(["settled script failure", "ownership error for another root"] as const)(
     "cleans only its stage after a %s",
     async (failure) => {
-      const { result, stage, lifecycleCalls } = await runUpdate(
-        async () => {},
-        async (step) => {
-          if (failure === "ownership error for another root") {
-            throw new PackageLifecycleOwnershipError(fixture.siblingRoot, "unrelated owner");
-          }
-          return failedStep(step, fixture.packageRoot, "preinstall exited with a settled failure");
-        },
-      );
+      const { result, stage, lifecycleCalls } = await runUpdate(undefined, async (step) => {
+        if (failure === "ownership error for another root") {
+          throw new PackageLifecycleOwnershipError(fixture.siblingRoot, "unrelated owner");
+        }
+        return failedStep(step, "preinstall exited with a settled failure");
+      });
 
       expect(result).toMatchObject({
         afterVersion: null,

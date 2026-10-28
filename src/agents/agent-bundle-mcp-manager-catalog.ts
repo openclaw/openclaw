@@ -117,7 +117,6 @@ export function createSessionMcpCatalogStore(
       // A reset, replacement or reload must not resurrect a late discovery result.
       if (
         publication &&
-        catalogByRuntimeKey.get(runtimeKey) === publication &&
         runtimes.get(runtimeKey) === runtime &&
         sessionMcpRuntimeOwners.get(runtime)?.isCurrent() !== false
       ) {

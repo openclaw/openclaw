@@ -1,9 +1,10 @@
 import type {
   SkillsWorkshopListResult,
   SkillWorkshopChange,
+  SkillWorkshopDraft,
   SkillWorkshopSkillSummary,
 } from "@openclaw/gateway-protocol";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -14,15 +15,18 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/chat/text.css";
+import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import "../../styles/skill-workshop.css";
 import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
 import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { undoMutationFor } from "./api.ts";
 import { Detail } from "./detail.tsx";
+import { DraftDetail } from "./draft-detail.tsx";
 import type { SkillWorkshopMode } from "./mode.ts";
 import {
   lastActivityMs,
@@ -32,8 +36,10 @@ import {
   WorkshopChangeText,
   UNUSED_ARCHIVE_DAYS,
   unusedDays,
+  type WorkshopFilter,
   type WorkshopSort,
   type WorkshopView,
+  type WorkshopReads,
 } from "./view-shared.tsx";
 export type {
   WorkshopFilter,
@@ -44,7 +50,7 @@ export type {
 } from "./view-shared.tsx";
 
 registerEnglishCatalog(registerSkillWorkshopEnglish);
-const MODES: readonly SkillWorkshopMode[] = ["off", "auto"];
+const MODES: readonly SkillWorkshopMode[] = ["off", "propose", "auto"];
 const SORTS: readonly WorkshopSort[] = ["uses", "recent", "name"];
 export function sortWorkshopSkills(
   skills: readonly SkillWorkshopSkillSummary[],
@@ -70,7 +76,7 @@ export function archivedWorkshopSkills(list: SkillsWorkshopListResult) {
     .toSorted((a, b) => (b.versions[0]?.createdAtMs ?? 0) - (a.versions[0]?.createdAtMs ?? 0));
 }
 
-export function SkillWorkshopView(props: { view: WorkshopView }) {
+export function SkillWorkshopView(props: { view: WorkshopView; reads: WorkshopReads }) {
   return (
     <>
       <PluginsHubHeader
@@ -78,12 +84,7 @@ export function SkillWorkshopView(props: { view: WorkshopView }) {
         onSelect={(tab) => props.view().context.navigate(tab)}
       />
       <SettingsWorkspace>
-        <div
-          id={PLUGINS_HUB_PANEL_ID}
-          role="tabpanel"
-          tabindex="0"
-          aria-labelledby="plugins-tab-skill-workshop"
-        >
+        <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-skill-workshop">
           <SettingsPage wide carapace>
             <Toolbar view={props.view} />
             <For
@@ -101,11 +102,26 @@ export function SkillWorkshopView(props: { view: WorkshopView }) {
                 onRetry={props.view().onRetry}
               />
             )}
-            <Show
-              when={props.view().snapshot}
-              fallback={props.view().loading && <SettingsLoadingSkeleton carapace />}
+            <Loading
+              on={props.reads.listRequest()}
+              fallback={!props.view().snapshot && <SettingsLoadingSkeleton carapace />}
             >
-              <Library view={props.view} />
+              <Errored
+                fallback={(error, reset) => (
+                  <ErrorBanner
+                    message={`${t("skillWorkshop.loadError")} ${formatUiError(error())}`}
+                    onRetry={() => {
+                      props.view().onRetry();
+                      reset();
+                    }}
+                  />
+                )}
+              >
+                {props.reads.list() && null}
+              </Errored>
+            </Loading>
+            <Show when={props.view().snapshot}>
+              <Library view={props.view} reads={props.reads} />
             </Show>
           </SettingsPage>
         </div>
@@ -152,7 +168,11 @@ function Toolbar(props: { view: WorkshopView }) {
             <div class="sw-learning" title={t(`skillWorkshop.mode.${mode()}Title`)}>
               <span class="sw-learning__label">
                 <span
-                  class={["sw-learning__dot", `sw-learning__dot--${mode()}`]}
+                  class={[
+                    "sw-learning__dot",
+                    // Propose still runs background reviews, so it shows learning as on.
+                    `sw-learning__dot--${mode() === "off" ? "off" : "auto"}`,
+                  ]}
                   aria-hidden="true"
                 />
                 {t("skillWorkshop.mode.label")}
@@ -161,7 +181,8 @@ function Toolbar(props: { view: WorkshopView }) {
                 mode="buttons"
                 ariaLabel={t("skillWorkshop.mode.aria")}
                 value={mode()}
-                disabled={props.view().modeBusy || !props.view().access.canSetMode}
+                disabled={!props.view().access.canSetMode}
+                saving={props.view().modeBusy}
                 options={MODES.map((value) => ({ value, label: t(`skillWorkshop.mode.${value}`) }))}
                 onChange={(nextMode) => props.view().onModeChange(nextMode)}
               />
@@ -188,17 +209,37 @@ function Toolbar(props: { view: WorkshopView }) {
 }
 
 type SkillRowEntry = SkillWorkshopSkillSummary | SkillsWorkshopListResult["archived"][number];
-function Library(props: { view: WorkshopView }) {
+function Library(props: { view: WorkshopView; reads: WorkshopReads }) {
   const list = () => props.view().snapshot!.list;
   const archived = createMemo(() => archivedWorkshopSkills(list()));
+  // Newest first, like an inbox.
+  const drafts = createMemo(() => (list().drafts ?? []).toReversed());
   const rows = createMemo<SkillRowEntry[]>(() =>
     props.view().filter === "active"
       ? sortWorkshopSkills(list().skills, props.view().snapshot!.changes, props.view().sort)
       : archived(),
   );
+  // The Drafts list appears once drafts can exist: in Propose mode, while any wait, or while it
+  // is the open list (discarding its last draft must not leave no list selected).
+  const filters = createMemo<WorkshopFilter[]>(() =>
+    props.view().mode === "propose" || drafts().length > 0 || props.view().filter === "drafts"
+      ? ["active", "drafts", "archived"]
+      : ["active", "archived"],
+  );
+  const count = (filter: WorkshopFilter) =>
+    filter === "active"
+      ? list().skills.length
+      : filter === "drafts"
+        ? drafts().length
+        : archived().length;
   return (
     <Show
-      when={list().skills.length > 0 || archived().length > 0}
+      when={
+        list().skills.length > 0 ||
+        archived().length > 0 ||
+        drafts().length > 0 ||
+        props.view().filter === "drafts"
+      }
       fallback={
         <div class="sw-empty oc-settings-group settings-group">
           <span class="sw-empty__icon" aria-hidden="true">
@@ -218,14 +259,12 @@ function Library(props: { view: WorkshopView }) {
               mode="buttons"
               ariaLabel={t("skillWorkshop.skills.filterAria")}
               value={props.view().filter}
-              options={(["active", "archived"] as const).map((value) => ({
+              options={filters().map((value) => ({
                 value,
                 label: (
                   <>
                     {t(`skillWorkshop.skills.${value}`)}{" "}
-                    <span class="settings-count">
-                      {value === "active" ? list().skills.length : archived().length}
-                    </span>
+                    <span class="settings-count">{count(value)}</span>
                   </>
                 ),
               }))}
@@ -253,22 +292,35 @@ function Library(props: { view: WorkshopView }) {
             )}
           </div>
           <div class="sw-list__rows">
-            <For
-              each={rows()}
-              keyed={(skill) => skill.name}
+            <Show
+              when={props.view().filter === "drafts"}
               fallback={
-                <SettingsEmpty
-                  message={t(
-                    props.view().filter === "active"
-                      ? "skillWorkshop.skills.noneActive"
-                      : "skillWorkshop.skills.noneArchived",
-                  )}
-                  carapace
-                />
+                <For
+                  each={rows()}
+                  keyed={(skill) => skill.name}
+                  fallback={
+                    <SettingsEmpty
+                      message={t(
+                        props.view().filter === "active"
+                          ? "skillWorkshop.skills.noneActive"
+                          : "skillWorkshop.skills.noneArchived",
+                      )}
+                      carapace
+                    />
+                  }
+                >
+                  {(skill) => <SkillRow skill={skill()} view={props.view} />}
+                </For>
               }
             >
-              {(skill) => <SkillRow skill={skill()} view={props.view} />}
-            </For>
+              <For
+                each={drafts()}
+                keyed={(draft) => draft.id}
+                fallback={<SettingsEmpty message={t("skillWorkshop.skills.noneDrafts")} carapace />}
+              >
+                {(draft) => <DraftRow draft={draft()} view={props.view} />}
+              </For>
+            </Show>
           </div>
         </section>
         <section class="sw-detail settings-group oc-settings-group">
@@ -276,7 +328,12 @@ function Library(props: { view: WorkshopView }) {
             when={props.view().viewer}
             fallback={<SettingsEmpty message={t("skillWorkshop.viewer.pick")} carapace />}
           >
-            <Detail view={props.view} />
+            <Show
+              when={props.view().viewer?.target.draftId}
+              fallback={<Detail view={props.view} reads={props.reads} />}
+            >
+              <DraftDetail view={props.view} reads={props.reads} />
+            </Show>
           </Show>
         </section>
       </div>
@@ -369,6 +426,35 @@ function SkillRow(props: { skill: SkillRowEntry; view: WorkshopView }) {
           </div>
         )}
       </Show>
+    </div>
+  );
+}
+
+function DraftRow(props: { draft: SkillWorkshopDraft; view: WorkshopView }) {
+  const selected = () => props.view().viewer?.target.draftId === props.draft.id;
+  const live = () =>
+    props.view().snapshot!.list.skills.some((skill) => skill.name === props.draft.skillName);
+  return (
+    <div class={["sw-row", { "sw-row--selected": selected() }]}>
+      <button
+        type="button"
+        class="sw-row__main"
+        aria-current={selected() ? "true" : undefined}
+        onClick={() => props.view().onSelectDraft(props.draft.id)}
+      >
+        <span class="sw-row__top">
+          <span class="sw-row__name">{props.draft.skillName}</span>
+          <span class="sw-row__uses">
+            {t(live() ? "skillWorkshop.drafts.update" : "skillWorkshop.drafts.newSkill")}
+          </span>
+        </span>
+        {props.draft.summary && <span class="sw-row__desc">{props.draft.summary}</span>}
+        <span class="sw-row__uses">
+          {t("skillWorkshop.drafts.proposed", {
+            time: formatRelativeTimestamp(props.draft.createdAtMs),
+          })}
+        </span>
+      </button>
     </div>
   );
 }

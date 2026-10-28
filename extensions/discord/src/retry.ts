@@ -175,7 +175,6 @@ export function createDiscordRetryRunner(params: {
       isRetryableDiscordError(err, safety) &&
       (attempt < retryConfig.attempts ||
         (observedGatewayDisconnect &&
-          isRetryableDiscordError(err) &&
           !(err instanceof RateLimitError) &&
           !collectDiscordErrorCandidates(err).some(
             (candidate) => readDiscordErrorStatus(candidate) !== undefined,

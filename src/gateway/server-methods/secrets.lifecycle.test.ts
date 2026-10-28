@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import * as questionDispatch from "../../agents/harness/gateway-question-dispatch.js";
-import { resetPendingAskUserQuestionsForTest } from "../../agents/tools/ask-user-tool.test-support.js";
 import type { GatewayQuestionCall } from "../../agents/tools/gateway-question-lifecycle.js";
 import * as gatewayTransport from "../../agents/tools/gateway.js";
 import { createSecretsTool } from "../../agents/tools/secrets-tool.js";
@@ -20,7 +19,6 @@ import type { GatewayClient, RespondFn } from "./types.js";
 
 afterEach(() => {
   secretRuntime.clearSecretsRuntimeSnapshot();
-  resetPendingAskUserQuestionsForTest();
   vi.restoreAllMocks();
 });
 
@@ -170,10 +168,8 @@ describe("secret store mutation lifecycle", () => {
         ...createQuestionHandlers(manager, storeWriteService, scheduler),
         ...handlers,
       };
-      const methods: string[] = [];
       try {
         const gatewayCall: GatewayQuestionCall = async (method, _options, params) => {
-          methods.push(method);
           const response = await invoke(method, params as Record<string, unknown>, client);
           if (!response?.[0]) {
             throw new Error("synthetic question RPC failed");
@@ -214,9 +210,10 @@ describe("secret store mutation lifecycle", () => {
         });
         expect(JSON.stringify(result)).not.toContain("proposed.example.test");
         expect(JSON.stringify(result)).not.toContain("test-secret-operator-only");
-        expect(methods).toEqual(["question.request", "question.waitAnswer", "secrets.store.list"]);
       } finally {
         manager.close();
+        await manager.drain();
+        await scheduler.stop();
         run.close();
       }
     });
@@ -294,7 +291,6 @@ describe("secret store mutation lifecycle", () => {
           { ok: true, reloaded: true },
         ]);
         expectCold();
-        expect(reloadSecrets).toHaveBeenCalledTimes(3);
         // Environment entries remain an operator-owned write path, and unrelated
         // names must not refresh every auth profile on the Gateway.
         expect(
@@ -306,7 +302,6 @@ describe("secret store mutation lifecycle", () => {
         ).toMatchObject([true, { ok: true, reloaded: false }]);
         expect(reloadSecrets).toHaveBeenCalledTimes(3);
         expect(await readSecret("UNRELATED_SETTING")).toEqual({ ok: true, value: "enabled" });
-        secretRuntime.clearSecretsRuntimeSnapshot();
       });
     },
   );

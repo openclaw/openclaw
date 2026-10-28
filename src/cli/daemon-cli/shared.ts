@@ -94,13 +94,12 @@ export function resolveDaemonServiceInstallGuidance(
 
 export function formatGatewayServiceInstallationDrift(
   drift: GatewayServiceInstallationDrift,
-  targetRole?: "target" | "diagnostic-only",
   env: NodeJS.ProcessEnv = process.env,
   service?: { stopped?: boolean; port?: number },
 ): string {
   const { serviceRoot, serviceVersion, activeRoot, activeVersion } = drift;
   const facts = `Gateway service targets a different OpenClaw install: ${serviceRoot} (${serviceVersion ?? "version unknown"}); active CLI: ${activeRoot} (${activeVersion ?? "version unknown"}).`;
-  const guidance = resolveDaemonServiceInstallGuidance(targetRole, env, service);
+  const guidance = resolveDaemonServiceInstallGuidance(undefined, env, service);
   return guidance ? `${facts} ${guidance}` : facts;
 }
 
@@ -126,23 +125,6 @@ export function resolveRuntimeStatusColor(status: string | undefined): (value: s
       : runtimeStatus === "unknown"
         ? theme.muted
         : theme.warn;
-}
-
-export function pickProbeHostForBind(
-  bindMode: string,
-  tailnetIPv4: string | undefined,
-  customBindHost?: string,
-) {
-  if (bindMode === "custom" && customBindHost?.trim()) {
-    return customBindHost.trim();
-  }
-  if (bindMode === "tailnet") {
-    return tailnetIPv4 ?? "127.0.0.1";
-  }
-  // Same as call.ts: self-connections should always target loopback.
-  // bind=lan controls which interfaces the server listens on (0.0.0.0),
-  // but co-located CLI probes should connect via 127.0.0.1.
-  return "127.0.0.1";
 }
 
 const SAFE_DAEMON_ENV_KEYS = [

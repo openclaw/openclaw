@@ -7,6 +7,8 @@ import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 export type RequesterOrigin = Readonly<{
   sessionKey: string;
   operatorProfileId?: string;
+  /** Causal human retained across a selected-user delegation; null means no human origin. */
+  delegatedCreatorProfileId?: string | null;
   messageProvider?: string | null;
   accountId?: string | null;
   chatType?: ChatType;
@@ -81,6 +83,7 @@ export function captureRequesterOrigin(
   const origin: RequesterOrigin = {
     sessionKey,
     operatorProfileId: facts.operatorProfileId,
+    delegatedCreatorProfileId: facts.delegatedCreatorProfileId,
     messageProvider: normalizeMessageChannel(
       source ? source.messageProvider : (params.messageProvider ?? params.messageChannel),
     ),
@@ -103,6 +106,13 @@ export function captureRequesterOrigin(
     }
   }
   return Object.freeze(origin);
+}
+
+/** Attribution only: selecting another participant does not make that person the initiator. */
+export function requesterCreatorProfileId(origin: RequesterOrigin | undefined): string | undefined {
+  return origin?.delegatedCreatorProfileId !== undefined
+    ? (origin.delegatedCreatorProfileId ?? undefined)
+    : origin?.operatorProfileId;
 }
 
 /** Compare authenticated requester identity; captured context and display facts are not identity. */
@@ -130,6 +140,14 @@ export function decodeRequesterOrigin(value: unknown): RequesterOrigin | undefin
     return undefined;
   }
   facts.operatorProfileId = record.operatorProfileId;
+  if (
+    record.delegatedCreatorProfileId !== undefined &&
+    record.delegatedCreatorProfileId !== null &&
+    typeof record.delegatedCreatorProfileId !== "string"
+  ) {
+    return undefined;
+  }
+  facts.delegatedCreatorProfileId = record.delegatedCreatorProfileId;
   if (record.chatType !== undefined) {
     if (typeof record.chatType !== "string") {
       return undefined;

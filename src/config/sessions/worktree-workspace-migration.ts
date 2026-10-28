@@ -126,7 +126,7 @@ export async function migrateManagedWorktreeCanonicalWorkspaces(params: {
     env,
     storePath: params.storePath,
   });
-  if (params.mode !== "doctor-fix") {
+  if (params.mode !== "doctor-fix" || entries.length === 0) {
     return { found: entries.length, repaired: 0 };
   }
   const worktrees = listRegistryWorktreesForMigration(env);

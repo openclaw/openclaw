@@ -2,7 +2,7 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import { defineSolidPage } from "./app-route-types.ts";
+import { defineSolidPage } from "./app-route-types.tsx";
 import { cleanupSolid, mountSolid } from "./test-helpers/mount-solid.ts";
 import { waitForSolid } from "./test-helpers/solid-settle.ts";
 

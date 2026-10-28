@@ -1,18 +1,14 @@
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareAgentCommandExecutionIdentity } from "../../agents/agent-command-execution-identity.js";
 import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { getRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
-import {
-  loadSessionEntry,
-  patchSessionEntryCore,
-  replaceSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import { installQueueTestPlugin, useOutboundFixture } from "./deliver.custody.test-support.js";
 import { settlePendingFinalDelivery } from "./delivery-completion.js";
+import { seedRecoverySession } from "./delivery-completion.shard-test-support.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import {
   enqueueDeliveryOnce,
@@ -107,21 +103,11 @@ describe("recovered requester receipt safety", () => {
     } = {},
   ) {
     const payloads = options.payloads ?? [{ text: "final output" }];
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:receipt-safety",
-      storePath: path.join(tmpDir, "sessions.json"),
-    };
     const context = { channel: "matrix", to: "!original:example", threadId: "original-thread" };
-    await replaceSessionEntry(scope, {
-      sessionId: "session",
+    const { scope, entry } = await seedRecoverySession(tmpDir, "source-a", "run-a", {
       lifecycleRevision: "lifecycle-a",
-      updatedAt: 1,
-      restartRecoveryDeliveryRunId: "run-a",
-      restartRecoveryDeliverySourceRunId: "source-a",
       restartRecoveryDeliveryContext: context,
     });
-    const entry = loadSessionEntry(scope)!;
     const admission = prepareAgentCommandExecutionIdentity({
       opts: { message: "finish the admitted task" },
       prepared: {

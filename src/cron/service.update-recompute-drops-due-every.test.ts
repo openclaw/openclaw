@@ -1,18 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
+import { expect, it } from "vitest";
+import * as clocks from "../test-utils/gateway-scheduler-clock.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import type { CronService } from "./service.js";
-import {
-  createCronServiceWithStateForTest,
-  createFinishedBarrier,
-  setupCronServiceSuite,
-} from "./service.test-harness.js";
+import * as serviceTest from "./service.test-harness.js";
 import { onTimer } from "./service/timer.test-support.js";
 import type { CronJob, CronSchedule } from "./types.js";
 
-const { logger, makeStorePath } = setupCronServiceSuite({ fakeTimers: false });
+const { logger, makeStorePath } = serviceTest.setupCronServiceSuite({ fakeTimers: false });
 const base = Date.parse("2025-12-13T00:00:00.000Z");
 
 async function withScheduledJob(
@@ -20,34 +14,25 @@ async function withScheduledJob(
   exercise: (fixture: {
     cron: CronService;
     job: CronJob;
-    clock: ReturnType<typeof createGatewaySchedulerClock>;
+    clock: ReturnType<typeof clocks.createGatewaySchedulerClock>;
   }) => Promise<void>,
 ) {
   const { storePath } = await makeStorePath();
-  const clock = createGatewaySchedulerClock(base);
-  const finished = createFinishedBarrier();
+  const clock = clocks.createGatewaySchedulerClock(base);
+  const finished = serviceTest.createFinishedBarrier();
   const turns: Promise<unknown>[] = [];
   const joinTurns = async () => {
     const failures: unknown[] = [];
     for (const turn of turns) {
-      try {
-        await turn;
-      } catch (error) {
-        failures.push(error);
-      }
+      await turn.catch((error: unknown) => failures.push(error));
     }
-    if (failures.length) {
-      throw new AggregateError(failures, "Cron fixture scheduler failed");
-    }
+    expect(failures, "Cron fixture scheduler failed").toEqual([]);
   };
-  const { cron, state } = createCronServiceWithStateForTest({
-    scheduler: createTestGatewayScheduler(clock.clock),
-    storePath,
-    cronEnabled: true,
+  const { cron, state } = serviceTest.createCronServiceWithStateForTest({
+    ...cronTestDeps({ storePath }),
+    scheduler: clocks.createTestGatewayScheduler(clock.clock),
+    nowMs: () => clock.clock.now(),
     log: logger,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     onEvent: finished.onEvent,
     runSchedulerOwned: (run) => {
       const turn = run();
@@ -57,14 +42,7 @@ async function withScheduledJob(
   });
   try {
     await cron.start();
-    let job = await cron.add({
-      name: "scheduled job",
-      enabled: true,
-      schedule,
-      sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "tick" },
-    });
+    let job = await cron.add(cronTestInput({ schedule }));
     if (schedule.kind === "every") {
       expect(job.schedule).toMatchObject({ anchorMs: base });
       expect(job.state.nextRunAtMs).toBe(base + schedule.everyMs);
@@ -84,51 +62,37 @@ async function withScheduledJob(
   }
 }
 
-describe("recurring schedule edits", () => {
-  it.each([
-    { kind: "every", everyMs: 10_000 },
-    { kind: "cron", expr: "0 9 * * *" },
-  ] as const)("preserves a due $kind slot on an idempotent re-save", async (schedule) => {
-    await withScheduledJob(schedule, async ({ cron, job, clock }) => {
-      const dueSlot = job.state.nextRunAtMs!;
-      clock.setTime(dueSlot + 50);
-      await cron.update(job.id, { schedule });
-      const current = (await cron.list({ includeDisabled: true })).find(
-        (entry) => entry.id === job.id,
-      )!;
-      expect(current.state.lastRunAtMs).toBe(job.state.lastRunAtMs);
-      expect(current.state.nextRunAtMs).toBe(dueSlot);
-      expect(current.state.nextRunAtMs).toBeLessThanOrEqual(clock.clock.now());
-      if (schedule.kind === "every") {
-        expect(current.schedule).toMatchObject({ kind: "every", anchorMs: base });
-      }
-    });
-  });
-
-  it.each([undefined, 7_200_000])(
-    "re-anchors a changed interval with future offset %s",
-    async (futureOffset) => {
-      await withScheduledJob({ kind: "every", everyMs: 10_000 }, async ({ cron, job, clock }) => {
-        const editTime = job.state.lastRunAtMs! + 3_000;
-        clock.setTime(editTime);
-        const anchorMs = futureOffset === undefined ? undefined : editTime + futureOffset;
-        await cron.update(job.id, {
-          schedule: {
-            kind: "every",
-            everyMs: 3_600_000,
-            ...(anchorMs === undefined ? {} : { anchorMs }),
-          },
-        });
-        const current = (await cron.list({ includeDisabled: true })).find(
-          (entry) => entry.id === job.id,
-        )!;
-        expect(current.schedule).toMatchObject({
-          kind: "every",
-          everyMs: 3_600_000,
-          anchorMs: anchorMs ?? editTime,
-        });
-        expect(current.state.nextRunAtMs).toBe(anchorMs ?? editTime + 3_600_000);
+const every = { kind: "every", everyMs: 10_000 } as const;
+it.each<[CronSchedule, number?, number?]>([
+  [every],
+  [{ kind: "cron", expr: "0 9 * * *" }],
+  [every, 3_600_000],
+  [every, 3_600_000, 7_200_000],
+])("re-saves %j with interval %s and future offset %s", async (schedule, everyMs, futureOffset) => {
+  await withScheduledJob(schedule, async ({ cron, job, clock }) => {
+    const changing = everyMs !== undefined;
+    const dueSlot = job.state.nextRunAtMs!;
+    const editTime = changing ? job.state.lastRunAtMs! + 3_000 : dueSlot + 50;
+    const anchorMs = futureOffset === undefined ? undefined : editTime + futureOffset;
+    clock.setTime(editTime);
+    const updatedSchedule: CronSchedule = changing
+      ? { kind: "every", everyMs, ...(anchorMs === undefined ? {} : { anchorMs }) }
+      : schedule;
+    await cron.update(job.id, { schedule: updatedSchedule });
+    const current = (await cron.list({ includeDisabled: true })).find(({ id }) => id === job.id)!;
+    expect([current.state.lastRunAtMs, current.state.nextRunAtMs]).toEqual([
+      job.state.lastRunAtMs,
+      changing ? (anchorMs ?? editTime + everyMs) : dueSlot,
+    ]);
+    if (updatedSchedule.kind === "every") {
+      expect(current.schedule).toMatchObject({
+        kind: "every",
+        everyMs: updatedSchedule.everyMs,
+        anchorMs: changing ? (anchorMs ?? editTime) : base,
       });
-    },
-  );
+    }
+    if (!changing) {
+      expect(current.state.nextRunAtMs).toBeLessThanOrEqual(clock.clock.now());
+    }
+  });
 });

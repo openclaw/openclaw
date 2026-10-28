@@ -1,20 +1,19 @@
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createLazyCustomElementRequests } from "../../app/lazy-custom-element.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
-import { createIdleImport } from "../../lib/idle-import.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { ChatWelcomeProps } from "../chat/components/chat-welcome.tsx";
+import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import * as catalog from "./catalog-target.ts";
-import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import type { NewSessionComposerOptions } from "./composer.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -31,17 +30,7 @@ import type { createNewSessionTitle } from "./draft-title.ts";
 import { NewSessionDraft } from "./draft.ts";
 import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
-
-const attachmentPanelElement = {
-  tagName: "openclaw-chat-detail-panel",
-  get label() {
-    return t("chat.attachments.pastedText");
-  },
-  loadModule: async () => {
-    await import("../../styles/chat/sidebar.css");
-    await import("../chat/components/chat-detail-panel.tsx");
-  },
-};
+import type { SubmissionPresentation } from "./submission-action.ts";
 
 export type PageHost = SolidBridgeElement<
   { data: NewSessionRouteData | undefined },
@@ -51,7 +40,21 @@ export type PageHost = SolidBridgeElement<
 >;
 
 export class NewSessionPageOwner {
-  private readonly listeners = new Set<() => void>();
+  private submissionLifetimeValue = Promise.withResolvers<void>();
+  presentSubmit: SubmissionPresentation["presentSubmit"];
+  get submissionLifetime() {
+    return this.submissionLifetimeValue.promise;
+  }
+  readonly retireSubmissionPresentation = () => {
+    this.submissionLifetimeValue.resolve();
+    this.submissionLifetimeValue = Promise.withResolvers<void>();
+    this.listeners.publish();
+  };
+  submit(background = false) {
+    const operation = () => this.submission.submit(undefined, background);
+    return this.presentSubmit ? this.presentSubmit(operation) : operation();
+  }
+  private readonly listeners = createChangeListeners();
   private contextSubscriptions: Array<() => void> = [];
   isConnected = false;
   private pendingChange = false;
@@ -70,14 +73,9 @@ export class NewSessionPageOwner {
         }
       });
     }
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   };
-  subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
   context?: ApplicationContext;
   get data() {
     return this.host.data;
@@ -85,9 +83,6 @@ export class NewSessionPageOwner {
 
   retainedForHandoff: object | null = null;
   openedFor: string | null = null;
-  readonly critterImport = createIdleImport(
-    () => import("../../components/lobster-pet.runtime.ts"),
-  );
   openedGroupDefaults = "";
   openedAgentId = "";
   messageOwnerKey = "";
@@ -97,7 +92,6 @@ export class NewSessionPageOwner {
     ownerKey: string;
     agentId: string;
   } | null = null;
-  readonly attachmentPanelLoader = createLazyCustomElementRequests();
   readonly closeAttachmentPanel = () => {
     if (this.attachmentPanel) {
       this.attachmentPanel = null;
@@ -122,7 +116,7 @@ export class NewSessionPageOwner {
   readonly browser: DraftPlaceBrowser;
   readonly place: DraftPlaceState;
   readonly submission: DraftSubmissionFlow;
-  readonly dictation: NewSessionDictationControl;
+  readonly dictation: DirectDictationControl;
   titlePreparation?: ReturnType<typeof createNewSessionTitle>;
   readonly flushDraft = () => this.submission.draftPersistence.persistNow();
   readonly setImageLightbox = (item: ImageLightboxItem | null) => {
@@ -131,14 +125,13 @@ export class NewSessionPageOwner {
   };
 
   constructor(readonly host: PageHost) {
-    // The page owner publishes its child loader's status through the shared page projection.
-    this.attachmentPanelLoader.subscribe(this.changed);
     this.draft = new NewSessionDraft(
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
         changed: this.changed,
         activeElement: () => this.host.ownerDocument.activeElement,
         onInvalidate: () => {
+          this.retireSubmissionPresentation();
           this.closeAttachmentPanel();
           this.connectMachine?.close();
         },
@@ -186,14 +179,14 @@ export class NewSessionPageOwner {
       () => ({ client: this.gateway.client, connected: this.gateway.connected }),
       this.changed,
     );
-    this.dictation = new NewSessionDictationControl({
+    this.dictation = new DirectDictationControl({
       textarea: this.submission.composerTextarea,
       getClient: () => this.gateway.client,
       isConnected: () => this.gateway.connected,
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
       onMessage: (message) => this.setMessageFromUser(message),
       onError: (message) => this.submission.setError(message),
-      onSubmit: () => void this.submission.submit(),
+      onSubmit: () => void this.submit(),
     });
     // Dictation receipts reconcile draft availability before the page projection reads it.
     this.dictation.subscribe(this.changed);
@@ -223,47 +216,63 @@ export class NewSessionPageOwner {
       return;
     }
     this.isConnected = true;
-    // These receipts reconcile the draft and prepared title before the view reads them.
-    const context = this.context;
-    if (context) {
-      this.contextSubscriptions = [
-        context.theme,
-        context.agents,
-        context.agentIdentity,
-        context.sessions,
-        context.placementStartup,
-        context.runtimeConfig,
-        context.config,
-      ].map((source) => source.subscribe(this.changed));
+    try {
+      // These receipts reconcile the draft and prepared title before the view reads them.
+      const context = this.context;
+      if (context) {
+        this.contextSubscriptions = [
+          context.theme,
+          context.agents,
+          context.agentIdentity,
+          context.placementStartup,
+          context.runtimeConfig,
+          context.config,
+        ].map((source) => source.subscribe(this.changed));
+        let location = context.router.getState().location;
+        this.contextSubscriptions.push(
+          context.router.subscribe((state) => {
+            if (state.location !== location) {
+              location = state.location;
+              this.retireSubmissionPresentation();
+              this.browser.close();
+            }
+          }),
+        );
+      }
+      this.draft.connect();
+      this.submission.draftPersistence.connect();
+      this.changed();
+    } catch (error) {
+      this.disconnect();
+      throw error;
     }
-    this.draft.connect();
-    this.submission.draftPersistence.connect();
-    this.critterImport.schedule();
-    this.changed();
   }
 
   disconnect() {
+    this.retireSubmissionPresentation();
     if (!this.isConnected) {
       return;
     }
+    this.isConnected = false;
+    this.browser.close();
     for (const stop of this.contextSubscriptions.splice(0)) {
       stop();
     }
     this.closeAttachmentPanel();
-    this.attachmentPanelLoader.requestWhileActive(attachmentPanelElement, false);
-    this.critterImport.dispose();
     this.dictation.dispose();
     this.connectMachine.close();
     if (!this.retainedForHandoff) {
       this.disposeDraft();
     }
-    this.isConnected = false;
   }
 
   disposeDraft() {
-    forgetInstantThreadPage(this.data, this.host);
-    retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
-    this.draft.disconnect();
+    try {
+      forgetInstantThreadPage(this.data, this.host);
+      retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
+    } finally {
+      this.draft.disconnect();
+    }
   }
 
   synchronize() {
@@ -281,10 +290,6 @@ export class NewSessionPageOwner {
     ) {
       this.closeAttachmentPanel();
     }
-    this.attachmentPanelLoader.requestWhileActive(
-      attachmentPanelElement,
-      this.attachmentPanel !== null,
-    );
 
     if (this.connectMachine.open && !this.place.isAdmin()) {
       this.connectMachine.close();
@@ -334,10 +339,11 @@ export class NewSessionPageOwner {
     }
     this.draft.synchronizeSelections();
     activateDraft(this.submission, openKey);
-    this.submission.resumeInterruptedSubmission();
+    this.submission.synchronizeSubmission();
   }
 
   resetDraft() {
+    this.retireSubmissionPresentation();
     this.place.resetDraft();
     this.submission.resetDraft();
     this.messageOwnerKey = catalog.routeKey(this.data);
@@ -387,7 +393,7 @@ export class NewSessionPageOwner {
       draftSource: submission.composerDraft,
       canSubmit: !submission.submitting && !dictationLocked && submission.canSubmit(),
       submitDisabledReason: submission.submitDisabledReason(),
-      blockedSubmitNotice: submission.blockedSubmitNotice(),
+      onBlockedSubmit: () => submission.noteBlockedSubmitAttempt(),
       get dictationActive() {
         return dictation.active;
       },
@@ -425,11 +431,11 @@ export class NewSessionPageOwner {
           submission.setVisibility(visibility);
         }
       },
-      onSubmit: () => void submission.submit(),
+      onSubmit: () => void this.submit(),
       onBackgroundSubmit:
         submission.visibility === "draft" || isCatalogTarget
           ? undefined
-          : () => void submission.submit(undefined, true),
+          : () => void this.submit(true),
     };
   }
 
@@ -463,8 +469,9 @@ export class NewSessionPageOwner {
         agentsList: this.context?.agents.state.agentsList ?? null,
         hello: gateway?.hello ?? null,
       },
+      operatorAuth: gateway?.hello?.auth ?? null,
       onDraftChange: (next) => this.setMessageFromUser(next),
-      onSend: () => void this.submission.submit(),
+      onSend: () => void this.submit(),
       onOpenSession: (sessionKey) => {
         const { context, submission } = this;
         if (!context || submission.submitting || submission.pendingPlacement.sessionKey) {

@@ -1,45 +1,32 @@
-// Control UI tests cover clipboard copy fallback behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { copyToClipboard } from "./clipboard.ts";
 
-// jsdom does not implement document.execCommand, so install a controllable mock
-// per test and remove it afterwards to keep the fallback path observable.
-function mockExecCommand(result: boolean): ReturnType<typeof vi.fn> {
-  const exec = vi.fn().mockReturnValue(result);
+const exec = vi.fn();
+const writeText = vi.fn();
+beforeEach(() => {
+  exec.mockReset().mockReturnValue(true);
+  writeText.mockReset().mockResolvedValue(undefined);
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  // jsdom does not implement execCommand.
   (document as unknown as { execCommand: unknown }).execCommand = exec;
-  return exec;
-}
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   delete (document as unknown as { execCommand?: unknown }).execCommand;
 });
 
 describe("copyToClipboard", () => {
-  it("returns false without touching the clipboard for empty text", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    const exec = mockExecCommand(true);
-
-    expect(await copyToClipboard("")).toBe(false);
-    expect(writeText).not.toHaveBeenCalled();
-    expect(exec).not.toHaveBeenCalled();
-  });
-
-  it("uses the async Clipboard API in secure contexts", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    const exec = mockExecCommand(true);
-
-    expect(await copyToClipboard("hello")).toBe(true);
-    expect(writeText).toHaveBeenCalledWith("hello");
+  it.each(["", "hello"])("uses only the Clipboard API for %j", async (text) => {
+    expect(await copyToClipboard(text)).toBe(text !== "");
+    expect(writeText.mock.calls).toEqual(text ? [[text]] : []);
     expect(exec).not.toHaveBeenCalled();
   });
 
   it("falls back to execCommand when the Clipboard API rejects", async () => {
-    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    const exec = mockExecCommand(true);
+    writeText.mockRejectedValue(new Error("denied"));
 
     expect(await copyToClipboard("hello")).toBe(true);
     expect(exec).toHaveBeenCalledWith("copy");
@@ -47,20 +34,13 @@ describe("copyToClipboard", () => {
   });
 
   it("skips fallback when the caller retires a rejected async write", async () => {
-    let rejectWrite: ((reason?: unknown) => void) | undefined;
-    const writeText = vi.fn().mockImplementation(
-      () =>
-        new Promise<void>((_resolve, reject) => {
-          rejectWrite = reject;
-        }),
-    );
-    vi.stubGlobal("navigator", { clipboard: { writeText } });
-    const exec = mockExecCommand(true);
+    const pending = createDeferred();
+    writeText.mockReturnValue(pending.promise);
     let current = true;
 
     const copy = copyToClipboard("hello", () => current);
     current = false;
-    rejectWrite?.(new Error("denied"));
+    pending.reject(new Error("denied"));
 
     expect(await copy).toBe(false);
     expect(exec).not.toHaveBeenCalled();
@@ -69,7 +49,6 @@ describe("copyToClipboard", () => {
 
   it("falls back to execCommand over plain HTTP where navigator.clipboard is undefined", async () => {
     vi.stubGlobal("navigator", {});
-    const exec = mockExecCommand(true);
 
     expect(await copyToClipboard("hello")).toBe(true);
     expect(exec).toHaveBeenCalledWith("copy");
@@ -78,7 +57,7 @@ describe("copyToClipboard", () => {
 
   it("returns false when both clipboard paths fail", async () => {
     vi.stubGlobal("navigator", {});
-    const exec = mockExecCommand(false);
+    exec.mockReturnValue(false);
 
     expect(await copyToClipboard("hello")).toBe(false);
     expect(exec).toHaveBeenCalledWith("copy");
@@ -87,24 +66,18 @@ describe("copyToClipboard", () => {
 
   it("keeps deferred focus restoration bound to its document after globals retire", async () => {
     vi.stubGlobal("navigator", {});
-    mockExecCommand(false);
+    exec.mockReturnValue(false);
     vi.useFakeTimers();
-    try {
-      expect(await copyToClipboard("hello")).toBe(false);
-      expect(vi.getTimerCount()).toBeGreaterThan(0);
-      vi.stubGlobal("document", undefined);
-      expect(() => vi.runAllTimers()).not.toThrow();
-    } finally {
-      vi.unstubAllGlobals();
-      vi.useRealTimers();
-    }
+    expect(await copyToClipboard("hello")).toBe(false);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    vi.stubGlobal("document", undefined);
+    expect(() => vi.runAllTimers()).not.toThrow();
   });
 
   it.each(["restore", "newer focus", "removed target"] as const)(
     "restores focus only when still appropriate after the fallback: %s",
     async (state) => {
       vi.stubGlobal("navigator", {});
-      mockExecCommand(true);
       const button = document.createElement("button");
       const input = document.createElement("input");
       document.body.append(button);
@@ -124,14 +97,10 @@ describe("copyToClipboard", () => {
       await new Promise<void>((resolve) => {
         window.setTimeout(resolve, 0);
       });
-      if (state === "restore") {
-        expect(document.activeElement).toBe(button);
-        expect(focus).toHaveBeenCalledWith({ preventScroll: true });
-      } else {
-        expect(document.activeElement).toBe(state === "newer focus" ? input : document.body);
-        expect(focus).not.toHaveBeenCalled();
-      }
-
+      const expectedFocus =
+        state === "restore" ? button : state === "newer focus" ? input : document.body;
+      expect(document.activeElement).toBe(expectedFocus);
+      expect(focus.mock.calls).toEqual(state === "restore" ? [[{ preventScroll: true }]] : []);
       button.remove();
       input.remove();
     },

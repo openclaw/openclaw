@@ -7,21 +7,21 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTeamReportsConfig, type TeamReportsConfig } from "./config.js";
+import { bindReportFetch, type ReportFixtureFetch } from "./report-network.test-support.js";
+import {
+  createNativeDiscordSource as createDiscordSource,
+  createNativeGithubSource as createGithubSource,
+  withReportSourceFixtures,
+} from "./report-source-fixtures.test-support.js";
 import { discordMessage, githubItem, measureReads } from "./reports-data.test-support.js";
 import { completion, type Complete } from "./reports.fixtures.js";
 import type { ReportRunRequest } from "./run-worker-contract.js";
 import { TeamReportsRunner } from "./run-worker.js";
-import {
-  generateReportPeriods,
-  type ReportSourceFactory,
-  type ResolvedTeamReportsConfig,
-} from "./run.js";
+import { generateReportPeriods, type ResolvedTeamReportsConfig } from "./run.js";
 import { TeamReportsScheduler } from "./scheduler.js";
-import { createDiscordSource } from "./sources/discord/index.js";
-import { createGithubSource } from "./sources/github/index.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
-import type { DiscordSource, GithubSource, SourceRuntime, SourceStatus } from "./types.js";
+import type { DiscordSource, GithubSource, SourceStatus } from "./types.js";
 
 const workerReads = vi.hoisted(() => ({ enabled: false, calls: 0, bytes: 0 }));
 vi.mock("openclaw/plugin-sdk/database-engine-runtime", async (importOriginal) => {
@@ -151,7 +151,7 @@ async function setup(
     }),
   };
   const runtimes: ReportRunRequest["runtime"][] = [];
-  const sources: ReportSourceFactory = () => ({ github, discord });
+  const sources = { github, discord };
   const complete = vi.fn<Complete>().mockRejectedValue(new Error("Unexpected model request"));
   const completions: Array<ReturnType<typeof createDeferred<void>>> = [];
   let published = 0;
@@ -169,7 +169,9 @@ async function setup(
     : undefined;
   const runReports = vi.fn(async (params: ReportRunRequest) => {
     runtimes.push(params.runtime);
-    return runner ? runner.run(params) : generateReportPeriods({ ...params, sources });
+    return runner
+      ? runner.run(params)
+      : withReportSourceFixtures(sources, () => generateReportPeriods(params));
   });
   const scheduler = new TeamReportsScheduler({
     config,
@@ -725,7 +727,7 @@ describe("Team Reports scheduler lifecycle", () => {
       expect(previousWeek?.report.totals.github.total).toBe(1);
       expect(previousMonth?.report.totals.discord.messages).toBe(1);
 
-      const fetchImpl: NonNullable<SourceRuntime["fetchImpl"]> = async (input) => {
+      const fetchImpl: ReportFixtureFetch = async (input) => {
         const url = new URL(input);
         if (url.pathname.endsWith("/commits") || url.pathname.endsWith("/messages")) {
           return new Response("{}", { status: 403 });
@@ -741,14 +743,14 @@ describe("Team Reports scheduler lifecycle", () => {
                 : [];
         return new Response(JSON.stringify(body));
       };
-      const runtime = { logger: context.logger, fetchImpl };
+      const runtime = { logger: context.logger };
       if (source === "github") {
         github.collect.mockImplementationOnce((...args) =>
-          createGithubSource(runtime).collect(...args),
+          bindReportFetch(createGithubSource(runtime), fetchImpl).collect(...args),
         );
       } else {
         discord.collect.mockImplementationOnce((...args) =>
-          createDiscordSource(runtime).collect(...args),
+          bindReportFetch(createDiscordSource(runtime), fetchImpl).collect(...args),
         );
       }
       vi.setSystemTime(Date.now() + 1_000);
@@ -788,22 +790,19 @@ describe("Team Reports scheduler lifecycle", () => {
       discord: true,
     });
     github.collect.mockImplementationOnce((...args) =>
-      createGithubSource({
-        logger: context.logger,
-        fetchImpl: async (input) => {
-          const url = new URL(input);
-          if (url.pathname.endsWith("/commits")) {
-            return new Response(JSON.stringify({ message: "Git Repository is empty." }), {
-              status: 409,
-            });
-          }
-          const body = url.pathname.endsWith("/repos")
-            ? [{ full_name: "sample/widgets", archived: false }]
-            : url.pathname === "/search/issues"
-              ? { total_count: 0, items: [] }
-              : [];
-          return new Response(JSON.stringify(body));
-        },
+      bindReportFetch(createGithubSource({ logger: context.logger }), async (input) => {
+        const url = new URL(input);
+        if (url.pathname.endsWith("/commits")) {
+          return new Response(JSON.stringify({ message: "Git Repository is empty." }), {
+            status: 409,
+          });
+        }
+        const body = url.pathname.endsWith("/repos")
+          ? [{ full_name: "sample/widgets", archived: false }]
+          : url.pathname === "/search/issues"
+            ? { total_count: 0, items: [] }
+            : [];
+        return new Response(JSON.stringify(body));
       }).collect(...args),
     );
     const id = await generate();

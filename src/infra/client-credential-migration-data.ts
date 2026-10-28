@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import type { ClientCredentialReceipt } from "./client-credential-receipt.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
 import { validateStoredDeviceIdentity } from "./device-identity-material.js";
 import { stripExecApprovalsRawSocketCredentials } from "./exec-approvals-config.js";
@@ -28,9 +29,46 @@ export type LegacyDatabase = Pick<
   exec_approvals_config: ApprovalRow;
 };
 
+/** Canonical predecessors consume legacy inputs even when the retained JSON changes. */
+export function resolveClientCredentialLegacyImportClaims(
+  source: EngineConnection,
+  options: {
+    identities: readonly Pick<LegacyDatabase["device_identities"], "identity_key">[];
+    nativeBootstrap: boolean;
+    authTablePresent: boolean;
+  },
+): ClientCredentialReceipt["legacyImports"] {
+  const claims: ClientCredentialReceipt["legacyImports"] = {};
+  for (const row of options.identities) {
+    if (
+      row.identity_key === "primary" ||
+      row.identity_key === "node" ||
+      row.identity_key === "shareExtension"
+    ) {
+      claims[`identity:${row.identity_key}`] = { sha256: null };
+      // Only an existing token table makes absence authoritative for native bootstraps.
+      if (options.authTablePresent) {
+        claims[`auth:${row.identity_key}`] = { sha256: null };
+      }
+    }
+  }
+  if (
+    !options.nativeBootstrap &&
+    tableExists(source, "migration_sources") &&
+    source
+      .prepare(
+        "SELECT 1 FROM migration_sources WHERE migration_kind = 'legacy-device-identity-json' LIMIT 1",
+      )
+      .get()
+  ) {
+    claims["identity:primary"] = { sha256: null };
+  }
+  return claims;
+}
+
 export function sourceRows(database: EngineConnection, nativeBootstrap: boolean) {
   const db = getNodeSqliteKysely<LegacyDatabase>(database);
-  return sortClientCredentialRows({
+  const rows = {
     identities:
       nativeBootstrap && !tableExists(database, "device_identities")
         ? []
@@ -50,7 +88,20 @@ export function sourceRows(database: EngineConnection, nativeBootstrap: boolean)
       nativeBootstrap && !tableExists(database, "exec_approvals_config")
         ? []
         : executeSqliteQuerySync(database, db.selectFrom("exec_approvals_config").selectAll()).rows,
-  });
+  };
+  // SQLite BINARY and PostgreSQL locale ordering must produce the same exact snapshot.
+  const compare = (left: string, right: string) =>
+    Buffer.compare(Buffer.from(left), Buffer.from(right));
+  rows.identities.sort((a, b) => compare(a.identity_key, b.identity_key));
+  rows.tokens.sort((a, b) => compare(a.device_id, b.device_id) || compare(a.role, b.role));
+  rows.origins.sort(
+    (a, b) =>
+      compare(a.gateway_scope, b.gateway_scope) ||
+      compare(a.device_id, b.device_id) ||
+      compare(a.role, b.role),
+  );
+  rows.approvals.sort((a, b) => compare(a.config_key, b.config_key));
+  return rows;
 }
 
 export function validateSource(
@@ -94,29 +145,6 @@ export function validateSource(
   }
 }
 
-/** SQLite BINARY and PostgreSQL locale ordering must produce the same exact snapshot. */
-function sortClientCredentialRows<
-  T extends {
-    identities: LegacyDatabase["device_identities"][];
-    tokens: LegacyDatabase["device_auth_tokens"][];
-    origins: LegacyDatabase["gateway_origin_device_tokens"][];
-    approvals: ApprovalRow[];
-  },
->(rows: T): T {
-  const compare = (left: string, right: string) =>
-    Buffer.compare(Buffer.from(left), Buffer.from(right));
-  rows.identities.sort((a, b) => compare(a.identity_key, b.identity_key));
-  rows.tokens.sort((a, b) => compare(a.device_id, b.device_id) || compare(a.role, b.role));
-  rows.origins.sort(
-    (a, b) =>
-      compare(a.gateway_scope, b.gateway_scope) ||
-      compare(a.device_id, b.device_id) ||
-      compare(a.role, b.role),
-  );
-  rows.approvals.sort((a, b) => compare(a.config_key, b.config_key));
-  return rows;
-}
-
 export function hashClientCredentialRows(
   rows: ReturnType<typeof sourceRows>,
   native?: { authTablePresent: boolean },
@@ -141,7 +169,10 @@ export function extractSocket(row: ApprovalRow | undefined) {
     return { socket: undefined, policy: undefined };
   }
   const invalid = () =>
-    new Error("Client credential migration found invalid socket credentials or projections.");
+    Object.assign(
+      new Error("Client credential migration found invalid socket credentials or projections."),
+      { code: "CLIENT_CREDENTIAL_SOCKET_INVALID" },
+    );
   let policy: unknown;
   try {
     policy = JSON.parse(row.raw_json);
@@ -154,11 +185,10 @@ export function extractSocket(row: ApprovalRow | undefined) {
   }
   const socketPath = isRecord(socket) ? socket.path : undefined;
   const socketToken = isRecord(socket) ? socket.token : undefined;
+  // raw_json is canonical; historical socket projections may be stale.
   if (
     (socketPath !== undefined && typeof socketPath !== "string") ||
-    (socketToken !== undefined && typeof socketToken !== "string") ||
-    (socketPath ?? null) !== row.socket_path ||
-    (socketToken ? 1 : 0) !== row.has_socket_token
+    (socketToken !== undefined && typeof socketToken !== "string")
   ) {
     throw invalid();
   }

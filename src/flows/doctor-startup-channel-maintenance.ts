@@ -10,8 +10,6 @@ type DoctorStartupMaintenanceRuntime = {
   log: (message: string) => void;
 };
 
-type ChannelPluginStartupMaintenanceRunner = typeof runChannelPluginStartupMaintenance;
-
 function normalizeWarningMessage(warning: string): string {
   return warning.replace(/^-\s*/, "").trim();
 }
@@ -23,22 +21,20 @@ function warningPath(warning: string): string | undefined {
 /** Collect read-only channel doctor preview warnings as structured findings. */
 export async function collectChannelPreviewWarningHealthFindings(params: {
   cfg: OpenClawConfig;
-  doctorFixCommand?: string;
-  env?: NodeJS.ProcessEnv;
   allowExec?: boolean;
 }): Promise<readonly HealthFinding[]> {
   const { collectChannelDoctorPreviewWarnings } =
     await import("../commands/doctor/shared/channel-doctor.js");
-  const doctorFixCommand = params.doctorFixCommand ?? "openclaw doctor --fix";
+  const doctorFixCommand = "openclaw doctor --fix";
   const previewConfig = await resolveDoctorChannelPreviewConfig({
     cfg: params.cfg,
-    env: params.env ?? process.env,
+    env: process.env,
     allowExec: params.allowExec,
   });
   const warnings = await collectChannelDoctorPreviewWarnings({
     cfg: previewConfig.cfg,
     doctorFixCommand,
-    env: params.env ?? process.env,
+    env: process.env,
   });
   return warnings.map((warning): HealthFinding => {
     const path = warningPath(warning);
@@ -60,19 +56,15 @@ export async function collectChannelPreviewWarningHealthFindings(params: {
 /** Runs channel plugin startup maintenance when doctor fix mode explicitly permits repairs. */
 export async function maybeRunDoctorStartupChannelMaintenance(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  runChannelPluginStartupMaintenance?: ChannelPluginStartupMaintenanceRunner;
   runtime: DoctorStartupMaintenanceRuntime;
   shouldRepair: boolean;
 }): Promise<void> {
   if (!params.shouldRepair) {
     return;
   }
-  const runStartupMaintenance =
-    params.runChannelPluginStartupMaintenance ?? runChannelPluginStartupMaintenance;
-  await runStartupMaintenance({
+  await runChannelPluginStartupMaintenance({
     cfg: params.cfg,
-    env: params.env ?? process.env,
+    env: process.env,
     // Doctor maps startup warnings to terminal errors so repair output is visible.
     log: {
       info: (message) => params.runtime.log(message),

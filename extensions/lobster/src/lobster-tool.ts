@@ -1,6 +1,5 @@
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import {
@@ -8,7 +7,7 @@ import {
   resolveLobsterCwd,
   type LobsterRunnerParams,
 } from "./lobster-runner.js";
-export function createLobsterTool(api: OpenClawPluginApi) {
+export function createLobsterTool() {
   const runner = createEmbeddedLobsterRunner();
   return {
     name: "lobster",
@@ -49,8 +48,6 @@ export function createLobsterTool(api: OpenClawPluginApi) {
       const cwd = resolveLobsterCwd(params.cwd);
       const timeoutMs = readPositiveIntegerParam(params, "timeoutMs") ?? 20_000;
       const maxStdoutBytes = readPositiveIntegerParam(params, "maxStdoutBytes") ?? 512_000;
-
-      api.logger.debug?.(`lobster plugin runtime=${api.runtime.version}`);
 
       const runnerParams: LobsterRunnerParams = {
         action,

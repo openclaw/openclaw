@@ -107,49 +107,38 @@ it.each([
   expect(receipt()).toBeUndefined();
 });
 
-it.each(["verify", "claim"] as const)(
-  "leaves a source changed before %s unchanged",
-  async (operation) => {
-    await writeLegacy();
-    if (operation === "verify") {
-      const verify = vi.spyOn(LegacyMigrationSourceClaim.prototype, "verify");
-      verify.mockImplementationOnce(function (this: LegacyMigrationSourceClaim, ...args) {
-        verify.mockRestore();
-        fs.appendFileSync(source, "\n");
-        return this.verify(...args);
-      });
-    } else {
-      const claimSource = vi.spyOn(LegacyMigrationSourceClaim.prototype, "claim");
-      claimSource.mockImplementationOnce(function (this: LegacyMigrationSourceClaim, ...args) {
-        claimSource.mockRestore();
-        fs.appendFileSync(source, "\n");
-        return this.claim(...args);
-      });
-    }
-    const result = await migrate();
-    expect(result.changes).toEqual([]);
-    expect(result.warnings[0]).toContain("changed");
-    expectPaths(true, false);
-    expect(receipt()).toBeUndefined();
-  },
-);
+it("leaves a source changed before cleanup unchanged with a pending receipt", async () => {
+  await writeLegacy();
+  const verify = vi.spyOn(LegacyMigrationSourceClaim.prototype, "verify");
+  verify.mockImplementationOnce(function (this: LegacyMigrationSourceClaim, ...args) {
+    verify.mockRestore();
+    fs.appendFileSync(source, "\n");
+    return this.verify(...args);
+  });
+  const result = await migrate();
+  expect(result.changes).toEqual([]);
+  expect(result.warnings[0]).toContain("changed");
+  expectPaths(true, false);
+  expect(receipt()?.removed_source).toBe(0);
+});
 
 it.each([false, true])(
-  "recovers interrupted cleanup (claim already deleted: %s)",
+  "recovers interrupted cleanup (source already deleted: %s)",
   async (deleted) => {
     await writeLegacy(rows("retired"));
-    const remove = vi.spyOn(LegacyMigrationSourceClaim.prototype, "remove");
-    remove.mockImplementationOnce(async function (this: LegacyMigrationSourceClaim, ...args) {
-      remove.mockRestore();
+    const verify = vi.spyOn(LegacyMigrationSourceClaim.prototype, "verify");
+    verify.mockImplementationOnce(async function (this: LegacyMigrationSourceClaim, ...args) {
+      verify.mockRestore();
+      await this.verify(...args);
       if (deleted) {
-        await this.remove(...args);
+        await fsp.unlink(source);
       }
       throw new Error("simulated cleanup failure");
     });
     const first = await migrate();
     expect(first.changes).toEqual([]);
     expect(first.warnings[0]).toContain("discard was recorded, but cleanup failed");
-    expectPaths(false, !deleted);
+    expectPaths(!deleted, false);
     expect(receipt()?.removed_source).toBe(0);
     const detected = await detect();
     expect(detected.hasLegacy).toBe(true);

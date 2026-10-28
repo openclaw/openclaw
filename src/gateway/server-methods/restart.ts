@@ -1,14 +1,26 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  validateUpdateRunParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import { isRestartEnabled } from "../../config/commands.flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import {
   createSafeGatewayRestartPreflight,
   scheduleSafeGatewayRestart,
 } from "../../infra/restart-coordinator.js";
-import { requestGatewayRestartWithSignalAdmission } from "../../infra/restart.js";
 import {
+  clearRestartSentinelIfRevision,
+  writeRestartSentinel,
+} from "../../infra/restart-sentinel.js";
+import { requestGatewayRestartWithSignalAdmission } from "../../infra/restart.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import {
+  parseRestartRequestParams,
   parseTargetedGatewayRestart,
   parseTargetedGatewayRestartIntent,
 } from "./restart-request.js";
@@ -56,7 +68,8 @@ export const restartHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
     }
   },
-  "gateway.restart.request": async ({ respond, params }) => {
+  "gateway.restart.request": async (options) => {
+    const { respond, params } = options;
     if (!isRecord(params)) {
       rejectRestartRequest(respond, "invalid gateway.restart.request params");
       return;
@@ -91,6 +104,7 @@ export const restartHandlers: GatewayRequestHandlers = {
         rejectRestartRequest(respond, "target gateway no longer owns the active lock");
         return;
       }
+      readGatewayRequestMutationAuthority(options).assertCurrent();
       const result = requestGatewayRestartWithSignalAdmission(reason, intent);
       if (result.status === "failed") {
         respond(
@@ -107,10 +121,75 @@ export const restartHandlers: GatewayRequestHandlers = {
       });
       return;
     }
+    // Retain chat ownership independently of the completed tool turn, like /restart.
+    const restartParams = {
+      requester: params.requester,
+      sessionKey: params.sessionKey,
+      deliveryContext: params.deliveryContext,
+      note: params.note,
+    };
+    if (!validateUpdateRunParams(restartParams)) {
+      rejectRestartRequest(respond, "invalid gateway restart requester or delivery");
+      return;
+    }
+    const requester = restartParams.requester;
+    const chat = requester?.channel && !isInternalMessageChannel(requester.channel);
+    const owner = chat
+      ? await prepareCommandOwnerAuthority(options.context.getRuntimeConfig(), requester)
+      : undefined;
+    const assertOwnerCurrent = () => {
+      if (!chat) {
+        return;
+      }
+      const config = options.context.getRuntimeConfig();
+      if (!owner?.isCurrent(config)) {
+        throw new Error("Gateway maintenance requires a current owner principal.");
+      }
+      if (!isRestartEnabled(config)) {
+        throw new Error("Restarts from chat are disabled (commands.restart=false).");
+      }
+    };
+    const { sessionKey, deliveryContext, threadId, note } =
+      parseRestartRequestParams(restartParams);
+    let revision: number | undefined;
+    const clearNotice = async () => {
+      if (revision !== undefined) {
+        await clearRestartSentinelIfRevision(revision);
+      }
+    };
+    assertOwnerCurrent();
+    readGatewayRequestMutationAuthority(options).assertCurrent();
     const result = scheduleSafeGatewayRestart({
       reason,
-      delayMs: 0,
       skipDeferral: params.skipDeferral === true,
+      sessionKey,
+      ...(chat || sessionKey
+        ? {
+            emitHooks: {
+              assertCurrent: assertOwnerCurrent,
+              beforeEmit: async () => {
+                if (!sessionKey) {
+                  return;
+                }
+                revision = (
+                  await writeRestartSentinel({
+                    kind: "restart",
+                    status: "ok",
+                    ts: Date.now(),
+                    sessionKey,
+                    deliveryContext,
+                    threadId,
+                    message: note ?? "Gateway restarted.",
+                    continuation: null,
+                    stats: { mode: "gateway.restart", reason },
+                  })
+                ).revision;
+              },
+              afterEmitRejected: clearNotice,
+              afterEmitFailed: clearNotice,
+            },
+          }
+        : {}),
     });
     respond(true, result);
   },

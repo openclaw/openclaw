@@ -2,7 +2,6 @@
  * OpenClaw stdio transport wrapper for MCP server subprocesses.
  */
 import fs from "node:fs/promises";
-import process from "node:process";
 import { PassThrough } from "node:stream";
 import {
   STDIO_DEFAULT_MAX_BUFFER_SIZE,
@@ -11,7 +10,7 @@ import {
   type JSONRPCMessage,
 } from "@modelcontextprotocol/client";
 import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
-import { throwCollectedErrors } from "../infra/error-graph-internal.js";
+import { materializeErrorStack, throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -42,7 +41,6 @@ type OpenClawStdioServerParameters = {
   decoder?: McpStdioDecoder;
   cwd?: string;
   prepareDataDir?: string;
-  stderr?: "pipe" | "overlapped" | "inherit" | "ignore";
 };
 
 export class OpenClawStdioClientTransport extends EventTarget implements Transport {
@@ -52,7 +50,7 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
   onexit?: (exit: McpStdioExit) => void;
 
   private readonly readBuffer: McpStdioDecoder;
-  private readonly stderrStream: PassThrough | null = null;
+  private readonly stderrStream = new PassThrough();
   private process?: OwnedStdioProcess;
   private starting?: Promise<void>;
   private closing?: Promise<void>;
@@ -70,9 +68,6 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
     // Keep malformed-frame errors visible; the v2 SDK buffer silently drops invalid JSON.
     this.readBuffer =
       serverParams.decoder ?? new McpStdioFrameDecoder(STDIO_DEFAULT_MAX_BUFFER_SIZE, "transport");
-    if (serverParams.stderr === "pipe" || serverParams.stderr === "overlapped") {
-      this.stderrStream = new PassThrough();
-    }
   }
 
   async start(): Promise<void> {
@@ -91,16 +86,20 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
       try {
         await fs.mkdir(prepareDataDir, { recursive: true });
       } catch (error) {
-        throw new Error(
+        const failure = new Error(
           `unable to prepare PLUGIN_DATA directory "${prepareDataDir}": ${formatErrorMessage(error)}`,
           { cause: error },
         );
+        materializeErrorStack(failure);
+        throw failure;
       }
     }
 
     // Directory preparation may finish after shutdown has retired this launch.
     if (this.startupAbort.signal.aborted) {
-      throw new Error("MCP stdio transport is closed");
+      const failure = new Error("MCP stdio transport is closed");
+      materializeErrorStack(failure);
+      throw failure;
     }
 
     try {
@@ -131,8 +130,7 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
         ...(this.docker
           ? { assertCurrent: this.docker.assertCurrent }
           : { abortSignal: this.startupAbort.signal }),
-        stderrDestination:
-          this.stderrStream ?? (this.serverParams.stderr === "ignore" ? undefined : process.stderr),
+        stderrDestination: this.stderrStream,
       });
       this.process = child;
       child.onError((error) => this.notifyError(error));
@@ -153,9 +151,6 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
           receive(Buffer.from(text));
         }
       }, receive);
-      if (this.serverParams.stderr === "ignore") {
-        child.onStderr(() => {});
-      }
       // Root closure retires the connection immediately; the retained owner still
       // joins descendants before disposal can certify completed cleanup.
       void child.wait().then(
@@ -177,6 +172,7 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
         },
       );
     } catch (error) {
+      materializeErrorStack(error);
       if (error instanceof OwnedStdioCleanupError) {
         this.startupCleanupError = error;
         recordAgentCleanupFailure();
@@ -273,12 +269,13 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
         }
         throwCollectedErrors(failures, "MCP container and host-process cleanup failed");
       } catch (error) {
+        materializeErrorStack(error);
         recordAgentCleanupFailure();
         throw error;
       } finally {
         this.process = undefined;
         this.readBuffer.clear();
-        this.stderrStream?.end();
+        this.stderrStream.end();
         this.notifyClosed();
       }
     })();

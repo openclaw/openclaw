@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 
 export async function withMockChromeCdpServer(params: {
   wsPath: string;
@@ -63,13 +64,9 @@ export async function withMockChromeCdpServer(params: {
       });
     });
   }
-  await new Promise<void>((resolve, reject) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-    server.once("error", reject);
-  });
+  const port = await listenOnLoopback(server);
   try {
-    const addr = server.address() as AddressInfo;
-    await params.run(`http://127.0.0.1:${addr.port}`, requests);
+    await params.run(`http://127.0.0.1:${port}`, requests);
   } finally {
     await new Promise<void>((resolve) => {
       wss.close(() => resolve());

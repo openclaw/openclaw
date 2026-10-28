@@ -38,10 +38,7 @@ import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
-import {
-  classifySessionAttention,
-  isRepeatedModelRequestStalled,
-} from "./diagnostic-session-attention.js";
+import { classifySessionAttention } from "./diagnostic-session-attention.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
@@ -345,9 +342,9 @@ it.for(["success", "expiry"] as const)(
       expect(activity).toMatchObject({
         repeatedRequestNoProgressAgeMs: REQUEST_TIMEOUT_MS + 250,
         lastProgressReason: "model_call:stream_progress",
-        activeModelCallRecoveryDeadlineAtMs: fallbackStartedAt + REQUEST_TIMEOUT_MS,
+        activeModelCallRequestTimeoutMs: REQUEST_TIMEOUT_MS,
       });
-      expect(isRepeatedModelRequestStalled(activity, STUCK_ABORT_MS)).toBe(false);
+      expect(operation.watchdog.decide().action).not.toBe("stop");
       expect(
         classifySessionAttention({
           state: "processing",
@@ -392,9 +389,11 @@ it.for(["success", "expiry"] as const)(
         expect(handle.abort).not.toHaveBeenCalled();
       } else {
         vi.setSystemTime(fallbackStartedAt + REQUEST_TIMEOUT_MS);
-        expect(
-          isRepeatedModelRequestStalled(getDiagnosticSessionActivitySnapshot(ref), STUCK_ABORT_MS),
-        ).toBe(true);
+        expect(operation.watchdog.decide()).toMatchObject({
+          action: "stop",
+          reason: "semantic_stall",
+          deadlineAtMs: fallbackStartedAt + REQUEST_TIMEOUT_MS,
+        });
         expect(await wait(recover())).toMatchObject({
           status: "aborted",
           action: "abort_embedded_run",

@@ -58,7 +58,7 @@ it.each([undefined, 100_000])(
         : {},
       followupRun,
       defaultModel: model,
-      isHeartbeat: false,
+
       sessionKey: "main",
       sessionEntry: {
         sessionId: "session",

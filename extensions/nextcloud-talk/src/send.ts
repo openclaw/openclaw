@@ -101,6 +101,7 @@ export async function sendMessageNextcloudTalk(
   to: string,
   text: string,
   opts: NextcloudTalkSendOpts & {
+    silent?: boolean;
     onPlatformSendDispatch?: () => Promise<void>;
     assertDirectAdapterHandoff?: () => void;
   },
@@ -124,7 +125,11 @@ export async function sendMessageNextcloudTalk(
   const { response, release, signature } = await postNextcloudTalkBot({
     context,
     path: `${roomToken}/message`,
-    payload: { message, replyTo: opts.replyTo || undefined },
+    payload: {
+      message,
+      replyTo: opts.replyTo || undefined,
+      ...(opts.silent ? { silent: true } : {}),
+    },
     signedValue: message,
     beforeRequest: opts.assertDirectAdapterHandoff,
     auditContext: "nextcloud-talk-send",

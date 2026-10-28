@@ -273,7 +273,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
         postPollError(port, err, retryAfterMs);
         // 409 must propagate to the parent: it owns duplicate-poller/webhook
         // conflict recovery. Transient Bot API errors stay local to this worker.
-        if (!isRetryableTelegramApiError(err, { context: "polling" })) {
+        if (!isRetryableTelegramApiError(err)) {
           throw err;
         }
         try {

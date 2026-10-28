@@ -3,6 +3,7 @@ import { sleepWithAbort } from "../../infra/backoff.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
+  NODE_WORKSPACE_RESULT_VERSION,
   resolveNodeWorkerLaunchToolNames,
 } from "../../infra/node-runner-inventory.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -20,10 +21,7 @@ import {
   NodeWorkerWorkspaceTransferError,
 } from "../../worker/node-workspace-transfer-protocol.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
-import type {
-  NodeWorkerSupervisorNodeProof,
-  NodeWorkerSupervisorTransport,
-} from "../node-registry-private.js";
+import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { measureGatewayCloseStep } from "../restart-trace.js";
 import {
   measureNodeWorkerLaunchBytes,
@@ -31,6 +29,7 @@ import {
   RETRYABLE_NODE_WORKER_TRANSPORT_CODES,
 } from "./node-launch-adapter.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
+import { findNodeWorker } from "./node-worker-discovery.js";
 import { nodeWorkerGatewayNamespace } from "./node-worker-gateway-namespace.js";
 import { createNodeWorkerProcessObserver } from "./node-worker-process-observation.js";
 import { parseNodeWorkerResponse } from "./node-worker-response.js";
@@ -39,11 +38,9 @@ import type {
   NodeTunnelEntry,
   NodeWorkerTunnelManagerOptions,
   NodeWorkerTunnelStartRequest,
+  NodeWorkerWorkspaceBinding,
 } from "./node-worker-tunnel.types.js";
-import {
-  createNodeWorkerWorkspaceActions,
-  type NodeWorkerWorkspaceBinding,
-} from "./node-worker-workspace-actions.js";
+import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import {
   drainNodeWorkerWorkspace,
   restoreNodeWorkerWorkspaceDrainOwner,
@@ -124,22 +121,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
     readWorkerProjectPreparation(
       options.getEnvironment(entry.environmentId)?.profileSnapshot.project,
     );
-  const findNode = async (
-    entry: NodeEnvironmentOwner,
-    signal: AbortSignal,
-  ): Promise<{ transport: NodeWorkerSupervisorTransport; node: NodeWorkerSupervisorNodeProof }> => {
-    const transport = options.getTransport();
-    if (!transport) {
-      throw new Error("device worker node transport is unavailable");
-    }
-    const node = await raceNodeWorkerOperation(transport.getCurrentNode(entry.deviceId), signal);
-    if (!node) {
-      throw new WorkerTunnelOwnerDisconnectedError(
-        "device worker node is not connected with the supervisor dialect",
-      );
-    }
-    return { transport, node };
-  };
+  const findNode = (entry: NodeEnvironmentOwner, signal: AbortSignal) =>
+    findNodeWorker({ getTransport: options.getTransport, deviceId: entry.deviceId, signal });
 
   const drainWorkspace = (entry: NodeEnvironmentOwner, isAuthorized: () => boolean) =>
     drainNodeWorkerWorkspace({
@@ -374,6 +357,13 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
             throw new Error("node worker workspace authority closed");
           }
           return node.workerHost.workspaceQuiescence === NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION;
+        },
+        supportsGitResults: async () => {
+          const { node } = await findNode(entry, entry.abortController.signal);
+          if (!isLiveEntry(entry)) {
+            throw new Error("node worker workspace authority closed");
+          }
+          return node.workerHost.workspaceResultVersion === NODE_WORKSPACE_RESULT_VERSION;
         },
         workspaceTransfer: options.workspaceTransfer,
         runWorkspaceCommand: (command) => runWorkspaceCommand(entry, command),

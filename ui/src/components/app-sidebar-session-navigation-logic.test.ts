@@ -6,6 +6,7 @@ import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts"
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createActiveSessionPlacement } from "../test-helpers/session-placement.ts";
 import { collectKnownSessionRows, fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import {
   buildReconciledSidebarZone,
@@ -296,19 +297,7 @@ describe("sidebar navigation lineage ownership", () => {
       const row = (key: string, status: "available" | "offline"): GatewaySessionRow => ({
         ...child,
         key,
-        placement: {
-          state: "active",
-          generation: 1,
-          createdAtMs: 1,
-          updatedAtMs: 1,
-          stateChangedAtMs: 1,
-          environmentId: "worker:device",
-          activeOwnerEpoch: 1,
-          workerBundleHash: "a".repeat(64),
-          workspaceBaseManifestRef: "manifest",
-          remoteWorkspaceDir: "/workspace",
-          runner: { kind: "device", status },
-        },
+        placement: createActiveSessionPlacement({ runner: { kind: "device", status } }),
       });
       const canonical = {
         ...row(rootKey, "offline"),

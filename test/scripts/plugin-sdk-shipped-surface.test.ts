@@ -21,11 +21,9 @@ const record: PluginCompatRecord = {
   code: "fixture.messaging",
   status: "removed",
   owner: "sdk",
-  introduced: "2026.9.8",
   docsPath: "/plugins/sdk-migration",
   surfaces: [surface],
   diagnostics: [],
-  tests: [],
 };
 
 // Protect the public compatibility window independently of compiler setup and budget accounting.

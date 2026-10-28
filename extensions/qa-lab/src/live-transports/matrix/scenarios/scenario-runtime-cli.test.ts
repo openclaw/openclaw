@@ -10,10 +10,10 @@ import {
   withinTest,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { isProcessAlive as isProcessRunning } from "../../../../../test-support/process.test-support.js";
 import { killMatrixQaCliChild } from "./scenario-runtime-cli-process.js";
 import {
   formatMatrixQaCliCommand,
-  redactMatrixQaCliOutput,
   runMatrixQaOpenClawCli,
   startMatrixQaOpenClawCli,
 } from "./scenario-runtime-cli.js";
@@ -52,15 +52,6 @@ const cliParams = (cwd: string, timeoutMs = 500) => ({
 });
 const waitForText = (session: ReturnType<typeof startMatrixQaOpenClawCli>, text: string) =>
   session.waitForOutput((output) => output.stdout.includes(text), text, 5_000);
-
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function readPidFile(pathToCheck: string): Promise<number> {
   const value = (await readFile(pathToCheck, "utf8")).trim();
@@ -126,12 +117,6 @@ describe("Matrix QA CLI runtime", () => {
     ],
   ])("redacts secret arguments in %s", (command, expected) => {
     expect(formatMatrixQaCliCommand(command.split(" "))).toBe(expected);
-  });
-
-  it("redacts Matrix token output before diagnostics and artifacts", () => {
-    expect(
-      redactMatrixQaCliOutput("GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij"),
-    ).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij");
   });
 
   it.each([

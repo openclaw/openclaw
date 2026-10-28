@@ -10,6 +10,7 @@ import {
   type SubagentRunRecordOverrides,
 } from "../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
+import { toolCall } from "./main-session-restart-recovery-transcript.test-support.js";
 
 type ParentRestartRecoveryFixture = {
   makeSessionsDir: (agentId?: string) => Promise<string>;
@@ -136,14 +137,7 @@ export function registerParentRestartRecoveryCases(harness: ParentRestartRecover
     async (replacement) => {
       const messages = [
         { role: "user", content: "finish the delegated work" },
-        createAssistantToolCallMessage([
-          {
-            type: "toolCall",
-            id: "inspect-child",
-            name: "read",
-            arguments: { path: "result.txt" },
-          },
-        ]),
+        createAssistantToolCallMessage([toolCall("inspect-child", "read", { path: "result.txt" })]),
       ];
       const originalLifecycleRevision = "original-parent-lifecycle";
       const sessionsDir = await writePreparedMainSessionTranscript(messages, {

@@ -218,6 +218,14 @@ export async function runIndependentCreationInputCase(
             ...expectDefined(
               createAdmittedGatewayToolCallerIdentity({
                 admittedRunContext: admitted,
+                // The initiating request is human-authored, independently of its execution grant.
+                requesterOrigin: {
+                  sessionKey: sourceKey,
+                  operatorProfileId: expectDefined(
+                    client.authenticatedUserProfile,
+                    "requesting profile",
+                  ).profileId,
+                },
                 agentId: "main",
                 sessionKey: sourceKey,
               }),

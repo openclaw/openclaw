@@ -39,11 +39,6 @@ type ArtifactTransferAuthorization = {
   abortController: AbortController;
 };
 
-export type ArtifactTransferOptions = {
-  now?: () => number;
-  generateToken?: (bytes: number) => string;
-};
-
 export class ArtifactTransferBusyError extends Error {
   constructor() {
     super("Worker artifact transfer is already active");
@@ -51,9 +46,7 @@ export class ArtifactTransferBusyError extends Error {
   }
 }
 
-export function createArtifactTransferService(options: ArtifactTransferOptions = {}) {
-  const now = options.now ?? Date.now;
-  const generateToken = options.generateToken ?? generateSecureToken;
+export function createArtifactTransferService() {
   const capabilities = new Map<string, ArtifactTransferCapability>();
 
   const revokeCapability = (
@@ -72,7 +65,7 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
     try {
       if (
         capabilities.get(capability.token) === capability &&
-        capability.expiresAtMs > now() &&
+        capability.expiresAtMs > Date.now() &&
         !capability.abortController.signal.aborted &&
         capability.isAuthorized()
       ) {
@@ -83,7 +76,7 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
     }
     revokeCapability(
       capability,
-      capability.expiresAtMs <= now() ? "expired" : "authorization lost",
+      capability.expiresAtMs <= Date.now() ? "expired" : "authorization lost",
     );
     return false;
   };
@@ -111,7 +104,7 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
       ) {
         throw new Error("Worker artifact archive is invalid or exceeds the transfer limit");
       }
-      const token = generateToken(32);
+      const token = generateSecureToken(32);
       if (!TOKEN_PATTERN.test(token) || capabilities.has(token)) {
         throw new Error("Worker artifact transfer token generator returned an invalid bearer");
       }
@@ -120,7 +113,7 @@ export function createArtifactTransferService(options: ArtifactTransferOptions =
         token,
         artifactKey: params.artifactKey,
         artifact: { ...params.artifact },
-        expiresAtMs: now() + params.ttlMs,
+        expiresAtMs: Date.now() + params.ttlMs,
         remainingServes: params.maxServes,
         abortController: new AbortController(),
         isAuthorized: params.isAuthorized,

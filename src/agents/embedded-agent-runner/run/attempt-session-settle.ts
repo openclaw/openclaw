@@ -1,4 +1,5 @@
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+import { createPendingPromiseTracker } from "../../../shared/pending-promises.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
@@ -9,7 +10,7 @@ import { clearToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-se
 import { log } from "../logger.js";
 import type { retainEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
-import type { UserTranscriptContext } from "./attempt-history.js";
+import type { UserTranscriptContext } from "./attempt-llm-boundary.types.js";
 import type { EmitDiagnosticRunCompleted } from "./attempt-setup.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
@@ -27,14 +28,7 @@ export function createEmbeddedAttemptSessionSettleTracker(
       recordAgentCleanupFailure();
     }
   };
-  const trackSettlePromise = (promise: Promise<void>): Promise<void> => {
-    inFlight.add(promise);
-    const settled = () => {
-      inFlight.delete(promise);
-    };
-    void promise.then(settled, settled);
-    return promise;
-  };
+  const trackSettlePromise = createPendingPromiseTracker(inFlight);
 
   return {
     abortActiveSession: (reason?: unknown) =>

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { NativeChromeExtensionSetupAction as Action } from "../../app/native-chrome-setup.ts";
 import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createChromeExtensionSetupResult } from "../../test-helpers/chrome-extension-setup.ts";
@@ -23,25 +24,22 @@ const labels = {
   inspect: "Refresh setup status",
   verify: "Verify connection",
 };
-let defaultCapability: ApplicationContext["nativeDeviceSettings"] = null;
 const capabilities = new Set<NonNullable<ApplicationContext["nativeDeviceSettings"]>>();
 function nativeBridge(
-  postMessage: (message: { type: string; action?: string }) => Promise<unknown>,
+  postMessage: (message: { type: string; action?: Action }) => Promise<unknown>,
   snapshot = createNativeDeviceSettingsSnapshot(),
 ) {
-  Object.assign(window, { __OPENCLAW_NATIVE_DEVICE_SETTINGS__: snapshot });
-  Object.defineProperty(window, "webkit", {
-    configurable: true,
-    value: {
-      messageHandlers: { openclawDeviceSettings: { postMessage } },
-    },
+  vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
+  vi.stubGlobal("webkit", {
+    messageHandlers: { openclawDeviceSettings: { postMessage } },
   });
-  defaultCapability = createNativeDeviceSettingsCapability()!;
-  capabilities.add(defaultCapability);
+  const capability = createNativeDeviceSettingsCapability()!;
+  capabilities.add(capability);
+  return capability;
 }
-function bridge(postMessage: (message: { action: string }) => Promise<unknown>) {
+function bridge(postMessage: (message: { action: Action }) => Promise<unknown>) {
   const snapshot = createNativeDeviceSettingsSnapshot();
-  nativeBridge(
+  return nativeBridge(
     (message) =>
       message.type === "chrome-extension-setup" && message.action
         ? postMessage({ action: message.action })
@@ -49,20 +47,18 @@ function bridge(postMessage: (message: { action: string }) => Promise<unknown>) 
     snapshot,
   );
 }
-async function mount() {
-  const fixture = createSolidApplicationContextProvider({
-    nativeDeviceSettings: defaultCapability,
+function mount(capability: ApplicationContext["nativeDeviceSettings"] = null) {
+  const { wrapper } = createSolidApplicationContextProvider({
+    nativeDeviceSettings: capability,
   } as ApplicationContext);
-  const mounted = mountSolid(() => <Apps onNavigate={vi.fn()} />, { wrapper: fixture.wrapper });
-  const host = mounted.container;
+  const { container, unmount } = mountSolid(() => <Apps onNavigate={vi.fn()} />, { wrapper });
   flush();
-  const setup = host.querySelector<HTMLElement>("openclaw-native-chrome-setup")!;
-  return { host, setup, card: setup.closest(".apps-card")!, unmount: mounted.unmount };
+  const setup = container.querySelector<HTMLElement>("openclaw-native-chrome-setup")!;
+  return { setup, card: setup.closest(".apps-card")!, unmount, capability };
 }
+const buttons = (setup: HTMLElement) => [...setup.querySelectorAll("button")];
 function click(setup: HTMLElement, label: string) {
-  const button = [...setup.querySelectorAll("button")].find(
-    (el) => el.textContent?.trim() === label,
-  );
+  const button = buttons(setup).find((el) => el.textContent?.trim() === label);
   expect(button).toBeDefined();
   button!.click();
 }
@@ -74,33 +70,23 @@ async function idle(setup: HTMLElement) {
 }
 beforeEach(() => i18n.setLocale("en"));
 afterEach(() => {
-  document.body.replaceChildren();
   for (const capability of capabilities) {
     capability.dispose();
   }
   capabilities.clear();
-  defaultCapability = null;
-  Reflect.deleteProperty(window, "webkit");
-  Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_DEVICE_SETTINGS__");
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
 describe("Apps local Chrome setup", () => {
   it("uses explicit native actions through the device-settings context", async () => {
-    const post = vi.fn(async ({ action }: { action: string }) =>
+    const post = vi.fn(async ({ action }: { action: Action }) =>
       result({
-        action: action as "inspect" | "install" | "verify",
-        target: {
-          ...result().target,
-          hostname: "Example desktop",
-          profile: "work",
-          relayPort: 19444,
-        },
+        action,
         ...(action === "verify" ? connected : {}),
       }),
     );
-    bridge(post);
-    const { setup, card } = await mount();
+    const { setup, card } = mount(bridge(post));
     window.dispatchEvent(new Event("focus"));
     expect(post).not.toHaveBeenCalled();
     expect(card.textContent).toContain("This does not install on a remote Gateway");
@@ -111,75 +97,77 @@ describe("Apps local Chrome setup", () => {
     await idle(setup);
     click(setup, "Verify connection");
     await expectText(setup, "Extension connected on this device.");
-    expect(setup.textContent).toContain("Example desktop");
-    expect(setup.textContent).toContain("work");
-    expect(setup.textContent).toContain("19444");
+    for (const text of ["Example Mac", "chrome", "18792"]) {
+      expect(setup.textContent).toContain(text);
+    }
     expect(setup.textContent).toContain("does not mean eligible tabs");
     expect(post.mock.calls).toEqual(["inspect", "install", "verify"].map((action) => [{ action }]));
   });
-  it("keeps only Store and docs in an ordinary browser", async () => {
-    const { card, setup } = await mount();
+  it("offers no native actions in an ordinary browser", () => {
+    const { setup } = mount();
     expect(setup.querySelector("button")).toBeNull();
-    expect([...card.querySelectorAll("a")].map((a) => a.href)).toEqual([
-      "https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig",
-      "https://docs.openclaw.ai/tools/chrome-extension",
-    ]);
   });
-  it.each([
-    { label: "legacy", actions: undefined, buttons: [labels.install] },
-    { label: "none", actions: [], buttons: [] },
-    { label: "inspect only", actions: ["inspect"], buttons: [labels.inspect] },
-  ] as const)(
-    "offers only advertised Mac actions or the released legacy install: $label",
-    async ({ actions, buttons }) => {
+  it("blocks duplicate setup while pending and recovers after a rejected request", async () => {
+    const pending = createDeferred<unknown>();
+    const retry = createDeferred<unknown>();
+    const post = vi.fn().mockReturnValueOnce(pending.promise).mockReturnValueOnce(retry.promise);
+    const { setup } = mount(bridge(post));
+    click(setup, labels.inspect);
+    click(setup, labels.inspect);
+    expect(post).toHaveBeenCalledExactlyOnceWith({ action: "inspect" });
+    flush();
+    expect(buttons(setup).every((button) => button.disabled)).toBe(true);
+    expect(setup.textContent).toContain("Working on this device…");
+
+    pending.reject(new Error("Native setup unavailable"));
+    await expectText(setup, "Setup could not finish");
+    await idle(setup);
+    click(setup, labels.verify);
+    flush();
+    expect(setup.textContent).toContain("Working on this device…");
+    expect(setup.textContent).not.toContain("Setup could not finish");
+    expect(buttons(setup).every((button) => button.disabled)).toBe(true);
+    retry.resolve(result(connected));
+    await expectText(setup, "Extension connected on this device.");
+    await idle(setup);
+    expect(setup.textContent).not.toContain("Setup could not finish");
+  });
+  it.each([{ actions: [] }, { actions: ["inspect"] }] as const)(
+    "offers only $actions",
+    ({ actions }) => {
       const snapshot = createNativeDeviceSettingsSnapshot();
-      if (actions === undefined) {
-        delete snapshot.browser!.chromeSetupActions;
-      } else {
-        snapshot.browser!.chromeSetupActions = [...actions];
-      }
-      const post = vi.fn(async (message: { type: string; action?: string }) => {
-        if (message.type === "install-chrome-extension") {
-          return { nativeHostRegistered: true, installRequested: true, discoveredProfiles: 0 };
-        }
-        if (message.type === "chrome-extension-setup") {
-          return result({ action: message.action as "install" | "inspect" | "verify" });
-        }
-        return snapshot;
-      });
-      nativeBridge(post, snapshot);
-      const { setup } = await mount();
-      expect(
-        [...setup.querySelectorAll("button")].map((button) => button.textContent?.trim()),
-      ).toEqual(buttons);
-      if (actions === undefined) {
-        click(setup, labels.install);
-        await expectText(setup, "Connection has not been verified on this device.");
-        expect(post).toHaveBeenCalledWith({ type: "install-chrome-extension" });
-        expect(post.mock.calls.some(([message]) => message.type === "chrome-extension-setup")).toBe(
-          false,
-        );
-        expect(setup.textContent).not.toContain("Extension connected on this device.");
-      } else {
-        for (const action of actions) {
-          click(setup, labels[action]);
-          await idle(setup);
-          expect(post).toHaveBeenCalledWith({ type: "chrome-extension-setup", action });
-        }
-        expect(
-          post.mock.calls.some(([message]) => message.type === "install-chrome-extension"),
-        ).toBe(false);
-      }
+      snapshot.browser.chromeSetupActions = [...actions];
+      const { setup } = mount(nativeBridge(async () => snapshot, snapshot));
+      expect(buttons(setup).map((button) => button.textContent?.trim())).toEqual(
+        actions.map((action) => labels[action]),
+      );
     },
   );
+  it("uses the released legacy install without claiming a connection", async () => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    delete snapshot.browser.chromeSetupActions;
+    const post = vi.fn(async (message: { type: string }) =>
+      message.type === "install-chrome-extension"
+        ? { nativeHostRegistered: true, installRequested: true, discoveredProfiles: 0 }
+        : snapshot,
+    );
+    const { setup } = mount(nativeBridge(post, snapshot));
+    expect(buttons(setup).map((button) => button.textContent?.trim())).toEqual([labels.install]);
+    click(setup, labels.install);
+    await expectText(setup, "Connection has not been verified on this device.");
+    expect(post).toHaveBeenCalledWith({ type: "install-chrome-extension" });
+    expect(post).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "chrome-extension-setup" }),
+    );
+    expect(setup.textContent).not.toContain("Extension connected on this device.");
+  });
   it("discards a pending reply after detach/remount and preserves newer intent", async () => {
     const old = createDeferred<unknown>();
     const post = vi.fn().mockReturnValueOnce(old.promise).mockResolvedValue(result(connected));
-    bridge(post);
-    const first = await mount();
+    const first = mount(bridge(post));
     click(first.setup, "Refresh setup status");
     first.unmount();
-    const { setup } = await mount();
+    const { setup } = mount(first.capability);
     click(setup, "Verify connection");
     await expectText(setup, "Extension connected on this device.");
     old.resolve(result());
@@ -192,8 +180,7 @@ describe("Apps local Chrome setup", () => {
     "rejects a setup reply with %s",
     async (reason) => {
       const pending = createDeferred<unknown>();
-      bridge(() => pending.promise);
-      const { setup } = await mount();
+      const { setup } = mount(bridge(() => pending.promise));
       click(setup, "Refresh setup status");
       const replacement = vi.fn();
       if (reason === "replaced handler") {

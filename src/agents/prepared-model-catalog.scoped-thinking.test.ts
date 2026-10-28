@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
@@ -30,6 +31,11 @@ const acquireSnapshotMock =
 const releaseSnapshotMock = vi.fn();
 const augmentCatalogMock =
   vi.fn<(params: { snapshot: ModelCatalogSnapshot }) => Promise<ModelCatalogSnapshot>>();
+function expectUnused(...mocks: Array<ReturnType<typeof vi.fn>>) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
 
 // mock-isolation: Keep harness discovery behind the controlled catalog fixture.
 vi.mock("./harness/model-catalog.js", () => ({
@@ -58,26 +64,19 @@ function catalog(entries: ModelCatalogEntry[]): ModelCatalogSnapshot {
 
 function owner(config: OpenClawConfig, entries: ModelCatalogEntry[]): PreparedModelRuntimeSnapshot {
   return {
-    agentDir: "/tmp/model-catalog-passive-test",
     inheritedAuthDir: resolveLegacyInheritedAuthDir(config),
-    activeProjectKeys: [],
-    catalogOwner: undefined,
-    config,
-    observationConfig: config,
-    isCurrent: () => true,
-    authModes: {},
-    metadataSnapshot: createPluginMetadataSnapshot({
+    ...createEmptyPreparedModelRuntimeFixture({
+      agentDir: "/tmp/model-catalog-passive-test",
       config,
-      manifestRegistry: { plugins: [], diagnostics: [] },
+      metadataSnapshot: createPluginMetadataSnapshot({
+        config,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      }),
+      createStores: () => {
+        throw new Error("Passive capability reads must not create stores");
+      },
     }),
-    allowGatewaySubagentBinding: false,
     modelCatalog: catalog(entries),
-    configuredRuntimeModels: [],
-    findConfiguredRuntimeModel: () => undefined,
-    inlineProviderModels: [],
-    createStores: () => {
-      throw new Error("Passive capability reads must not create stores");
-    },
   };
 }
 
@@ -101,6 +100,7 @@ const entry = {
   api: "openai-responses",
   baseUrl: "https://provider.invalid/v1",
 } satisfies ModelCatalogEntry;
+const inputRoute = { api: entry.api, baseUrl: entry.baseUrl };
 
 async function readThinking(
   config: OpenClawConfig,
@@ -176,10 +176,7 @@ it("reuses paired completed catalogs for thinking capabilities", async () => {
     loadFullModelCatalog,
   });
   expect(await readThinking(config)).toEqual([completedEntry]);
-  expect(loadFullModelCatalog).not.toHaveBeenCalled();
-  expect(manifestCatalogMock).not.toHaveBeenCalled();
-  expect(scopedCatalogMock).not.toHaveBeenCalled();
-  expect(acquireSnapshotMock).not.toHaveBeenCalled();
+  expectUnused(loadFullModelCatalog, manifestCatalogMock, scopedCatalogMock, acquireSnapshotMock);
 });
 
 it("keeps ownerless native observations passive", async () => {
@@ -187,10 +184,7 @@ it("keeps ownerless native observations passive", async () => {
   const entries = [{ ...entry, reasoning: true, nativeRuntime: "test-harness" }];
   augmentCatalogMock.mockResolvedValue(catalog(entries));
   expect(await readThinking(config)).toEqual(entries);
-  expect(acquireSnapshotMock).not.toHaveBeenCalled();
-  expect(releaseSnapshotMock).not.toHaveBeenCalled();
-  expect(manifestCatalogMock).not.toHaveBeenCalled();
-  expect(scopedCatalogMock).not.toHaveBeenCalled();
+  expectUnused(acquireSnapshotMock, releaseSnapshotMock, manifestCatalogMock, scopedCatalogMock);
 });
 
 it.each([
@@ -215,13 +209,10 @@ it.each([
   );
   const result = await readAdmitted(
     admitted,
-    native
-      ? { agentRuntime: "native-one" }
-      : { requiredInputRoute: { api: entry.api, baseUrl: entry.baseUrl } },
+    native ? { agentRuntime: "native-one" } : { requiredInputRoute: inputRoute },
   );
   expect(result).toEqual([admittedEntry]);
-  expect(preparedSnapshotMock).not.toHaveBeenCalled();
-  expect(augmentCatalogMock).not.toHaveBeenCalled();
+  expectUnused(preparedSnapshotMock, augmentCatalogMock);
   expect(readFullModelCatalog).toHaveBeenCalledOnce();
 });
 
@@ -256,9 +247,7 @@ it.each([
     current = false;
     const result = await readAdmitted(admitted, {
       agentRuntime: runtime,
-      ...(runtime === "openclaw"
-        ? { requiredInputRoute: { api: entry.api, baseUrl: entry.baseUrl } }
-        : {}),
+      ...(runtime === "openclaw" ? { requiredInputRoute: inputRoute } : {}),
     });
     const physical = publishedSelected ? discovered : configured;
     expect(result).toContainEqual(runtime === "openclaw" ? physical : native);
@@ -347,6 +336,5 @@ it("rejects published capabilities from a different route", async () => {
       requiredInputRoute: { ...entry, baseUrl: "https://custom.invalid/v1" },
     }),
   ).toEqual([]);
-  expect(manifestCatalogMock).not.toHaveBeenCalled();
-  expect(scopedCatalogMock).not.toHaveBeenCalled();
+  expectUnused(manifestCatalogMock, scopedCatalogMock);
 });

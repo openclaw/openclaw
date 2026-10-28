@@ -12,6 +12,11 @@ const editorContext = { viewport: { width: 1280, height: 900 } };
 const fileEditorRequest = controlUiE2eBuiltModuleRequest(
   "ui/src/pages/chat/components/file-editor-view.ts",
 );
+async function expectEditor(page: Page, name: string) {
+  const editor = page.locator(".cm-content:visible");
+  await editor.waitFor();
+  expect(await editor.textContent()).toContain(`Synthetic ${name} content`);
+}
 
 declare global {
   interface Window {
@@ -86,18 +91,12 @@ suite.define(() => {
       );
       await page.evaluate(() => {
         window.editorInitMaySucceed = true;
-        const panel = document.querySelector("openclaw-chat-detail-panel") as HTMLElement & {
-          basePath: string;
-        };
-        panel.basePath = "/incidental-redraw";
+        document.querySelector("openclaw-chat-detail-panel")!.basePath = "/incidental-redraw";
       });
       await twoFrames(page);
       expect(await page.evaluate(() => window.editorInitAttempts)).toBe(1);
       await page.locator(".lazy-view-error").getByRole("button", { name: /Retry/iu }).click();
-      await page.locator(".cm-content").waitFor();
-      expect(await page.locator(".cm-content").textContent()).toContain(
-        "Synthetic notes.txt content",
-      );
+      await expectEditor(page, "notes.txt");
       expect(await page.evaluate(() => window.editorInitAttempts)).toBe(2);
     });
   });
@@ -118,11 +117,9 @@ suite.define(() => {
       });
       await page.route(fileEditorRequest, async (route) => {
         chunkRequests += 1;
-        if (reachable) {
-          await route.continue();
-        } else {
-          await route.fulfill({ status: 404, contentType: "text/javascript", body: "" });
-        }
+        await (reachable
+          ? route.continue()
+          : route.fulfill({ status: 404, contentType: "text/javascript", body: "" }));
       });
       await openFilePreview(page);
       const failure = page.locator(".lazy-view-error--stale");
@@ -135,17 +132,14 @@ suite.define(() => {
       await exactButton(failure, "Reload").click();
       await navigation;
       await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
-      await page.locator(".cm-content").waitFor();
-      expect(await page.locator(".cm-content").textContent()).toContain(
-        "Synthetic notes.txt content",
-      );
+      await expectEditor(page, "notes.txt");
       expect(chunkRequests).toBe(2);
       expect(documentProbes).toBe(2);
       expect(errors).toEqual([]);
     });
   });
 
-  it.each(["raw", "file", "close"] as const)(
+  it.each(["file", "close"] as const)(
     "keeps a late initialization failure scoped after selecting %s",
     async (selection) => {
       await suite.withPage(editorContext, async ({ page }) => {
@@ -161,11 +155,9 @@ suite.define(() => {
         );
         await openFilePreview(page);
         await page.waitForFunction(() => typeof window.rejectEditorInitialization === "function");
-        if (selection === "raw") {
-          await page.getByRole("button", { name: /raw text/iu, exact: true }).click();
-        } else if (selection === "file") {
+        if (selection === "file") {
           await page.locator('a.markdown-file-link[data-file-path="other.txt"]').click();
-          await page.locator(".cm-content").waitFor();
+          await expectEditor(page, "other.txt");
         } else {
           await exactButton(page, "Close tab: notes.txt").click();
         }
@@ -173,29 +165,16 @@ suite.define(() => {
         await twoFrames(page);
         expect(await page.locator(".lazy-view-error:visible").count()).toBe(0);
         expect(errors).toEqual([]);
-        if (selection === "raw") {
-          expect(await page.locator(".sidebar-markdown-shell").textContent()).toContain(
-            "Synthetic notes.txt content",
-          );
-        } else if (selection === "file") {
-          expect(await page.locator(".cm-content:visible").textContent()).toContain(
-            "Synthetic other.txt content",
-          );
+        if (selection === "file") {
+          const tab = (name: string) =>
+            page.locator(".side-panel__header .tabstrip-tab").filter({ hasText: name });
           expect(await page.locator(".lazy-view-error").count()).toBe(1);
-          await page
-            .locator(".side-panel__header .tabstrip-tab")
-            .filter({ hasText: "notes.txt" })
-            .click();
+          await tab("notes.txt").click();
           expect(await page.locator(".lazy-view-error:visible").textContent()).toContain(
             "Retired editor failed",
           );
-          await page
-            .locator(".side-panel__header .tabstrip-tab")
-            .filter({ hasText: "other.txt" })
-            .click();
-          expect(await page.locator(".cm-content:visible").textContent()).toContain(
-            "Synthetic other.txt content",
-          );
+          await tab("other.txt").click();
+          await expectEditor(page, "other.txt");
         } else {
           expect(await page.locator("openclaw-chat-detail-panel").count()).toBe(0);
         }

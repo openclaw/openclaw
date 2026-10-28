@@ -1,8 +1,8 @@
-import type {
-  DiscordAccountConfig,
-  DiscordConfig,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import {
@@ -15,146 +15,173 @@ import {
   resolveDiscordAccountDisabledReason,
   resolveDiscordMaxLinesPerMessage,
 } from "./accounts.js";
+import {
+  getDiscordExecApprovalApprovers as approvers,
+  isDiscordExecApprovalApprover as isApprover,
+  isDiscordExecApprovalClientEnabled as approvalsEnabled,
+} from "./exec-approvals.js";
+import { resolveDiscordToken } from "./token.js";
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
-describe("Discord defaultAccount omission contract", () => {
-  it("createDiscordActionGate uses configured defaultAccount when accountId is omitted", () => {
-    const gate = createDiscordActionGate({
-      cfg: {
-        channels: {
-          discord: {
-            actions: { reactions: false },
-            defaultAccount: "work",
-            accounts: { work: { token: "token-work", actions: { reactions: true } } },
-          },
-        },
-      },
-    });
+function config(discord: DiscordConfig = {}, owners?: string[]): OpenClawConfig {
+  return { channels: { discord }, ...(owners ? { commands: { ownerAllowFrom: owners } } : {}) };
+}
+const secret = (id: string) => ({ source: "env" as const, provider: "default", id });
+const enabledIds = (cfg: OpenClawConfig) => listEnabledDiscordAccounts(cfg).map((a) => a.accountId);
+const inspect = (cfg: OpenClawConfig, ...ids: string[]) =>
+  ids.map((accountId) => inspectDiscordAccount({ cfg, accountId }));
+const workConfig = (
+  work: NonNullable<DiscordConfig["accounts"]>[string],
+  root: DiscordConfig = {},
+) => config({ ...root, accounts: { work } });
 
-    expect(gate("reactions")).toBe(true);
+describe("Discord accounts", () => {
+  it("createDiscordActionGate uses configured defaultAccount when accountId is omitted", () => {
+    const cfg = workConfig(
+      { actions: { reactions: true } },
+      {
+        actions: { reactions: false },
+        defaultAccount: "work",
+      },
+    );
+    expect(createDiscordActionGate({ cfg })("reactions")).toBe(true);
   });
 
   it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "token-default",
-          accounts: { work: { enabled: false, token: "token-work" } },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = workConfig({ enabled: false, token: "work" }, { token: "default" });
 
     expect(listDiscordAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultDiscordAccountId(cfg)).toBe("default");
-    expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual([
-      "default",
-    ]);
+    expect(enabledIds(cfg)).toEqual(["default"]);
   });
-});
-
-describe("resolveDiscordAccount allowFrom precedence", () => {
   it("does not inherit default account allowFrom for named account when top-level is absent", () => {
-    const resolved = resolveDiscordAccount({
-      cfg: {
-        channels: {
-          discord: {
-            accounts: {
-              default: { allowFrom: ["default"], token: "token-default" },
-              work: { token: "token-work" },
-            },
-          },
-        },
+    const cfg = config({
+      accounts: {
+        default: { allowFrom: ["default"], token: "token-default" },
+        work: { token: "token-work" },
       },
-      accountId: "work",
     });
-
-    expect(resolved.config.allowFrom).toBeUndefined();
+    expect(resolveDiscordAccount({ cfg, accountId: "work" }).config.allowFrom).toBeUndefined();
   });
-});
-
-describe("resolveDiscordMaxLinesPerMessage", () => {
-  it.each<{
-    name: string;
-    accounts: Record<string, DiscordAccountConfig>;
-    discordConfig: Pick<DiscordConfig, "maxLinesPerMessage">;
-    accountId: string;
-    expected: number;
-  }>([
-    {
-      name: "prefers explicit runtime discord maxLinesPerMessage over merged config",
-      accounts: { default: { token: "token-default", maxLinesPerMessage: 80 } },
-      discordConfig: { maxLinesPerMessage: 55 },
-      accountId: "default",
-      expected: 55,
-    },
-    {
-      name: "uses per-account discord maxLinesPerMessage over the root value when runtime config omits it",
-      accounts: { work: { token: "token-work", maxLinesPerMessage: 80 } },
-      discordConfig: {},
-      accountId: "work",
-      expected: 80,
-    },
-  ])("$name", ({ accounts, discordConfig, accountId, expected }) => {
-    const resolved = resolveDiscordMaxLinesPerMessage({
-      cfg: { channels: { discord: { maxLinesPerMessage: 120, accounts } } },
-      discordConfig,
-      accountId,
-    });
-
-    expect(resolved).toBe(expected);
+  it.each([
+    ["prefers explicit runtime over merged config", "default", { maxLinesPerMessage: 55 }, 55],
+    ["uses per-account value over root when runtime omits it", "work", {}, 80],
+  ] as const)("maxLinesPerMessage %s", (_name, accountId, discordConfig, expected) => {
+    expect(
+      resolveDiscordMaxLinesPerMessage({
+        cfg: config({
+          maxLinesPerMessage: 120,
+          accounts: { [accountId]: { token: `token-${accountId}`, maxLinesPerMessage: 80 } },
+        }),
+        discordConfig,
+        accountId,
+      }),
+    ).toBe(expected);
   });
-});
-
-describe("Discord duplicate-token account filtering", () => {
-  it("keeps the config-token account over default env fallback when tokens collide", () => {
+  it("ignores disabled duplicate-token accounts", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "same-token");
-    const accountId = "work";
-    const duplicateId = "default";
-    const expectedReason = 'duplicate bot token; using account "work"';
-    const cfg = { channels: { discord: { accounts: { work: { token: "same-token" } } } } };
-    const enabledAccount = resolveDiscordAccount({ cfg, accountId });
-    const duplicateAccount = resolveDiscordAccount({ cfg, accountId: duplicateId });
-
-    expect(isDiscordAccountEnabledForRuntime(duplicateAccount, cfg)).toBe(false);
-    expect(resolveDiscordAccountDisabledReason(duplicateAccount, cfg)).toBe(expectedReason);
-    expect(inspectDiscordAccount({ cfg, accountId: duplicateId })).toMatchObject({
-      enabled: false,
-      configured: true,
-      stateReason: expectedReason,
+    const cfg = config({
+      accounts: {
+        disabled: { enabled: false, token: "same-token" },
+        active: { token: "same-token" },
+      },
     });
-    expect(inspectDiscordAccount({ cfg, accountId })).toMatchObject({
-      enabled: true,
-      configured: true,
-    });
-    expect(isDiscordAccountEnabledForRuntime(enabledAccount, cfg)).toBe(true);
-    expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual([
-      accountId,
+    const activeAccount = resolveDiscordAccount({ cfg, accountId: "active" });
+    const inactiveAccount = resolveDiscordAccount({ cfg, accountId: "disabled" });
+    expect(isDiscordAccountEnabledForRuntime(activeAccount, cfg)).toBe(true);
+    expect(isDiscordAccountEnabledForRuntime(inactiveAccount, cfg)).toBe(false);
+    expect(resolveDiscordAccountDisabledReason(inactiveAccount, cfg)).toBe("disabled");
+    expect(inspect(cfg, "active", "disabled", "default")).toMatchObject([
+      { enabled: true, configured: true },
+      { enabled: false, configured: true, stateReason: "disabled" },
+      {
+        enabled: false,
+        configured: true,
+        stateReason: 'duplicate bot token; using account "active"',
+      },
     ]);
+    expect(enabledIds(cfg)).toEqual(["active"]);
+  });
+});
+
+describe("resolveDiscordToken", () => {
+  const missing = { token: "", source: "none", tokenStatus: "missing" };
+  const unavailable = { token: "", source: "config", tokenStatus: "configured_unavailable" };
+  it.each([
+    ["blank account", "", "work", missing],
+    ["root SecretRef", secret("DISCORD_BOT_TOKEN"), undefined, unavailable],
+    ["account SecretRef", secret("DISCORD_WORK_TOKEN"), "work", unavailable],
+  ] as const)("blocks fallback for %s", (_name, token, accountId, expected) => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
+    const cfg = config(
+      accountId ? { token: "base-token", accounts: { work: { token } } } : { token },
+    );
+    expect(resolveDiscordToken(cfg, { accountId })).toEqual(expected);
   });
 
-  it("does not let disabled duplicate-token accounts suppress enabled accounts", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          accounts: {
-            disabled: { enabled: false, token: "same-token" },
-            active: { token: "same-token" },
-          },
-        },
-      },
-    };
-
-    const activeAccount = resolveDiscordAccount({ cfg, accountId: "active" });
-
-    expect(isDiscordAccountEnabledForRuntime(activeAccount, cfg)).toBe(true);
-    expect(inspectDiscordAccount({ cfg, accountId: "active" }).enabled).toBe(true);
-    expect(inspectDiscordAccount({ cfg, accountId: "disabled" })).toMatchObject({
-      enabled: false,
-      stateReason: "disabled",
+  it("uses the active runtime snapshot when resolving a matching source config", () => {
+    const source = workConfig({ token: secret("DISCORD_WORK_TOKEN") });
+    setRuntimeConfigSnapshot(workConfig({ token: "Bot runtime-work-token" }), source);
+    expect(resolveDiscordToken(source, { accountId: "work" })).toEqual({
+      token: "runtime-work-token",
+      source: "config",
+      tokenStatus: "available",
     });
-    expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual(["active"]);
+  });
+});
+
+describe("discord exec approvals", () => {
+  const approvalConfig = (
+    execApprovals?: DiscordConfig["execApprovals"],
+    owners?: string[],
+    allowFrom?: string[],
+  ) => ({
+    cfg: config(
+      { execApprovals, ...(allowFrom ? { allowFrom, defaultTo: "user:789" } : {}) },
+      owners,
+    ),
+  });
+
+  it.each<[DiscordConfig["execApprovals"], string[] | undefined, boolean]>([
+    [undefined, undefined, false],
+    [{ enabled: true }, undefined, false],
+    [{ approvers: ["123"] }, undefined, false],
+    [undefined, ["discord:789"], false],
+    [{ enabled: "auto", approvers: ["123"] }, undefined, true],
+    [{ enabled: false, approvers: ["123"] }, undefined, false],
+  ])("requires explicit enablement and resolved owners (%j)", (settings, owners, expected) => {
+    expect(approvalsEnabled(approvalConfig(settings, owners))).toBe(expected);
+  });
+
+  it("prefers explicit approvers over allowFrom and default routes", () => {
+    const ctx = approvalConfig({ approvers: ["456"] }, undefined, ["123"]);
+    expect(approvers(ctx)).toEqual(["456"]);
+    expect([
+      isApprover({ ...ctx, senderId: "456" }),
+      isApprover({ ...ctx, senderId: "123" }),
+    ]).toEqual([true, false]);
+  });
+
+  it("does not infer approvers from allowFrom or default DM routes", () => {
+    const ctx = approvalConfig({ enabled: true }, undefined, ["123", "456"]);
+    expect(approvers(ctx)).toStrictEqual([]);
+    expect(isApprover({ ...ctx, senderId: "789" })).toBe(false);
+  });
+
+  it("normalizes global exec approvers and preserves explicit overrides", () => {
+    const ctx = approvalConfig(
+      { enabled: "auto" },
+      "discord:123 discord:user:123 user:456 789 discord:<@987> user:<@654> pk:999".split(" "),
+    );
+    expect(approvers(ctx)).toEqual(["123", "456", "789", "987", "654"]);
+    expect(approvalsEnabled(ctx)).toBe(true);
+    expect(isApprover({ ...ctx, senderId: "456" })).toBe(true);
+    expect(approvers({ ...ctx, configOverride: { approvers: ["discord:user:456"] } })).toEqual([
+      "456",
+    ]);
   });
 });

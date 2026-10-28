@@ -3,6 +3,7 @@
  * transcript, strips the name before agent routing, and keeps fuzzy matching
  * conservative so ordinary dictation does not trigger Talk turns.
  */
+import { commonPrefixLength } from "@openclaw/normalization-core/string-normalization";
 import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 
 const REALTIME_VOICE_ACTIVATION_NAME_MAX_WORDS = 2;
@@ -250,16 +251,6 @@ function hasOnlyPhoneticSubstitutions(left: string, right: string): boolean {
     substitutions += 1;
   }
   return substitutions > 0;
-}
-
-function commonPrefixLength(left: string, right: string): number {
-  const limit = Math.min(left.length, right.length);
-  for (let index = 0; index < limit; index += 1) {
-    if (left[index] !== right[index]) {
-      return index;
-    }
-  }
-  return limit;
 }
 
 // Fuzzy matching requires a strong punctuation/edge boundary and same first

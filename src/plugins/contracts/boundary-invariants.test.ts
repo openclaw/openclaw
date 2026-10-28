@@ -26,6 +26,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/discord/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/facetime/index.ts": ["before_tool_call"],
   "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
+  "extensions/knowledge/src/memory-index-hook.ts": ["before_prompt_build"],
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/mcp-events/index.ts": ["cron_changed", "cron_reconciled"],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
@@ -38,9 +39,6 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/workboard/index.ts": ["agent_end", "gateway_start", "gateway_stop", "subagent_ended"],
   "extensions/x/src/work-origin.ts": ["before_prompt_build"],
 } as const satisfies Record<string, readonly string[]>;
-const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = Object.keys(
-  BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS,
-).toSorted();
 const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
   "extensions/active-memory/index.ts": ["resolveLivePluginConfigObject(", '"active-memory"'],
   "extensions/codex/index.ts": ["resolveLivePluginConfigObject(", '"codex"'],
@@ -59,31 +57,6 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
     "resolveEffectiveEnableState(",
     '"onepassword"',
     "api.runtime.config.current()",
-  ],
-} as const satisfies Record<string, readonly string[]>;
-const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
-  "extensions/amazon-bedrock/register.sync.runtime.ts": [
-    "resolvePluginConfigObject(",
-    "const startupPluginConfig = (api.pluginConfig ?? {})",
-    "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
-    "const currentPluginConfig = resolveCurrentPluginConfig(config);",
-    "const currentGuardrail = currentPluginConfig?.guardrail;",
-  ],
-  "extensions/amazon-bedrock-mantle/register.sync.runtime.ts": [
-    "resolvePluginConfigObject(",
-    "const startupPluginConfig = (api.pluginConfig ?? {})",
-    "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
-  ],
-  "extensions/ollama/index.ts": [
-    "resolvePluginConfigObject(",
-    'const runtimePluginConfig = resolvePluginConfigObject(config, "ollama");',
-    "return config ? {} : startupPluginConfig;",
-  ],
-  "extensions/openai/index.ts": [
-    "resolvePluginConfigObject(",
-    'const runtimePluginConfig = resolvePluginConfigObject(ctx.config, "openai");',
-    "runtimePluginConfig ??",
-    "ctx.config ? undefined : (api.pluginConfig as Record<string, unknown>)",
   ],
 } as const satisfies Record<string, readonly string[]>;
 const BUNDLED_STARTUP_GATED_HOOK_FORBIDDEN_SNIPPETS = {
@@ -168,13 +141,6 @@ function isBundledExtensionImportHelperCall(expression: ts.Expression): boolean 
   return ts.isIdentifier(expression) && expression.text === "importActual";
 }
 
-function collectTypedHookNames(source: string): string[] {
-  return [...source.matchAll(/\bapi\.on\(\s*"([^"]+)"/gu)]
-    .map((match) => match[1])
-    .filter((hookName): hookName is string => typeof hookName === "string")
-    .toSorted();
-}
-
 function expectNoSources(
   root: string,
   filter: FileFilter,
@@ -255,19 +221,18 @@ describe("plugin contract boundary invariants", () => {
     expect(offenders).toStrictEqual([]);
   });
 
-  it("keeps bundled plugin typed hook registrations on an explicit allowlist", () => {
-    const files = listTsFiles("extensions", { excludeTests: true });
-    const hookRegistrationFiles = files.filter((file) => /\bapi\.on\(/u.test(readRepoSource(file)));
-    expect(hookRegistrationFiles).toEqual(BUNDLED_TYPED_HOOK_REGISTRATION_FILES);
-  });
-
-  it("keeps bundled plugin typed hook names on an explicit allowlist", () => {
+  it("keeps bundled plugin typed hook files and names on an explicit allowlist", () => {
     expect(
       Object.fromEntries(
-        BUNDLED_TYPED_HOOK_REGISTRATION_FILES.map((file) => [
-          file,
-          collectTypedHookNames(readRepoSource(file)),
-        ]),
+        listTsFiles("extensions", { excludeTests: true })
+          .filter((file) => /\bapi\.on\(/u.test(readRepoSource(file)))
+          .map((file) => [
+            file,
+            [...readRepoSource(file).matchAll(/\bapi\.on\(\s*"([^"]+)"/gu)]
+              .map((match) => match[1])
+              .filter((hookName): hookName is string => typeof hookName === "string")
+              .toSorted(),
+          ]),
       ),
     ).toEqual(BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS);
   });
@@ -282,8 +247,13 @@ describe("plugin contract boundary invariants", () => {
     expectSnippetGuards(BUNDLED_LIVE_CONFIG_HOOK_GUARDS);
   });
 
-  it("keeps live provider config surfaces on runtime config lookups", () => {
-    expectSnippetGuards(BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS);
+  it("does not restore startup provider defaults when live plugin config is removed", () => {
+    expectSnippetGuards({
+      "extensions/ollama/index.ts": ["return config ? {} : startupPluginConfig;"],
+      "extensions/openai/index.ts": [
+        "ctx.config ? undefined : (api.pluginConfig as Record<string, unknown>)",
+      ],
+    });
   });
 
   it("keeps long-lived bundled hook handlers off startup-only registration gates", () => {

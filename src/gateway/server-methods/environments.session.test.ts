@@ -1,179 +1,141 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
+import {
+  createPersonalToolParticipant as participant,
+  withPersonalToolTurn,
+} from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { ensureSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { createOperatorClient } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import * as support from "../worker-environments/service.test-support.js";
 import { environmentsSessionHandlers } from "./environments.session.js";
-import type { GatewayClient } from "./types.js";
 
-const owner = {
-  profileId: "alice",
-  senderId: "alice-sender",
-  name: "Alice",
-  gatewayUiCommandTarget: { connId: "alice-tab", profileId: "alice" },
-};
-const steerer = {
-  profileId: "bob",
-  senderId: "bob-sender",
-  name: "Bob",
-  gatewayUiCommandTarget: { connId: "bob-tab", profileId: "bob" },
-};
+const owner = participant("alice", "Alice");
+const steerer = participant("bob", "Bob");
 const identity = {
   agentId: "main",
   sessionKey: "agent:main:personal-tools",
   sessionId: "personal-tools",
 };
 
-describe("conversation environment presentation participants", () => {
-  support.setupWorkerEnvironmentServiceSuite();
-  beforeEach(() => {
-    support.testState.config.session = {
-      store: path.join(support.testState.root, "sessions.json"),
-    };
-    ensureSessionEntrySync(
-      { ...identity, storePath: support.testState.config.session.store },
-      { sessionId: identity.sessionId, updatedAt: 1 },
-    );
-  });
-  afterEach(() => closeOpenClawAgentDatabases());
-
-  function fixture() {
-    const provision = vi.fn(async () => ({ leaseId: "lease-one", ssh: support.SSH_ENDPOINT }));
-    const service = support.createService(support.createProvider({ provision }));
-    const create = vi.spyOn(service, "createSessionAttachment");
-    const clients: GatewayClient[] = [owner, steerer].map((person) => ({
-      connId: person.gatewayUiCommandTarget.connId,
-      authenticatedUserProfile: {
-        profileId: person.profileId,
-        displayName: person.name,
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: GATEWAY_CLIENT_IDS.CONTROL_UI, version: "test", platform: "web", mode: "ui" },
-        caps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],
-      },
-    }));
-    const context = createDirectChatContext({
-      getRuntimeConfig: () => support.testState.config,
-      workerEnvironmentService: service,
-      getClientConnIds: (filter) =>
-        new Set(
-          clients.filter((client) => !filter || filter(client)).map((client) => client.connId!),
-        ),
-    });
-    const respond = vi.fn();
-    const call = (presentation?: "desktop" | "portal") =>
-      withGatewayToolCallerIdentity(
-        { ...identity, assertToolAllowed: () => {}, gatewayContextResolver: () => context },
-        () =>
-          environmentsSessionHandlers["environments.session.create"]!({
-            req: { type: "req", id: "create-preview", method: "environments.session.create" },
-            params: {
-              profileId: "development",
-              idempotencyKey: "open-preview",
-              ...(presentation ? { presentation } : {}),
-            },
-            client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "crabbox" }),
-            context,
-            isWebchatConnect: () => false,
-            respond,
-          }),
-      );
-    return { call, respond, create, provision, service, context };
-  }
-
-  it.each(["desktop", "portal"] as const)(
-    "rejects ambiguous %s presentation before creating an environment, but permits creation without presentation",
-    async (presentation) => {
-      const test = fixture();
-      await withPersonalToolTurn({ owner, allowCollaborativeSteering: true }, async (turn) => {
-        expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
-        await test.call(presentation);
-        expect(test.create).not.toHaveBeenCalled();
-        expect(test.provision).not.toHaveBeenCalled();
-        expect(test.context.broadcastToConnIds).not.toHaveBeenCalled();
-        expect(test.respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            message: expect.stringMatching(
-              /without presentation.*screen.*desktop_show.*portal_show.*environmentId.*requester_profile.id/s,
-            ),
-          }),
-        );
-        await test.call();
-        expect(test.respond).toHaveBeenLastCalledWith(
-          true,
-          expect.objectContaining({
-            environment: expect.objectContaining({ status: "available" }),
-          }),
-        );
-        expect(test.provision).toHaveBeenCalledOnce();
-      });
-    },
+support.setupWorkerEnvironmentServiceSuite((config, root) => {
+  config.session = { store: path.join(root, "sessions.json") };
+});
+beforeEach(() => {
+  ensureSessionEntrySync(
+    { ...identity, storePath: support.testState.config.session!.store },
+    { sessionId: identity.sessionId, updatedAt: 1 },
   );
+});
+afterEach(() => closeOpenClawAgentDatabases());
 
-  it("presents a single-owner environment only in that owner's connection", async () => {
-    const test = fixture();
-    await withPersonalToolTurn({ owner }, () => test.call("desktop"));
-    expect(test.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ environment: expect.objectContaining({ status: "available" }) }),
-    );
-    expect(test.context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-      "ui.command",
-      expect.objectContaining({
-        command: expect.objectContaining({ panel: "desktop", open: true }),
-      }),
-      new Set(["alice-tab"]),
-    );
-    expect(test.provision).toHaveBeenCalledOnce();
+function fixture() {
+  const provision = vi.fn(async () => ({ leaseId: "lease-one", ssh: support.SSH_ENDPOINT }));
+  const service = support.createService(support.createProvider({ provision }));
+  const clients = [owner, steerer].map((person) => {
+    const client = createOperatorClient({
+      profileId: person.profileId,
+      scopes: [],
+      caps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],
+    });
+    client.connId = person.gatewayUiCommandTarget.connId;
+    client.connect.client.id = GATEWAY_CLIENT_IDS.CONTROL_UI;
+    return client;
   });
-
-  it.each(["ambiguity", "revocation"])("cancels before allocation: %s", async (change) => {
-    const test = fixture();
-    await withPersonalToolTurn({ owner, allowCollaborativeSteering: true }, async (turn) => {
-      const reserve = support.testState.store.createSessionAttachmentIntent.bind(
-        support.testState.store,
-      );
-      vi.spyOn(support.testState.store, "createSessionAttachmentIntent").mockImplementation(
-        async (...args) => {
-          const reservation = await reserve(...args);
-          if (change === "revocation") {
-            turn.revoke(owner.profileId);
-          } else {
-            expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
-          }
-          return reservation;
-        },
-      );
-      await test.call("portal");
-      expect(test.create).toHaveBeenCalledOnce();
-      expect(test.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          message: expect.stringMatching(
-            change === "revocation" ? /Profile access revoked/ : /Several people.*Alice.*Bob/s,
-          ),
+  const context = createDirectChatContext({
+    getRuntimeConfig: () => support.testState.config,
+    workerEnvironmentService: service,
+    getClientConnIds: (filter) =>
+      new Set(clients.filter(filter ?? (() => true)).map((client) => client.connId!)),
+  });
+  const respond = vi.fn();
+  const call = (presentation?: "desktop" | "portal") =>
+    withGatewayToolCallerIdentity(
+      { ...identity, assertToolAllowed: () => {}, gatewayContextResolver: () => context },
+      () =>
+        environmentsSessionHandlers["environments.session.create"]!({
+          req: { type: "req", id: "create-preview", method: "environments.session.create" },
+          params: {
+            profileId: "development",
+            idempotencyKey: "open-preview",
+            ...(presentation ? { presentation } : {}),
+          },
+          client: createSyntheticPluginRuntimeClient({ pluginRuntimeOwnerId: "crabbox" }),
+          context,
+          isWebchatConnect: () => false,
+          respond,
         }),
-      );
-      expect(test.context.broadcastToConnIds).not.toHaveBeenCalled();
-      expect(test.provision).not.toHaveBeenCalled();
-      const result = test.service.getSessionAttachmentStatus(identity.sessionId)!;
-      expect(result.attachment.closedAtMs).not.toBeNull();
-      expect(result.environment.state).toBe("failed");
+    );
+  const expectRejected = (message: RegExp) => {
+    expect(provision).not.toHaveBeenCalled();
+    expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+    expect(respond.mock.lastCall).toMatchObject([
+      false,
+      undefined,
+      { message: expect.stringMatching(message) },
+    ]);
+  };
+  const expectAvailable = () => {
+    expect(respond.mock.lastCall).toMatchObject([true, { environment: { status: "available" } }]);
+    expect(provision).toHaveBeenCalledOnce();
+  };
+  return { call, service, context, expectRejected, expectAvailable };
+}
+
+it("rejects ambiguous presentation but permits creation without presentation", async () => {
+  const test = fixture();
+  await withPersonalToolTurn({ owner, allowCollaborativeSteering: true }, async (turn) => {
+    expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
+    await test.call("portal");
+    test.expectRejected(
+      /without presentation.*screen.*desktop_show.*portal_show.*environmentId.*requester_profile.id/s,
+    );
+    await test.call();
+    test.expectAvailable();
+  });
+});
+
+it("presents a single-owner environment only in that owner's connection", async () => {
+  const test = fixture();
+  await withPersonalToolTurn({ owner }, () => test.call("desktop"));
+  test.expectAvailable();
+  expect(test.context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+    "ui.command",
+    expect.objectContaining({
+      command: expect.objectContaining({ panel: "desktop", open: true }),
+    }),
+    new Set(["alice-tab"]),
+  );
+});
+
+it.each(["ambiguity", "revocation"])("cancels before allocation: %s", async (change) => {
+  const test = fixture();
+  await withPersonalToolTurn({ owner, allowCollaborativeSteering: true }, async (turn) => {
+    const store = support.testState.store;
+    const reserve = store.createSessionAttachmentIntent.bind(store);
+    vi.spyOn(store, "createSessionAttachmentIntent").mockImplementation(async (...args) => {
+      const reservation = await reserve(...args);
+      if (change === "revocation") {
+        turn.revoke(owner.profileId);
+      } else {
+        expect(await turn.steer(steerer)).toMatchObject({ status: "accepted" });
+      }
+      return reservation;
+    });
+    await test.call("portal");
+    test.expectRejected(
+      change === "revocation" ? /Profile access revoked/ : /Several people.*Alice.*Bob/s,
+    );
+    expect(test.service.getSessionAttachmentStatus(identity.sessionId)).toMatchObject({
+      attachment: { closedAtMs: expect.any(Number) },
+      environment: { state: "failed" },
     });
   });
 });

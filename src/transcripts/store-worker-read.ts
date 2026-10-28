@@ -81,8 +81,8 @@ export const transcriptReadOperations = {
         readTranscriptSummarySnapshot(db, session, maxUtterances),
       ),
   ),
-  "transcripts.sessionEntries": readTranscript<"transcripts.sessionEntries">((db) =>
-    runSqliteReadSnapshotSync(db, () => readTranscriptSessionEntries(db)),
+  "transcripts.sessionEntries": readTranscript<"transcripts.sessionEntries">(
+    readTranscriptSessionEntries,
   ),
   "transcripts.matches": readTranscript<"transcripts.matches">((db, { value }) =>
     runSqliteReadSnapshotSync(db, () => readTranscriptSessionMatches(db, value)),
@@ -94,8 +94,8 @@ export const transcriptReadOperations = {
     readTranscriptEntry(db, selector, purpose),
   ),
   "transcripts.latest": readTranscript<"transcripts.latest">(readLatestTranscriptEntry),
-  "transcripts.notes": readTranscript<"transcripts.notes">((db, { session, purpose }) =>
-    readStoredTranscriptNotes(db, session, purpose),
+  "transcripts.notes": readTranscript<"transcripts.notes">((db, { session }) =>
+    readStoredTranscriptNotes(db, session),
   ),
   "transcripts.libraryEntry": readTranscript<"transcripts.libraryEntry">((db, params) =>
     runSqliteReadSnapshotSync(db, () => readTranscriptLibraryEntry(db, params)),
@@ -107,8 +107,8 @@ export const transcriptReadOperations = {
   "transcripts.summaryRevision": readTranscript<"transcripts.summaryRevision">((db, { session }) =>
     readTranscriptSummaryInputRevision(db, session),
   ),
-  "transcripts.utterances": readTranscript<"transcripts.utterances">(
-    (db, { session, maxUtterances }) => readTranscriptUtterances(db, session, maxUtterances),
+  "transcripts.utterances": readTranscript<"transcripts.utterances">((db, { session }) =>
+    readTranscriptUtterances(db, session),
   ),
   "transcripts.summary": readTranscript<"transcripts.summary">((db, { session }) =>
     readStoredTranscriptSummary(db, session),

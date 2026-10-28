@@ -1,14 +1,11 @@
 import {
   createArtifactTransferService,
-  type ArtifactTransferOptions,
   type TransferArtifact,
 } from "./artifact-transfer-service.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
 
-export function createWorkerBootstrapArtifactTransferService(
-  options: ArtifactTransferOptions = {},
-) {
-  const transfer = createArtifactTransferService(options);
+export function createWorkerBootstrapArtifactTransferService() {
+  const transfer = createArtifactTransferService();
   return {
     ...transfer,
     prepare(params: {

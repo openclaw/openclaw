@@ -1,5 +1,6 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
@@ -309,9 +310,7 @@ export async function runUpdatedInstallGatewayCommand(
   }
   const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
   if (installing && response) {
-    const warnings = Array.isArray(response.warnings)
-      ? response.warnings.filter((message): message is string => typeof message === "string")
-      : [];
+    const warnings = filterStringEntries(response.warnings);
     if (warnings.length) {
       params.onWarnings?.(warnings);
     }

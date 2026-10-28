@@ -16,10 +16,7 @@ export type DocxDescendantCreateBlock = NonNullable<
 
 function toDescendantBlock(block: FeishuDocxBlock): DocxDescendantCreateBlock {
   const child = readStringValue(block.children);
-  return {
-    ...block,
-    ...(child ? { children: [child] } : {}),
-  } as DocxDescendantCreateBlock;
+  return (child ? { ...block, children: [child] } : block) as DocxDescendantCreateBlock;
 }
 
 export async function insertDocxDescendants(

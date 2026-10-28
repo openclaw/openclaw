@@ -8,24 +8,6 @@ import {
 import { normalizeXaiRealtimeBaseUrl } from "./realtime-voice-config.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 
-type XaiTranscriptionRuntime = Pick<
-  PluginCapabilityCatalogHostContext,
-  | "isProviderAuthProfileConfigured"
-  | "isProviderAuthProfileConfiguredAsync"
-  | "resolveApiKeyForProvider"
-  | "createRealtimeTranscriptionWebSocketSession"
->;
-
-type XaiRealtimeTranscriptionEvent = {
-  type?: string;
-  text?: string;
-  transcript?: string;
-  is_final?: boolean;
-  speech_final?: boolean;
-  error?: unknown;
-  message?: string;
-};
-
 function readErrorDetail(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -37,7 +19,13 @@ function readErrorDetail(value: unknown): string {
 }
 
 export function buildXaiRealtimeTranscriptionProvider(
-  runtime: XaiTranscriptionRuntime,
+  runtime: Pick<
+    PluginCapabilityCatalogHostContext,
+    | "isProviderAuthProfileConfigured"
+    | "isProviderAuthProfileConfiguredAsync"
+    | "resolveApiKeyForProvider"
+    | "createRealtimeTranscriptionWebSocketSession"
+  >,
 ): RealtimeTranscriptionProviderPlugin {
   return {
     ...createXaiRealtimeTranscriptionProviderMetadata(runtime),
@@ -47,7 +35,10 @@ export function buildXaiRealtimeTranscriptionProvider(
       const callbacks = { ...req };
       let lastTranscript: string | undefined;
       let speechStarted = false;
+      let lockedTranscript = "";
       const emitTranscript = (text: string) => {
+        lockedTranscript = "";
+        speechStarted = false;
         if (text === lastTranscript) {
           return;
         }
@@ -55,7 +46,15 @@ export function buildXaiRealtimeTranscriptionProvider(
         callbacks.onTranscript?.(text);
       };
 
-      return runtime.createRealtimeTranscriptionWebSocketSession<XaiRealtimeTranscriptionEvent>({
+      return runtime.createRealtimeTranscriptionWebSocketSession<{
+        type?: string;
+        text?: string;
+        transcript?: string;
+        is_final?: boolean;
+        speech_final?: boolean;
+        error?: unknown;
+        message?: string;
+      }>({
         providerId: "xai",
         callbacks,
         url: () => {
@@ -97,6 +96,14 @@ export function buildXaiRealtimeTranscriptionProvider(
         connectClosedBeforeReadyMessage:
           "xAI realtime transcription connection closed before ready",
         reconnectLimitMessage: "xAI realtime transcription reconnect limit reached",
+        onOpen: () => {
+          // A replacement stream cannot finalize the previous stream's locked chunks.
+          if (lockedTranscript) {
+            emitTranscript(lockedTranscript);
+          }
+          speechStarted = false;
+          lastTranscript = undefined;
+        },
         sendAudio: (audio, transport) => {
           transport.sendBinary(audio);
         },
@@ -125,11 +132,15 @@ export function buildXaiRealtimeTranscriptionProvider(
                 callbacks.onSpeechStart?.();
               }
               if (event.is_final && event.speech_final) {
+                // xAI already stitches every chunk into the utterance final.
                 emitTranscript(text);
-                speechStarted = false;
                 return;
               }
-              callbacks.onPartial?.(text);
+              const partial = lockedTranscript ? `${lockedTranscript} ${text}` : text;
+              if (event.is_final) {
+                lockedTranscript = partial;
+              }
+              callbacks.onPartial?.(partial);
               return;
             }
             case "transcript.done": {
@@ -137,6 +148,7 @@ export function buildXaiRealtimeTranscriptionProvider(
               if (text) {
                 emitTranscript(text);
               }
+              lockedTranscript = "";
               transport.closeNow();
               return;
             }

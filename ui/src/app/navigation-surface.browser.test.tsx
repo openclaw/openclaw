@@ -51,7 +51,8 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
       </div>
     ));
 
-    await vi.waitFor(() => expect(document.querySelector(".sidebar-update-card")).not.toBeNull());
+    await vi.dynamicImportSettled();
+    expect(document.querySelector(".sidebar-update-card")).not.toBeNull();
     const refreshCardHost = document.querySelector("openclaw-sidebar-update-card");
     const attentionHost = document.querySelector<
       HTMLElement & { updateComplete: Promise<boolean> }

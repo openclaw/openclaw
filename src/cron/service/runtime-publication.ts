@@ -1,5 +1,6 @@
+import { captureCronJobConfigRevision } from "../config-revision.js";
 import type { CronJob } from "../types.js";
-import { emit, type CronServiceState } from "./state.js";
+import { emit, emitCronDefinitionChanges, type CronServiceState } from "./state.js";
 
 /** Applies committed target rows locally without copying any unrelated store snapshot. */
 export function applyCronRuntimeRowsToState(
@@ -13,6 +14,15 @@ export function applyCronRuntimeRowsToState(
   }
   const jobsById = new Map([...jobs].map((job) => [job.id, job] as const));
   const deleted = new Set(deletedJobIds);
+  const configRevisions = new Map(state.jobConfigRevisions);
+  if (state.deps.onDefinitionChange) {
+    for (const job of jobsById.values()) {
+      configRevisions.set(job.id, captureCronJobConfigRevision(job));
+    }
+  }
+  for (const jobId of deleted) {
+    configRevisions.delete(jobId);
+  }
   const residentJobIds = new Set(state.store.jobs.map((job) => job.id));
   const residentJobs = state.store.jobs
     .filter((job) => !deleted.has(job.id))
@@ -20,7 +30,9 @@ export function applyCronRuntimeRowsToState(
   const importedJobs = [...jobsById.values()].filter(
     (job) => !residentJobIds.has(job.id) && !deleted.has(job.id),
   );
+  const previousJobs = state.store.jobs;
   state.store.jobs = [...residentJobs, ...importedJobs];
+  emitCronDefinitionChanges(state, previousJobs, state.store.jobs, configRevisions);
   if (opts?.publish !== false) {
     publishDurableNextRunChanges({ state, storeJobs: state.store.jobs });
   }

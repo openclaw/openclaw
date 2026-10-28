@@ -1,18 +1,22 @@
 import type {
   ResponseCreateParamsStreaming,
   ResponseStreamEvent,
-  Tool as OpenAIResponsesTool,
 } from "openai/resources/responses/responses.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+} from "../../../../src/shared/immutable-data.js";
 import { createResponsesDoneArgumentEvents } from "../../../../test/helpers/openai-responses-events.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
-import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
 } from "../transports/openai-responses-compaction-replay.js";
 import type { OpenAIResponsesRequestParams } from "../transports/openai-responses-contracts.js";
 import { isInvalidEncryptedContentError } from "../transports/openai-responses-replay-internal.js";
+import { convertResponsesMessages as convertTransportResponsesMessages } from "../transports/openai-responses-replay-messages-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -25,9 +29,6 @@ import {
   convertResponsesMessages,
   runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
-import { convertResponsesToolPayload } from "./openai-responses-tools.js";
-
-type ResponsesFunctionTool = Extract<OpenAIResponsesTool, { type: "function" }>;
 async function* streamResponsesEvents<T>(events: readonly T[]): AsyncGenerator<T> {
   yield* events;
 }
@@ -49,11 +50,6 @@ function createCapturedAssistantMessageEventStream(
     push(event);
   };
   return { stream, events };
-}
-
-function expectResponsesFunctionTool(tool: OpenAIResponsesTool | undefined): ResponsesFunctionTool {
-  expect(tool).toHaveProperty("type", "function");
-  return tool as ResponsesFunctionTool;
 }
 
 const nativeOpenAIModel = makeOpenAIProviderModel("openai-responses", {
@@ -204,147 +200,11 @@ function createAssistantOutput(): AssistantMessage {
   return { ...createResponsesAssistantOutput(nativeOpenAIModel), timestamp: 0 };
 }
 
-describe("convertResponsesToolPayload", () => {
-  beforeEach(() => {
-    // Mimic the OpenClaw host strict-tool policy: native OpenAI routes force
-    // strict=true; compatible routes opt in to sending strict=false.
-    const capabilities = getAiTransportHost().resolveProviderRequestCapabilities({});
-    configureAiTransportHost({
-      resolveProviderRequestCapabilities: ({ baseUrl }) => ({
-        ...capabilities,
-        endpointClass: baseUrl === nativeOpenAIModel.baseUrl ? "openai-public" : "custom",
-      }),
-      resolveOpenAIStrictToolSetting: (model, options) => {
-        if (model.provider === "openai" && model.baseUrl === "https://api.openai.com/v1") {
-          return true;
-        }
-        return options?.supportsStrictMode ? false : undefined;
-      },
-    });
-  });
-
-  afterEach(() => {
-    configureAiTransportHost({});
-  });
-
-  it("downgrades incompatible native Responses schemas to strict false", () => {
-    const converted = convertResponsesToolPayload(
-      [
-        {
-          name: "read_file",
-          description: "Read",
-          parameters: {
-            type: "object",
-            additionalProperties: false,
-            properties: { path: { type: "string" } },
-            required: [],
-          },
-        },
-      ],
-      { model: nativeOpenAIModel },
-    );
-
-    const tool = expectResponsesFunctionTool(converted[0]);
-    expect(tool.strict).toBe(false);
-    expect(tool.parameters).toEqual({
-      type: "object",
-      additionalProperties: false,
-      properties: { path: { type: "string" } },
-      required: [],
-    });
-  });
-
-  it("omits strict on proxy-like Responses routes but keeps schema normalization", () => {
-    const converted = convertResponsesToolPayload(
-      [
-        {
-          name: "lookup_weather",
-          description: "Get forecast",
-          parameters: {},
-        },
-      ],
-      { model: proxyOpenAIModel },
-    );
-
-    const tool = expectResponsesFunctionTool(converted[0]);
-    expect(tool).not.toHaveProperty("strict");
-    expect(tool.parameters).toEqual({
-      type: "object",
-      properties: {},
-    });
-  });
-
-  it("keeps tool order deterministic", () => {
-    const tools = [
-      { name: "zeta", description: "Z", parameters: {} },
-      { name: "alpha", description: "A", parameters: {} },
-    ];
-    expect(
-      convertResponsesToolPayload(tools).map((tool) => expectResponsesFunctionTool(tool).name),
-    ).toEqual(["alpha", "zeta"]);
-  });
-
-  it("skips unreadable schemas and preserves healthy native strict tools", () => {
-    const converted = convertResponsesToolPayload(
-      [
-        {
-          name: "broken",
-          description: "Broken",
-          parameters: {
-            type: "object",
-            get properties(): never {
-              throw new Error("properties exploded");
-            },
-          },
-        },
-        {
-          name: "lookup",
-          description: "Lookup",
-          parameters: {},
-        },
-      ],
-      { model: nativeOpenAIModel },
-    );
-
-    expect(converted).toEqual([
-      {
-        type: "function",
-        name: "lookup",
-        description: "Lookup",
-        strict: true,
-        parameters: {
-          type: "object",
-          properties: {},
-          required: [],
-          additionalProperties: false,
-        },
-      },
-    ]);
-  });
-
-  it("does not reread an unreadable tool inventory length", () => {
-    const tools = new Proxy([], {
-      get(target, property, receiver) {
-        if (property === "length") {
-          throw new Error("length exploded");
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
-    const params = {} as never;
-
-    applyCommonResponsesParams(params, nativeOpenAIModel, {
-      messages: [{ role: "user", content: "hello", timestamp: 1 }],
-      tools,
-    } as never);
-
-    expect(params).not.toHaveProperty("tools");
-  });
-});
-
 const eventTypes = (events: AssistantMessageEvent[]) => events.map((event) => event.type);
 const eventPositions = (events: AssistantMessageEvent[]) =>
-  events.map((event) => [event.type, "contentIndex" in event ? event.contentIndex : undefined]);
+  events
+    .map((event) => `${event.type}@${"contentIndex" in event ? event.contentIndex : "-"}`)
+    .join(" ");
 const text = (value: string) => ({ type: "text" as const, text: value });
 const signedText = (value: string, id: string) => ({
   ...text(value),
@@ -418,6 +278,72 @@ it.each([
 );
 
 describe("convertResponsesMessages", () => {
+  it.each([
+    ["provider", convertResponsesMessages],
+    ["transport", convertTransportResponsesMessages],
+  ] as const)("preserves frozen %s bytes, identities and replay fences", (_style, convert) => {
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    runWithAiTransportHost(host, () => {
+      const model: Model = { ...nativeOpenAIModel, input: ["text", "image"] };
+      const image = { type: "image" as const, mimeType: "image/png", data: "aW1n" };
+      const metadata = buildOpenAIResponsesReasoningReplayMetadata(model, reasoningReplayIdentity);
+      const context: Context = {
+        messages: freezeJsonSnapshot([
+          { role: "user", timestamp: 0, content: [text("question"), image] },
+          assistant(
+            [
+              thinking("hidden", {
+                ...wireReasoning("rs_prior", undefined, "ciphertext"),
+                __openclaw_replay: metadata,
+              }),
+              signedText("answer", "msg_prior"),
+              toolCall("read", "read", { path: "a\nb" }),
+            ],
+            { stopReason: "toolUse" },
+          ),
+          {
+            ...makeTextToolResult("call_read|fc_read", "read", "result", false, 2),
+            content: [text("result"), image],
+          },
+        ]),
+      };
+      const golden = `[${[
+        '{"type":"message","role":"user","content":[{"type":"input_text","text":"question"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1n"}]}',
+        '{"id":"rs_prior","type":"reasoning","summary":[],"encrypted_content":"ciphertext"}',
+        '{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}],"status":"completed","id":"msg_prior","phase":"commentary"}',
+        String.raw`{"type":"function_call","id":"fc_read","call_id":"call_read","name":"read","arguments":"{\"path\":\"a\\nb\"}"}`,
+        '{"type":"function_call_output","call_id":"call_read","output":[{"type":"input_text","text":"result"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,aW1n"}]}',
+      ].join(",")}]`;
+      const build = (target = model, options = reasoningReplayIdentity) =>
+        convert(target, context, testAllowedToolCallProviders, options);
+      const first = build();
+      expect(JSON.stringify(first)).toBe(golden);
+      for (const [target, options] of [
+        [model, { ...reasoningReplayIdentity, sessionId: "other" }],
+        [model, { ...reasoningReplayIdentity, authProfileId: "other" }],
+        [{ ...model, id: "other-model" }, reasoningReplayIdentity],
+        [{ ...model, baseUrl: "https://other.invalid/v1" }, reasoningReplayIdentity],
+      ] as const) {
+        expect(JSON.stringify(build(target, options))).not.toContain("ciphertext");
+        const again = build();
+        expect(JSON.stringify(again)).toBe(golden);
+        for (const index of [1, 2, 3]) {
+          expect(again[index]).toBe(first[index]);
+        }
+      }
+      const idless = convert(model, context, testAllowedToolCallProviders, {
+        ...reasoningReplayIdentity,
+        replayResponsesItemIds: false,
+      });
+      expect(JSON.stringify(idless)).toBe(
+        golden.replace(/"id":"(?:rs_prior|msg_prior|fc_read)",/g, ""),
+      );
+      expect(first.slice(1, 4).every(isDeeplyFrozenPlainData)).toBe(true);
+    });
+  });
+
   it("strips the internal cache boundary marker from the system prompt message", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
@@ -513,128 +439,45 @@ describe("convertResponsesMessages", () => {
     expect(message).not.toHaveProperty("id");
   });
 
-  it("omits Responses replay item ids when requested by store-disabled callers", () => {
-    const input = replayMessages(
-      [
-        assistant(
-          [
-            thinking("Need a tool.", {
-              type: "reasoning",
-              id: "rs_prior",
-              encrypted_content: "ciphertext",
-            }),
-            signedText("Checking the price.", "msg_prior"),
-            {
-              type: "toolCall",
-              id: "call_abc|fc_prior",
-              name: "price_lookup",
-              arguments: { symbol: "SOL" },
-            },
-          ],
-          { stopReason: "toolUse" },
-        ),
-        makeTextToolResult("call_abc|fc_prior", "price_lookup", "$83.95", false, 2),
-      ],
-      { includeSystemPrompt: false, replayResponsesItemIds: false },
-    );
-    const reasoningItem = input.find((item) => item.type === "reasoning");
-    expect(reasoningItem).toMatchObject({
-      type: "reasoning",
-      encrypted_content: "ciphertext",
-      summary: [],
-    });
-    expect(reasoningItem).not.toHaveProperty("id");
-    const message = input.find((item) => item.type === "message" && item.role === "assistant");
-    expect(message).toMatchObject({ type: "message", role: "assistant", phase: "commentary" });
-    expect(message).not.toHaveProperty("id");
-    const call = input.find((item) => item.type === "function_call");
-    expect(call).toMatchObject({ type: "function_call", call_id: "call_abc" });
-    expect(call).not.toHaveProperty("id");
-  });
-
-  it("preserves image-bearing tool results instead of using no-output text", () => {
-    const input = convertResponsesMessages(
-      { ...nativeOpenAIModel, input: ["text", "image"] },
-      {
-        messages: [
-          {
-            ...assistant([
-              { type: "toolCall", id: "call_screenshot", name: "screenshot", arguments: {} },
-            ]),
-            stopReason: "toolUse",
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_screenshot",
-            toolName: "screenshot",
-            content: [{ type: "image", mimeType: "image/png", data: "aW1n" }],
-            isError: false,
-            timestamp: 2,
-          },
-        ],
-      },
-      testAllowedToolCallProviders,
-      { includeSystemPrompt: false },
-    );
-    const result = input.find((item) => item.type === "function_call_output");
-    expect(result?.output).toEqual([
-      { type: "input_image", detail: "auto", image_url: "data:image/png;base64,aW1n" },
-    ]);
-  });
-
-  it("uses audio placeholder for audio-only tool results instead of image or no-output text", () => {
-    const input = convertResponsesMessages(
-      nativeOpenAIModel,
-      {
-        messages: [
-          assistant([{ type: "toolCall", id: "call_audio", name: "audio", arguments: {} }], {
-            stopReason: "toolUse",
-          }),
-          {
-            ...makeTextToolResult("call_audio", "audio", "", false, 2),
-            content: [{ type: "audio", mimeType: "audio/mpeg", data: "YXVkaW8=" }],
-          },
-        ],
-      } as unknown as Context,
-      testAllowedToolCallProviders,
-      { includeSystemPrompt: false },
-    );
-    const result = input.find((item) => item.type === "function_call_output");
-    expect(result).toMatchObject({
-      type: "function_call_output",
-      call_id: "call_audio",
-      output: "(see attached audio)",
-    });
-  });
-
-  it("does not emit image parts or placeholders for payload-less tool media", () => {
-    const input = replayMessages(
-      [
-        {
-          ...makeTextToolResult("call_husk", "screenshot", "", false, 2),
-          content: [{ type: "image", mimeType: "image/png", data: "" }],
-        },
-      ],
-      { includeSystemPrompt: false },
-      { ...nativeOpenAIModel, input: ["text", "image"] },
-    );
-    const result = input.find((item) => item.type === "function_call_output");
-    expect(result?.output).toBe("(no output)");
-    expect(JSON.stringify(result)).not.toContain("input_image");
-    expect(JSON.stringify(result)).not.toContain("see attached image");
-  });
-
-  describe.each([
-    { name: "SDK", model: nativeOpenAIModel, summary: [], content: undefined },
-    {
-      name: "native ChatGPT",
-      model: { ...nativeOpenAIModel, api: "openai-chatgpt-responses" },
-      summary: [{ type: "summary_text", text: "safe summary" }],
-      content: [{ type: "reasoning_text", text: "safe content" }],
+  it.each([
+    [
+      "image",
+      "aW1n",
+      [{ type: "input_image", detail: "auto", image_url: "data:image/png;base64,aW1n" }],
+    ],
+    ["image", "", "(no output)"],
+    ["audio", "YXVkaW8=", "(see attached audio)"],
+  ] as const)(
+    "replays %s tool bytes '%s' without spurious placeholders",
+    (type, data, expected) => {
+      const call = assistant([toolCall("media", "media", {})], { stopReason: "toolUse" });
+      const result = {
+        ...makeTextToolResult("call_media|fc_media", "media", "", false, 2),
+        content: [{ type, data, mimeType: type === "image" ? "image/png" : "audio/mpeg" }],
+      };
+      const input = replayMessages(
+        [...(data ? [call] : []), result] as unknown as Context["messages"],
+        { includeSystemPrompt: false },
+        { ...nativeOpenAIModel, input: ["text", "image"] },
+      );
+      expect(input.find((item) => item.type === "function_call_output")).toEqual({
+        type: "function_call_output",
+        call_id: "call_media",
+        output: expected,
+      });
     },
-  ] satisfies Array<{ name: string; model: Model; summary: unknown[]; content?: unknown[] }>)(
-    "$name reasoning replay",
-    ({ model, summary, content }) => {
+  );
+
+  describe.each(["openai-responses", "openai-chatgpt-responses"] as const)(
+    "%s reasoning replay",
+    (api) => {
+      const model = { ...nativeOpenAIModel, api };
+      const summary =
+        api === "openai-chatgpt-responses" ? [{ type: "summary_text", text: "safe summary" }] : [];
+      const content =
+        api === "openai-chatgpt-responses"
+          ? [{ type: "reasoning_text", text: "safe content" }]
+          : undefined;
       const sameRoute = buildOpenAIResponsesReasoningReplayMetadata(model, reasoningReplayIdentity);
       const otherSession = buildOpenAIResponsesReasoningReplayMetadata(model, {
         ...reasoningReplayIdentity,
@@ -642,12 +485,14 @@ describe("convertResponsesMessages", () => {
       });
       it.each([
         ["matching block metadata", sameRoute, otherSession, true],
+        ["legacy unattributed metadata", undefined, undefined, true],
         ["mismatched block metadata", otherSession, sameRoute, false],
         ["malformed block metadata", null, sameRoute, false],
         ["mismatched embedded metadata", undefined, otherSession, false],
       ])(
         "fences encrypted reasoning with %s",
         (_name, blockMetadata, embeddedMetadata, preservesCiphertext) => {
+          const replayIds = blockMetadata !== undefined || embeddedMetadata !== undefined;
           const signature = {
             type: "reasoning",
             id: "rs_route_fenced",
@@ -664,28 +509,23 @@ describe("convertResponsesMessages", () => {
             [assistant([block] as unknown as AssistantMessage["content"], { api: model.api })],
             {
               includeSystemPrompt: false,
-              replayResponsesItemIds: true,
+              replayResponsesItemIds: replayIds,
               ...reasoningReplayIdentity,
             },
             model,
           );
           const item = input.find((entry) => entry.type === "reasoning");
-          if (!preservesCiphertext) {
-            expect(item).toBeUndefined();
-            return;
-          }
-          expect(item).toMatchObject({
-            type: "reasoning",
-            id: "rs_route_fenced",
-            summary,
-            encrypted_content: "route-bound-ciphertext",
-          });
-          if (content) {
-            expect(item).toHaveProperty("content", content);
-          } else {
-            expect(item).not.toHaveProperty("content");
-          }
-          expect(item).not.toHaveProperty("__openclaw_replay");
+          expect(item).toEqual(
+            preservesCiphertext
+              ? {
+                  ...(replayIds ? { id: "rs_route_fenced" } : {}),
+                  type: "reasoning",
+                  summary,
+                  ...(content ? { content } : {}),
+                  encrypted_content: "route-bound-ciphertext",
+                }
+              : undefined,
+          );
         },
       );
     },
@@ -970,14 +810,9 @@ describe("processResponsesStream", () => {
       { type: "thinking", thinking: "first" },
       { type: "thinking", thinking: "second" },
     ]);
-    expect(eventPositions(events)).toEqual([
-      ["thinking_start", 0],
-      ["thinking_start", 1],
-      ["thinking_delta", 0],
-      ["thinking_delta", 1],
-      ["thinking_end", 1],
-      ["thinking_end", 0],
-    ]);
+    expect(eventPositions(events)).toBe(
+      "thinking_start@0 thinking_start@1 thinking_delta@0 thinking_delta@1 thinking_end@1 thinking_end@0",
+    );
     expect(
       output.content.map((block) =>
         block.type === "thinking" && block.thinkingSignature
@@ -1006,11 +841,9 @@ describe("processResponsesStream", () => {
       { type: "text", text: "first extended" },
       { type: "thinking", thinking: "thought" },
     ]);
-    expect(eventPositions(events.filter((event) => event.type.endsWith("_start")))).toEqual([
-      ["text_start", 0],
-      ["text_start", 1],
-      ["thinking_start", 2],
-    ]);
+    expect(eventPositions(events.filter((event) => event.type.endsWith("_start")))).toBe(
+      "text_start@0 text_start@1 thinking_start@2",
+    );
   });
 
   it("finalizes incomplete usage and derives an omitted token total", async () => {
@@ -1122,6 +955,29 @@ describe("processResponsesStream", () => {
     expect(output.responseId).toBe("resp_aborted");
   });
 
+  it("yields to aborts during bursty Responses streams without retaining partial snapshots", async () => {
+    const abort = new AbortController();
+    let yieldedToTimer = false;
+    setTimeout(() => {
+      yieldedToTimer = true;
+      abort.abort();
+    }, 0);
+
+    const { events, done } = startResponses(
+      [
+        itemEvent("added", { type: "message" }),
+        ...Array.from({ length: 512 }, () => ({ type: "response.output_text.delta", delta: "x" })),
+      ],
+      { model: azureModel, options: { signal: abort.signal } },
+    );
+    await expect(done).rejects.toThrow("Request was aborted");
+    expect(yieldedToTimer).toBe(true);
+    expect(events.length).toBeLessThan(512);
+    const textDeltas = events.filter((event) => event.type === "text_delta");
+    expect(textDeltas.length).toBeGreaterThan(0);
+    expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
+  });
+
   const fallbackArguments = (doneArguments: string | undefined) => ({
     name:
       "preserves streamed arguments when done " +
@@ -1159,81 +1015,69 @@ describe("processResponsesStream", () => {
     expect(eventTypes(events)).toEqual(types);
   });
 
-  it("keeps idless tool-call ids stable within a response and unique across responses", async () => {
-    const runOnce = async () => {
-      const { output, events } = await collectResponses([
-        itemEvent("added", { type: "function_call", name: "computer", arguments: "" }, 0),
-        itemEvent("done", { type: "function_call", name: "computer", arguments: "{}" }, 0),
-        completed("resp_idless"),
-      ]);
-      const block = output.content.find((entry) => entry.type === "toolCall");
-      const end = events.find((event) => event.type === "toolcall_end");
-      if (!block || block.type !== "toolCall" || !end || end.type !== "toolcall_end") {
-        throw new Error("missing tool-call lifecycle");
-      }
-      return { blockId: block.id, endId: end.toolCall.id };
-    };
-
-    const first = await runOnce();
-    const second = await runOnce();
-    expect(first.blockId).toMatch(/^call_[0-9a-f]{24}$/);
-    expect(first.endId).toBe(first.blockId);
-    expect(second.endId).toBe(second.blockId);
-    expect(second.blockId).not.toBe(first.blockId);
-  });
-
-  it("adopts the completed SDK item id while preserving lifecycle and result linkage", async () => {
-    const item = {
-      type: "function_call",
-      call_id: "call_weather",
-      name: "weather",
-      arguments: "",
-      status: "in_progress",
-    };
-    let startedId: string | undefined;
-    const { output, events } = await collectResponses(
-      [
-        itemEvent("added", item, 0),
-        itemEvent(
-          "done",
-          { ...item, id: "fc_weather", arguments: '{"city":"Seattle"}', status: "completed" },
-          0,
-        ),
-        completed("resp_weather"),
-      ],
-      {
-        observe(event) {
-          if (event.type === "toolcall_start") {
-            const block = event.partial.content[event.contentIndex];
-            startedId = block?.type === "toolCall" ? block.id : undefined;
-          }
+  it.each([true, false])(
+    "adopts completed SDK identities and result linkage (call id present: %s)",
+    async (hasCallId) => {
+      const item = {
+        type: "function_call",
+        ...(hasCallId ? { call_id: "call_weather" } : {}),
+        name: "weather",
+        arguments: "",
+        status: "in_progress",
+      };
+      const doneItem = {
+        ...item,
+        id: "fc_weather",
+        call_id: "call_weather",
+        arguments: '{"city":"Seattle"}',
+        status: "completed",
+      };
+      let startedId: string | undefined;
+      const { output, events } = await collectResponses(
+        [
+          itemEvent("added", item, 0),
+          itemEvent("done", doneItem, 0),
+          completed("resp_weather", { output: [doneItem] }),
+        ],
+        {
+          model: hasCallId ? nativeOpenAIModel : azureModel,
+          observe(event) {
+            if (event.type === "toolcall_start") {
+              const block = event.partial.content[event.contentIndex];
+              startedId = block?.type === "toolCall" ? block.id : undefined;
+            }
+          },
         },
-      },
-    );
+      );
 
-    expect(startedId).toBe("call_weather");
-    expect(output.content).toEqual([toolCall("weather", "weather", { city: "Seattle" })]);
-    expect(eventPositions(events)).toEqual([
-      ["toolcall_start", 0],
-      ["toolcall_end", 0],
-    ]);
+      expect(startedId).toEqual(
+        hasCallId ? "call_weather" : expect.stringMatching(/^call_[0-9a-f]{24}$/),
+      );
+      expect(output.stopReason).toBe("toolUse");
+      expect(output.content).toEqual([toolCall("weather", "weather", { city: "Seattle" })]);
+      expect(eventPositions(events)).toBe("toolcall_start@0 toolcall_end@0");
+      expect(events.at(-1)).toMatchObject({
+        type: "toolcall_end",
+        toolCall: { id: "call_weather|fc_weather" },
+      });
 
-    const replay = replayMessages(
-      [output, makeTextToolResult("call_weather|fc_weather", "weather", "Rain", false, 1)],
-      { includeSystemPrompt: false },
-    );
-    expect(replay).toContainEqual({
-      type: "function_call",
-      call_id: "call_weather",
-      name: "weather",
-      arguments: '{"city":"Seattle"}',
-    });
-    expect(replay).toContainEqual({
-      type: "function_call_output",
-      call_id: "call_weather",
-      output: "Rain",
-    });
-  });
+      const replay = replayMessages(
+        [output, makeTextToolResult("call_weather|fc_weather", "weather", "Rain", false, 1)],
+        { includeSystemPrompt: false },
+      );
+      expect(replay).toContainEqual({
+        type: "function_call",
+        call_id: "call_weather",
+        name: "weather",
+        arguments: '{"city":"Seattle"}',
+      });
+      expect(replay).toContainEqual({
+        type: "function_call_output",
+        call_id: "call_weather",
+        output: "Rain",
+      });
+    },
+  );
 
   it("keeps parallel unindexed Responses calls bound by identity without orphans", async () => {
     const firstItem = { ...toolItem("first_unindexed", '{"slot":1}'), status: "completed" };
@@ -1251,22 +1095,16 @@ describe("processResponsesStream", () => {
       completed("resp_parallel_unindexed", { output: [firstItem, secondItem] }),
     ]);
 
-    expect(output.content).toEqual([
+    const expected = [
       toolCall("first_unindexed", "computer", { slot: 1 }),
       toolCall("second_unindexed", "computer", { slot: 2 }),
-    ]);
+    ];
+    expect(output.content).toEqual(expected);
     expect(
       events
         .filter((event) => event.type === "toolcall_end")
-        .map((event) =>
-          event.type === "toolcall_end"
-            ? [event.contentIndex, event.toolCall.id, event.toolCall.arguments]
-            : undefined,
-        ),
-    ).toEqual([
-      [0, "call_first_unindexed|fc_first_unindexed", { slot: 1 }],
-      [1, "call_second_unindexed|fc_second_unindexed", { slot: 2 }],
-    ]);
+        .map((event) => [event.contentIndex, event.toolCall]),
+    ).toEqual(expected.map((call, index) => [index, call]));
     expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(2);
   });
 
@@ -1369,32 +1207,6 @@ describe("processResponsesStream", () => {
     ).toEqual(deltas);
     expect(events.filter((event) => event.type === "toolcall_start")).toHaveLength(calls);
     expect(events.filter((event) => event.type === "toolcall_end")).toHaveLength(calls);
-  });
-
-  it("pairs an item-only tool call with one generated call id", async () => {
-    const { output, events } = await collectResponses([
-      {
-        type: "response.output_item.done",
-        output_index: 0,
-        sequence_number: 1,
-        item: {
-          type: "function_call",
-          id: "fc_item_only",
-          name: "computer",
-          arguments: "{}",
-          status: "completed",
-        },
-      },
-      completed("resp_item_only"),
-    ]);
-
-    const block = output.content[0];
-    const end = events.find((event) => event.type === "toolcall_end");
-    if (!block || block.type !== "toolCall" || !end || end.type !== "toolcall_end") {
-      throw new Error("missing item-only tool-call lifecycle");
-    }
-    expect(block.id).toMatch(/^call_[0-9a-f]{24}\|fc_item_only$/);
-    expect(end.toolCall.id).toBe(block.id);
   });
 });
 

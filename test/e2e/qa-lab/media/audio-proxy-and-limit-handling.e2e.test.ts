@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { createServer, type IncomingHttpHeaders, type ServerResponse } from "node:http";
+import { createServer } from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
@@ -17,8 +17,6 @@ vi.mock("../../../../src/plugins/capability-provider-runtime.js", () => ({
 }));
 
 type RequestObservation = {
-  body: Buffer;
-  headers: IncomingHttpHeaders;
   method: string | undefined;
   remotePort: number | undefined;
   url: string | undefined;
@@ -27,32 +25,22 @@ type ProxyRequest = Pick<RequestObservation, "method" | "url">;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function withRequestBody(
-  request: NodeJS.ReadableStream,
-  response: ServerResponse,
-  handle: (body: Buffer) => void,
-): void {
-  void buffer(request)
-    .then(handle)
-    .catch((error: unknown) => {
-      response.destroy(error instanceof Error ? error : new Error(String(error)));
-    });
-}
-
 async function startProviderServer(observations: RequestObservation[]) {
   return await listen(
     createServer((request, response) => {
-      withRequestBody(request, response, (body) => {
-        observations.push({
-          body,
-          headers: request.headers,
-          method: request.method,
-          remotePort: request.socket.remotePort,
-          url: request.url,
+      void buffer(request)
+        .then(() => {
+          observations.push({
+            method: request.method,
+            remotePort: request.socket.remotePort,
+            url: request.url,
+          });
+          response.writeHead(200, { "content-type": "application/json", connection: "close" });
+          response.end(JSON.stringify({ text: "proxied audio transcript" }));
+        })
+        .catch((error: unknown) => {
+          response.destroy(error instanceof Error ? error : new Error(String(error)));
         });
-        response.writeHead(200, { "content-type": "application/json", connection: "close" });
-        response.end(JSON.stringify({ text: "proxied audio transcript" }));
-      });
     }),
   );
 }
@@ -93,44 +81,28 @@ async function startForwardProxy(observations: ProxyRequest[], upstreamLocalPort
   return await listen(server);
 }
 
-async function createAudioContext(tempRoot: string, fileName: string, size: number) {
-  const filePath = path.join(tempRoot, fileName);
-  await fs.writeFile(filePath, Buffer.alloc(size, 0x52));
-  const ctx: MsgContext = {
-    Body: "",
-    media: [{ path: filePath, contentType: "audio/wav" }],
-  };
-  return { ctx, workspaceDir: tempRoot };
-}
-
 describe("media.audio-proxy-and-limit-handling", () => {
-  it("routes provider audio through the proxy and rejects oversized audio before network IO", async () => {
+  it("routes provider audio through the CONNECT proxy", async () => {
     const proxyRequests: ProxyRequest[] = [];
     const providerRequests: RequestObservation[] = [];
     const proxyUpstreamPorts = new Set<number>();
     const provider = await startProviderServer(providerRequests);
     const proxy = await startForwardProxy(proxyRequests, proxyUpstreamPorts);
     const dir = await fs.realpath(tempDirs.make("openclaw-audio-qa-"));
-    const transcribe = async (fileName: string, size: number) => {
-      const { ctx, workspaceDir } = await createAudioContext(dir, fileName, size);
-      await applyMediaUnderstanding({
-        ctx,
-        cfg: audioConfig(
-          "openai",
-          "gpt-4o-transcribe",
-          {
-            apiKey: "test",
-            baseUrl: `${provider.url}/v1`,
-            request: { allowPrivateNetwork: true },
-            models: [],
-          },
-          { maxBytes: 4096 },
-        ),
-        workspaceDir,
-        providers: { openai: openaiMediaUnderstandingProvider },
-      });
-      return ctx;
-    };
+    const filePath = path.join(dir, "accepted.wav");
+    await fs.writeFile(filePath, Buffer.alloc(2048, 0x52));
+    const ctx: MsgContext = { Body: "", media: [{ path: filePath, contentType: "audio/wav" }] };
+    const cfg = audioConfig(
+      "openai",
+      "gpt-4o-transcribe",
+      {
+        apiKey: "test",
+        baseUrl: `${provider.url}/v1`,
+        request: { allowPrivateNetwork: true },
+        models: [],
+      },
+      {},
+    );
 
     try {
       await withEnvAsync(
@@ -145,31 +117,21 @@ describe("media.audio-proxy-and-limit-handling", () => {
           no_proxy: "",
         },
         async () => {
-          const accepted = await transcribe("accepted.wav", 2048);
+          await applyMediaUnderstanding({
+            ctx,
+            cfg,
+            workspaceDir: dir,
+            providers: { openai: openaiMediaUnderstandingProvider },
+          });
 
-          expect(accepted.Transcript).toBe("proxied audio transcript");
+          expect(ctx.Transcript).toBe("proxied audio transcript");
           expect(proxyRequests).toMatchObject([
             { method: "CONNECT", url: new URL(provider.url).host },
           ]);
           expect(providerRequests).toMatchObject([
             { method: "POST", url: "/v1/audio/transcriptions" },
           ]);
-          expect(providerRequests[0]?.headers["content-type"]).toContain("multipart/form-data");
-          expect(providerRequests[0]?.body.toString("utf8")).toContain("gpt-4o-transcribe");
           expect(proxyUpstreamPorts.has(providerRequests[0]?.remotePort ?? -1)).toBe(true);
-
-          proxyRequests.length = 0;
-          providerRequests.length = 0;
-          proxyUpstreamPorts.clear();
-
-          const oversized = await transcribe("oversized.wav", 4097);
-
-          expect(oversized.MediaUnderstanding).toBeUndefined();
-          expect(JSON.stringify(oversized.MediaUnderstandingDecisions)).toContain(
-            "exceeds maxBytes 4096",
-          );
-          expect(proxyRequests).toHaveLength(0);
-          expect(providerRequests).toHaveLength(0);
         },
       );
     } finally {

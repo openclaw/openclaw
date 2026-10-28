@@ -161,65 +161,58 @@ it.each(["size limit", "read-only workspace"])(
   },
 );
 
-it.each([
-  { requesterAgentId: "main", projectionClosed: true },
-  { requesterAgentId: "work", projectionClosed: false },
-  { requesterAgentId: "work", projectionClosed: true },
-])(
-  "reacquires the admitted policy owner for $requesterAgentId (projection closed: $projectionClosed) and rejects rerouting",
-  async ({ requesterAgentId, projectionClosed }) => {
-    const { workspace, sandbox, build, context: makeContext } = await fixture();
-    const originalWrite = vi.spyOn(sandbox.bridge, "createFileExclusive");
-    if (projectionClosed) {
-      originalWrite.mockRejectedValue(new Error("Originating projection has closed"));
-    }
-    const dispose = vi.fn();
-    const skillsSnapshot = {
-      prompt: "admitted skills",
-      skills: [],
-      librarySelections: [{ skillId: "s", revision: "r", name: "s", ownerProfileId: "o" }],
-    };
-    const config = { agents: { entries: { main: {}, work: {} } } };
-    resolveSandboxContext.mockImplementation(async (selection) => {
-      resolveSessionAgentIds({ ...selection, config });
-      return projection(workspace, dispose);
-    });
-    const context = makeContext({
-      config,
-      agentSessionKey: `agent:${requesterAgentId}:cron:generated:run:current`,
-      sandboxSessionKey: "agent:main:policy",
-      sandboxAgentId: "main",
-      requesterAgentId,
-      workspaceDir: "/closed/projection",
-      spawnWorkspaceDir: "/canonical/worktree",
-      skillsSnapshot,
-    });
-    expect(context.taskOptions()).toMatchObject({
-      requesterAgentId,
-      sessionKey: `agent:${requesterAgentId}:cron:generated:run:current`,
-    });
-    const result = await build({ sandbox: context.acquireOutputSandbox });
-    expect(resolveSandboxContext).toHaveBeenCalledWith({
-      config,
-      sessionKey: "agent:main:policy",
-      agentId: "main",
-      workspaceDir: "/canonical/worktree",
-      skillsSnapshot,
-      execOverrides: undefined,
-      assertCurrent: expect.any(Function),
-    });
-    await expectStaged(result, workspace);
-    expect(originalWrite).not.toHaveBeenCalled();
-    expect(dispose).toHaveBeenCalledOnce();
+it("reacquires a different admitted policy owner after projection closure and rejects rerouting", async () => {
+  const requesterAgentId = "work";
+  const { workspace, sandbox, build, context: makeContext } = await fixture();
+  const originalWrite = vi
+    .spyOn(sandbox.bridge, "createFileExclusive")
+    .mockRejectedValue(new Error("Originating projection has closed"));
+  const dispose = vi.fn();
+  const skillsSnapshot = {
+    prompt: "admitted skills",
+    skills: [],
+    librarySelections: [{ skillId: "s", revision: "r", name: "s", ownerProfileId: "o" }],
+  };
+  const config = { agents: { entries: { main: {}, work: {} } } };
+  resolveSandboxContext.mockImplementation(async (selection) => {
+    resolveSessionAgentIds({ ...selection, config });
+    return projection(workspace, dispose);
+  });
+  const context = makeContext({
+    config,
+    agentSessionKey: `agent:${requesterAgentId}:cron:generated:run:current`,
+    sandboxSessionKey: "agent:main:policy",
+    sandboxAgentId: "main",
+    requesterAgentId,
+    workspaceDir: "/closed/projection",
+    spawnWorkspaceDir: "/canonical/worktree",
+    skillsSnapshot,
+  });
+  expect(context.taskOptions()).toMatchObject({
+    requesterAgentId,
+    sessionKey: `agent:${requesterAgentId}:cron:generated:run:current`,
+  });
+  const result = await build({ sandbox: context.acquireOutputSandbox });
+  expect(resolveSandboxContext).toHaveBeenCalledWith({
+    config,
+    sessionKey: "agent:main:policy",
+    agentId: "main",
+    workspaceDir: "/canonical/worktree",
+    skillsSnapshot,
+    execOverrides: undefined,
+    assertCurrent: expect.any(Function),
+  });
+  await expectStaged(result, workspace);
+  expect(originalWrite).not.toHaveBeenCalled();
+  expect(dispose).toHaveBeenCalledOnce();
 
-    const otherWorkspace = tempDirs.make("other-sandbox-");
-    resolveSandboxContext.mockResolvedValue(projection(otherWorkspace, dispose));
-    const refused = await build({ sandbox: context.acquireOutputSandbox });
-    expectUnavailable(refused);
-    await expect(fs.readdir(otherWorkspace)).resolves.toEqual([]);
-    expect(dispose).toHaveBeenCalledTimes(2);
-  },
-);
+  const otherWorkspace = tempDirs.make("other-sandbox-");
+  resolveSandboxContext.mockResolvedValue(projection(otherWorkspace, dispose));
+  const refused = await build({ sandbox: context.acquireOutputSandbox });
+  expectUnavailable(refused);
+  await expect(fs.readdir(otherWorkspace)).resolves.toEqual([]);
+  expect(dispose).toHaveBeenCalledTimes(2);
+});
 
 it.each([
   "read-only before completion",

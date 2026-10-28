@@ -45,16 +45,11 @@ export type CloseParams = SessionEntryCurrentPreparation & {
   /** Gates new cleanup claims, without revoking an already admitted close. */
   isCurrent?: () => boolean;
   closeTab?: CloseTab;
-  closeDurableTab?: (
-    tab: DurableTab,
-    options: { closeIfCurrent: CloseIfCurrent },
-  ) => Promise<CloseTrackedCdpTargetResult>;
   getResolvedBrowserConfig?: () =>
     | ResolvedBrowserConfig
     | null
     | Promise<ResolvedBrowserConfig | null>;
   onWarn?: (message: string) => void;
-  onDebug?: (message: string) => void;
 };
 
 const deferredTabDiagnosticsSymbol = Symbol.for(
@@ -97,10 +92,6 @@ function reportDeferredTab(params: CloseParams, tab: DurableTab, reason: string)
   const message = `deferred tracked browser tab ${tab.nativeTargetId}: ${reason}`;
   if (recordDeferredTabDiagnostic(tab, reason)) {
     params.onWarn?.(message);
-    return;
-  }
-  if (params.onDebug) {
-    params.onDebug(message);
     return;
   }
   log.debug(message);
@@ -285,9 +276,7 @@ export async function closeDurableTab(
     )) ?? { status: "cancelled" };
   let outcome: DurableCleanupResult;
   try {
-    if (params.closeDurableTab) {
-      outcome = await params.closeDurableTab(tab, { closeIfCurrent });
-    } else if (params.closeTab) {
+    if (params.closeTab) {
       const closeTab = params.closeTab;
       outcome = await closeIfCurrent(async () => {
         await closeTab({

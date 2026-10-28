@@ -1,10 +1,20 @@
+import http from "node:http";
+import { promisify } from "node:util";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
+import { getMatrixRuntime } from "../../runtime.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import type { CoreConfig, MatrixConfig } from "../../types.js";
 import {
-  resolveMatrixConfigForAccount,
+  createMatrixMonitorTaskRunner,
+  getMatrixMonitorTaskSignal,
+} from "../monitor/task-runner.js";
+import { probeMatrix } from "../probe.js";
+import {
+  backfillMatrixAuthDeviceIdAfterStartup,
+  resolveMatrixAuth,
   resolveMatrixAuthContext,
   resolveValidatedMatrixHomeserverUrl,
   validateMatrixHomeserverUrl,
@@ -47,6 +57,14 @@ const envAuth = {
   MATRIX_DEVICE_NAME: "EnvDevice",
 };
 const opsAccount = { homeserver: "https://ops.example.org", accessToken: "ops-token" };
+const legacyAuth = { homeserver: "https://legacy.example.org", accessToken: "legacy-token" };
+const httpError =
+  "Matrix homeserver must use https:// unless it targets a private or loopback host";
+const secretEnv = { MATRIX_TEST_SECRET: "env-secret" };
+
+function resolve(matrix: MatrixConfig, env: NodeJS.ProcessEnv = {}, accountId?: string) {
+  return resolveDefaultMatrixAuthContext(matrixConfig(matrix), env, accountId);
+}
 
 beforeEach(() => {
   installMatrixTestRuntime();
@@ -56,30 +74,24 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function createEnvSecretRefConfig(params: {
-  field: "accessToken" | "password";
-  provider?: string;
-  secrets?: CoreConfig["secrets"];
-}): CoreConfig {
-  const account = {
-    homeserver: "https://matrix.example.org",
-    userId: "@bot:example.org",
-    [params.field]: {
-      source: "env",
-      provider: params.provider ?? "default",
-      id: "MATRIX_TEST_SECRET",
-    },
-  };
+function secretConfig(
+  field: "accessToken" | "password",
+  provider = "default",
+  secrets?: CoreConfig["secrets"],
+): CoreConfig {
   return {
-    ...matrixConfig(account),
-    secrets: params.secrets,
+    ...matrixConfig({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      [field]: { source: "env", provider, id: "MATRIX_TEST_SECRET" },
+    }),
+    secrets,
   };
 }
 
 describe("Matrix auth/config live surfaces", () => {
   it("prefers config over env", () => {
-    const cfg = matrixConfig({ ...configAuth });
-    expect(resolveDefaultMatrixAuthContext(cfg, envAuth).resolved).toEqual({
+    expect(resolve(configAuth, envAuth).resolved).toEqual({
       ...configAuth,
       deviceId: undefined,
       encryption: false,
@@ -102,13 +114,9 @@ describe("Matrix auth/config live surfaces", () => {
   });
 
   it("resolves password from supplied env with a default alias declared as exec", () => {
-    const cfg = createEnvSecretRefConfig({
-      field: "password",
-      provider: "shared",
-      secrets: {
-        defaults: { env: "shared" },
-        providers: { shared: { source: "exec", command: "/unused/matrix-secret-command" } },
-      },
+    const cfg = secretConfig("password", "shared", {
+      defaults: { env: "shared" },
+      providers: { shared: { source: "exec", command: "/unused/matrix-secret-command" } },
     });
     expect(
       resolveDefaultMatrixAuthContext(cfg, { MATRIX_TEST_SECRET: " supplied-secret " }, "default")
@@ -120,14 +128,15 @@ describe("Matrix auth/config live surfaces", () => {
     const cfg = matrixConfig({
       accounts: {
         ops: {
-          homeserver: "https://ops.example.org",
+          homeserver: opsAccount.homeserver,
           password: { source: "env", provider: "default", id: "MATRIX_OPS_PASSWORD" },
         },
       },
     });
     cfg.secrets = { providers: { default: { source: "env", allowlist: [] } } };
     expect(
-      resolveMatrixConfigForAccount(cfg, "ops", { MATRIX_OPS_ACCESS_TOKEN: "ops-token" }),
+      resolveDefaultMatrixAuthContext(cfg, { MATRIX_OPS_ACCESS_TOKEN: "ops-token" }, "ops")
+        .resolved,
     ).toMatchObject({ accessToken: "ops-token", password: undefined });
   });
 
@@ -135,9 +144,8 @@ describe("Matrix auth/config live surfaces", () => {
     vi.stubEnv("MATRIX_ACCESS_TOKEN", "ambient-token");
     vi.stubEnv("MATRIX_PASSWORD", "ambient-password");
     vi.stubEnv("MATRIX_TEST_SECRET", "ambient-secret");
-    const cfg = createEnvSecretRefConfig({ field: "accessToken" });
     expect(() =>
-      resolveDefaultMatrixAuthContext(cfg, {
+      resolveDefaultMatrixAuthContext(secretConfig("accessToken"), {
         MATRIX_TEST_SECRET: undefined,
         MATRIX_ACCESS_TOKEN: "fallback-token",
       }),
@@ -148,38 +156,26 @@ describe("Matrix auth/config live surfaces", () => {
     [["MATRIX_TEST_SECRET"], true],
     [[], false],
   ] as const)("honors explicit env allowlist %j (allowed: %s)", (allowlist, allowed) => {
-    const cfg = createEnvSecretRefConfig({
-      field: "password",
-      provider: "shared",
-      secrets: {
-        defaults: { env: "shared" },
-        providers: { shared: { source: "env", allowlist: [...allowlist] } },
-      },
+    const cfg = secretConfig("password", "shared", {
+      defaults: { env: "shared" },
+      providers: { shared: { source: "env", allowlist: [...allowlist] } },
     });
-    const resolve = () =>
-      resolveDefaultMatrixAuthContext(cfg, { MATRIX_TEST_SECRET: "env-secret" });
-
+    const read = () => resolveDefaultMatrixAuthContext(cfg, secretEnv);
     if (allowed) {
-      expect(resolve().resolved.password).toBe("env-secret");
+      expect(read().resolved.password).toBe("env-secret");
     } else {
-      expect(resolve).toThrow("not allowlisted in secrets.providers.shared.allowlist");
+      expect(read).toThrow("not allowlisted in secrets.providers.shared.allowlist");
     }
   });
 
   it.each([{ source: "file", path: "/unused/matrix-secret.json" }, undefined] as const)(
     "rejects non-default alias with declaration %j",
     (declaration) => {
-      const cfg = createEnvSecretRefConfig({
-        field: "accessToken",
-        provider: "other",
-        secrets: {
-          providers: declaration ? { other: declaration } : undefined,
-        },
+      const cfg = secretConfig("accessToken", "other", {
+        providers: declaration ? { other: declaration } : undefined,
       });
 
-      expect(() =>
-        resolveDefaultMatrixAuthContext(cfg, { MATRIX_TEST_SECRET: "env-secret" }),
-      ).toThrow(
+      expect(() => resolveDefaultMatrixAuthContext(cfg, secretEnv)).toThrow(
         declaration
           ? 'Secret provider "other" has source "file" but ref requests "env".'
           : 'Secret provider "other" is not configured (ref: env:other:MATRIX_TEST_SECRET).',
@@ -211,10 +207,7 @@ describe("Matrix auth/config live surfaces", () => {
       encryption: true,
     };
     const { MATRIX_ACCESS_TOKEN: _unusedToken, ...env } = envAuth;
-    const resolved = resolveDefaultMatrixAuthContext(
-      matrixConfig({ accounts: { default: { ...account } } }),
-      env,
-    );
+    const resolved = resolve({ accounts: { default: account } }, env);
     expect(resolved.accountId).toBe("default");
     expect(resolved.resolved).toEqual({
       ...account,
@@ -228,27 +221,12 @@ describe("Matrix auth/config live surfaces", () => {
   });
 
   it("ignores typoed defaultAccount values that do not map to a real Matrix account", () => {
-    const cfg = matrixConfig({
-      defaultAccount: "ops",
-      homeserver: "https://legacy.example.org",
-      accessToken: "legacy-token",
-    });
-
-    expect(resolveDefaultMatrixAuthContext(cfg).accountId).toBe("default");
+    expect(resolve({ ...legacyAuth, defaultAccount: "ops" }).accountId).toBe("default");
   });
 
   it("requires explicit defaultAccount selection when multiple named Matrix accounts exist", () => {
-    const cfg = matrixConfig({
-      accounts: {
-        assistant: {
-          homeserver: "https://matrix.assistant.example.org",
-          accessToken: "assistant-token",
-        },
-        ops: opsAccount,
-      },
-    });
-
-    expect(() => resolveDefaultMatrixAuthContext(cfg)).toThrow(
+    const accounts = { assistant: { ...configAuth }, ops: opsAccount };
+    expect(() => resolve({ accounts })).toThrow(
       /channels\.matrix\.defaultAccount.*--account <id>/i,
     );
   });
@@ -279,22 +257,18 @@ describe("Matrix auth/config live surfaces", () => {
   ] as const)(
     "rejects explicit account %s instead of borrowing the default",
     (accountId, error) => {
-      const cfg = matrixConfig({
-        homeserver: "https://legacy.example.org",
-        accessToken: "legacy-token",
-        accounts: { ops: opsAccount },
-      });
-      expect(() => resolveDefaultMatrixAuthContext(cfg, {}, accountId)).toThrow(error);
+      expect(() =>
+        resolve({ ...legacyAuth, accounts: { ops: opsAccount } }, {}, accountId),
+      ).toThrow(error);
     },
   );
 
   it.each(["channel", "account"])(
     "rejects a disabled %s before resolving secrets",
     (disabledScope) => {
-      const cfg = matrixConfig({
+      const matrix: MatrixConfig = {
         enabled: disabledScope !== "channel",
-        homeserver: "https://legacy.example.org",
-        accessToken: "legacy-token",
+        ...legacyAuth,
         accounts: {
           disabled: {
             enabled: disabledScope !== "account",
@@ -306,9 +280,8 @@ describe("Matrix auth/config live surfaces", () => {
             },
           },
         },
-      });
-
-      expect(() => resolveDefaultMatrixAuthContext(cfg, {}, "disabled")).toThrow(
+      };
+      expect(() => resolve(matrix, {}, "disabled")).toThrow(
         /Matrix account "disabled" is disabled/i,
       );
     },
@@ -331,58 +304,44 @@ describe("Matrix auth/config live surfaces", () => {
       expected: { password: undefined },
     },
   ])("does not inherit base or global $field for non-default accounts", ({ account, expected }) => {
-    const cfg = matrixConfig({
+    const matrix: MatrixConfig = {
       homeserver: "https://base.example.org",
       userId: "@base:example.org",
       accessToken: "base-token",
       password: "base-pass", // pragma: allowlist secret
       deviceId: "BASEDEVICE",
       accounts: { ops: account },
-    });
+    };
     const env = {
       MATRIX_ACCESS_TOKEN: "global-token",
       MATRIX_PASSWORD: "global-pass",
       MATRIX_DEVICE_ID: "GLOBALDEVICE",
     };
 
-    expect(resolveMatrixConfigForAccount(cfg, "ops", env)).toMatchObject(expected);
+    expect(resolve(matrix, env, "ops").resolved).toMatchObject(expected);
   });
 
   it("accepts internal http homeservers only when private-network access is enabled", () => {
-    expect(() => validateMatrixHomeserverUrl("http://matrix-synapse:8008")).toThrow(
-      "Matrix homeserver must use https:// unless it targets a private or loopback host",
-    );
-    expect(
-      validateMatrixHomeserverUrl("http://matrix-synapse:8008", {
-        allowPrivateNetwork: true,
-      }),
-    ).toBe("http://matrix-synapse:8008");
+    const url = "http://matrix-synapse:8008";
+    expect(() => validateMatrixHomeserverUrl(url)).toThrow(httpError);
+    expect(validateMatrixHomeserverUrl(url, { allowPrivateNetwork: true })).toBe(url);
   });
 
   it("resolves an explicit proxy dispatcher from top-level Matrix config", () => {
-    const cfg = matrixConfig({
-      homeserver: "https://matrix.example.org",
-      accessToken: "tok-123",
-      proxy: "http://127.0.0.1:7890",
-    });
-
-    const resolved = resolveDefaultMatrixAuthContext(cfg).resolved;
-
-    expect(resolved.dispatcherPolicy).toEqual({
+    const proxy = "http://127.0.0.1:7890";
+    expect(resolve({ ...configAuth, proxy }).resolved.dispatcherPolicy).toEqual({
       mode: "explicit-proxy",
-      proxyUrl: "http://127.0.0.1:7890",
+      proxyUrl: proxy,
     });
   });
 
   it("rejects public http homeservers even when private-network access is enabled", async () => {
     await expect(
       resolveValidatedMatrixHomeserverUrl("http://matrix.example.org:8008", {
-        allowPrivateNetwork: true,
+        dangerouslyAllowPrivateNetwork: true,
         lookupFn: createLookupFn([{ address: "93.184.216.34", family: 4 }]),
       }),
-    ).rejects.toThrow(
-      "Matrix homeserver must use https:// unless it targets a private or loopback host",
-    );
+    ).rejects.toThrow(httpError);
   });
 
   it("accepts internal http hostnames when the private-network opt-in is explicit", async () => {
@@ -392,5 +351,136 @@ describe("Matrix auth/config live surfaces", () => {
         lookupFn: createLookupFn([{ address: "127.0.0.1", family: 4 }]),
       }),
     ).resolves.toBe("http://localhost.localdomain:8008");
+  });
+});
+
+vi.mock("../credentials-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../credentials-read.js")>()),
+  loadMatrixCredentialsAsync: async () => null,
+  credentialsMatchConfig: () => false,
+}));
+// mock-isolation: Loopback auth probes must not persist their synthetic credentials.
+vi.mock("../credentials.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../credentials.js")>()),
+  saveMatrixCredentials: async () => {},
+}));
+
+describe("Matrix auth transport and retirement", () => {
+  const identity = { user_id: "@fixture:example.org", device_id: "FIXTURE" };
+  const token = "synthetic-token";
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    installMatrixTestRuntime({ logging: { getChildLogger: () => logger } });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  async function listen(server: http.Server) {
+    onTestFinished(async () => {
+      server.closeAllConnections();
+      await promisify(server.close.bind(server))();
+    });
+    await new Promise<void>((listening) => {
+      server.listen(0, "127.0.0.1", listening);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected loopback fixture address");
+    }
+    return `http://127.0.0.1:${address.port}`;
+  }
+
+  it("authenticates identity, login, and probe outcomes without opening probe state (#61317)", async () => {
+    let requests = 0;
+    let rejectLogin = false;
+    const server = http.createServer((request, response) => {
+      requests++;
+      const login = request.url === "/_matrix/client/v3/login";
+      const rejected = login
+        ? rejectLogin
+        : request.headers.authorization === "Bearer expired-token";
+      response.writeHead(rejected ? 401 : 200, { "content-type": "application/json" });
+      const payload = { ...identity, access_token: login ? token : undefined };
+      response.end(JSON.stringify(rejected ? { error: "Invalid credentials" } : payload));
+    });
+    const homeserver = await listen(server);
+    const matrix = { homeserver, network: { dangerouslyAllowPrivateNetwork: true } };
+    const authenticate = (auth: { accessToken?: string; userId?: string; password?: string }) =>
+      resolveMatrixAuth({ cfg: { channels: { matrix: { ...matrix, ...auth } } }, env: {} });
+    await expect(authenticate({ accessToken: token })).resolves.toMatchObject({
+      userId: identity.user_id,
+      deviceId: identity.device_id,
+      allowPrivateNetwork: true,
+    });
+    const login = { userId: identity.user_id, password: "synthetic-password" };
+    await expect(authenticate(login)).resolves.toMatchObject({
+      userId: "@fixture:example.org",
+      accessToken: token,
+    });
+    rejectLogin = true;
+    await expect(authenticate(login)).rejects.toMatchObject({ statusCode: 401 });
+    const stateAccess = (
+      ["openKeyedStore", "openKeyedStoreV2", "openSyncKeyedStore", "openBlobStore"] as const
+    ).map((method) => vi.spyOn(getMatrixRuntime().state, method));
+    for (const [outcome, expected] of Object.entries({
+      success: { ok: true },
+      mismatch: { ok: false, error: expect.stringContaining("does not match configured userId") },
+      unauthorized: { ok: false, status: 401 },
+    })) {
+      const result = await probeMatrix({
+        homeserver,
+        accessToken: outcome === "unauthorized" ? "expired-token" : token,
+        userId: outcome === "mismatch" ? "@other:example.org" : "@fixture:example.org",
+        allowPrivateNetwork: true,
+      });
+      expect(result).toMatchObject(expected);
+    }
+    for (const open of stateAccess) {
+      expect(open).not.toHaveBeenCalled();
+    }
+    expect(requests).toBe(6);
+  });
+
+  it("cancels an in-flight whoami request and joins backfill on monitor retirement", async () => {
+    const received = createDeferred<void>();
+    const closed = createDeferred<void>();
+    const server = http.createServer((request, response) => {
+      expect(request.url).toBe("/_matrix/client/v3/account/whoami");
+      response.once("close", closed.resolve);
+      received.resolve();
+    });
+    const runner = createMatrixMonitorTaskRunner({ logger, logVerboseMessage: () => {} });
+    let task: Promise<void> | undefined;
+    try {
+      const homeserver = await listen(server);
+      task = runner.runDetachedTask("deviceId backfill", async () => {
+        const result = await backfillMatrixAuthDeviceIdAfterStartup({
+          auth: {
+            homeserver,
+            userId: "@fixture:example.org",
+            accountId: "default",
+            accessToken: token,
+            ssrfPolicy: { allowPrivateNetwork: true },
+          },
+          abortSignal: getMatrixMonitorTaskSignal(),
+        });
+        expect(result).toBeUndefined();
+      });
+      await Promise.race([
+        received.promise,
+        task.then(() => {
+          throw new Error("Backfill settled before reaching the loopback fixture");
+        }),
+      ]);
+      runner.close();
+      const retired = runner.waitForIdle();
+      await closed.promise;
+      await retired;
+      expect(logger.warn).not.toHaveBeenCalled();
+    } finally {
+      runner.close();
+      server.closeAllConnections();
+      await task;
+    }
   });
 });

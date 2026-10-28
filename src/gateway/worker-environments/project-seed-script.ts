@@ -1,3 +1,4 @@
+import { gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import {
   WORKSPACE_SEED_RETENTION,
   WORKSPACE_SEED_RETENTION_JS,
@@ -50,6 +51,7 @@ ${WORKSPACE_SEED_RETENTION_JS}
 const prepareWorkspace = ${input.preparation ? PREPARE_PROJECT_WORKSPACE_JS : "undefined"};
 process.umask(0o077);
 const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(GIT_|GH_TOKEN$|GITHUB_TOKEN$)/i.test(key))), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
+Object.assign(env, ${JSON.stringify(gitMaintenanceEnvironment())});
 const git = (root, args, stdin, networkEnv) => {
   const result = spawnSync("git", ["-c", "core.hooksPath=" + os.devNull, "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "core.askPass=", "-c", "init.templateDir=", "-C", root, ...args], { env: networkEnv ?? env, encoding: "utf8", timeout: 600000, maxBuffer: 262144, stdio: [stdin ?? "ignore", "pipe", "pipe"] });
   if (result.status !== 0) throw new Error(networkEnv ? "Project repository fetch failed" : "Project Git preparation failed: " + (result.stderr?.trim() || result.error?.message || "exit " + result.status));

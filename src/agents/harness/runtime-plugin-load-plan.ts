@@ -1,3 +1,4 @@
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
@@ -30,6 +31,7 @@ import {
 } from "../agent-runtime-id.js";
 import { collectConfiguredAgentHarnessRuntimes } from "../harness-runtimes.js";
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
+import { resolveProviderEndpoint } from "../provider-attribution.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 
 export type AgentHarnessPluginSelection = {
@@ -73,6 +75,7 @@ function resolveSelectedMemoryPluginIds(params: {
   }
   return resolveEffectivePluginActivationState({
     id: plugin.pluginId,
+    channelIds: params.metadataSnapshot.byPluginId.get(plugin.pluginId)?.channels,
     origin: plugin.origin,
     config: plugins,
     rootConfig: params.config,
@@ -149,6 +152,7 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
   }
   lookup.addAgentHarnessOwners(pluginIds, runtimeIds);
   addConfiguredSlotPluginIds(pluginIds, {
+    index: params.index,
     activationSourceConfig: params.config ?? {},
     activationSourcePlugins: pluginsConfig,
     lookup,
@@ -201,6 +205,22 @@ function resolveSelectedProviderOwnerPluginIds(params: {
       providerOwnerPluginIds = normalizeUniqueStringEntries(
         resolveOwningPluginIdsForProviderRef({ ...params, provider: apiOwnerHint }) ?? [],
       );
+    }
+  }
+  if (providerOwnerPluginIds.length === 0) {
+    const baseUrl = findNormalizedProviderValue(
+      params.config?.models?.providers,
+      params.provider,
+    )?.baseUrl;
+    if (baseUrl) {
+      providerOwnerPluginIds = resolveManifestActivationPluginIds({
+        ...params,
+        trigger: {
+          kind: "provider",
+          provider: resolveProviderEndpoint(baseUrl, params.metadataSnapshot?.owners).endpointClass,
+        },
+        manifestRecords: params.metadataSnapshot?.plugins,
+      });
     }
   }
   if (providerOwnerPluginIds.length === 0) {
@@ -382,7 +402,13 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
       })
     : [];
   const contextEnginePluginId = includeAgentOwners
-    ? resolveSelectedContextEnginePluginId(params.config)
+    ? resolveSelectedContextEnginePluginId(
+        params.config,
+        params.metadataSnapshot.registryIndex.plugins.map((plugin) => ({
+          id: plugin.pluginId,
+          contextEngineIds: plugin.contextEngineIds,
+        })),
+      )
     : undefined;
   const contextEnginePluginIds = contextEnginePluginId ? [contextEnginePluginId] : [];
   const basePluginIds = (params.basePluginIds ?? []).filter(

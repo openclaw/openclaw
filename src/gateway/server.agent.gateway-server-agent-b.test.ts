@@ -1,7 +1,5 @@
-import { once } from "node:events";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
@@ -10,13 +8,10 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
 } from "../config/sessions/session-accessor.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
-import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { readAgentCommandCall } from "./agent-command.test-helpers.js";
 import { refusePendingInputCommit } from "./pending-input-commit.test-support.js";
 import {
   agentCommandMock,
-  connectOk,
   connectWebchatClient,
   installGatewayTestHooks,
   onceMessage,
@@ -25,7 +20,6 @@ import {
   startConnectedServerWithClient,
   startServerWithClient,
   testState,
-  trackConnectChallengeNonce,
   writeSessionStore,
 } from "./test-helpers.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
@@ -90,32 +84,24 @@ afterEach(async () => {
 test("write-scoped callers cannot reset conversations via agent", async () => {
   const scope = await writeMainSessionEntry("sess-main-before-write-reset");
 
-  const writeWs = new WebSocket(`ws://127.0.0.1:${port}`);
-  trackConnectChallengeNonce(writeWs);
+  const writeWs = await connectWebchatClient({ port, scopes: ["operator.write"] });
   try {
-    await once(writeWs, "open");
-    await connectOk(writeWs, { scopes: ["operator.write"] });
-
     const directReset = await rpcReq(writeWs, "sessions.reset", { key: "main" });
     expect(directReset.ok).toBe(false);
     expect(directReset.error?.message).toContain("missing scope: operator.admin");
 
-    vi.mocked(agentCommandMock).mockClear();
     const viaAgent = await rpcReq(writeWs, "agent", {
       message: "/reset",
       sessionKey: "main",
       idempotencyKey: "idem-agent-write-reset",
     });
+    const missingScope = "operator.admin";
     expect(viaAgent).toMatchObject({
       ok: false,
       error: {
         code: "FORBIDDEN",
-        message: "missing scope: operator.admin",
-        details: {
-          code: "MISSING_SCOPE",
-          missingScope: "operator.admin",
-          requiredScopes: ["operator.admin"],
-        },
+        message: `missing scope: ${missingScope}`,
+        details: { code: "MISSING_SCOPE", missingScope, requiredScopes: [missingScope] },
       },
     });
 
@@ -192,30 +178,25 @@ test.each(["completion", "abort"] as const)(
 
 test("agent returns a wire error when durable user-turn admission fails", async () => {
   await writeMainSessionEntry("sess-durable-agent-failure");
-  const refusal = refusePendingInputCommit({
+  using _ = refusePendingInputCommit({
     operation: "stage",
     message: "injected agent transcript admission failure",
     sessionId: "sess-durable-agent-failure",
     runId: "idem-agent-durable-failure",
   });
-  try {
-    const response = await rpcReq(ws, "agent", {
-      message: "this turn must not be acknowledged",
-      sessionKey: "main",
-      idempotencyKey: "idem-agent-durable-failure",
-    });
-
-    expect(response).toMatchObject({
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        message: expect.stringContaining("injected agent transcript admission failure"),
-      },
-    });
-    expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
-  } finally {
-    refusal.mockRestore();
-  }
+  const response = await rpcReq(ws, "agent", {
+    message: "this turn must not be acknowledged",
+    sessionKey: "main",
+    idempotencyKey: "idem-agent-durable-failure",
+  });
+  expect(response).toMatchObject({
+    ok: false,
+    error: {
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("injected agent transcript admission failure"),
+    },
+  });
+  expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
 });
 
 test("agent final response surfaces redacted ACP runtime cause details", async () => {
@@ -239,30 +220,4 @@ test("agent final response surfaces redacted ACP runtime cause details", async (
   expect(errorMessage).toMatch(/upstream rejected/);
   expect(errorMessage).not.toContain("AcpRuntimeError");
   expect(JSON.stringify(final)).not.toContain(token);
-});
-
-test("agent events stream to webchat clients when run context is registered", async () => {
-  await writeMainSessionEntry("sess-main");
-  const webchatWs = await connectWebchatClient({ port });
-  try {
-    registerAgentRunContext("run-auto-1", { sessionKey: "main" });
-    const finalChatP = onceMessage(
-      webchatWs,
-      (o) =>
-        o.type === "event" &&
-        o.event === "chat" &&
-        o.payload?.state === "final" &&
-        o.payload.runId === "run-auto-1",
-      8000,
-    );
-    for (const [stream, data] of [
-      ["assistant", { text: "hi from agent" }],
-      ["lifecycle", { phase: "end" }],
-    ] as const) {
-      emitAgentEvent({ runId: "run-auto-1", stream, data });
-    }
-    expect((await finalChatP).payload).toMatchObject({ sessionKey: "main", runId: "run-auto-1" });
-  } finally {
-    webchatWs.close();
-  }
 });

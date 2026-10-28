@@ -30,11 +30,15 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
     "configuredModelRefs" | "configuredRuntimeModels"
   >;
   preferBuiltPluginArtifacts: boolean;
+  installedIndexFingerprint: string;
   pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
 }>;
 
 export type PreparedModelCatalogWorkerTask = {
-  value: PreparedModelCatalogWorkerInput;
+  context: { workspaceDir: string | undefined; fingerprint: string };
+  value:
+    | PreparedModelCatalogWorkerInput
+    | Omit<PreparedModelCatalogWorkerInput, "remoteCatalog" | "pluginMetadataSnapshot">;
   request: PreparedModelWorkerRequest;
 };
 

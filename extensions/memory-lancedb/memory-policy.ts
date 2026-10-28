@@ -229,13 +229,10 @@ export function formatRelevantMemoriesContext(
   memories: Array<{ category: MemoryCategory; text: string }>,
   maxChars: number = DEFAULT_RECALL_MAX_CHARS,
 ): string {
-  // Defense-in-depth: filter envelope contamination that slipped through while
-  // preserving legacy media text as inert historical content.
-  const clean = memories.filter((entry) => isRecallableMemoryText(entry.text));
-  if (clean.length === 0) {
+  if (memories.length === 0) {
     return "";
   }
-  const memoryLines = clean.map(
+  const memoryLines = memories.map(
     (entry, index) =>
       `${index + 1}. [${entry.category}] ${formatRecalledMemoryForModel(entry.text, maxChars)}`,
   );

@@ -175,7 +175,22 @@ export class LinkReaderPrefetchOwner {
         this.schedulePrefetch();
       });
       this.observer = observer;
-      this.mutations = new MutationObserver(() => this.scheduleScan());
+      this.mutations = new MutationObserver((records) => {
+        // Streaming text and formatting edits cannot change link membership or hrefs.
+        if (
+          records.some(
+            (record) =>
+              record.type === "attributes" ||
+              [...record.addedNodes, ...record.removedNodes].some(
+                (node) =>
+                  node instanceof Element &&
+                  (node.localName === "a" || node.getElementsByTagName("a").length > 0),
+              ),
+          )
+        ) {
+          this.scheduleScan();
+        }
+      });
       this.mutations.observe(root, {
         childList: true,
         subtree: true,

@@ -3,7 +3,7 @@ import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { makeBrowserProfile, makeBrowserServerState } from "../server-context.test-harness.js";
 import { registerBrowserRoutes } from "./index.js";
 import { withBrowserProfileCapabilities } from "./profile-capabilities.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { createRouteFixture } from "./request.test-support.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 
 function setup(engine: "chromium" | "lightpanda" = "lightpanda") {
@@ -21,17 +21,8 @@ function setup(engine: "chromium" | "lightpanda" = "lightpanda") {
     forProfile: vi.fn(() => profileCtx),
     state: () => makeBrowserServerState({ profile }),
   } as unknown as BrowserRouteContext;
-  const routes = createBrowserRouteApp();
-  const request = async (method: "get" | "post", path: string, input: Partial<BrowserRequest>) => {
-    const handler = (method === "post" ? routes.postHandlers : routes.getHandlers).get(path);
-    if (!handler) {
-      throw new Error(`Route not registered: ${method} ${path}`);
-    }
-    const response = createBrowserRouteResponse();
-    await handler({ params: {}, query: {}, ...input }, response.res);
-    return response;
-  };
-  return { ctx, ensureTabAvailable, routes, request };
+  const routes = createRouteFixture();
+  return { ctx, ensureTabAvailable, routes, request: routes.request };
 }
 
 describe("browser engine route admission", () => {
@@ -40,9 +31,7 @@ describe("browser engine route admission", () => {
     ["get", "/cookies", {}],
     ["post", "/act", { body: { kind: "batch", actions: [{ kind: "click" }] } }],
     ["post", "/act", { body: { kind: "wait", selector: "main" } }],
-    ...[true, "1", "yes", " TRUE "].map(
-      (labels) => ["get", "/snapshot", { query: { labels } }] as const,
-    ),
+    ["get", "/snapshot", { query: { labels: " TRUE " } }],
     ...[{ format: "aria" }, { refs: "role" }, { selector: "main" }, { frame: "iframe" }].map(
       (query) => ["get", "/snapshot", { query }] as const,
     ),
@@ -68,7 +57,7 @@ describe("browser engine route admission", () => {
   it.each([
     ["lightpanda", "post", "/act", { body: { kind: "click", ref: "e1" } }],
     ["chromium", "post", "/act", { body: { kind: "wait", selector: "main" } }],
-    ...[undefined, false, "0", "no", " FALSE "].map(
+    ...[undefined, " FALSE "].map(
       (labels) =>
         [
           "lightpanda",

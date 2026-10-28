@@ -2,6 +2,7 @@ import {
   asFiniteNumber,
   asSafeIntegerInRange,
   expectDefined,
+  filterStringEntries,
   isRecord as isObject,
   parseStrictInteger,
 } from "@openclaw/normalization-core";
@@ -47,11 +48,7 @@ function dur(raw: number): string {
 }
 
 function meter(value: unknown, width: number, scale: unknown): string {
-  const glyphs = Array.isArray(scale)
-    ? scale.filter((glyph): glyph is string => typeof glyph === "string")
-    : typeof scale === "string"
-      ? Array.from(scale)
-      : [];
+  const glyphs = typeof scale === "string" ? Array.from(scale) : filterStringEntries(scale);
   if (glyphs.length < 2 || width < 1) {
     return "";
   }

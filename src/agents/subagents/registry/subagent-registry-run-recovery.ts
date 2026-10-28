@@ -10,7 +10,9 @@ import {
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
+import { createOperatorInputRecoverySource } from "../../operator-run-recovery-source.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.js";
 import {
@@ -23,18 +25,25 @@ import {
   normalizeSubagentRunState,
   resetRequesterSettleWakeRetry,
 } from "./subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import {
   safeRemoveAttachmentsDir,
   shouldRemoveSubagentAttachments,
 } from "./subagent-registry-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
+  assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import { SubagentWaitManager } from "./subagent-registry-run-wait.js";
-import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  RequesterSettleWakeState,
+  SubagentRunRecord,
+  SubagentAdmissionRejection,
+  SubagentSessionEffects,
+} from "./subagent-registry.types.js";
 import { hasRequesterCompletionCohort } from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
@@ -64,6 +73,85 @@ function continuesPausedSubagentRun(row: SubagentRunRecord): boolean {
 }
 
 export class SubagentRecoveryManager extends SubagentWaitManager {
+  protected captureAdmissionRejection(
+    entry: SubagentRunRecord,
+    sessionEffects?: SubagentSessionEffects,
+  ): SubagentAdmissionRejection {
+    const { runId, generation, createdAt } = entry;
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const context = captureOpenClawStateWorkerContext();
+    const resolver = getGatewayContextResolver(entry);
+    const gateway = resolver?.();
+    const isCurrent = () => {
+      try {
+        assertSubagentRegistryWriteSourceCurrent(context);
+      } catch {
+        return false;
+      }
+      return (
+        isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+        isSameSubagentRunOwner(this.options.runs.get(runId), entry) &&
+        entry.runId === runId &&
+        entry.generation === generation &&
+        entry.createdAt === createdAt &&
+        getGatewayContextResolver(entry) === resolver &&
+        (!resolver || (gateway !== undefined && resolver() === gateway))
+      );
+    };
+    const assertHostCurrent = () => {
+      if (!isCurrent()) {
+        throw new Error("Plugin subagent admission cleanup host changed.");
+      }
+      sessionEffects?.assertHostCurrent();
+    };
+    const nativeCheck = sessionEffects?.nativeCheck;
+    const completionSessionEffects: SubagentSessionEffects | undefined = sessionEffects
+      ? {
+          async isCurrent() {
+            return isCurrent() && (await sessionEffects.isCurrent()) && isCurrent();
+          },
+          assertHostCurrent,
+          assertCurrentEntry(current) {
+            assertHostCurrent();
+            sessionEffects.assertCurrentEntry(current);
+          },
+          ...(nativeCheck
+            ? {
+                nativeCheck: {
+                  source: nativeCheck.source,
+                  assertCurrent(current) {
+                    assertHostCurrent();
+                    nativeCheck.assertCurrent(current);
+                  },
+                },
+              }
+            : {}),
+        }
+      : undefined;
+    let failure: { error: string; endedAt: number } | undefined;
+    return async (error) => {
+      if (!isCurrent() || this.options.runs.get(runId)?.execution.endedAt !== undefined) {
+        return;
+      }
+      failure ??= { error, endedAt: Date.now() };
+      // The committed row owes an outcome after caller authority is revoked.
+      // It never started a turn, so old child history cannot supply its result.
+      await this.options.completeSubagentRun({
+        runId,
+        expectedEntry: entry,
+        endedAt: failure.endedAt,
+        outcome: { status: "error", error: failure.error },
+        reason: SUBAGENT_ENDED_REASON_ERROR,
+        completionSnapshot: { resultText: failure.error, capturedAt: failure.endedAt },
+        sessionEffects: completionSessionEffects,
+        // Callers without an admitted child source may settle the registry, never its session.
+        suppressSessionEffects: sessionEffects ? undefined : true,
+        triggerCleanup: true,
+        recoveryCurrent: { isHostCurrent: isCurrent, prepare: async () => isCurrent() },
+      });
+    };
+  }
+
   protected planSupersededKillReconciliations(
     rows: ReadonlyMap<string, SubagentRunRecord>,
     next: SubagentRunRecord,
@@ -111,6 +199,8 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     /** Exact paused owner captured by explicit task-resume admission. */
     expected?: SubagentRunRecord;
     gatewayContextResolver?: GatewayContextResolver;
+    retainAdmission?: (reject: SubagentAdmissionRejection) => void;
+    admissionSessionEffects?: SubagentSessionEffects;
     assertCurrent?: () => void;
     onPublished?: (entry: SubagentRunRecord) => void;
   }): Promise<boolean> => {
@@ -135,6 +225,8 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     }
     return this.replaceSubagentRunAfterSteer({
       assertCurrent: params.assertCurrent,
+      retainAdmission: params.retainAdmission,
+      admissionSessionEffects: params.admissionSessionEffects,
       onPublished: params.onPublished,
       previousRunId: paused.runId,
       nextRunId: runId,
@@ -162,6 +254,8 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
   readonly adoptPausedSubagentRunIntoSuccessor = async (params: {
     childSessionKey: string;
     childAgentId?: string;
+    retainAdmission?: (reject: SubagentAdmissionRejection) => void;
+    admissionSessionEffects?: SubagentSessionEffects;
     assertCurrent?: () => void;
   }): Promise<boolean> => {
     const { childSessionKey, childAgentId } = params;
@@ -197,6 +291,8 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
         task: successor.task,
         gatewayContextResolver: getGatewayContextResolver(successor),
         assertCurrent: params.assertCurrent,
+        retainAdmission: params.retainAdmission,
+        admissionSessionEffects: params.admissionSessionEffects,
       });
     } catch (error) {
       log.warn("failed to adopt paused subagent run into its admitted follow-up", {
@@ -217,6 +313,8 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     allowEndedSource?: boolean;
     /** Ordinary next turns retain the completed execution's independent delivery. */
     preserveCompletedRun?: boolean;
+    /** Current admitted child identity for a new task, never a historical task rebind. */
+    sessionEntry?: SubagentRunRecord["childSessionIdentity"];
     preserveFrozenResultFallback?: boolean;
     // A follow-up that continues a paused run inherits the original requester's
     // wake credential. An operator steer intentionally drops it: the operator is
@@ -228,6 +326,8 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     task?: string;
     lifecycleGeneration?: string;
     gatewayContextResolver?: GatewayContextResolver;
+    retainAdmission?: (reject: SubagentAdmissionRejection) => void;
+    admissionSessionEffects?: SubagentSessionEffects;
     assertCurrent?: () => void;
     onPublished?: (entry: SubagentRunRecord) => void;
   }): Promise<boolean> => {
@@ -359,15 +459,36 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
                 }
               : {}),
           });
+          // A reused key must not transfer the old controller's custody to a different child.
+          const admittedChild =
+            preserveCompletedRun &&
+            replaceParams.sessionEntry?.sessionId === source.childSessionIdentity?.sessionId
+              ? replaceParams.sessionEntry
+              : undefined;
+          const childSessionIdentity =
+            admittedChild ?? absorbed?.childSessionIdentity ?? source.childSessionIdentity;
+          const childAuthority = resolveSubagentChildAuthority(
+            preserveCompletedRun ? { ...source, childSessionIdentity } : (absorbed ?? source),
+          );
+          const followupRecoverySource =
+            preserveCompletedRun && childAuthority.status === "verified"
+              ? createOperatorInputRecoverySource({
+                  authority: authority?.operatorAuthority,
+                  agentId: childAuthority.childAgentId,
+                  sessionKey: source.childSessionKey,
+                  entry: { ...childAuthority.sessionIdentity, updatedAt: now },
+                  sourceRunId: nextRunId,
+                })
+              : undefined;
           const next: SubagentRunRecord = normalizeSubagentRunState({
             ...source,
             runId: nextRunId,
             // Completed follow-ups start a new task; steer retains its task's lineage.
             taskRunId: preserveCompletedRun ? nextRunId : (source.taskRunId ?? source.runId),
             requesterTurnRunId: preserveCompletedRun ? undefined : source.requesterTurnRunId,
-            // A new task has a fresh caller; it cannot recover under the completed task's grant.
+            // Human follow-ups belong to this child, not the completed task's parent grant.
             operatorRecoverySource: preserveCompletedRun
-              ? undefined
+              ? followupRecoverySource
               : source.operatorRecoverySource,
             requesterTurnYielded: preserveCompletedRun ? undefined : source.requesterTurnYielded,
             retireAfterRequesterTurn: preserveCompletedRun
@@ -376,12 +497,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             task: nextTask,
             generation,
             createdAt: now,
-            ...(absorbed
-              ? {
-                  childSessionIdentity:
-                    absorbed.childSessionIdentity ?? source.childSessionIdentity,
-                }
-              : {}),
+            ...(childSessionIdentity ? { childSessionIdentity } : {}),
             sessionStartedAt,
             accumulatedRuntimeMs,
             endedReason: undefined,
@@ -400,7 +516,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
                 lifecycleGeneration,
                 transcriptTarget: replaceParams.transcriptTarget,
               }),
-              ...(resolveSubagentChildAuthority(absorbed ?? source).status === "legacy-unverified"
+              ...(childAuthority.status === "legacy-unverified"
                 ? { suppressSessionEffects: true }
                 : {}),
             },
@@ -472,6 +588,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             bindGatewayContextResolver(
               next,
               replaceParams.gatewayContextResolver ?? getGatewayContextResolver(value.source),
+            );
+            replaceParams.retainAdmission?.(
+              this.captureAdmissionRejection(next, replaceParams.admissionSessionEffects),
             );
             if (preserveCompletedRun) {
               if (authority) {

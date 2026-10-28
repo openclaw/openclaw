@@ -8,6 +8,7 @@ import { extractGatewayMessageText } from "../../gateway-log-sentinel.js";
 import { formatApprovalResultValue } from "../shared/live-approval-result.js";
 import {
   SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
+  SLACK_QA_REACTION_VERIFY_TIMEOUT_MS,
   type SlackQaCodexApprovalMethod,
   type SlackQaCodexApprovalScenarioRun,
   type SlackQaApprovalContext,
@@ -72,20 +73,17 @@ function readAgentWaitStatus(result: unknown) {
 export async function waitForSlackReaction(params: {
   channelId: string;
   client: WebClient;
-  expectedReactionName: string;
   messageId: string;
   sutUserId: string;
-  timeoutMs: number;
 }) {
   const { listSlackReactions } = loadSlackQaRuntime();
-  const deadline = Date.now() + params.timeoutMs;
+  const deadline = Date.now() + SLACK_QA_REACTION_VERIFY_TIMEOUT_MS;
   while (true) {
     const reactions = await listSlackReactions(params.channelId, params.messageId, {
       client: params.client,
     });
     const reaction = reactions?.find(
-      (entry) =>
-        entry.name === params.expectedReactionName && entry.users?.includes(params.sutUserId),
+      (entry) => entry.name === "white_check_mark" && entry.users?.includes(params.sutUserId),
     );
     if (reaction) {
       return reaction;
@@ -96,7 +94,7 @@ export async function waitForSlackReaction(params: {
     await sleep(1_000);
   }
   throw new Error(
-    `Slack message ${params.messageId} did not receive ${params.expectedReactionName} from ${params.sutUserId}`,
+    `Slack message ${params.messageId} did not receive white_check_mark from ${params.sutUserId}`,
   );
 }
 

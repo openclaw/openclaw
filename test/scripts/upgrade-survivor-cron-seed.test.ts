@@ -8,28 +8,72 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.each([
-  ["base", "auto-auth"],
-  ["cron-scheduled-authority", "auto-auth"],
-  ["cron-scheduled-authority", "manual"],
-])("bootstraps %s in %s mode before publishing migration specimens", (scenario, mode) => {
-  const root = tempDirs.make("openclaw-survivor-bootstrap-");
-  const binDir = path.join(root, "bin");
-  const accountHome = path.join(root, "account");
-  const authoredPath = path.join(root, "authored.json");
-  const probePath = path.join(binDir, "openclaw");
-  const runnerPath = path.join(root, "run.sh");
-  const authoredConfig =
-    '{"plugins":{"enabled":true,"allow":["discord","whatsapp"]},"gateway":{"mode":"local"}}\n';
-  mkdirSync(binDir);
-  writeFileSync(authoredPath, authoredConfig);
-  writeFileSync(
-    path.join(binDir, "getent"),
-    `#!/bin/sh\nprintf 'fixture:x:1000:1000:Fixture:%s:/bin/sh\\n' "$FIXTURE_ACCOUNT_HOME"\n`,
-    { mode: 0o755 },
-  );
-  writeFileSync(
-    probePath,
-    `#!${process.execPath}
+  ["base", "auto-auth", "2026.8.1"],
+  ["cron-scheduled-authority", "auto-auth", "2026.8.1"],
+  ["cron-scheduled-authority", "manual", "2026.8.1"],
+  ["cron-scheduled-authority", "manual", "2026.6.34"],
+])(
+  "bootstraps %s in %s mode at %s before publishing migration specimens",
+  (scenario, mode, baselineVersion) => {
+    const root = tempDirs.make("openclaw-survivor-bootstrap-");
+    const binDir = path.join(root, "bin");
+    const accountHome = path.join(root, "account");
+    const authoredPath = path.join(root, "authored.json");
+    const probePath = path.join(binDir, "openclaw");
+    const runnerPath = path.join(root, "run.sh");
+    const authoredConfig =
+      '{"plugins":{"enabled":true,"allow":["discord","whatsapp"]},"gateway":{"mode":"local"}}\n';
+    mkdirSync(binDir);
+    const packageRoot = path.join(root, "fixture-package");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: baselineVersion,
+        type: "module",
+        exports: { "./plugin-sdk/cron-store-runtime": "./cron-store-runtime.mjs" },
+      }),
+    );
+    // The package operation is substituted, but the real phase sequence must resolve
+    // its installed SDK and seed SQLite before the historical no-restart update.
+    writeFileSync(
+      path.join(packageRoot, "cron-store-runtime.mjs"),
+      `
+import fs from "node:fs";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+const databasePath = (storePath) => path.join(path.dirname(path.dirname(storePath)), "state", "openclaw.sqlite");
+export async function saveCronStore(storePath, store) {
+  const file = databasePath(storePath);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const db = new DatabaseSync(file);
+  try {
+    db.exec("CREATE TABLE cron_jobs (job_id TEXT PRIMARY KEY, job_json TEXT NOT NULL)");
+    const insert = db.prepare("INSERT INTO cron_jobs VALUES (?, ?)");
+    for (const source of store.jobs) {
+      const job = structuredClone(source);
+      if (${JSON.stringify(baselineVersion)} === "2026.6.34") delete job.owner;
+      insert.run(job.id, JSON.stringify(job));
+    }
+  } finally { db.close(); }
+}
+export async function loadCronStore(storePath) {
+  const db = new DatabaseSync(databasePath(storePath), { readOnly: true });
+  try { return { version: 1, jobs: db.prepare("SELECT job_json FROM cron_jobs ORDER BY rowid").all().map(row => JSON.parse(row.job_json)) }; }
+  finally { db.close(); }
+}
+`,
+    );
+    writeFileSync(authoredPath, authoredConfig);
+    writeFileSync(
+      path.join(binDir, "getent"),
+      `#!/bin/sh\nprintf 'fixture:x:1000:1000:Fixture:%s:/bin/sh\\n' "$FIXTURE_ACCOUNT_HOME"\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      probePath,
+      `#!${process.execPath}
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -154,33 +198,46 @@ if (args[0] === "config") {
     assert.equal(read(path.join(state, "plugin-runtime-deps", plugin, ".openclaw-runtime-deps-stamp.json")).stale, true);
   }
   if (process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "cron-scheduled-authority") {
-    const jobs = read(path.join(state, "cron", "jobs.json")).jobs;
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(path.join(state, "state", "openclaw.sqlite"), { readOnly: true });
+    let jobs;
+    try { jobs = db.prepare("SELECT job_json FROM cron_jobs ORDER BY rowid").all().map(row => JSON.parse(row.job_json)); }
+    finally { db.close(); }
     assert.deepEqual(jobs.map((job) => job.id), ["cron-pre-cap", "cron-ownerless-cap", "cron-owner-session", "cron-encoded-account", "cron-agent-mismatch"]);
     assert.equal(jobs.every((job) => job.scheduledToolPolicy === undefined), true);
-    assert.equal(jobs[3].owner.sessionKey, "agent:main:discord:personal:direct:user-1");
-    assert.equal(jobs[4].owner.agentId, "other");
+    assert.equal(fs.existsSync(path.join(state, "cron", "jobs.json")), false);
+    if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION === "2026.6.34") {
+      assert.equal(jobs.every(job => job.owner === undefined), true);
+    } else {
+      assert.equal(jobs[3].owner.sessionKey, "agent:main:discord:personal:direct:user-1");
+      assert.equal(jobs[4].owner.agentId, "other");
+    }
   }
   fs.writeFileSync(path.join(process.env.FIXTURE_ROOT, "updated"), "complete");
 }
 `,
-    { mode: 0o755 },
-  );
-  writeFileSync(
-    path.join(binDir, "systemctl"),
-    `#!/bin/sh\nexec "${process.execPath}" "$FIXTURE_PROBE" fixture-systemctl "$@"\n`,
-    { mode: 0o755 },
-  );
-  const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
-  const phaseStart = source.indexOf("phase storage-preflight");
-  const updatePhase = "phase update-candidate update_candidate";
-  const phaseEnd = source.indexOf(updatePhase, phaseStart) + updatePhase.length;
-  // Run the actual phase sequence; substitute external model, package, and service operations.
-  writeFileSync(
-    runnerPath,
-    `${source.slice(0, phaseStart)}
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      path.join(binDir, "systemctl"),
+      `#!/bin/sh\nexec "${process.execPath}" "$FIXTURE_PROBE" fixture-systemctl "$@"\n`,
+      { mode: 0o755 },
+    );
+    const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
+    const phaseStart = source.indexOf("phase storage-preflight");
+    const updatePhase = "phase update-candidate update_candidate";
+    const phaseEnd = source.indexOf(updatePhase, phaseStart) + updatePhase.length;
+    // Run the actual phase sequence; substitute external model, package, and service operations.
+    writeFileSync(
+      runnerPath,
+      `${source.slice(0, phaseStart)}
 trap - EXIT ERR HUP INT TERM
 storage_preflight() { :; }
-install_baseline() { baseline_version=2026.8.1; }
+install_baseline() {
+  baseline_version=${baselineVersion}
+  mkdir -p "$BASELINE_PACKAGE_ROOT"
+  cp -R "$FIXTURE_ROOT/fixture-package/." "$BASELINE_PACKAGE_ROOT/"
+}
 apply_baseline_config_recipe() {
   mkdir -p "$OPENCLAW_STATE_DIR"
   cp "$FIXTURE_AUTHORED_PATH" "$OPENCLAW_CONFIG_PATH"
@@ -205,48 +262,49 @@ ${source.slice(phaseStart, phaseEnd)}
 assert_survival
 repair_fixture_plugin_consent
 `,
-  );
-  const stateFunction = execFileSync(process.execPath, [
-    "--import",
-    "tsx",
-    "scripts/lib/openclaw-test-state.mts",
-    "shell-function",
-  ]);
-  const result = spawnSync("bash", [runnerPath], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
-      OPENCLAW_TEST_STATE_FUNCTION_B64: stateFunction.toString("base64"),
-      OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.8.1",
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
-      OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
-      OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
-      OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT: accountHome,
-      OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
-      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "",
-      OPENCLAW_GATEWAY_TOKEN: "fixture-override-must-be-cleared",
-      OPENCLAW_GATEWAY_PASSWORD: "fixture-override-must-be-cleared",
-      FIXTURE_ROOT: root,
-      FIXTURE_ACCOUNT_HOME: accountHome,
-      FIXTURE_AUTHORED_PATH: authoredPath,
-      FIXTURE_PROBE: probePath,
-    },
-  });
-  const installError = path.join(root, "artifacts", "baseline-service-install.err");
-  expect(
-    result.status,
-    result.stdout +
-      result.stderr +
-      (existsSync(installError) ? readFileSync(installError, "utf8") : ""),
-  ).toBe(0);
-  expect(readFileSync(path.join(accountHome, ".openclaw", "openclaw.json"), "utf8")).toBe(
-    authoredConfig,
-  );
-  expect(readFileSync(path.join(root, "updated"), "utf8")).toBe("complete");
-  expect(existsSync(path.join(root, "restarted"))).toBe(mode === "auto-auth");
-  expect(existsSync(path.join(root, "served"))).toBe(mode === "auto-auth");
-});
+    );
+    const stateFunction = execFileSync(process.execPath, [
+      "--import",
+      "tsx",
+      "scripts/lib/openclaw-test-state.mts",
+      "shell-function",
+    ]);
+    const result = spawnSync("bash", [runnerPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        OPENCLAW_TEST_STATE_FUNCTION_B64: stateFunction.toString("base64"),
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: `openclaw@${baselineVersion}`,
+        OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+        OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: mode,
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: path.join(root, "runtime"),
+        OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT: accountHome,
+        OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: path.join(root, "artifacts", "summary.json"),
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: "",
+        OPENCLAW_GATEWAY_TOKEN: "fixture-override-must-be-cleared",
+        OPENCLAW_GATEWAY_PASSWORD: "fixture-override-must-be-cleared",
+        FIXTURE_ROOT: root,
+        FIXTURE_ACCOUNT_HOME: accountHome,
+        FIXTURE_AUTHORED_PATH: authoredPath,
+        FIXTURE_PROBE: probePath,
+      },
+    });
+    const installError = path.join(root, "artifacts", "baseline-service-install.err");
+    expect(
+      result.status,
+      result.stdout +
+        result.stderr +
+        (existsSync(installError) ? readFileSync(installError, "utf8") : ""),
+    ).toBe(0);
+    expect(readFileSync(path.join(accountHome, ".openclaw", "openclaw.json"), "utf8")).toBe(
+      authoredConfig,
+    );
+    expect(readFileSync(path.join(root, "updated"), "utf8")).toBe("complete");
+    expect(existsSync(path.join(root, "restarted"))).toBe(mode === "auto-auth");
+    expect(existsSync(path.join(root, "served"))).toBe(mode === "auto-auth");
+  },
+);
 
 const baselineJobs = [
   { id: "job-default", name: "survivor-default-owner" },

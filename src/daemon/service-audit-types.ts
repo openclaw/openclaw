@@ -27,4 +27,6 @@ export type ServiceConfigIssue = {
   detail?: string;
   environmentKeys?: string[];
   level?: "recommended" | "aggressive";
+  /** Host policy cannot be repaired by reinstalling the Gateway service. */
+  repair?: "host";
 };

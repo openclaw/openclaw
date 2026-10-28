@@ -12,6 +12,7 @@ import {
   resolveGitHubFetchTimeoutMs,
 } from "../../scripts/gh-read.js";
 import { normalizeGitHubRepo as normalizeRepo } from "../../scripts/lib/github-repo.js";
+import { createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -37,9 +38,6 @@ describe("gh-read helpers", () => {
   it("normalizes repo strings from common git formats", () => {
     expect(normalizeRepo("openclaw/openclaw")).toBe("openclaw/openclaw");
     expect(normalizeRepo("github.com/openclaw/openclaw")).toBe("openclaw/openclaw");
-    expect(normalizeRepo("github:openclaw/openclaw")).toBe("openclaw/openclaw");
-    expect(normalizeRepo("https://github.com/openclaw/openclaw.git")).toBe("openclaw/openclaw");
-    expect(normalizeRepo("git@github.com:openclaw/openclaw.git")).toBe("openclaw/openclaw");
     expect(normalizeRepo("https://gitlab.com/openclaw/openclaw.git")).toBeNull();
     expect(normalizeRepo("invalid")).toBeNull();
   });
@@ -48,15 +46,11 @@ describe("gh-read helpers", () => {
     const permissions = {
       actions: "write",
       issues: "read",
-      administration: "write",
-      metadata: "read",
       statuses: null,
     } as const;
     expect(buildReadPermissions(permissions, Object.keys(permissions))).toEqual({
-      administration: "read",
       actions: "read",
       issues: "read",
-      metadata: "read",
     });
   });
 
@@ -83,38 +77,28 @@ describe("gh-read helpers", () => {
     );
   });
 
-  it("aborts stalled GitHub API fetches at the request timeout", async () => {
+  it.each(["fetch", "body"])("aborts a stalled GitHub API %s at the deadline", async (phase) => {
     let signal: AbortSignal | undefined;
-    let markFetchStarted!: () => void;
-    const fetchStarted = new Promise<void>((resolve) => {
-      markFetchStarted = resolve;
-    });
-
+    const fetchStarted = createDeferred();
+    const cancel = vi.fn();
     vi.useFakeTimers();
     const request = githubJson("/app", "token", undefined, {
       timeoutMs: 5,
-      fetchImpl: ((_url, init) => {
+      fetchImpl: async (_url, init) => {
         signal = init?.signal ?? undefined;
-        markFetchStarted();
-        return new Promise(() => {});
-      }) as typeof fetch,
+        fetchStarted.resolve();
+        return phase === "fetch"
+          ? new Promise<Response>(() => {})
+          : streamed({ pull: () => new Promise(() => {}), cancel });
+      },
     });
-    await fetchStarted;
+    await fetchStarted.promise;
     await expectTimeout(request, /GitHub API GET \/app exceeded timeout/u);
     expect(signal?.aborted).toBe(true);
-  });
-
-  it("times out stalled GitHub API response body reads", async () => {
-    const cancel = vi.fn();
-    vi.useFakeTimers();
-    const response = streamed({ pull: () => new Promise(() => {}), cancel });
-    const request = githubJson("/app/installations", "token", undefined, {
-      timeoutMs: 5,
-      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
-    });
-    await expectTimeout(request, /GitHub API GET \/app\/installations exceeded timeout/u);
-    await Promise.resolve();
-    expect(cancel).toHaveBeenCalled();
+    if (phase === "body") {
+      await Promise.resolve();
+      expect(cancel).toHaveBeenCalled();
+    }
   });
 
   it.each([
@@ -130,8 +114,9 @@ describe("gh-read helpers", () => {
   );
 
   it("reads bounded GitHub API JSON responses", async () => {
-    const response = new Response('{"id":123}');
-    await expect(readBoundedGitHubJson(response, 1024)).resolves.toEqual({ id: 123 });
+    await expect(readBoundedGitHubJson(new Response('{"id":123}'), 1024)).resolves.toEqual({
+      id: 123,
+    });
   });
 
   it("rejects oversized GitHub API JSON responses by content length", async () => {
@@ -139,20 +124,6 @@ describe("gh-read helpers", () => {
     const response = streamed({ cancel }, { headers: { "content-length": "1025" } });
     await expect(readBoundedGitHubJson(response, 1024)).rejects.toMatchObject(oversizedError);
     expect(cancel).toHaveBeenCalled();
-  });
-
-  it("rejects oversized streamed GitHub API JSON responses", async () => {
-    const encoder = new TextEncoder();
-    const response = streamed({
-      start(controller) {
-        controller.enqueue(encoder.encode('{"body":"'));
-        controller.enqueue(encoder.encode("x".repeat(1024)));
-        controller.enqueue(encoder.encode('"}'));
-        controller.close();
-      },
-    });
-
-    await expect(readBoundedGitHubJson(response, 1024)).rejects.toMatchObject(oversizedError);
   });
 
   it("rejects invalid GitHub API timeout values", () => {

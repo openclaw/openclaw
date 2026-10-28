@@ -89,9 +89,17 @@ fixture.describe("sidebar session row tint", () => {
               const hover = rowState.includes("hover");
               const background = paint(fill.backgroundColor);
               const token = selected ? "--accent" : active ? "--text" : "--session-color";
+              // Neutral active paint differs by mode and strengthens on hover;
+              // multiselection keeps its independent accent wash over either state.
               const tints =
-                mode === "light" ? { idle: 0.09, hover: 0.14 } : { idle: 0.12, hover: 0.18 };
-              const alpha = selected ? 0.14 : active ? 0.1 : tints[hover ? "hover" : "idle"];
+                mode === "light"
+                  ? { idle: 0.09, hover: 0.14, active: 0.06, activeHover: 0.09 }
+                  : { idle: 0.12, hover: 0.18, active: 0.08, activeHover: 0.11 };
+              const alpha = selected
+                ? 0.14
+                : active
+                  ? tints[hover ? "activeHover" : "active"]
+                  : tints[hover ? "hover" : "idle"];
               const expected = paint(style.getPropertyValue(token), alpha);
               const metadata = [".sidebar-recent-session__subtitle", ".session-row-trail"].map(
                 (selector) => {

@@ -10,7 +10,6 @@ export type DispatchDiscordCommandInteractionParams = DiscordCommandArgContext &
   prompt: string;
   command: ChatCommandDefinition;
   commandArgs?: CommandArgs;
-  preferFollowUp: boolean;
   responseEphemeral?: boolean;
   suppressReplies?: boolean;
   pluginCommandDispatch: PluginCommandCatalogDecision;

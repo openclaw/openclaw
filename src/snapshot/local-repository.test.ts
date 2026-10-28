@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import * as directoryDurability from "@openclaw/fs-safe/durability";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runExec } from "../process/exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
@@ -13,6 +14,7 @@ import {
   createGlobalDatabase,
   createUnsafeIndexDrift,
   DURABLE_PLUGIN_BLOB_MARKER,
+  readGlobalRows,
   seedGlobalPluginBlobSnapshotFixtures,
   seedStateLease,
   STATE_LEASE_MARKER,
@@ -22,11 +24,14 @@ import {
   createGenericDatabase,
   createGenericSnapshot as createSnapshot,
   expectMissing,
+  interceptOpen,
+  interceptPublication,
   readGenericValues,
+  refreshArtifactManifest,
   useLocalRepositoryFixtures,
   withDatabase,
 } from "./local-repository.test-support.js";
-import { hashSnapshotArtifact, readSnapshotManifest } from "./manifest.js";
+import { hashSnapshotArtifact } from "./manifest.js";
 import {
   SNAPSHOT_MANIFEST_FILENAME,
   SNAPSHOT_SQLITE_FILENAME,
@@ -76,120 +81,21 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
 
 const success = ({ manifest }: SnapshotResult) => ({ ok: true, manifest });
-type Publication = Parameters<typeof directoryDurability.publishFileExclusive>[0];
-function interceptPublication(action: (options: Publication) => Promise<void>, after = false) {
-  const publish = directoryDurability.publishFileExclusive;
-  vi.spyOn(directoryDurability, "publishFileExclusive").mockImplementation(async (options) => {
-    if (!after) {
-      await action(options);
-    }
-    const published = await publish(options);
-    if (after) {
-      await action(options);
-    }
-    return published;
-  });
-}
-function interceptOpen(
-  action: (
-    pathname: string,
-    flags: Parameters<typeof fs.open>[1],
-    handle: Awaited<ReturnType<typeof fs.open>>,
-  ) => Promise<void>,
-) {
-  const open = fs.open.bind(fs);
-  vi.spyOn(fs, "open").mockImplementation(async (pathname, flags, mode) => {
-    const handle = await open(pathname, flags, mode);
-    await action(String(pathname), flags, handle);
-    return handle;
-  });
-}
-
 // Restore filesystem spies before the fixture tracker removes their directories.
 afterEach(() => vi.restoreAllMocks());
-const { createTempDir, createGenericRepositoryFixture: makeRepository } =
-  useLocalRepositoryFixtures(afterEach);
-
-async function repositoryFixture(options: Parameters<typeof makeRepository>[0] = {}) {
-  const fixture = await makeRepository(options);
-  return {
-    ...fixture,
-    create: (id = "test") => createSnapshot(fixture.provider, fixture.sourcePath, id),
-  };
-}
-
-async function snapshotFixture(options: Parameters<typeof makeRepository>[0] = {}) {
-  const fixture = await repositoryFixture(options);
-  const snapshot = await fixture.create();
-  return {
-    ...fixture,
-    snapshot,
-    file: (name = SNAPSHOT_SQLITE_FILENAME) => path.join(snapshot.ref.path, name),
-    verify: () => fixture.provider.verify(snapshot.ref),
-    restore: (target = fixture.restorePath) => fixture.provider.restoreFresh(snapshot.ref, target),
-  };
-}
+const {
+  createTempDir,
+  createGenericRepositoryFixture: repositoryFixture,
+  createGenericSnapshotFixture: snapshotFixture,
+  pendingSnapshot,
+  stagingFixture,
+} = useLocalRepositoryFixtures(afterEach);
 
 afterEach(() => {
   durabilityTestState.beforePin = undefined;
   durabilityTestState.beforeSync = undefined;
   durabilityTestState.pinnedSyncOutcome = undefined;
 });
-
-async function refreshArtifactManifest(result: SnapshotResult): Promise<void> {
-  const { sha256, sizeBytes } = await hashSnapshotArtifact(result.ref.path);
-  const manifest = await readSnapshotManifest(result.ref.path);
-  await fs.writeFile(
-    path.join(result.ref.path, SNAPSHOT_MANIFEST_FILENAME),
-    `${JSON.stringify({ ...manifest, artifact: { ...manifest.artifact, sha256, sizeBytes } }, null, 2)}\n`,
-  );
-}
-
-async function pendingSnapshot() {
-  const fixture = await snapshotFixture();
-  const pendingPath = path.join(fixture.snapshot.ref.path, ".pending");
-  await fs.writeFile(pendingPath, "");
-  return { ...fixture, pendingPath };
-}
-
-async function stagingFixture(mode = 0o700, sharedMode?: number) {
-  const { tempDir, sourcePath, repositoryPath } = await repositoryFixture();
-  const sharedPath = path.join(tempDir, "shared");
-  const validationRootPath = path.join(sharedPath, "validation");
-  const restoreParentPath = path.join(sharedPath, "restore");
-  for (const directory of [validationRootPath, restoreParentPath]) {
-    await fs.mkdir(directory, { recursive: true, mode });
-    await fs.chmod(directory, mode);
-  }
-  if (sharedMode !== undefined) {
-    await fs.chmod(sharedPath, sharedMode);
-  }
-  const provider = createLocalSqliteSnapshotProvider({ repositoryPath, validationRootPath });
-  const snapshot = await createSnapshot(provider, sourcePath, "test");
-  return {
-    provider,
-    snapshot,
-    sharedPath,
-    validationRootPath,
-    restorePath: path.join(restoreParentPath, "source.sqlite"),
-  };
-}
-
-function readGlobalRows(file: string) {
-  return withDatabase(
-    file,
-    (database) => ({
-      queue: database.prepare("SELECT COUNT(*) AS count FROM delivery_queue_entries").get(),
-      leases: database.prepare("SELECT COUNT(*) AS count FROM state_leases").get(),
-      blobs: database
-        .prepare(
-          "SELECT plugin_id, entry_key FROM plugin_blob_entries ORDER BY plugin_id, entry_key",
-        )
-        .all(),
-    }),
-    { readOnly: true },
-  );
-}
 
 describe("local SQLite snapshot repository", () => {
   it.runIf(process.platform !== "win32").each([
@@ -758,10 +664,9 @@ describe("local SQLite snapshot repository", () => {
     "cleans an entry when its staging pathname changes %s publication",
     async (phase) => {
       const { provider, repositoryPath, create } = await repositoryFixture();
-      const publish = directoryDurability.publishFileExclusive;
       let raced = false;
-      vi.spyOn(directoryDurability, "publishFileExclusive").mockImplementation(async (options) => {
-        const replaceStaging = async () => {
+      interceptPublication(
+        async (options) => {
           if (
             !raced &&
             path.basename(options.targetPath) === SNAPSHOT_SQLITE_FILENAME &&
@@ -773,21 +678,10 @@ describe("local SQLite snapshot repository", () => {
             await fs.writeFile(options.sourcePath, "raced staging bytes");
             raced = true;
           }
-        };
-        if (phase === "before") {
-          // Keep the removed inode live so the replacement cannot reuse its identity.
-          const stagingHandle = await fs.open(options.sourcePath, "r");
-          try {
-            await replaceStaging();
-            return await publish(options);
-          } finally {
-            await stagingHandle.close();
-          }
-        }
-        const published = await publish(options);
-        await replaceStaging();
-        return published;
-      });
+        },
+        phase === "after",
+        phase === "before",
+      );
 
       await expect(create()).rejects.toThrow(/publication|staging|target/u);
       expect(raced).toBe(true);
@@ -1090,68 +984,169 @@ describe("local SQLite snapshot repository", () => {
   });
 });
 
-describe("snapshot manifest parser", () => {
-  const snapshotId = "snapshot";
-  const validManifest: SnapshotManifest = {
-    schemaVersion: 1,
-    snapshotId,
-    createdAt: "2026-07-12T14:00:00.000Z",
-    database: {
-      role: "agent",
-      agentId: "worker-1",
-      basename: "openclaw-agent.sqlite",
-      userVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-    },
-    artifact: {
-      path: SNAPSHOT_SQLITE_FILENAME,
-      sha256: "a".repeat(64),
-      sizeBytes: 4096,
-    },
-  };
-  function manifest(
-    overrides: {
-      createdAt?: string;
-      extra?: boolean;
-      database?: Partial<SnapshotManifest["database"]>;
-      artifact?: Omit<Partial<SnapshotManifest["artifact"]>, "path"> & { path?: string };
-    } = {},
-  ) {
-    return {
-      ...validManifest,
-      ...overrides,
-      database: { ...validManifest.database, ...overrides.database },
-      artifact: { ...validManifest.artifact, ...overrides.artifact },
-    };
-  }
+it.each(["repository", "validation", "restore"] as const)(
+  "retains an exact large directory ID through %s operations",
+  async (operation) => {
+    const { provider, repositoryPath, validationRootPath, restorePath, sourcePath } =
+      await repositoryFixture({ useValidationRoot: true });
+    const isRestore = operation === "restore";
+    const directoryPath = {
+      repository: repositoryPath,
+      validation: validationRootPath,
+      restore: path.dirname(restorePath),
+    }[operation];
+    if (operation !== "validation") {
+      await fs.mkdir(directoryPath, { mode: 0o700 });
+    }
+    const create = () => createSnapshot(provider, sourcePath, "large-directory-id");
+    const snapshot = operation === "repository" ? undefined : await create();
+    mockLargeDirectoryId(directoryPath);
+    const { ref, manifest } = snapshot ?? (await create());
+    const outcome = isRestore ? provider.restoreFresh(ref, restorePath) : provider.verify(ref);
+    await expect(outcome).resolves.toEqual({ ok: true, manifest });
+    const databasePath = isRestore ? restorePath : path.join(ref.path, SNAPSHOT_SQLITE_FILENAME);
+    expect(readGenericValues(databasePath)).toEqual([{ value: "one" }]);
+    if (operation !== "repository") {
+      expect(await fs.readdir(directoryPath)).toEqual(isRestore ? ["source.sqlite"] : []);
+    }
+  },
+);
 
-  it.each([
-    ["unknown top-level field", manifest({ extra: true }), /fields must be exactly/u],
-    ["wrong directory id", validManifest, /does not match directory/u, "other"],
-    ["timestamp", manifest({ createdAt: "2026-07-12T14:00:00Z" }), /not canonical/u],
-    [
-      "path traversal",
-      manifest({ artifact: { path: "../database.sqlite" } }),
-      /artifact\.path must be database\.sqlite/u,
-    ],
-    [
-      "prefixed digest",
-      manifest({ artifact: { sha256: `sha256:${"a".repeat(64)}` } }),
-      /sha256 is invalid/u,
-    ],
-    ["agent id", manifest({ database: { agentId: "Worker-1" } }), /agentId is invalid/u],
-    ["basename", manifest({ database: { basename: "../db.sqlite" } }), /basename is invalid/u],
-    ["user version", manifest({ database: { userVersion: 2 ** 31 } }), /userVersion is invalid/u],
-    ["empty artifact", manifest({ artifact: { sizeBytes: 0 } }), /sizeBytes is invalid/u],
-  ])("rejects %s", async (_name, value, error, expectedId = snapshotId) => {
-    const snapshotDir = path.join(await createTempDir(), snapshotId);
-    await fs.mkdir(snapshotDir);
-    await fs.writeFile(
-      path.join(snapshotDir, SNAPSHOT_MANIFEST_FILENAME),
-      JSON.stringify(value),
-      "utf8",
-    );
+it.runIf(process.platform !== "win32")("pins paths during symlink swaps", async () => {
+  const { tempDir, sourcePath, repositoryPath } = await repositoryFixture();
+  const realShared = path.join(tempDir, "real-shared");
+  const aliasShared = path.join(tempDir, "alias-shared");
+  const validationRootPath = path.join(aliasShared, "validation");
+  const restorePath = path.join(aliasShared, "restore", "source.sqlite");
+  await fs.mkdir(path.join(realShared, "validation"), { recursive: true, mode: 0o700 });
+  await fs.chmod(path.join(realShared, "validation"), 0o700);
+  await fs.symlink(realShared, aliasShared, "dir");
+  const provider = createLocalSqliteSnapshotProvider({ repositoryPath, validationRootPath });
+  const snapshot = await createSnapshot(provider, sourcePath, "canonical-staging");
 
-    await expect(readSnapshotManifest(snapshotDir, expectedId)).rejects.toThrow(error);
+  expect(await provider.verify(snapshot.ref)).toMatchObject({ ok: true });
+  expect(await provider.restoreFresh(snapshot.ref, restorePath)).toMatchObject({ ok: true });
+  expect(readGenericValues(restorePath)).toEqual([{ value: "one" }]);
+
+  const otherShared = path.join(tempDir, "other-shared");
+  await fs.mkdir(path.join(otherShared, "validation"), { recursive: true, mode: 0o700 });
+  const canonicalValidationRoot = await fs.realpath(validationRootPath);
+  const originalMkdtemp = fs.mkdtemp.bind(fs);
+  let redirected = false;
+  vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
+    const directoryPath = await originalMkdtemp(prefix, options);
+    if (!redirected && path.dirname(prefix) === canonicalValidationRoot) {
+      redirected = true;
+      await fs.unlink(aliasShared);
+      await fs.symlink(otherShared, aliasShared, "dir");
+    }
+    return directoryPath;
   });
+  expect(await provider.verify(snapshot.ref)).toMatchObject({ ok: true });
+  expect(redirected).toBe(true);
+  expect(await fs.readdir(canonicalValidationRoot)).toEqual([]);
+  expect(await fs.readdir(validationRootPath)).toEqual([]);
 });
+
+it.each([
+  ["global", OPENCLAW_STATE_SCHEMA_VERSION, 20],
+  ["agent", OPENCLAW_AGENT_SCHEMA_VERSION, 25],
+] as const)(
+  "verifies and restores a previous-schema %s snapshot without migrating its bytes",
+  async (role, currentVersion, previousVersion) => {
+    const root = await createTempDir();
+    const source = path.join(root, "source.sqlite");
+    if (role === "global") {
+      createGlobalDatabase(source);
+    }
+    const historicalSchema =
+      role === "global"
+        ? `
+          DROP INDEX idx_meeting_transcript_sessions_source;
+          DROP INDEX idx_meeting_transcript_sessions_account;
+          DROP INDEX idx_meeting_transcript_sessions_agent;
+          DROP INDEX idx_delivery_queue_bounded_retention;
+          ALTER TABLE meeting_transcript_sessions DROP COLUMN source_account_id;
+          ALTER TABLE meeting_transcript_sessions DROP COLUMN source_guild_id;
+          ALTER TABLE meeting_transcript_sessions DROP COLUMN source_channel_id;
+          ALTER TABLE meeting_transcript_sessions DROP COLUMN source_meeting_url;
+          ALTER TABLE meeting_transcript_sessions DROP COLUMN source_thread_ts;
+          ALTER TABLE meeting_transcript_sessions DROP COLUMN source_file_id;
+          ALTER TABLE meeting_transcript_sessions DROP COLUMN metadata_agent_id;
+          ALTER TABLE meeting_transcript_summaries DROP COLUMN overview;
+          ALTER TABLE delivery_queue_entries DROP COLUMN retention_id_prefix;
+          ALTER TABLE delivery_queue_entries DROP COLUMN retention_max_age_ms;
+          ALTER TABLE delivery_queue_entries DROP COLUMN retention_max_entries;
+        `
+        : await fs.readFile(
+            new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v25.sql", import.meta.url),
+            "utf8",
+          );
+    withDatabase(source, (db) => {
+      db.exec(`${historicalSchema}\nPRAGMA user_version = ${previousVersion};`);
+      db.prepare(`INSERT INTO schema_meta
+        (meta_key, role, schema_version, agent_id, created_at, updated_at)
+        VALUES ('primary', ?, ?, ?, 1, 1)
+        ON CONFLICT(meta_key) DO UPDATE SET schema_version = excluded.schema_version
+      `).run(role, previousVersion, role === "agent" ? "main" : null);
+    });
+
+    const provider = createLocalSqliteSnapshotProvider({ repositoryPath: path.join(root, "repo") });
+    // Capture historical bytes without asking this build's current-schema creation validator.
+    const snapshot = await createSnapshot(provider, source, role);
+    const artifactPath = path.join(snapshot.ref.path, SNAPSHOT_SQLITE_FILENAME);
+    let manifest: SnapshotManifest = {
+      ...snapshot.manifest,
+      database: {
+        basename: snapshot.manifest.database.basename,
+        userVersion: previousVersion,
+        ...(role === "agent" ? { role, agentId: "main" } : { role }),
+      },
+    };
+    const manifestPath = path.join(snapshot.ref.path, SNAPSHOT_MANIFEST_FILENAME);
+    async function writeManifest(rehash = false) {
+      if (rehash) {
+        const { sha256, sizeBytes } = await hashSnapshotArtifact(snapshot.ref.path);
+        manifest = { ...manifest, artifact: { ...manifest.artifact, sha256, sizeBytes } };
+      }
+      await fs.writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    }
+    await writeManifest();
+    const bytes = await fs.readFile(artifactPath);
+    await expect(provider.verify(snapshot.ref)).resolves.toMatchObject({ ok: true });
+    const target = path.join(root, "restored.sqlite");
+    await expect(provider.restoreFresh(snapshot.ref, target)).resolves.toMatchObject({ ok: true });
+    expect(await fs.readFile(target)).toEqual(bytes);
+    expect(await fs.readFile(artifactPath)).toEqual(bytes);
+
+    async function rewriteVersion(version: number, metadataVersion = version) {
+      withDatabase(artifactPath, (db) => {
+        db.exec(`PRAGMA user_version = ${version}`);
+        db.prepare("UPDATE schema_meta SET schema_version = ?").run(metadataVersion);
+      });
+      manifest = { ...manifest, database: { ...manifest.database, userVersion: version } };
+      await writeManifest(true);
+    }
+
+    await rewriteVersion(currentVersion + 1);
+    await expect(provider.verify(snapshot.ref)).rejects.toThrow(/newer/u);
+    const refusedTarget = path.join(root, "refused.sqlite");
+    await expect(provider.restoreFresh(snapshot.ref, refusedTarget)).rejects.toThrow(/newer/u);
+    await expectMissing(refusedTarget);
+
+    await rewriteVersion(previousVersion, currentVersion);
+    await expect(provider.verify(snapshot.ref)).rejects.toThrow(/snapshot schema version/u);
+
+    await rewriteVersion(0);
+    await expect(provider.verify(snapshot.ref)).rejects.toThrow(/snapshot schema version/u);
+
+    await rewriteVersion(previousVersion);
+    withDatabase(artifactPath, (db) => {
+      db.prepare("UPDATE schema_meta SET role = ?").run(role === "global" ? "agent" : "global");
+    });
+    await writeManifest(true);
+    await expect(provider.verify(snapshot.ref)).rejects.toThrow(/expected global|expected agent/u);
+  },
+);
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

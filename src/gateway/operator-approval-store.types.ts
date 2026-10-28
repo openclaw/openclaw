@@ -60,6 +60,14 @@ export type OperatorApprovalRecord = {
   consumedBy: string | null;
 };
 
+/** A live waiter lends consumption to the effect's transaction and observes only its commit. */
+export type ExecApprovalPreparedConsumption = {
+  input: Readonly<OperatorApprovalConsumptionInput>;
+  databasePath: string;
+  assertCurrent: () => void;
+  markCommitted: (record: OperatorApprovalRecord) => void;
+};
+
 export type NewOperatorApproval = {
   id: string;
   kind: OperatorApprovalKind;
@@ -111,6 +119,15 @@ export type ConsumeOperatorApprovalResult =
   | { outcome: "not-allow-once"; record: OperatorApprovalRecord }
   | { outcome: "not-found" }
   | { outcome: "corrupt" };
+
+export type OperatorApprovalConsumptionInput = {
+  id: string;
+  consumerId: string;
+  expectedKind?: OperatorApprovalKind;
+  runtimeEpoch?: string;
+  redemptionWindowMs?: number;
+  nowMs?: number;
+};
 
 export type TerminalizeOperatorApprovalsResult = {
   affected: number;
@@ -167,6 +184,8 @@ export type OperatorApprovalReceiptPage = {
 export type OperatorApprovalExecutionLinkState = "exact" | "missing" | "malformed" | "mismatch";
 
 export type ListTerminalOperatorApprovalsInput = {
+  /** Stable session/run attribution survives Doctor routing repairs; it grants no authority. */
+  source?: { sessionId: string; runId: string };
   cursor?: string;
   limit?: number;
   kind?: OperatorApprovalKind;

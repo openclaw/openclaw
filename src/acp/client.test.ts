@@ -1,6 +1,6 @@
 import { ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import {
   AgentSideConnection,
   ndJsonStream,
@@ -39,6 +39,15 @@ const sanitizedTitle = 'exec: [permission] Allow "safe"? (y/N) \\nnext (exec)';
 function request(toolCall: ToolCall, options = onceOptions): RequestPermissionRequest {
   return { sessionId: "session-1", toolCall: { toolCallId: "tool-1", ...toolCall }, options };
 }
+function waitForText(stream: PassThrough, text: string) {
+  const ready = createDeferred();
+  stream.on("data", (chunk: Buffer) => {
+    if (chunk.toString().includes(text)) {
+      ready.resolve();
+    }
+  });
+  return ready.promise;
+}
 
 describe("interactive ACP permissions", () => {
   const cleanups: Array<() => Promise<void>> = [];
@@ -56,11 +65,7 @@ describe("interactive ACP permissions", () => {
     const output = Object.assign(new PassThrough(), { isTTY: true });
     const fromClient = new PassThrough();
     const toClient = new PassThrough();
-    const agent = new ChildProcess();
-    Object.defineProperties(agent, {
-      stdin: { value: fromClient },
-      stdout: { value: toClient },
-    });
+    const agent = Object.assign(new ChildProcess(), { stdin: fromClient, stdout: toClient });
     const closeServer = () => {
       if (agent.exitCode !== null) {
         return;
@@ -87,19 +92,9 @@ describe("interactive ACP permissions", () => {
     const question = vi.spyOn(readline.Interface.prototype, "question");
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "log").mockImplementation(() => {});
-    const promptReady = createDeferred();
-    const permissionReady = createDeferred();
+    const promptReady = waitForText(stdout, "> ");
+    const permissionReady = waitForText(output, "[permission] Allow");
     const result = createDeferred<RequestPermissionResponse>();
-    stdout.on("data", (chunk: Buffer) => {
-      if (chunk.toString().includes("> ")) {
-        promptReady.resolve();
-      }
-    });
-    output.on("data", (chunk: Buffer) => {
-      if (chunk.toString().includes("[permission] Allow")) {
-        permissionReady.resolve();
-      }
-    });
     const server = new AgentSideConnection(
       (connection) => ({
         async initialize(params) {
@@ -117,11 +112,7 @@ describe("interactive ACP permissions", () => {
         async cancel() {},
       }),
       ndJsonStream(
-        new WritableStream<Uint8Array>({
-          write(bytes) {
-            toClient.write(bytes);
-          },
-        }),
+        Writable.toWeb(toClient),
         new ReadableStream<Uint8Array>({
           start(controller) {
             fromClient.on("data", (bytes: Buffer) => controller.enqueue(bytes));
@@ -147,7 +138,7 @@ describe("interactive ACP permissions", () => {
       }
     });
     await awaitGateBeforeSettlement(
-      promptReady.promise,
+      promptReady,
       work,
       "ACP client stopped before its interactive prompt",
     );
@@ -156,7 +147,7 @@ describe("interactive ACP permissions", () => {
       input,
       question,
       log,
-      permissionReady: permissionReady.promise,
+      permissionReady,
       result: result.promise,
       async finish() {
         input.end();

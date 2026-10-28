@@ -58,6 +58,7 @@ import {
   resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
 } from "./accounts.js";
+import { buildFeishuMessageToolHints } from "./agent-prompt.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
@@ -136,6 +137,17 @@ function resolveFeishuSendAttachmentMedia(params: Record<string, unknown>): stri
     return snakeKey !== key && Object.hasOwn(record, snakeKey) ? record[snakeKey] : undefined;
   };
 
+  const addCandidate = (value: unknown): void => {
+    if (typeof value !== "string") {
+      malformed = true;
+      return;
+    }
+    const normalized = normalizeOptionalString(value);
+    if (normalized) {
+      candidates.push(normalized);
+    }
+  };
+
   const inspect = (record: Record<string, unknown>, nested = false): void => {
     const keys = nested ? [...sourceKeys.slice(0, -1), "url", "image"] : sourceKeys;
     for (const key of keys) {
@@ -143,27 +155,13 @@ function resolveFeishuSendAttachmentMedia(params: Record<string, unknown>): stri
       if (value === undefined) {
         continue;
       }
-      if (typeof value !== "string") {
-        malformed = true;
-        continue;
-      }
-      const normalized = normalizeOptionalString(value);
-      if (normalized) {
-        candidates.push(normalized);
-      }
+      addCandidate(value);
     }
 
     const multiple = read(record, "mediaUrls");
     if (multiple !== undefined) {
       for (const value of Array.isArray(multiple) ? multiple : [multiple]) {
-        if (typeof value !== "string") {
-          malformed = true;
-          continue;
-        }
-        const normalized = normalizeOptionalString(value);
-        if (normalized) {
-          candidates.push(normalized);
-        }
+        addCandidate(value);
       }
     }
 
@@ -534,132 +532,6 @@ function normalizeFeishuAcpConversationId(conversationId: string) {
   };
 }
 
-function matchFeishuAcpConversation(params: {
-  bindingConversationId: string;
-  conversationId: string;
-  parentConversationId?: string;
-}) {
-  const binding = normalizeFeishuAcpConversationId(params.bindingConversationId);
-  if (!binding) {
-    return null;
-  }
-  const incoming = parseFeishuConversationId({
-    conversationId: params.conversationId,
-    parentConversationId: params.parentConversationId,
-  });
-  if (
-    !incoming ||
-    (incoming.scope !== "group_topic" &&
-      incoming.scope !== "group_topic_sender" &&
-      !isSupportedFeishuDirectConversationId(incoming.canonicalConversationId))
-  ) {
-    return null;
-  }
-  const matchesCanonicalConversation = binding.conversationId === incoming.canonicalConversationId;
-  const matchesParentTopicForSenderScopedConversation =
-    incoming.scope === "group_topic_sender" &&
-    binding.parentConversationId === incoming.chatId &&
-    binding.conversationId === `${incoming.chatId}:topic:${incoming.topicId}`;
-  if (!matchesCanonicalConversation && !matchesParentTopicForSenderScopedConversation) {
-    return null;
-  }
-  return {
-    conversationId: matchesParentTopicForSenderScopedConversation
-      ? binding.conversationId
-      : incoming.canonicalConversationId,
-    parentConversationId:
-      incoming.scope === "group_topic" || incoming.scope === "group_topic_sender"
-        ? incoming.chatId
-        : undefined,
-    matchPriority: matchesCanonicalConversation ? 2 : 1,
-  };
-}
-
-function resolveFeishuSenderScopedCommandConversation(params: {
-  accountId: string;
-  parentConversationId?: string;
-  threadId?: string;
-  senderId?: string;
-  sessionKey?: string;
-  parentSessionKey?: string;
-}): string | undefined {
-  const parentConversationId = params.parentConversationId?.trim();
-  const threadId = params.threadId?.trim();
-  const senderId = params.senderId?.trim();
-  if (!parentConversationId || !threadId || !senderId) {
-    return undefined;
-  }
-  const expectedScopePrefix = `feishu:group:${normalizeLowercaseStringOrEmpty(parentConversationId)}:topic:${normalizeLowercaseStringOrEmpty(threadId)}:sender:`;
-  const isSenderScopedSession = [params.sessionKey, params.parentSessionKey].some((candidate) => {
-    const normalized = normalizeLowercaseStringOrEmpty(candidate ?? "");
-    if (!normalized) {
-      return false;
-    }
-    const scopedRest = normalized.replace(/^agent:[^:]+:/, "");
-    return scopedRest.startsWith(expectedScopePrefix);
-  });
-  const senderScopedConversationId = buildFeishuConversationId({
-    chatId: parentConversationId,
-    scope: "group_topic_sender",
-    topicId: threadId,
-    senderOpenId: senderId,
-  });
-  if (isSenderScopedSession) {
-    return senderScopedConversationId;
-  }
-  if (!params.sessionKey?.trim()) {
-    return undefined;
-  }
-  const boundConversation = getFeishuThreadBindingManager(params.accountId)
-    ?.listBySessionKey(params.sessionKey)
-    .find((binding) => binding.conversationId === senderScopedConversationId);
-  return boundConversation?.conversationId;
-}
-
-function resolveFeishuCommandConversation(params: {
-  accountId: string;
-  threadId?: string;
-  senderId?: string;
-  sessionKey?: string;
-  parentSessionKey?: string;
-  originatingTo?: string;
-  commandTo?: string;
-  fallbackTo?: string;
-}) {
-  if (params.threadId) {
-    const parentConversationId =
-      parseFeishuTargetId(params.originatingTo) ??
-      parseFeishuTargetId(params.commandTo) ??
-      parseFeishuTargetId(params.fallbackTo);
-    if (!parentConversationId) {
-      return null;
-    }
-    const senderScopedConversationId = resolveFeishuSenderScopedCommandConversation({
-      accountId: params.accountId,
-      parentConversationId,
-      threadId: params.threadId,
-      senderId: params.senderId,
-      sessionKey: params.sessionKey,
-      parentSessionKey: params.parentSessionKey,
-    });
-    return {
-      conversationId:
-        senderScopedConversationId ??
-        buildFeishuConversationId({
-          chatId: parentConversationId,
-          scope: "group_topic",
-          topicId: params.threadId,
-        }),
-      parentConversationId,
-    };
-  }
-  const conversationId =
-    parseFeishuDirectConversationId(params.originatingTo) ??
-    parseFeishuDirectConversationId(params.commandTo) ??
-    parseFeishuDirectConversationId(params.fallbackTo);
-  return conversationId ? { conversationId } : null;
-}
-
 function jsonActionResult(details: Record<string, unknown>) {
   return textResult(JSON.stringify(details), details);
 }
@@ -977,27 +849,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         reply: true,
       },
       agentPrompt: {
-        messageToolHints: ({ cfg, accountId }) => {
-          const actions = describeFeishuMessageTool({
-            cfg,
-            accountId,
-          }).actions;
-          return [
-            "- Feishu targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:open_id` or `chat:chat_id`.",
-            "- Feishu supports interactive cards plus native image, file, audio, and video/media delivery.",
-            "- Feishu supports `send`, `read`, `edit`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
-            ...(actions?.includes("sticker")
-              ? [
-                  "- Feishu stickers: use `action=sticker` with `fileId` (or the first `stickerId`) from a sticker this bot previously received. Sticker upload is not supported.",
-                ]
-              : []),
-            ...(actions?.includes("sticker-search")
-              ? [
-                  "- Feishu `action=sticker-search`: configured keyword lookup only, not store search or learned/visual matching. Supply `query` (1–128 characters) and optional `limit` (1–10, default 5); send a returned `fileId` with `action=sticker` on the same account. If `truncated` is true, narrow the query.",
-                ]
-              : []),
-          ];
-        },
+        customInlineButtonHint: true,
+        messageToolHints: ({ cfg, accountId }) =>
+          buildFeishuMessageToolHints(describeFeishuMessageTool({ cfg, accountId }).actions),
       },
       groups: {
         resolveToolPolicy: resolveFeishuGroupToolPolicy,
@@ -1148,7 +1002,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const mediaUrl = resolveFeishuSendAttachmentMedia(ctx.params);
             const audioAsVoice = readBooleanParam(ctx.params, ["asVoice", "audioAsVoice"]);
             if (textCard && !presentation) {
-              assertFeishuCardWithinEnvelope(textCard, "Feishu native card");
+              assertFeishuCardWithinEnvelope(textCard);
             }
             const generatedCard = presentation
               ? buildFeishuPresentationCard({
@@ -1566,13 +1420,105 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       bindings: {
         compileConfiguredBinding: ({ conversationId }) =>
           normalizeFeishuAcpConversationId(conversationId),
-        matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
-          matchFeishuAcpConversation({
-            bindingConversationId: compiledBinding.conversationId,
+        matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
+          const binding = normalizeFeishuAcpConversationId(compiledBinding.conversationId);
+          if (!binding) {
+            return null;
+          }
+          const incoming = parseFeishuConversationId({
             conversationId,
             parentConversationId,
-          }),
-        resolveCommandConversation: resolveFeishuCommandConversation,
+          });
+          if (
+            !incoming ||
+            (incoming.scope !== "group_topic" &&
+              incoming.scope !== "group_topic_sender" &&
+              !isSupportedFeishuDirectConversationId(incoming.canonicalConversationId))
+          ) {
+            return null;
+          }
+          const matchesCanonicalConversation =
+            binding.conversationId === incoming.canonicalConversationId;
+          const matchesParentTopicForSenderScopedConversation =
+            incoming.scope === "group_topic_sender" &&
+            binding.parentConversationId === incoming.chatId &&
+            binding.conversationId === `${incoming.chatId}:topic:${incoming.topicId}`;
+          if (!matchesCanonicalConversation && !matchesParentTopicForSenderScopedConversation) {
+            return null;
+          }
+          return {
+            conversationId: matchesParentTopicForSenderScopedConversation
+              ? binding.conversationId
+              : incoming.canonicalConversationId,
+            parentConversationId:
+              incoming.scope === "group_topic" || incoming.scope === "group_topic_sender"
+                ? incoming.chatId
+                : undefined,
+            matchPriority: matchesCanonicalConversation ? 2 : 1,
+          };
+        },
+        resolveCommandConversation: (params) => {
+          if (params.threadId) {
+            const parentConversationId =
+              parseFeishuTargetId(params.originatingTo) ??
+              parseFeishuTargetId(params.commandTo) ??
+              parseFeishuTargetId(params.fallbackTo);
+            if (!parentConversationId) {
+              return null;
+            }
+            function resolveSenderScopedConversation(): string | undefined {
+              const normalizedParentConversationId = parentConversationId?.trim();
+              const threadId = params.threadId?.trim();
+              const senderId = params.senderId?.trim();
+              if (!normalizedParentConversationId || !threadId || !senderId) {
+                return undefined;
+              }
+              const expectedScopePrefix = `feishu:group:${normalizeLowercaseStringOrEmpty(normalizedParentConversationId)}:topic:${normalizeLowercaseStringOrEmpty(threadId)}:sender:`;
+              const isSenderScopedSession = [params.sessionKey, params.parentSessionKey].some(
+                (candidate) => {
+                  const normalized = normalizeLowercaseStringOrEmpty(candidate ?? "");
+                  if (!normalized) {
+                    return false;
+                  }
+                  const scopedRest = normalized.replace(/^agent:[^:]+:/, "");
+                  return scopedRest.startsWith(expectedScopePrefix);
+                },
+              );
+              const senderScopedConversationId = buildFeishuConversationId({
+                chatId: normalizedParentConversationId,
+                scope: "group_topic_sender",
+                topicId: threadId,
+                senderOpenId: senderId,
+              });
+              if (isSenderScopedSession) {
+                return senderScopedConversationId;
+              }
+              if (!params.sessionKey?.trim()) {
+                return undefined;
+              }
+              const boundConversation = getFeishuThreadBindingManager(params.accountId)
+                ?.listBySessionKey(params.sessionKey)
+                .find((binding) => binding.conversationId === senderScopedConversationId);
+              return boundConversation?.conversationId;
+            }
+            const senderScopedConversationId = resolveSenderScopedConversation();
+            return {
+              conversationId:
+                senderScopedConversationId ??
+                buildFeishuConversationId({
+                  chatId: parentConversationId,
+                  scope: "group_topic",
+                  topicId: params.threadId,
+                }),
+              parentConversationId,
+            };
+          }
+          const conversationId =
+            parseFeishuDirectConversationId(params.originatingTo) ??
+            parseFeishuDirectConversationId(params.commandTo) ??
+            parseFeishuDirectConversationId(params.fallbackTo);
+          return conversationId ? { conversationId } : null;
+        },
       },
       auth: {
         login: async ({ cfg }) => {

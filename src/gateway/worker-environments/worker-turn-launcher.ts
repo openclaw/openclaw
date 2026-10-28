@@ -526,8 +526,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                     const timeout = setTimeout(
                       () => reconnect.abort(new WorkerRunnerUnavailableError()),
                       waitTimeoutMs,
-                    );
-                    timeout.unref?.();
+                    ).unref();
                     try {
                       const admissionFacts = await options.placements.prepareRuntimeRefresh(
                         placement.sessionId,

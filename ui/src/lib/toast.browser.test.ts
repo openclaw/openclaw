@@ -5,7 +5,7 @@ import { i18n } from "../i18n/index.ts";
 import { waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { showToast, type ToastOptions } from "./toast.ts";
-import "./toast-host.ts";
+import "./toast-host.tsx";
 
 const rect = (element: Element) => element.getBoundingClientRect();
 async function useViewport(width: number, height = 844) {
@@ -76,6 +76,24 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     }
   });
 
+  it("uses the error theme tone only for error feedback", async () => {
+    const { host, toast, action, dismiss } = await renderToast();
+    const neutral = getComputedStyle(toast).color;
+    showToast({ ...host.toast!, severity: "error", icon: "alertTriangle" });
+    await waitForSolid(() => expect(toast.classList.contains("app-toast--error")).toBe(true));
+    const tone = document.createElement("span");
+    tone.style.color = "var(--danger)";
+    toast.append(tone);
+    const danger = getComputedStyle(tone).color;
+    tone.remove();
+    for (const element of [toast, action, dismiss, host.querySelector(".app-toast__icon")!]) {
+      expect(getComputedStyle(element).color).toBe(danger);
+    }
+    showToast({ message: "Saved" });
+    await waitForSolid(() => expect(toast.classList.contains("app-toast--error")).toBe(false));
+    expect(getComputedStyle(toast).color).toBe(neutral);
+  });
+
   it("shows the selected agent avatar at notification size without crowding the action", async () => {
     await useViewport(390);
     const onAction = vi.fn();
@@ -94,15 +112,27 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
 
   it("keeps a toast usable inside a native modal and returns it to the shell on dismissal", async () => {
     const shell = document.body.appendChild(document.createElement("div"));
-    shell.className = "shell";
+    shell.className = "shell shell--chat";
     const host = shell.appendChild(document.createElement("openclaw-toast-host"));
+    await useViewport(1280);
+    const { toast: restingToast } = await renderToast({ message: "Saved" }, host);
+    const restingBounds = rect(restingToast);
     const controller = new AbortController();
     const confirmation = showConfirmDialog({ message: "Keep?", signal: controller.signal });
     try {
       const { modal, dialog } = await waitForRenderedModalDialog(document.body);
       const onAction = vi.fn();
-      const { action } = await renderToast({ message: "Saved", onAction }, host);
+      const { toast, action } = await renderToast({ message: "Saved", onAction }, host);
+      expect(rect(toast).top).toBeCloseTo(restingBounds.top, 0);
+      expect(rect(toast).right).toBeCloseTo(restingBounds.right, 0);
       expect(host.parentElement).toBe(modal.getOverlayContainer());
+      await Promise.all([
+        new Promise<void>((resolve) => {
+          window.addEventListener("resize", () => resolve(), { once: true });
+        }),
+        useViewport(390),
+      ]);
+      const narrowBounds = rect(toast);
       action.focus();
       expect(document.activeElement).toBe(action);
       expect(dialog.open).toBe(true);
@@ -112,6 +142,8 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
       await confirmation;
       await host.updateComplete;
       expect(host.parentElement).toBe(shell);
+      expect(rect(toast).top).toBeCloseTo(narrowBounds.top, 0);
+      expect(rect(toast).right).toBeCloseTo(narrowBounds.right, 0);
       expect(host.textContent).toContain("Saved");
       host.querySelector<HTMLElement>(".app-toast__action")!.click();
       expect(onAction).toHaveBeenCalledOnce();

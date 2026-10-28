@@ -1,6 +1,10 @@
 import http from "node:http";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import {
+  readMcpFixtureMessage,
+  replyMcpFixtureResult,
+} from "./agent-bundle-mcp-lifecycle.test-support.js";
 
 export async function startCatalogRecoveryMcpServer(
   label: string,
@@ -15,15 +19,35 @@ export async function startCatalogRecoveryMcpServer(
   let callReceived = createDeferred();
   const recoveryListStarted = createDeferred();
   const pendingLists: Array<{
-    id: string | number;
+    id?: string | number;
     response: http.ServerResponse;
     sessionId: string;
   }> = [];
+  const replyList = (
+    response: http.ServerResponse,
+    id: string | number | undefined,
+    sessionId: string,
+  ) => {
+    response.setHeader("mcp-session-id", sessionId);
+    replyMcpFixtureResult(
+      response,
+      { id },
+      {
+        tools: [
+          {
+            name: "probe",
+            inputSchema: { type: "object" },
+            outputSchema: {
+              type: "object",
+              properties: { revision: { const: sessionId } },
+              required: ["revision"],
+            },
+          },
+        ],
+      },
+    );
+  };
   const server = http.createServer((request, response) => {
-    if (request.method === "GET") {
-      response.writeHead(405).end();
-      return;
-    }
     if (request.method === "DELETE") {
       terminationCount += 1;
       terminationStarted.resolve();
@@ -41,33 +65,17 @@ export async function startCatalogRecoveryMcpServer(
       response.writeHead(405).end();
       return;
     }
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk) => {
-      body += chunk;
-    });
-    request.on("end", () => {
-      const message = JSON.parse(body) as {
-        id: string | number;
-        method: string;
-        params?: { protocolVersion?: string };
-      };
+    void (async () => {
+      const message = await readMcpFixtureMessage(request);
       if (message.method === "initialize") {
         sessionGeneration += 1;
         const sessionId = `${label}-${sessionGeneration}`;
-        response.setHeader("content-type", "application/json");
         response.setHeader("mcp-session-id", sessionId);
-        response.writeHead(200).end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: message.id,
-            result: {
-              protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-              capabilities: { tools: {} },
-              serverInfo: { name: label, version: "1.0.0" },
-            },
-          }),
-        );
+        replyMcpFixtureResult(response, message, {
+          protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+          capabilities: { tools: {} },
+          serverInfo: { name: label, version: "1.0.0" },
+        });
         return;
       }
       if (message.method === "notifications/initialized") {
@@ -82,67 +90,28 @@ export async function startCatalogRecoveryMcpServer(
         if (hangCalls) {
           return;
         }
-        response.setHeader("content-type", "application/json");
         response.setHeader("mcp-session-id", sessionId);
-        response.writeHead(200).end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: message.id,
-            result: {
-              content: [],
-              structuredContent: { revision: sessionId },
-            },
-          }),
-        );
+        replyMcpFixtureResult(response, message, {
+          content: [],
+          structuredContent: { revision: sessionId },
+        });
         return;
       }
       if (message.method === "tools/list") {
         listCount += 1;
         if (listCount === 1) {
-          response.setHeader("content-type", "application/json");
-          response.setHeader("mcp-session-id", sessionId);
-          response.writeHead(200).end(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              id: message.id,
-              result: {
-                tools: [
-                  {
-                    name: "probe",
-                    inputSchema: { type: "object" },
-                    outputSchema: {
-                      type: "object",
-                      properties: { revision: { const: sessionId } },
-                      required: ["revision"],
-                    },
-                  },
-                ],
-              },
-            }),
-          );
+          replyList(response, message.id, sessionId);
           return;
         }
         pendingLists.push({ id: message.id, response, sessionId });
         maxActiveLists = Math.max(maxActiveLists, pendingLists.length);
         recoveryListStarted.resolve();
       }
-    });
+    })();
   });
-  const portClaim = await acquireTestPortBlock({ offsets: [0] });
-  try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(portClaim.port, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-  } catch (error) {
-    await portClaim.release();
-    throw error;
-  }
+  const listener = await reserveTestPortListener({ offsets: [0], createListener: () => server });
   return {
-    url: `http://127.0.0.1:${portClaim.port}/mcp`,
+    url: `http://127.0.0.1:${listener.claim.port}/mcp`,
     terminationStarted: terminationStarted.promise,
     terminationCount: () => terminationCount,
     nextCall: () => callReceived.promise,
@@ -153,37 +122,15 @@ export async function startCatalogRecoveryMcpServer(
     },
     releaseLists: () => {
       for (const pending of pendingLists.splice(0)) {
-        pending.response.setHeader("content-type", "application/json");
-        pending.response.setHeader("mcp-session-id", pending.sessionId);
-        pending.response.writeHead(200).end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: pending.id,
-            result: {
-              tools: [
-                {
-                  name: "probe",
-                  inputSchema: { type: "object" },
-                  outputSchema: {
-                    type: "object",
-                    properties: { revision: { const: pending.sessionId } },
-                    required: ["revision"],
-                  },
-                },
-              ],
-            },
-          }),
-        );
+        replyList(pending.response, pending.id, pending.sessionId);
       }
     },
     close: async () => {
       server.closeAllConnections();
       try {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await listener.releaseListener();
       } finally {
-        await portClaim.release();
+        await listener.claim.release();
       }
     },
   };

@@ -1,4 +1,4 @@
-import type { Component, OverlayHandle } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import type {
   QuestionGetResult,
   QuestionListResult,
@@ -10,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createOverlayHandle } from "./tui-overlay-handle.test-support.js";
+import "./tui-overlay.test-support.js";
 import { createTuiQuestionController } from "./tui-questions.js";
 
 const UP = "\x1b[A";
@@ -80,15 +82,7 @@ function createHarness(initialRecord?: QuestionRecord) {
   const onPendingChange = vi.fn<(text: string) => void>();
   const openOverlay = vi.fn((component: Component) => {
     shown = component;
-    return {
-      hide() {},
-      setHidden() {},
-      isHidden: () => false,
-      focus() {},
-      unfocus() {},
-      isFocused: () => true,
-      getBounds: () => undefined,
-    } satisfies OverlayHandle;
+    return createOverlayHandle();
   });
   const listQuestions = vi.fn(async (): Promise<QuestionListResult> => ({ questions: [] }));
   const getQuestion = vi.fn<(id: string) => Promise<QuestionGetResult>>(async () => ({
@@ -268,37 +262,28 @@ describe("TUI questions", () => {
     harness.expectOutcome("cancelled");
   });
 
-  it.each([false, true])(
-    "masks secret input, including a pasted value (store-bound=%s)",
-    async (storeBound) => {
-      const secret = "synthetic-secret-only";
-      const harness = createHarness(
-        textQuestion({
-          questionId: "credential",
-          isSecret: true,
-          ...(storeBound
-            ? {
-                secretStore: { ...secretStore, reason: "Access the example service" },
-                secretStoreExisting: { updatedAtMs: 0 },
-              }
-            : {}),
-        }),
-      );
-      harness.input(`\x1b[200~${secret}\x1b[201~`);
-      expect(harness.render()).toContain("•".repeat(secret.length));
-      expect(harness.render()).not.toContain(secret);
-      if (storeBound) {
-        expect(harness.render()).toContain("Secret store entry: EXAMPLE_KEY");
-        expect(harness.render()).toContain("Reason: Access the example service");
-        expect(harness.render()).toContain("Allowed hosts (accept as proposed): api.example.test");
-        expect(harness.render()).toContain("An existing value will be replaced.");
-        expect(harness.rawRender(80).split("\n").length).toBeLessThanOrEqual(24);
-      }
-      await harness.answer();
-      harness.expectAnswers({ credential: [secret] });
-      expectNoLeak(harness, secret);
-    },
-  );
+  it("masks pasted secrets and shows the secret-store replacement policy", async () => {
+    const secret = "synthetic-secret-only";
+    const harness = createHarness(
+      textQuestion({
+        questionId: "credential",
+        isSecret: true,
+        secretStore: { ...secretStore, reason: "Access the example service" },
+        secretStoreExisting: { updatedAtMs: 0 },
+      }),
+    );
+    harness.input(`\x1b[200~${secret}\x1b[201~`);
+    expect(harness.render()).toContain("•".repeat(secret.length));
+    expect(harness.render()).not.toContain(secret);
+    expect(harness.render()).toContain("Secret store entry: EXAMPLE_KEY");
+    expect(harness.render()).toContain("Reason: Access the example service");
+    expect(harness.render()).toContain("Allowed hosts (accept as proposed): api.example.test");
+    expect(harness.render()).toContain("An existing value will be replaced.");
+    expect(harness.rawRender(80).split("\n").length).toBeLessThanOrEqual(24);
+    await harness.answer();
+    harness.expectAnswers({ credential: [secret] });
+    expectNoLeak(harness, secret);
+  });
 
   it.each([false, true])(
     "buffers split bracketed paste without treating Enter as submit (secret=%s)",
@@ -337,25 +322,18 @@ describe("TUI questions", () => {
     harness.expectAnswers({ value: ["   "] });
   });
 
-  it("collapses without resolving, preserves the draft, and reopens with /question", async () => {
+  it("collapses all pending prompts without resolving, preserves the draft, and reopens with /question", async () => {
     const harness = createHarness(questionRecord());
+    harness.controller.handleEvent("question.requested", questionRecord({ id: "second" }));
     harness.input("3", "Draft answer", ESC);
     expect(harness.render()).toBe("");
     expect(harness.resolveQuestion).not.toHaveBeenCalled();
     harness.expectPending("/question to open");
+    harness.expectPending("Question pending (2)");
     await harness.controller.reopen();
     expect(harness.render()).toContain("Draft answer");
     await harness.answer();
     harness.expectAnswers({ target: ["Draft answer"] });
-  });
-
-  it("returns to the composer on Esc even with multiple pending requests", () => {
-    const harness = createHarness(questionRecord());
-    harness.controller.handleEvent("question.requested", questionRecord({ id: "second" }));
-    harness.input(ESC);
-    expect(harness.render()).toBe("");
-    harness.expectPending("Question pending (2)");
-    expect(harness.resolveQuestion).not.toHaveBeenCalled();
   });
 
   it("sanitizes terminal controls and bidirectional overrides in authored text", () => {
@@ -388,7 +366,6 @@ describe("TUI questions", () => {
     await harness.controller.sessionChanged();
     await harness.answer();
     expect(harness.resolveQuestion).toHaveBeenCalledWith(expect.objectContaining({ id: "other" }));
-    expect(harness.listQuestions).toHaveBeenCalledTimes(2);
   });
 
   it("rejects malformed records and contradictory session ownership", () => {

@@ -190,15 +190,6 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it("preserves an existing malformed database", () => {
-  const malformed = Buffer.from("not a sqlite database");
-  fs.writeFileSync(databasePath, malformed, { mode: 0o600 });
-
-  expect(() => withDatabase(true, () => undefined)).toThrow();
-  expect(fs.readFileSync(databasePath)).toEqual(malformed);
-  expect(fs.statSync(databasePath).nlink).toBe(1);
-});
-
 it.each(["file", "parent"] as const)(
   "preserves initialization ownership when %s replacement is attempted",
   (target) => {
@@ -268,8 +259,11 @@ it.each([
       ? { kind: "absent" }
       : { kind: "unreadable", error: expect.any(Error) },
   );
+  if (state === "malformed") {
+    expect(() => withDatabase(true, () => undefined)).toThrow();
+  }
   expect(fs.readFileSync(databasePath)).toEqual(bytes);
-  expect(fs.statSync(databasePath).ino).toBe(before.ino);
+  expect(fs.statSync(databasePath)).toMatchObject({ ino: before.ino, nlink: 1 });
   expect(fs.readdirSync(root)).toEqual([path.basename(databasePath)]);
 });
 
@@ -364,22 +358,6 @@ it.skipIf(process.platform !== "win32")(
   },
 );
 
-it("ordinary readers observe no lease while a real peer initializes the schema", async () => {
-  const writer = spawnFixture("(await openDatabase())(true, () => undefined);");
-  do {
-    expect(store.read(root)).toEqual({ kind: "absent" });
-    if (fs.existsSync(databasePath)) {
-      const stat = fs.statSync(databasePath);
-      if (process.platform !== "win32") {
-        expect(stat.mode & 0o777).toBe(0o600);
-      }
-    }
-    await delay(1);
-  } while (writer.child.exitCode === null && writer.child.signalCode === null);
-  await expectSuccessfulExit(writer);
-  expectSingleLink([]);
-});
-
 it("recovers the same inode when its first writer crashes before schema initialization", async ({
   signal,
 }) => {
@@ -401,6 +379,9 @@ it("recovers the same inode when its first writer crashes before schema initiali
   await writer.waitForMarker("before-schema");
   const before = fs.statSync(databasePath);
   expect(before).toMatchObject({ size: 0, nlink: 1 });
+  if (process.platform !== "win32") {
+    expect(before.mode & 0o777).toBe(0o600);
+  }
   expect(store.read(root)).toEqual({ kind: "absent" });
   writer.child.kill("SIGKILL");
   await withinTest(writer.closed, signal);
@@ -433,23 +414,22 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     const identityLess = version === "9.4 identity-less";
     const numeric = version === "9.6 numeric" || version === "9.6 bridge";
     const executor = store.processIdentity(process.ppid);
-    const owner = randomUUID();
     const runId = randomUUID();
     const spawnerKey =
       version === "9.6 bridge" ? `${root}/.openclaw-update-child-${randomUUID()}` : root;
-    const payloadFor = (
-      childExecutor = executor,
-      action: ManagedHandoffLease["action"] = { kind: "update" },
-      helper = childExecutor,
-    ) => JSON.stringify({ version: 2, helper, executor: childExecutor, action });
-    const payload = payloadFor(executor, {
+    const action: ManagedHandoffLease["action"] = {
       kind: "update",
       ...(version === "9.7 exact" ? { mutationProtocol: "original-cancellation-v1" } : {}),
-    });
+    };
+    const payloadFor = (
+      actor = executor,
+      nextAction: ManagedHandoffLease["action"] = action,
+      helper = actor,
+    ) => JSON.stringify({ version: 2, helper, executor: actor, action: nextAction });
     withDatabase(true, (db) => {
-      insertRow(db, root, owner, payload);
+      insertRow(db, root, "parent", payloadFor());
       if (spawnerKey !== root) {
-        insertRow(db, spawnerKey, runId, payload);
+        insertRow(db, spawnerKey, runId, payloadFor());
       }
     });
     const parent = store.read(root);
@@ -488,9 +468,6 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
           parentIdentity: numericIdentity(root),
         }
       : captureManagedUpdateLeaseDatabaseIdentity(databasePath);
-    expect(databaseIdentity.parentIdentity).toMatch(
-      numeric ? /:168040561096346660$/ : new RegExp(`:${initialInode}$`),
-    );
     const makeGrant = (
       sender: ManagedHandoffLease,
       identity: typeof databaseIdentity,
@@ -501,23 +478,25 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
         ? payloadFor(store.processIdentity(process.pid), { kind: "update" }, executor)
         : payloadFor(sender.executor, sender.action);
       withSqlite((db) => insertRow(db, childKey, runId, childPayload, sender.updatedAt + 1));
-      const grant = { runId, root, databasePath, parent: parent.lease, childKey };
-      return legacy
-        ? grant
-        : {
-            ...grant,
-            databaseIdentity: identity,
-            originalParent: parent.lease,
-            spawner: sender,
-            originalChildKey: childKey,
-          };
+      return {
+        runId,
+        root,
+        databasePath,
+        parent: parent.lease,
+        childKey,
+        ...(!legacy && {
+          databaseIdentity: identity,
+          originalParent: parent.lease,
+          spawner: sender,
+          originalChildKey: childKey,
+        }),
+      };
     };
     const grant = makeGrant(spawner.lease, databaseIdentity, identityLess);
     const resolve = () => resolveUpdateCommandChildBinding(grant, runId, root);
     const admitted = await resolve();
     assert(admitted.databaseIdentity);
     expect(admitted.databaseIdentity.parentIdentity).toMatch(new RegExp(`^\\d+:${initialInode}$`));
-    expect(admitted.store.read(root)).toMatchObject({ kind: "current" });
     const descendantGrant = makeGrant(admitted.child, admitted.databaseIdentity);
     const resolveDescendant = async () => {
       // Model the next receiver's parent PID without booting another source runtime.

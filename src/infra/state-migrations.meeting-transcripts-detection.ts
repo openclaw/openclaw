@@ -15,6 +15,7 @@ import {
   isRecordedCanonicalTranscriptExport,
 } from "./state-migrations.meeting-transcripts-files.js";
 import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
+import { decodeUtf8Input } from "./utf8-input.js";
 
 type MeetingTranscriptExportOwnership = {
   selector: string;
@@ -74,7 +75,7 @@ export function resolveMeetingTranscriptExportOwnership(params: {
       if (stat.isSymbolicLink() || !stat.isFile()) {
         return undefined;
       }
-      const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as {
+      const metadata = JSON.parse(decodeUtf8Input(fs.readFileSync(metadataPath), metadataPath)) as {
         sessionId?: unknown;
         startedAt?: unknown;
       };

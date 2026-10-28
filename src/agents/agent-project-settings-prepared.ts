@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -6,14 +7,14 @@ import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   buildEmbeddedAgentSettingsSnapshot,
   loadEnabledBundleAgentSettingsSnapshot,
   resolveEmbeddedAgentProjectSettingsPolicy,
   type AgentSettingsSnapshot,
 } from "./agent-project-settings-snapshot.js";
-import { FileSettingsStorage, readSettingsScope } from "./sessions/settings-storage.js";
+import { CONFIG_DIR_NAME } from "./package-metadata.js";
+import { readSettingsScope } from "./sessions/settings-storage.js";
 
 type PreparedSettingsParams = {
   sessionId: string;
@@ -32,7 +33,7 @@ type PreparedSettings = {
   globalSettings: AgentSettingsSnapshot;
   projectSettings: AgentSettingsSnapshot;
   pluginSettings: AgentSettingsSnapshot;
-  snapshot: AgentSettingsSnapshot;
+  providerRetryCount: number | undefined;
   embeddedSnapshot?: AgentSettingsSnapshot;
 };
 
@@ -48,7 +49,7 @@ export function clearPreparedEmbeddedAgentSettings(sessionIds: Iterable<string |
   }
 }
 
-/** Share immutable input facts; embedded validation and MCP setup remain at their owner. */
+/** Share admitted input facts; embedded validation and MCP setup remain at their owner. */
 export function prepareAgentSettingsSnapshot(params: PreparedSettingsParams): PreparedSettings {
   const configKey = params.cfg ? resolveRuntimeConfigCacheKey(params.cfg) : undefined;
   let prepared = preparedSessionSettings.get(params.sessionId);
@@ -59,15 +60,15 @@ export function prepareAgentSettingsSnapshot(params: PreparedSettingsParams): Pr
     prepared.configKey !== configKey ||
     prepared.pluginMetadataSnapshot !== params.pluginMetadataSnapshot
   ) {
-    const storage = new FileSettingsStorage(params.cwd, params.agentDir);
-    const globalSettings = freezeJsonSnapshot(readSettingsScope(storage, "global").settings);
-    const projectSettings = freezeJsonSnapshot(readSettingsScope(storage, "project").settings);
+    const globalSettings = readSettingsScope(join(params.agentDir, "settings.json"));
+    const projectSettings = readSettingsScope(join(params.cwd, CONFIG_DIR_NAME, "settings.json"));
     const metadata =
       params.pluginMetadataSnapshot ??
       loadPluginMetadataSnapshot({ workspaceDir: params.cwd, config: params.cfg ?? {} });
-    const pluginSettings = freezeJsonSnapshot(
-      loadEnabledBundleAgentSettingsSnapshot({ ...params, pluginMetadataSnapshot: metadata }),
-    );
+    const pluginSettings = loadEnabledBundleAgentSettingsSnapshot({
+      ...params,
+      pluginMetadataSnapshot: metadata,
+    });
     prepared = {
       cwd: params.cwd,
       agentDir: params.agentDir,
@@ -77,14 +78,12 @@ export function prepareAgentSettingsSnapshot(params: PreparedSettingsParams): Pr
       globalSettings,
       projectSettings,
       pluginSettings,
-      snapshot: freezeJsonSnapshot(
-        buildEmbeddedAgentSettingsSnapshot({
-          globalSettings,
-          pluginSettings,
-          projectSettings,
-          policy: resolveEmbeddedAgentProjectSettingsPolicy(params.cfg),
-        }),
-      ),
+      providerRetryCount: buildEmbeddedAgentSettingsSnapshot({
+        globalSettings,
+        pluginSettings,
+        projectSettings,
+        policy: resolveEmbeddedAgentProjectSettingsPolicy(params.cfg),
+      }).retry?.provider?.maxRetries,
     };
   }
   preparedSessionSettings.delete(params.sessionId);
@@ -95,5 +94,5 @@ export function prepareAgentSettingsSnapshot(params: PreparedSettingsParams): Pr
 
 /** Absence must preserve a harness's shipped result budget and the host defaults. */
 export function prepareAgentProviderRetryCount(params: PreparedSettingsParams): number | undefined {
-  return prepareAgentSettingsSnapshot(params).snapshot.retry?.provider?.maxRetries;
+  return prepareAgentSettingsSnapshot(params).providerRetryCount;
 }

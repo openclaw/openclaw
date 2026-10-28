@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLegacyInboundContextLabelsJson } from "../config/sessions/legacy-inbound-context-labels.js";
 import { withSqliteSessionImportStage } from "../config/sessions/session-accessor.sqlite-import-stage.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { canonicalizeTranscriptEventMedia } from "../config/sessions/transcript-event-media.js";
@@ -25,9 +26,17 @@ export function verifyTranscriptEvents(
       false,
       readTranscriptFingerprint(source.path),
       source.originalPath,
-    )((event) => stage.append(0, seq++, JSON.stringify(canonicalizeTranscriptEventMedia(event))));
+    )((event) =>
+      stage.append(
+        0,
+        seq++,
+        normalizeLegacyInboundContextLabelsJson(
+          JSON.stringify(canonicalizeTranscriptEventMedia(event)),
+        ),
+      ),
+    );
     const repair = stage.repairLegacyTranscript(0);
-    // Historical receipts require exact payloads; retries accept only recognized branch repair.
+    // Ordered checks retain the historical provider/branch contract after label normalization.
     if (
       (mode === "ordered" && (repair.repaired || !repair.recognized)) ||
       (repair.branchRepaired && !repair.recognized)
@@ -53,13 +62,14 @@ export function verifyTranscriptEvents(
           .where("session_id", "=", source.sessionId)
           .orderBy("seq", "asc"),
       )) {
+        const eventJson = normalizeLegacyInboundContextLabelsJson(event.event_json);
         if (mode !== "ordered") {
-          const entry = stage.addSeen(event.event_json, true);
+          const entry = stage.addSeen(eventJson, true);
           if (isRecord(entry) && typeof entry.id === "string") {
             stage.addSeen(`id\0${entry.id}`);
           }
         }
-        if (!expected.done && event.event_json === expected.value.eventJson) {
+        if (!expected.done && eventJson === expected.value.eventJson) {
           expected = sourceRows.next();
           if (expected.done) {
             break;

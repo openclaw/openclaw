@@ -33,6 +33,7 @@ import {
   extractAssistantPhaseText,
   extractAssistantTextForPhase,
 } from "../../shared/chat-message-content.js";
+import { combineNonStreamingReplyParts } from "../../shared/text/trim-code-text.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { isToolHistoryBlockType } from "../chat-display-projection.canvas.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
@@ -40,7 +41,6 @@ import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachment
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
 import { formatForLog } from "../ws-log.js";
 import {
-  combineNonStreamingReplyParts,
   extractAssistantDisplayText,
   hasAssistantDisplayMediaContent,
   isMediaBearingPayload,

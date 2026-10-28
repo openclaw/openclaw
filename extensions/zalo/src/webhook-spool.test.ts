@@ -6,9 +6,16 @@ import {
   createZaloWebhookTestEvent,
   waitForZaloWebhookVerdict,
   withZaloWebhookTestQueue,
+  type ZaloWebhookTestQueue as Queue,
 } from "./webhook-spool.test-support.js";
 
 const { createZaloWebhookIngress } = zaloWebhookIngressRuntime;
+
+let selectedQueue: Queue;
+// mock-isolation: Select the real test queue without initializing the plugin runtime.
+vi.mock("./runtime.js", () => ({
+  getZaloRuntime: () => ({ state: { openChannelIngressQueue: () => selectedQueue } }),
+}));
 
 vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>();
@@ -24,11 +31,11 @@ function latestMonitor() {
 }
 
 type IngressOptions = Parameters<typeof createZaloWebhookIngress>[0];
-type Queue = NonNullable<IngressOptions["queue"]>;
 
 function createIngress(queue: Queue, deliver: IngressOptions["deliver"] = vi.fn()) {
+  selectedQueue = queue;
   const runtime = { error: vi.fn(), log: vi.fn() };
-  return createZaloWebhookIngress({ accountId: "default", runtime, queue, deliver });
+  return createZaloWebhookIngress({ accountId: "default", runtime, deliver });
 }
 
 async function withIngress(

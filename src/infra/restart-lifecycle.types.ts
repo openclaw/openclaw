@@ -2,6 +2,8 @@ export type GatewayRestartIntent = {
   reason?: string;
   force?: boolean;
   waitMs?: number;
+  // Process-local only: a native worker wedge cannot recover in the same process.
+  requireFreshProcess?: true;
   // Process-local only: persisted restart requests cannot delegate successor ownership.
   successorOwner?: {
     kind: "managed-update-handoff";

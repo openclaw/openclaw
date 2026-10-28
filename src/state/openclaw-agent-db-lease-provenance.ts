@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { hostname } from "node:os";
+import {
+  createManagedHandoffBootIdentityReader,
+  predatesCurrentBoot,
+} from "../infra/update-managed-service-handoff-boot.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { VERSION } from "../version.js";
 
@@ -20,19 +24,45 @@ export function mayShareAgentDatabaseFile(left: string, right: string): boolean 
   }
 }
 
-export function agentDatabaseLeaseStaleReason(row: {
-  owner_pid: number;
-  owner_start_time: number | null;
-}): "owner-pid-dead" | "owner-start-time-changed" | undefined {
-  if (isPidDefinitelyDead(row.owner_pid)) {
-    return "owner-pid-dead";
-  }
-  const currentStartTime = getFileLockProcessStartTime(row.owner_pid);
-  return row.owner_start_time !== null &&
-    currentStartTime !== null &&
-    row.owner_start_time !== currentStartTime
-    ? "owner-start-time-changed"
-    : undefined;
+type AgentDatabaseLeaseStaleReason =
+  | "owner-pid-dead"
+  | "owner-start-time-changed"
+  | "owner-prior-boot";
+
+/** Observe boot identity at most once per scan, never retain it across repairs. */
+export function createAgentDatabaseLeaseStaleReasonReader() {
+  let currentBoot:
+    | ReturnType<ReturnType<typeof createManagedHandoffBootIdentityReader>>
+    | null
+    | undefined;
+  return (row: {
+    owner_pid: number;
+    owner_start_time: number | null;
+    opened_at: number;
+  }): AgentDatabaseLeaseStaleReason | undefined => {
+    if (isPidDefinitelyDead(row.owner_pid)) {
+      return "owner-pid-dead";
+    }
+    if (row.owner_start_time === null) {
+      if (row.opened_at <= 0) {
+        return undefined;
+      }
+      if (currentBoot === undefined) {
+        try {
+          currentBoot = createManagedHandoffBootIdentityReader(process.env)();
+        } catch {
+          currentBoot = null;
+        }
+      }
+      return predatesCurrentBoot(row.opened_at, currentBoot ?? undefined)
+        ? "owner-prior-boot"
+        : undefined;
+    }
+    const currentStartTime = getFileLockProcessStartTime(row.owner_pid);
+    return currentStartTime !== null && row.owner_start_time !== currentStartTime
+      ? "owner-start-time-changed"
+      : undefined;
+  };
 }
 
 export function readAgentDatabaseLeaseProvenance(pathname: string): string | null {
@@ -71,10 +101,10 @@ export function agentDatabaseLeaseProcessDeathRefusal(
     provenance: string | null;
   },
   pathname: string,
-  staleReason: NonNullable<ReturnType<typeof agentDatabaseLeaseStaleReason>>,
+  staleReason: AgentDatabaseLeaseStaleReason,
 ): string | undefined {
   if (staleReason !== "owner-pid-dead") {
-    return "owner-start-time-changed";
+    return staleReason;
   }
   if (row.opened_at <= 0) {
     return "predecessor-admission-incomplete";

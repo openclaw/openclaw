@@ -45,12 +45,49 @@ export async function loadCopilotWorkspaceInstructions(params: {
       runKind: attempt.bootstrapContextRunKind,
     });
     // Render the paths seen by sandboxed tools, while loading from the host workspace.
-    const contextFiles = remapCopilotBootstrapContextFiles({
-      files: bootstrapContext.contextFiles,
-      sourceWorkspaceDir: workspaceDir,
-      targetWorkspaceDir: readResolvedAttemptPath(params.effectiveWorkspaceDir) ?? workspaceDir,
-    });
-    return renderCopilotWorkspaceBootstrapInstructions(contextFiles);
+    const sourceContextFiles = bootstrapContext.contextFiles;
+    const targetWorkspaceDir =
+      readResolvedAttemptPath(params.effectiveWorkspaceDir) ?? workspaceDir;
+    const contextFiles =
+      workspaceDir === targetWorkspaceDir
+        ? sourceContextFiles
+        : sourceContextFiles.map((file) => {
+            const relative = path.relative(workspaceDir, file.path);
+            // Files outside the workspace must retain their actual location.
+            if (!isRelativePathInsideOrEqual(relative)) {
+              return file;
+            }
+            return Object.assign({}, file, {
+              path: relative === "" ? targetWorkspaceDir : path.join(targetWorkspaceDir, relative),
+            });
+          });
+    const files = contextFiles
+      .filter((file) => {
+        const baseName = getCopilotContextFileBasename(file.path);
+        return baseName.length > 0 && !COPILOT_NATIVE_PROJECT_DOC_BASENAMES.has(baseName);
+      })
+      .toSorted(compareCopilotContextFiles);
+    if (files.length === 0) {
+      return undefined;
+    }
+    const hasSoulFile = files.some(
+      (file) => getCopilotContextFileBasename(file.path) === "soul.md",
+    );
+    const lines: string[] = [
+      "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. The Copilot SDK loads AGENTS.md natively from its instruction directories, so AGENTS.md is not repeated here.",
+      "",
+      "# Project Context",
+      "",
+      "The following project context files have been loaded:",
+    ];
+    if (hasSoulFile) {
+      lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
+    }
+    lines.push("");
+    for (const file of files) {
+      lines.push(`## ${file.path}`, "", file.content, "");
+    }
+    return lines.join("\n").trim();
   } catch (error) {
     params.warn?.(
       `[copilot-attempt] failed to load workspace bootstrap instructions: ${
@@ -61,30 +98,6 @@ export async function loadCopilotWorkspaceInstructions(params: {
   }
 }
 
-// Files outside the workspace must retain their actual location.
-function remapCopilotBootstrapContextFiles(params: {
-  files: EmbeddedContextFile[];
-  sourceWorkspaceDir: string;
-  targetWorkspaceDir: string;
-}): EmbeddedContextFile[] {
-  if (params.sourceWorkspaceDir === params.targetWorkspaceDir) {
-    return params.files;
-  }
-  return params.files.map((file) => {
-    const relative = path.relative(params.sourceWorkspaceDir, file.path);
-    if (!isRelativePathInsideOrEqual(relative)) {
-      return file;
-    }
-    return {
-      ...file,
-      path:
-        relative === ""
-          ? params.targetWorkspaceDir
-          : path.join(params.targetWorkspaceDir, relative),
-    };
-  });
-}
-
 function isRelativePathInsideOrEqual(relativePath: string): boolean {
   return (
     relativePath === "" ||
@@ -92,36 +105,6 @@ function isRelativePathInsideOrEqual(relativePath: string): boolean {
       !relativePath.startsWith(`..${path.sep}`) &&
       !path.isAbsolute(relativePath))
   );
-}
-
-function renderCopilotWorkspaceBootstrapInstructions(
-  contextFiles: EmbeddedContextFile[],
-): string | undefined {
-  const files = contextFiles
-    .filter((file) => {
-      const baseName = getCopilotContextFileBasename(file.path);
-      return baseName.length > 0 && !COPILOT_NATIVE_PROJECT_DOC_BASENAMES.has(baseName);
-    })
-    .toSorted(compareCopilotContextFiles);
-  if (files.length === 0) {
-    return undefined;
-  }
-  const hasSoulFile = files.some((file) => getCopilotContextFileBasename(file.path) === "soul.md");
-  const lines: string[] = [
-    "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. The Copilot SDK loads AGENTS.md natively from its instruction directories, so AGENTS.md is not repeated here.",
-    "",
-    "# Project Context",
-    "",
-    "The following project context files have been loaded:",
-  ];
-  if (hasSoulFile) {
-    lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
-  }
-  lines.push("");
-  for (const file of files) {
-    lines.push(`## ${file.path}`, "", file.content, "");
-  }
-  return lines.join("\n").trim();
 }
 
 function compareCopilotContextFiles(left: EmbeddedContextFile, right: EmbeddedContextFile): number {

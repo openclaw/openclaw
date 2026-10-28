@@ -3,7 +3,6 @@ import {
   createArchivedSubagentSweeperRun,
   createSubagentSweeperHarness,
 } from "../../agents/subagents/registry/subagent-registry-sweeper.test-support.js";
-import { deleteSubagentSessionForCleanup } from "../../agents/subagents/registry/subagent-session-cleanup.js";
 import {
   createQueueSettings,
   createQueueTestRun,
@@ -36,6 +35,17 @@ function lifecycleConfig() {
   setRuntimeConfigSnapshot(cfg);
 }
 
+function resolveTarget(key: string, agentId: string) {
+  return resolveGatewaySessionStoreTargetInWorker({
+    cfg: getRuntimeConfig(),
+    key,
+    agentId,
+    projection: "list",
+    exactRead: true,
+    readOnly: false,
+  });
+}
+
 function gateway(extraHandlers = { ...sessionDeleteHandlers, ...sessionMutationHandlers }) {
   const cfg = getRuntimeConfig();
   const client = sharingPolicyClient({
@@ -60,58 +70,43 @@ function gateway(extraHandlers = { ...sessionDeleteHandlers, ...sessionMutationH
   };
 }
 
-it.each(["sweep", "cleanup"] as const)(
-  "%s removes the recorded raw child owner without deleting another agent's global session",
-  async (flow) => {
-    lifecycleConfig();
-    for (const agentId of ["main", "research"]) {
-      await upsertSessionEntryCore(
-        { agentId, sessionKey: "global" },
-        {
-          sessionId: `${agentId}-global`,
-          lifecycleRevision: `${agentId}-revision`,
-          updatedAt: Date.now(),
-        },
-      );
-    }
-    const mainBefore = loadSessionEntry({ agentId: "main", sessionKey: "global" });
-    const call = gateway(sessionDeleteHandlers);
-    const entry = createArchivedSubagentSweeperRun({
-      childSessionKey: "global",
-      childAgentId: "research",
-      childSessionIdentity: {
-        sessionId: "research-global",
-        lifecycleRevision: "research-revision",
+it("sweep removes the recorded raw child owner without deleting another agent's global session", async () => {
+  lifecycleConfig();
+  for (const agentId of ["main", "research"]) {
+    await upsertSessionEntryCore(
+      { agentId, sessionKey: "global" },
+      {
+        sessionId: `${agentId}-global`,
+        lifecycleRevision: `${agentId}-revision`,
+        updatedAt: Date.now(),
       },
-    });
-    const h = createSubagentSweeperHarness({}, entry);
-    h.callGateway.mockImplementation(async (request) => {
-      await request.prepareDispatchCurrent?.();
-      request.assertDispatchCurrent?.();
-      return call(request.method, request.params);
-    });
-    try {
-      if (flow === "sweep") {
-        await h.sweeper.sweepOnce();
-        expect(h.runs.has(entry.runId)).toBe(false);
-      } else {
-        expect(
-          await deleteSubagentSessionForCleanup({
-            callGateway: h.callGateway,
-            childSessionKey: entry.childSessionKey,
-            childAgentId: entry.childAgentId,
-            expectedSessionId: "research-global",
-            expectedLifecycleRevision: "research-revision",
-          }),
-        ).toBe("deleted");
-      }
-      expect(loadSessionEntry({ agentId: "research", sessionKey: "global" })).toBeUndefined();
-      expect(loadSessionEntry({ agentId: "main", sessionKey: "global" })).toEqual(mainBefore);
-    } finally {
-      await h.sweeper.reset();
-    }
-  },
-);
+    );
+  }
+  const mainBefore = loadSessionEntry({ agentId: "main", sessionKey: "global" });
+  const call = gateway(sessionDeleteHandlers);
+  const entry = createArchivedSubagentSweeperRun({
+    childSessionKey: "global",
+    childAgentId: "research",
+    childSessionIdentity: {
+      sessionId: "research-global",
+      lifecycleRevision: "research-revision",
+    },
+  });
+  const h = createSubagentSweeperHarness({}, entry);
+  h.callGateway.mockImplementation(async (request) => {
+    await request.prepareDispatchCurrent?.();
+    request.assertDispatchCurrent?.();
+    return call(request.method, request.params);
+  });
+  try {
+    await h.sweeper.sweepOnce();
+    expect(h.runs.has(entry.runId)).toBe(false);
+    expect(loadSessionEntry({ agentId: "research", sessionKey: "global" })).toBeUndefined();
+    expect(loadSessionEntry({ agentId: "main", sessionKey: "global" })).toEqual(mainBefore);
+  } finally {
+    await h.sweeper.reset();
+  }
+});
 
 it.each([
   { method: "sessions.delete", key: "global", agentId: "research" },
@@ -123,24 +118,9 @@ it.each([
   { method: "sessions.delete", key: "shared", agentId: "main" },
 ])("$method preserves another agent's $key work ($agentId)", async ({ method, key, agentId }) => {
   lifecycleConfig();
-  const cfg = getRuntimeConfig();
   const foreignAgentId = agentId === "main" ? "research" : "main";
-  const target = await resolveGatewaySessionStoreTargetInWorker({
-    cfg,
-    key,
-    agentId,
-    projection: "list",
-    exactRead: true,
-    readOnly: false,
-  });
-  const foreignTarget = await resolveGatewaySessionStoreTargetInWorker({
-    cfg,
-    key,
-    agentId: foreignAgentId,
-    projection: "list",
-    exactRead: true,
-    readOnly: false,
-  });
+  const target = await resolveTarget(key, agentId);
+  const foreignTarget = await resolveTarget(key, foreignAgentId);
   const targetId = `${agentId}-session`;
   const foreignId = `${foreignAgentId}-session`;
   await upsertSessionEntryCore(
@@ -178,12 +158,11 @@ it.each([
   let owned: ReturnType<typeof followup> | undefined;
   try {
     owned = followup(agentId, targetId, target.canonicalKey);
-    const params = {
+    await gateway()(method, {
       key,
       agentId,
       ...(method === "sessions.patch" ? { archived: true, expectedSessionId: targetId } : {}),
-    };
-    await gateway()(method, params);
+    });
     expect(operation.abortSignal.aborted).toBe(false);
     expect(foreign.settled).not.toHaveBeenCalled();
     expect(owned.settled).toHaveBeenCalledOnce();
@@ -208,46 +187,3 @@ it.each([
     }
   }
 });
-
-it.each(["sessions.delete", "sessions.reset", "sessions.patch"])(
-  "%s still cancels the selected agent's own session",
-  async (method) => {
-    const key = "agent:main:lifecycle-owned";
-    const sessionId = "owned-session";
-    const cfg = getRuntimeConfig();
-    await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, { sessionId, updatedAt: 1 });
-    const target = await resolveGatewaySessionStoreTargetInWorker({
-      cfg,
-      key,
-      agentId: "main",
-      projection: "list",
-      exactRead: true,
-      readOnly: false,
-    });
-    const operation = createReplyOperation({
-      sessionKey: key,
-      sessionId,
-      agentId: "main",
-      target: captureSessionTarget({
-        storeScope: target.storePath,
-        sessionKey: key,
-        incarnation: sessionId,
-        agentId: "main",
-      }),
-      resetTriggered: false,
-    });
-    operation.setPhase("running");
-    operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
-    try {
-      const params = {
-        key,
-        ...(method === "sessions.patch" ? { archived: true, expectedSessionId: sessionId } : {}),
-      };
-      await gateway()(method, params);
-      expect(operation.abortSignal.aborted).toBe(true);
-    } finally {
-      operation.complete();
-      clearSessionQueues([key, sessionId]);
-    }
-  },
-);

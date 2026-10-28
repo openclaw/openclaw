@@ -7,6 +7,10 @@ import { assertAgentReplyContainsMarker } from "../agent-turn-output.mjs";
 import { readTcpPortEnv } from "../env-limits.mjs";
 import { readJson } from "../fixtures/common.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
+import {
+  prepareLegacyOperatorAuth,
+  seedLegacyOperatorAuth,
+} from "./legacy-operator-doctor-repairs.mjs";
 import { readDatabase } from "./observations.mjs";
 
 const MODEL = "survivor/gpt-5.6-luna";
@@ -93,6 +97,7 @@ function approvalsCommand() {
 }
 
 export function seedLegacyOperatorState() {
+  prepareLegacyOperatorAuth();
   const workspace = requiredEnv("OPENCLAW_TEST_WORKSPACE_DIR");
   const mockPort = readTcpPortEnv("OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT");
   const set = (key, value) =>
@@ -139,6 +144,7 @@ export function seedLegacyOperatorState() {
     "legacy-operator-setup",
   );
   set("agents.defaults.model.primary", MODEL);
+  seedLegacyOperatorAuth();
   // Every fixture client shares this container's loopback network namespace.
   set("plugins.entries.device-pair", {
     enabled: true,

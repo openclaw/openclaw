@@ -602,6 +602,30 @@ struct RootTabsPresentationTests {
         #expect(Set(layout.sections.flatMap(\.nodes).map(\.session.key)) == ["recent", "expired"])
     }
 
+    @Test(arguments: [
+        ("", "conversation", false),
+        ("", "agent:main:cron:daily", true),
+        ("Scheduled", "conversation", true),
+    ])
+    func `pinned automations stay discoverable through selection and search`(
+        query: String, selected: String, showsAutomation: Bool) throws
+    {
+        let entries = try JSONDecoder().decode([OpenClawChatSessionEntry].self, from: Data("""
+        [
+          {"key":"agent:main:cron:daily","label":"Scheduled task","pinned":true},
+          {"key":"conversation"}
+        ]
+        """.utf8))
+        let keys = RootSidebarModel.sections(
+            sessions: entries,
+            query: query,
+            currentSessionKey: selected,
+            mainSessionKey: "main",
+            activeAgentID: "main",
+            groups: []).flatMap(\.nodes).map(\.session.key)
+        #expect(keys.contains("agent:main:cron:daily") == showsAutomation)
+    }
+
     @Test func `sidebar agent badges use canonical identity fallback`() {
         #expect(RootSidebar.agentBadge(
             name: "Research Agent",

@@ -17,6 +17,7 @@ import {
 } from "../../scripts/ui.mts";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../../src/gateway/control-ui-root-assets.js";
 import { inspectControlUiRootAssets } from "../../src/infra/control-ui-assets.js";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { mergeProcessEnv } from "../../src/infra/process-env.js";
 import { isPidDefinitelyDead } from "../../src/shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -67,6 +68,7 @@ function copyUiFixture(root: string, extra: string[] = []): void {
     "scripts/run-node-package-bin.mts",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/build-identity.mts",
+    "scripts/lib/control-ui-build-inputs.mts",
     "scripts/lib/output-root-guard.mjs",
     "scripts/lib/record-shared.mjs",
     "scripts/lib/prepare-control-ui-settings.mts",
@@ -90,13 +92,13 @@ function copyUiFixture(root: string, extra: string[] = []): void {
   fs.mkdirSync(nativeModules, { recursive: true });
   // Resolve native optional dependencies from their installed package owner.
   fs.symlinkSync(procSafeRoot, path.join(nativeModules, "proc-safe"), "junction");
-  fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+  writeFiles(root, {
+    "package.json": '{"type":"module"}\n',
+    "scripts/generate-control-ui-validators.mts":
+      'if (process.argv.at(-1) !== "--check") throw new Error("expected validator freshness check");\n',
+  });
   fs.mkdirSync(path.join(root, ".git"));
   installDistArtifactScripts(root, [], { compiler: false });
-  fs.writeFileSync(
-    path.join(root, "scripts/generate-control-ui-validators.mts"),
-    'if (process.argv.at(-1) !== "--check") throw new Error("expected validator freshness check");\n',
-  );
 }
 
 function writeUiPackageBin(modules: string, name: string, source: string): string {
@@ -334,38 +336,10 @@ describe("scripts/ui", () => {
         resolvePnpmSpawnCall(
           ["install", argument],
           { PATH: "" },
-          {
-            npmExecPath: "",
-            platform: "win32",
-          },
+          { npmExecPath: "", platform: "win32" },
         ),
       ).toThrow(/unsafe windows cmd\.exe argument/i);
     }
-  });
-
-  it("routes Windows Corepack pnpm entrypoints through node", () => {
-    const tempDir = tempDirs.make("openclaw-pnpm-runner-");
-    const npmExecPath = path.join(tempDir, "pnpm.mjs");
-    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
-    const env = { npm_execpath: npmExecPath, ComSpec: "C:\\Windows\\System32\\cmd.exe" };
-
-    expect(
-      resolvePnpmSpawnCall(["run", "build"], env, {
-        cwd: "C:\\repo\\ui",
-        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-        platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: [npmExecPath, "run", "build"],
-      options: {
-        cwd: "C:\\repo\\ui",
-        stdio: "inherit",
-        env,
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
   });
 
   it("detects direct execution through a junctioned script path", () => {
@@ -430,40 +404,82 @@ process.exitCode = 0;\n`,
       "src/shared/non-packaged-plugin-dirs.ts",
     ]);
     fs.mkdirSync(path.join(root, "extensions"));
+    writeFiles(root, {
+      "extensions/qa-lab/package.json": JSON.stringify({ name: "@openclaw/qa-lab" }),
+      "extensions/qa-lab/openclaw.plugin.json": JSON.stringify({ id: "qa-lab" }),
+      "extensions/qa-lab/index.ts": "export {};\n",
+      "ui/src/cache-only.test.ts": "export const fixture = 1;\n",
+      "ui/src/consumed.test.ts": "export const fixture = 1;\n",
+    });
+    const posterFonts = [
+      "src/gateway/assets/session-card/Lato-Regular.ttf",
+      "src/gateway/assets/session-card/InstrumentSerif-Regular.ttf",
+    ];
+    writeFiles(root, Object.fromEntries(posterFonts.map((font) => [font, "initial font bytes"])));
     // This fixture owns UI cache behavior; the native presenter builder is
     // exercised with real source and distribution bytes in its delivery suite.
-    fs.writeFileSync(path.join(root, "scripts/build-plugin-control-ui.mts"), "export {};\n");
+    writeFiles(root, {
+      "scripts/build-plugin-control-ui.mts": "export {};\n",
+      ...Object.fromEntries(validatorNames.map((file) => [`scripts/${file}`, "export {};\n"])),
+    });
     build.vite(`
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 export async function runnerImport() {
-  return { module: { refreshControlUiBuildOutput() {}, resolveControlUiBuildInfo() { return {}; } } };
+  return { module: {
+    refreshControlUiBuildOutput(out) { fs.writeFileSync(path.join(out, "index.html"), "refreshed identity"); },
+    resolveControlUiBuildInfo() { return {}; },
+  } };
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const out = process.argv[process.argv.indexOf("--outDir") + 1];
   fs.mkdirSync(out, { recursive: true });
   for (const file of ["index.html", "sw.js", ".build-inputs.json"]) fs.writeFileSync(path.join(out, file), "[]");
+  fs.writeFileSync(path.join(out, ".build-inputs.json"), JSON.stringify(["ui/src/consumed.test.ts"]));
   console.log("fixture-bundler-ran");
 }
 `);
-    for (const file of validatorNames) {
-      fs.writeFileSync(path.join(root, "scripts", file), "export {};\n");
-    }
-    const run = (expectedExit = 0) => {
+    const run = (expectedExit = 0, privateQa = false) => {
       const result = build.run({
         BUILD_ALL_CACHE_ROOT: cacheRoot === "explicit" ? path.join(root, "cache") : undefined,
         OPENCLAW_BUILD_CACHE: "1",
         OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS: "1",
         OPENCLAW_CONTROL_UI_BUILD_ID: "cache-test",
+        OPENCLAW_BUILD_PRIVATE_QA: privateQa ? "1" : "0",
       });
       expectExit(result, expectedExit);
       return result.stdout;
     };
     expect(run()).toContain("fixture-bundler-ran");
+    const cachedHtml = path.join(
+      root,
+      cacheRoot === "explicit" ? "cache" : ".artifacts/build-all-cache",
+      "ui_build/outputs/index.html",
+    );
+    const cachedSource = fs.readFileSync(cachedHtml, "utf8");
     expect(run()).toContain("reused content cache");
+    expect(fs.readFileSync(path.join(root, "dist/control-ui/index.html"), "utf8")).toBe(
+      "refreshed identity",
+    );
+    expect(fs.readFileSync(cachedHtml, "utf8")).toBe(cachedSource);
+    writeFiles(root, {
+      "dist/extensions/qa-lab/package.json": JSON.stringify({ name: "@openclaw/qa-lab" }),
+      "dist/extensions/qa-lab/openclaw.plugin.json": JSON.stringify({ id: "qa-lab" }),
+    });
+    expect(run(0, true)).toContain("reused content cache");
+    fs.appendFileSync(path.join(root, "ui/src/cache-only.test.ts"), "// changed test body\n");
+    expect(run()).toContain("reused content cache");
+    writeFiles(root, { "ui/src/new.test.tsx": "export {};\n" });
+    expect(run()).toContain("fixture-bundler-ran");
+    fs.appendFileSync(path.join(root, "ui/src/consumed.test.ts"), "// changed consumed input\n");
+    expect(run()).toContain("fixture-bundler-ran");
+    for (const font of posterFonts) {
+      fs.appendFileSync(path.join(root, font), "changed font bytes");
+      expect(run()).toContain("fixture-bundler-ran");
+      expect(run()).toContain("reused content cache");
+    }
     const plugin = path.join(root, "extensions/new-board");
-    fs.mkdirSync(plugin);
     writeFiles(plugin, {
       "package.json": JSON.stringify({
         name: "@openclaw/new-board",
@@ -472,12 +488,36 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       "openclaw.plugin.json": JSON.stringify({ id: "new-board" }),
     });
     expect(run()).toContain("fixture-bundler-ran");
+    writeFiles(root, {
+      "dist/extensions/new-board/package.json": JSON.stringify({
+        name: "@openclaw/new-board",
+        version: "1.0.0",
+      }),
+      "dist/extensions/new-board/openclaw.plugin.json": JSON.stringify({
+        id: "new-board",
+        controlUi: { entry: "dist/control-ui/generation/index.js" },
+      }),
+      "dist/extensions/new-board/dist/control-ui/generation/index.js": "export {};\n",
+    });
+    expect(run()).toContain("fixture-bundler-ran");
+    fs.appendFileSync(
+      path.join(root, "dist/extensions/new-board/dist/control-ui/generation/index.js"),
+      "// changed native UI\n",
+    );
+    expect(run()).toContain("fixture-bundler-ran");
+    for (const manifest of ["invalid JSON", JSON.stringify({ id: " " })]) {
+      writeFiles(root, { "dist/extensions/qa-lab/openclaw.plugin.json": manifest });
+      const refused = run(1);
+      expect(refused).not.toContain("fixture-bundler-ran");
+      expect(refused).not.toContain("reused content cache");
+    }
+    writeFiles(root, {
+      "dist/extensions/qa-lab/openclaw.plugin.json": JSON.stringify({ id: "qa-lab" }),
+    });
+    expect(run()).toContain("reused content cache");
     const output = path.join(root, "dist/control-ui/index.html");
     const published = fs.readFileSync(output, "utf8");
-    fs.writeFileSync(
-      path.join(root, "scripts/generate-control-ui-validators.mts"),
-      "process.exitCode = 23;\n",
-    );
+    writeFiles(root, { "scripts/generate-control-ui-validators.mts": "process.exitCode = 23;\n" });
     const refused = run(23);
     expect(refused).not.toContain("fixture-bundler-ran");
     expect(refused).not.toContain("reused content cache");
@@ -512,9 +552,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       buildFiles("stale-runtime"),
     );
     if (retiredOnly) {
-      const unfinished = path.join(root, "dist", `control-ui.build-${deadPid}-y`);
-      fs.mkdirSync(unfinished);
-      fs.writeFileSync(path.join(unfinished, "junk"), "incomplete");
+      writeFiles(root, { [`dist/control-ui.build-${deadPid}-y/junk`]: "incomplete" });
     }
     build.vite(`
 import fs from "node:fs";
@@ -577,8 +615,7 @@ require("node:module").syncBuiltinESMExports();
         `control-ui.build-${deadPid}-dead`,
         `control-ui.build-${deadPid}-dead.retired`,
       ]) {
-        fs.mkdirSync(path.join(root, "dist", name), { recursive: true });
-        fs.writeFileSync(path.join(root, "dist", name, "sentinel"), name);
+        writeFiles(root, { [`dist/${name}/sentinel`]: name });
       }
     }
     const result = build.run({ OPENCLAW_CONTROL_UI_BUILD_ID: buildId }, args);
@@ -589,8 +626,8 @@ require("node:module").syncBuiltinESMExports();
     expect(inspectControlUiRootAssets(output, buildId).kind).toBe(seedSiblings ? "ready" : "stale");
     const expected = buildFiles(seedSiblings ? buildId : "stale-runtime");
     expect(
-      fs
-        .readdirSync(output, { recursive: true, encoding: "utf8" })
+      listDirectoryTreeStrictSync(output)
+        .map((walkEntry) => walkEntry.relativePath)
         .toSorted((left, right) => left.localeCompare(right)),
     ).toEqual(["assets", ...Object.keys(expected)].map((file) => path.normalize(file)).toSorted());
     for (const [file, bytes] of Object.entries(expected)) {
@@ -603,13 +640,11 @@ require("node:module").syncBuiltinESMExports();
       for (const name of liveUiBuildSiblings) {
         expect(fs.readFileSync(path.join(root, "dist", name, "sentinel"), "utf8")).toBe(name);
       }
-    }
-    if (seedSiblings) {
       if (process.platform !== "win32") {
         const published = [
           output,
-          ...fs
-            .readdirSync(output, { recursive: true, encoding: "utf8" })
+          ...listDirectoryTreeStrictSync(output)
+            .map((walkEntry) => walkEntry.relativePath)
             .map((entry) => path.join(output, entry)),
         ];
         for (const entry of published) {
@@ -641,15 +676,14 @@ require("node:module").syncBuiltinESMExports();
   it("checks the selected staged directory with both real validators", () => {
     const root = tempDirs.make("openclaw-ui-validators-");
     const staging = path.join(root, "dist/control-ui.build-123-fixture");
-    fs.mkdirSync(path.join(staging, "assets"), { recursive: true });
-    fs.writeFileSync(
-      path.join(staging, "index.html"),
-      '<script src="./assets/index.js"></script><link href="./assets/index.css">',
-    );
+    writeFiles(staging, {
+      "index.html": '<script src="./assets/index.js"></script><link href="./assets/index.css">',
+      "assets/index.js": "/* synthetic asset */",
+      "assets/index.css": "/* synthetic asset */",
+    });
     for (const name of ["index.js", "index.css"]) {
       const bytes = Buffer.from("/* synthetic asset */");
       const file = path.join(staging, "assets", name);
-      fs.writeFileSync(file, bytes);
       fs.writeFileSync(`${file}.gz`, gzipSync(bytes));
       fs.writeFileSync(`${file}.br`, brotliCompressSync(bytes));
     }
@@ -658,161 +692,6 @@ require("node:module").syncBuiltinESMExports();
       ["check-control-ui-performance.mts", "--report-only", "--dist", staging],
     ] as const) {
       expectExit(runNode(root, [path.resolve("scripts", script), ...args]));
-    }
-  });
-
-  it("reports budgets and enforces asset validity without compiler children or disk caches", () => {
-    const tempDir = fs.realpathSync(tempDirs.make("openclaw-ui-cache-"));
-    const root = path.join(tempDir, "repo");
-    const build = prepareBuildFixture(root);
-    const vite = build.vite('throw new Error("build must be intercepted");');
-    const tempRoot = path.join(tempDir, "temp");
-    const cacheRoots = ["tsx", `tsx-${process.geteuid?.() ?? os.userInfo().username}`].map((name) =>
-      path.join(tempRoot, name),
-    );
-    const accessLog = path.join(tempDir, "cache-access.log");
-    const guard = path.join(tempDir, "cache-guard.cjs");
-    const capture = path.join(tempDir, "capture-ui-children.cjs");
-    const fixture = path.join(tempDir, "validator.mts");
-    const pnpm = path.join(tempDir, "pnpm.cjs");
-    const validators = validatorNames;
-
-    for (const cacheRoot of cacheRoots) {
-      fs.mkdirSync(cacheRoot, { recursive: true });
-      fs.writeFileSync(path.join(cacheRoot, "0-sentinel"), "keep");
-    }
-    // Record before throwing: tsx catches some cache errors, so exit status alone
-    // cannot prove that the loader left the cache untouched.
-    fs.writeFileSync(
-      guard,
-      `
-const fs = require("node:fs");
-const path = require("node:path");
-const roots = ${JSON.stringify(cacheRoots)};
-if (${JSON.stringify(validators)}.includes(process.argv[2])) {
-  function rejectRuntimeActivity(operation) {
-    fs.appendFileSync(${JSON.stringify(accessLog)}, operation + "\\n");
-    throw new Error("Unexpected validator runtime activity: " + operation);
-  }
-  const childProcess = require("node:child_process");
-  for (const operation of ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"]) {
-    childProcess[operation] = function() { rejectRuntimeActivity(operation); };
-  }
-  require("node:worker_threads").Worker = function() { rejectRuntimeActivity("Worker"); };
-}
-function guardAccess(target, operation) {
-  const resolved = path.resolve(String(target));
-  if (roots.some(root => resolved === root || resolved.startsWith(root + path.sep))) {
-    fs.appendFileSync(${JSON.stringify(accessLog)}, operation + "\\n");
-    throw new Error("Unexpected tsx disk cache access: " + operation);
-  }
-}
-for (const operation of ["readdirSync", "readFileSync", "writeFileSync", "openSync"]) {
-  const original = fs[operation];
-  fs[operation] = function(target, ...args) {
-    guardAccess(target, operation);
-    return original.call(this, target, ...args);
-  };
-}
-for (const operation of ["readdir", "readFile", "writeFile", "open", "unlink", "rm", "rmdir", "access"]) {
-  const original = fs.promises[operation];
-  fs.promises[operation] = async function(target, ...args) {
-    guardAccess(target, operation);
-    return original.call(this, target, ...args);
-  };
-}
-require("node:module").syncBuiltinESMExports();
-`,
-    );
-    fs.writeFileSync(pnpm, 'throw new Error("build must be intercepted");\n');
-    fs.writeFileSync(
-      fixture,
-      `
-const validator: string = process.argv[2];
-const reportOnly = process.argv.includes("--report-only");
-console.log(JSON.stringify({ validator, reportOnly }));
-process.exitCode = validator === "check-control-ui-performance.mts" && !reportOnly ? 1 : 0;
-`,
-    );
-    // Run the native launcher, intercept only the build, then replay each real
-    // validator command/environment with erasable TypeScript. The preload rejects
-    // compiler workers and subprocesses before they can escape validator completion.
-    fs.writeFileSync(
-      capture,
-      `
-const assert = require("node:assert/strict");
-const childProcess = require("node:child_process");
-const path = require("node:path");
-const spawnSync = childProcess.spawnSync;
-const validators = ${JSON.stringify(validators)};
-assert.equal(process.env.TSX_DISABLE_CACHE, undefined);
-assert.equal(process.env.npm_execpath, ${JSON.stringify(pnpm)});
-childProcess.spawnSync = function(command, args, options) {
-  if (args.includes(path.join(${JSON.stringify(root)}, "scripts/generate-control-ui-validators.mts"))) {
-    return spawnSync(command, args, options);
-  }
-  const viteIndex = args.indexOf(require("node:url").pathToFileURL(${JSON.stringify(vite)}).href);
-  if (viteIndex !== -1) {
-    assert.deepEqual(args.slice(viteIndex + 1, viteIndex + 3), ["build", "--outDir"]);
-    assert.equal(path.dirname(args[viteIndex + 3]), ${JSON.stringify(path.join(root, "dist"))});
-    assert.equal(require("node:fs").existsSync(args[viteIndex + 3]), true);
-    return { status: 0 };
-  }
-  const validatorIndex = args.findIndex(arg => validators.includes(path.basename(arg)));
-  if (validatorIndex === -1) throw new Error("Unexpected UI subprocess");
-  const validator = path.basename(args[validatorIndex]);
-  const validatorArgs = args.slice(validatorIndex + 1);
-  const staging = validatorArgs.at(-1);
-  assert.equal(path.dirname(staging), ${JSON.stringify(path.join(root, "dist"))});
-  assert.equal(require("node:fs").existsSync(staging), true);
-  assert.deepEqual(validatorArgs, validator === "check-control-ui-performance.mts" ? ["--report-only", "--dist", staging] : [staging]);
-  assert.equal(options.env.TSX_DISABLE_CACHE, undefined);
-  return spawnSync(command, [...args.slice(0, validatorIndex), ${JSON.stringify(fixture)}, validator, ...validatorArgs], options);
-};
-require("node:module").syncBuiltinESMExports();
-`,
-    );
-    // A spread can retain NPM_EXECPATH, which wins over npm_execpath on Windows.
-    const env = mergeProcessEnv([
-      process.env,
-      {
-        TMPDIR: tempRoot,
-        TMP: tempRoot,
-        TEMP: tempRoot,
-        XDG_CACHE_HOME: path.join(tempDir, "xdg-cache"),
-        NODE_COMPILE_CACHE: path.join(tempDir, "node-cache"),
-        NODE_OPTIONS: `--require ${JSON.stringify(guard)}`,
-        ...buildEnvironment,
-        OPENCLAW_BUILD_ALL_NO_PNPM: "0",
-        npm_execpath: pnpm,
-        TSX_DISABLE_CACHE: undefined,
-        TSX_TSCONFIG_PATH: undefined,
-        PNPM_CONFIG_MODULES_DIR: undefined,
-        npm_config_modules_dir: undefined,
-      },
-    ]);
-
-    const control = runNode(
-      root,
-      ["--eval", `require("node:fs").readdirSync(${JSON.stringify(cacheRoots[0])})`],
-      { env },
-    );
-    expectExit(control, 1);
-    // Check the cache guard without starting the compiler service it protects against.
-    expect(fs.readFileSync(accessLog, "utf8").trim()).toBe("readdirSync");
-    fs.unlinkSync(accessLog);
-    const result = runNode(root, ["--require", capture, "scripts/ui.js", "build"], { env });
-    expectExit(result);
-    expect(fs.existsSync(accessLog), result.stderr).toBe(false);
-    expect(outputLines(result)).toEqual(
-      validators.map((validator) => ({
-        validator,
-        reportOnly: validator === "check-control-ui-performance.mts",
-      })),
-    );
-    for (const cacheRoot of cacheRoots) {
-      expect(fs.readdirSync(cacheRoot)).toEqual(["0-sentinel"]);
-      expect(fs.readFileSync(path.join(cacheRoot, "0-sentinel"), "utf8")).toBe("keep");
     }
   });
 

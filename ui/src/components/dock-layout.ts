@@ -1,7 +1,8 @@
-import { listen } from "../lib/reactive/listener.ts";
+import { observeWindowResize } from "../lib/reactive/window-resize.ts";
 import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
 
-type DockLayoutDependencies<TDock extends DockPanelPlacement> = {
+/** Geometry and open intent stay synchronous for panel actions and persistence. */
+export function createDockLayout<TDock extends DockPanelPlacement>(deps: {
   layout: DockPanelLayoutStore<TDock>;
   reservationPrefix: string;
   isAvailable: () => boolean;
@@ -9,12 +10,7 @@ type DockLayoutDependencies<TDock extends DockPanelPlacement> = {
   isFullscreen?: () => boolean;
   onResize?: () => void;
   notify: () => void;
-};
-
-/** Geometry and open intent stay synchronous for panel actions and persistence. */
-export function createDockLayout<TDock extends DockPanelPlacement>(
-  deps: DockLayoutDependencies<TDock>,
-) {
+}) {
   let suppressed = false;
   let persistedOpen = false;
   let stopResize: (() => void) | undefined;
@@ -39,7 +35,7 @@ export function createDockLayout<TDock extends DockPanelPlacement>(
       dock.dock = layout.dock;
       dock.height = layout.height;
       dock.width = Math.min(layout.width, deps.layout.maxWidth());
-      stopResize = listen(window, "resize", () => {
+      stopResize = observeWindowResize(window, () => {
         const height = Math.min(dock.height, deps.layout.maxHeight());
         const width = Math.min(dock.width, deps.layout.maxWidth());
         if (height === dock.height && width === dock.width) {
@@ -148,7 +144,7 @@ export function createDockLayout<TDock extends DockPanelPlacement>(
     },
 
     get resizer() {
-      if (isFullscreen() || dock.dock === "main") {
+      if (isFullscreen() || dock.dock === "main" || (!dock.open && !deps.isEmbedded?.())) {
         return null;
       }
       const horizontal = dock.dock === "bottom";

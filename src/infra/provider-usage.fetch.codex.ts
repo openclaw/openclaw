@@ -1,53 +1,11 @@
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
-type CodexUsageResponse = {
-  rate_limit?: {
-    limit_reached?: boolean;
-    primary_window?: {
-      limit_window_seconds?: number;
-      used_percent?: number;
-      reset_at?: number;
-      reset_after_seconds?: number;
-    };
-    secondary_window?: {
-      limit_window_seconds?: number;
-      used_percent?: number;
-      reset_at?: number;
-      reset_after_seconds?: number;
-    };
-  };
-  plan_type?: string;
-  credits?: { balance?: number | string | null };
-};
-
 const WEEKLY_RESET_GAP_SECONDS = 3 * 24 * 60 * 60;
-
-function resolveSecondaryWindowLabel(params: {
-  windowHours: number;
-  secondaryResetAt?: number;
-  primaryResetAt?: number;
-}): string {
-  if (params.windowHours >= 168) {
-    return "Week";
-  }
-  if (params.windowHours < 24) {
-    return `${params.windowHours}h`;
-  }
-  // Codex occasionally reports a 24h secondary window while exposing a
-  // weekly reset cadence in reset timestamps. Prefer cadence in that case.
-  if (
-    typeof params.secondaryResetAt === "number" &&
-    typeof params.primaryResetAt === "number" &&
-    params.secondaryResetAt - params.primaryResetAt >= WEEKLY_RESET_GAP_SECONDS
-  ) {
-    return "Week";
-  }
-  return "Day";
-}
 
 export async function fetchCodexUsage(
   token: string,
@@ -78,7 +36,7 @@ export async function fetchCodexUsage(
   const parsed = await fetchUsageJson({
     provider: "openai",
     url: "https://chatgpt.com/backend-api/wham/usage",
-    init: { method: "GET", headers },
+    init: { method: "GET", headers: omitNullRequestHeaders(headers) },
     timeoutMs,
     fetchFn,
     tokenExpiredStatuses: [401, 403],
@@ -86,7 +44,25 @@ export async function fetchCodexUsage(
   if (!parsed.ok) {
     return parsed.snapshot;
   }
-  const data = parsed.data as CodexUsageResponse;
+  const data = parsed.data as {
+    rate_limit?: {
+      limit_reached?: boolean;
+      primary_window?: {
+        limit_window_seconds?: number;
+        used_percent?: number;
+        reset_at?: number;
+        reset_after_seconds?: number;
+      };
+      secondary_window?: {
+        limit_window_seconds?: number;
+        used_percent?: number;
+        reset_at?: number;
+        reset_after_seconds?: number;
+      };
+    };
+    plan_type?: string;
+    credits?: { balance?: number | string | null };
+  };
   const windows: UsageWindow[] = [];
 
   for (const kind of ["primary_window", "secondary_window"] as const) {
@@ -98,14 +74,19 @@ export async function fetchCodexUsage(
     const windowHours = Math.round(
       (window.limit_window_seconds || (primary ? 10800 : 86400)) / 3600,
     );
-    windows.push({
-      label: primary
+    const primaryResetAt = data.rate_limit?.primary_window?.reset_at;
+    // Codex occasionally reports 24h with weekly reset cadence.
+    const label =
+      primary || windowHours < 24
         ? `${windowHours}h`
-        : resolveSecondaryWindowLabel({
-            windowHours,
-            primaryResetAt: data.rate_limit?.primary_window?.reset_at,
-            secondaryResetAt: window.reset_at,
-          }),
+        : windowHours >= 168 ||
+            (typeof window.reset_at === "number" &&
+              typeof primaryResetAt === "number" &&
+              window.reset_at - primaryResetAt >= WEEKLY_RESET_GAP_SECONDS)
+          ? "Week"
+          : "Day";
+    windows.push({
+      label,
       usedPercent: clampPercent(window.used_percent || 0),
       resetAt: window.reset_at ? window.reset_at * 1000 : undefined,
     });

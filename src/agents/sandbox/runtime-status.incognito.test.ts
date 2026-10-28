@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
   upsertSessionEntryCore,
@@ -9,12 +10,20 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { assertAgentHarnessExecutionEnvironment } from "../harness/execution-environment.js";
 import { readSessionRuntimeOwnership } from "../harness/session-runtime-ownership.js";
 import type { AgentHarness } from "../harness/types.js";
+import { resolveSandboxContext } from "./context.js";
 import {
   resolveSandboxRuntimeStatus,
+  resolvePreparedSandboxRuntimeStatus,
+  resolveSandboxRuntimeStatusAsync,
+  resolveSandboxRuntimeStatusesForPersistedSessions,
+  type SandboxRuntimeStatusParams,
   withSandboxRuntimeStatusInWorker,
   withSandboxRuntimeStatusesInWorker,
 } from "./runtime-status.js";
@@ -29,17 +38,33 @@ const harness: AgentHarness = {
   },
 };
 afterEach(() => memorySessionActorOwners.reset());
+const enabledStatus = { sandboxed: true, sandboxRequired: false };
+const defaultConfig: OpenClawConfig = {
+  agents: { defaults: { sandbox: { mode: "all" } } },
+};
+const identity = <T>(value: T) => value;
+
+function memoryPolicy(state: OpenClawTestState, suffix: string) {
+  const sessionKey = `agent:main:dashboard:incognito-${suffix}`;
+  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+  const request = { cfg: { ...defaultConfig, session: { store: storePath } }, sessionKey };
+  const scope = { agentId: "main", sessionKey, storePath, env: state.env };
+  const source = { env: state.env, cwd: state.env.OPENCLAW_STATE_DIR!, assertCurrent() {} };
+  return {
+    request,
+    storePath,
+    scope,
+    source,
+    classify: () => resolveSandboxRuntimeStatus(request),
+    batch: () => withSandboxRuntimeStatusesInWorker([request], source, identity),
+    update: (entry: Parameters<typeof upsertSessionEntryCore>[1]) =>
+      upsertSessionEntryCore(scope, entry),
+  };
+}
 
 it("classifies unbound memory policy and rejects execution after permission or sandbox changes", async () => {
   await withOpenClawTestState({ label: "memory-policy" }, async (state) => {
-    const sessionKey = "agent:main:dashboard:incognito-policy";
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { sandbox: { mode: "all" } } },
-      session: { store: storePath },
-    };
-    const scope = { agentId: "main", sessionKey, storePath, env: state.env };
-    const source = { env: state.env, cwd: state.env.OPENCLAW_STATE_DIR!, assertCurrent() {} };
+    const { request, scope, source, classify, batch, update } = memoryPolicy(state, "policy");
     const observe = observeHostDataSql();
     try {
       await replaceSessionEntry(scope, {
@@ -52,38 +77,28 @@ it("classifies unbound memory policy and rejects execution after permission or s
         nativeRuntimeConsent: "fixture",
       });
       const params = {
-        config: cfg,
+        config: request.cfg,
         agentId: "main",
-        sessionKey,
+        sessionKey: request.sessionKey,
         sessionId: "policy",
         permissionMode: "full" as const,
       };
-      expect(resolveSandboxRuntimeStatus({ cfg, sessionKey }).sandboxed).toBe(false);
+      expect(classify().sandboxed).toBe(false);
       await expect(assertAgentHarnessExecutionEnvironment(harness, params)).resolves.toBe(true);
-      expect(
-        resolveSandboxRuntimeStatus({
-          cfg,
-          sessionKey,
-          preparedSessionEntry: { sandbox: "required" },
-        }).sandboxRequired,
-      ).toBe(true);
-      await expect(
-        withSandboxRuntimeStatusesInWorker([{ cfg, sessionKey }], source, (statuses) => statuses),
-      ).resolves.toMatchObject([{ sandboxed: false }]);
-      await upsertSessionEntryCore(scope, { permissionMode: "workspace" });
+      const prepared = { ...request, preparedSessionEntry: { sandbox: "required" as const } };
+      expect(resolveSandboxRuntimeStatus(prepared).sandboxRequired).toBe(true);
+      await expect(batch()).resolves.toMatchObject([{ sandboxed: false }]);
+      await update({ permissionMode: "workspace" });
       await expect(assertAgentHarnessExecutionEnvironment(harness, params)).rejects.toThrow(
         "requires Full access",
       );
       await expect(
-        withSandboxRuntimeStatusInWorker({ cfg, sessionKey }, source, async () => {
-          await upsertSessionEntryCore(scope, { sandboxMode: undefined });
+        withSandboxRuntimeStatusInWorker(request, source, async () => {
+          await update({ sandboxMode: undefined });
           return "prepared";
         }),
       ).rejects.toThrow("Session entry changed during read");
-      expect(resolveSandboxRuntimeStatus({ cfg, sessionKey })).toMatchObject({
-        sandboxRequired: false,
-        sandboxed: true,
-      });
+      expect(classify()).toMatchObject(enabledStatus);
       expect(observe.queries).toEqual([]);
     } finally {
       observe.restore();
@@ -93,36 +108,16 @@ it("classifies unbound memory policy and rejects execution after permission or s
 
 it("classifies absent incognito sessions without allocating an owner", async () => {
   await withOpenClawTestState({ label: "memory-policy-absent" }, async (state) => {
-    const sessionKey = "agent:main:dashboard:incognito-absent";
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { sandbox: { mode: "all" } } },
-      session: { store: storePath },
-    };
-    expect(resolveSandboxRuntimeStatus({ cfg, sessionKey })).toMatchObject({
-      sandboxed: true,
-      sandboxRequired: false,
-    });
-    await expect(
-      withSandboxRuntimeStatusesInWorker(
-        [{ cfg, sessionKey }],
-        {
-          env: state.env,
-          cwd: state.env.OPENCLAW_STATE_DIR!,
-          assertCurrent() {},
-        },
-        (statuses) => statuses,
-      ),
-    ).resolves.toMatchObject([{ sandboxed: true, sandboxRequired: false }]);
+    const { classify, batch, storePath } = memoryPolicy(state, "absent");
+    expect(classify()).toMatchObject(enabledStatus);
+    await expect(batch()).resolves.toMatchObject([enabledStatus]);
     expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBeUndefined();
   });
 });
 
 it("reads current memory predecessor lineage and retires the scoped runtime reader", async () => {
   await withOpenClawTestState({ label: "memory-policy-lineage" }, async (state) => {
-    const sessionKey = "agent:main:dashboard:incognito-lineage";
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-    const scope = { agentId: "main", sessionKey, storePath, env: state.env };
+    const { scope } = memoryPolicy(state, "lineage");
     const entry = {
       sessionId: "lineage",
       updatedAt: 1,
@@ -158,6 +153,90 @@ it("reads current memory predecessor lineage and retires the scoped runtime read
       expect(() => retainedRead?.()).toThrow("ownership changed");
       await upsertSessionEntryCore(scope, { previousSessionId: "predecessor-2" });
       expect(read()?.modelRef?.model).toBe("predecessor-2");
+    });
+  });
+});
+
+const optionalStatus = { sandboxed: false, sandboxRequired: false };
+const requiredStatus = { sandboxed: true, sandboxRequired: true };
+
+it("uses canonical classification identity in exact, batch, and context resolution", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const cfg = defaultConfig;
+    setRuntimeConfigSnapshot(cfg);
+    const optional = "agent:main:optional";
+    const required = "agent:main:required";
+    const classify = (sessionKey: string, classificationSessionKey?: string) =>
+      resolveSandboxRuntimeStatusAsync({ cfg, sessionKey, classificationSessionKey });
+    for (const sessionKey of [optional, required]) {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: sessionKey,
+          updatedAt: 1,
+          sandboxMode: "off",
+          ...(sessionKey === required ? { sandbox: "required" as const } : {}),
+        },
+      );
+    }
+    expect((await classify("optional")).sandboxed).toBe(false);
+    expect(await classify(optional, required)).toMatchObject(requiredStatus);
+    expect(await classify(required, optional)).toMatchObject(optionalStatus);
+    const [persisted] = await resolveSandboxRuntimeStatusesForPersistedSessions([
+      { cfg, agentId: "main", env: state.env, sessionKeys: [optional, required] },
+    ]);
+    expect(persisted).toMatchObject([optionalStatus, requiredStatus]);
+    const native = "agent:main:dashboard:incognito-batch";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: native },
+      { sessionId: "native", updatedAt: 1, sandbox: "required", sandboxMode: "off" },
+    );
+    await expect(
+      withSandboxRuntimeStatusesInWorker(
+        ["optional", required, native].map((sessionKey) => ({ cfg, agentId: "main", sessionKey })),
+        { env: state.env, cwd: state.workspaceDir, assertCurrent() {} },
+        identity,
+      ),
+    ).resolves.toMatchObject([optionalStatus, requiredStatus, requiredStatus]);
+    // An opted-out session must not start or prepare any sandbox backend.
+    await expect(
+      resolveSandboxContext({
+        config: cfg,
+        sessionKey: optional,
+        agentId: "main",
+        workspaceDir: state.workspaceDir,
+      }),
+    ).resolves.toBeNull();
+  });
+});
+
+it("classifies a trusted patch candidate without using the old row", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { sandbox: { mode: "all", workspaceAccess: "rw" } } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const sessionKey = "agent:main:candidate";
+    const prepared = (
+      preparedSessionEntry: NonNullable<SandboxRuntimeStatusParams["preparedSessionEntry"]> | null,
+    ) => resolvePreparedSandboxRuntimeStatus({ cfg, sessionKey, preparedSessionEntry });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      { sessionId: "candidate", updatedAt: 1 },
+    );
+    expect((await resolveSandboxRuntimeStatusAsync({ cfg, sessionKey })).sandboxed).toBe(true);
+    expect(prepared({ sandboxMode: "off" }).sandboxed).toBe(false);
+    expect(prepared(null).sandboxed).toBe(true);
+    expect(
+      prepared({
+        sandbox: "required",
+        sandboxMode: "off",
+        createdActor: { type: "human", source: "profile", id: "creator" },
+      }),
+    ).toMatchObject({
+      ...requiredStatus,
+      isolationSubject: { kind: "profile", profileId: "creator" },
+      workspaceAccess: "ro",
     });
   });
 });

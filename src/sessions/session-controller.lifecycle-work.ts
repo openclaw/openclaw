@@ -1,5 +1,6 @@
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { captureGatewayScopeMatcher } from "../gateway/session-runtime-scope.js";
+import { throwCollectedErrors, throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { hasGatewayContextOwner } from "../plugins/runtime/gateway-request-scope.js";
 import { sourceSettlements } from "./session-controller.context.js";
 import type {
@@ -21,12 +22,6 @@ import {
 import { abortSessionControllerInput } from "./session-controller.mailbox-source.js";
 import { ownerContext } from "./session-controller.owner-context.js";
 import { targetFrom, type TargetInput } from "./session-controller.target.js";
-
-function releaseEffects(effects: readonly Effect[]): Promise<void> | undefined {
-  return effects.length
-    ? Promise.all(effects.map((effect) => effect.ref.released)).then(() => undefined)
-    : undefined;
-}
 
 export type { CapturedSessionControllerEffect } from "./session-controller.contracts.js";
 
@@ -106,20 +101,6 @@ export function captureSessionWorkRunInterruptions(params: {
   });
 }
 
-/** @internal Exposed for unit tests only. */
-export function getSessionWorkAdmissionOwnerRelease(params: {
-  scope: string;
-  identities: Iterable<string | undefined>;
-  owner: symbol;
-  phase?: "acquired";
-}) {
-  return releaseEffects(
-    [...selectedEffects([targetFrom(params)])].filter(
-      (effect) => effect.owner === params.owner && (!params.phase || effect.phase === params.phase),
-    ),
-  );
-}
-
 export function getCompetingSessionWorkAdmissionRelease(params: {
   scope: string;
   identities: Iterable<string | undefined>;
@@ -128,30 +109,31 @@ export function getCompetingSessionWorkAdmissionRelease(params: {
   beforeClaim?: SessionControllerMailboxClaim;
 }) {
   const current = ownerContext.getStore();
-  return releaseEffects(
-    [...selectedEffects([targetFrom(params)])].filter((effect) => {
-      const input = effect.sourceInput;
-      const claim = params.beforeClaim;
-      // The selector already belongs to this claim. Unclaimed live sources on
-      // that mailbox can only run afterward; their preparation is not prior work.
-      if (
-        claim &&
-        input &&
-        input.mailbox === claim.mailbox &&
-        (claim.inputs.includes(input) ||
-          (!input.claim && !input.retirementRequested && input.phase !== "consumed"))
-      ) {
-        return false;
-      }
-      return (
-        !current?.effects.has(effect) &&
-        (params.owner === undefined || effect.owner === params.owner) &&
-        (!params.excludePendingOwner ||
-          effect.owner !== params.excludePendingOwner ||
-          effect.phase === "acquired")
-      );
-    }),
-  );
+  const effects = [...selectedEffects([targetFrom(params)])].filter((effect) => {
+    const input = effect.sourceInput;
+    const claim = params.beforeClaim;
+    // The selector already belongs to this claim. Unclaimed live sources on
+    // that mailbox can only run afterward; their preparation is not prior work.
+    if (
+      claim &&
+      input &&
+      input.mailbox === claim.mailbox &&
+      (claim.inputs.includes(input) ||
+        (!input.claim && !input.retirementRequested && input.phase !== "consumed"))
+    ) {
+      return false;
+    }
+    return (
+      !current?.effects.has(effect) &&
+      (params.owner === undefined || effect.owner === params.owner) &&
+      (!params.excludePendingOwner ||
+        effect.owner !== params.excludePendingOwner ||
+        effect.phase === "acquired")
+    );
+  });
+  return effects.length
+    ? Promise.all(effects.map((effect) => effect.ref.released)).then(() => undefined)
+    : undefined;
 }
 
 export function getTerminalSessionWorkAdmissionRelease(params: {
@@ -196,16 +178,22 @@ export function captureGatewaySessionWorkAdmissionInterruption(
         }
       });
       return {
+        inspectPending: () => {
+          const pending = effects.filter((effect) => effect.phase !== "released");
+          const first = pending[0];
+          return {
+            effects: pending.length,
+            phase: first?.phase,
+            sessionKey: first?.ref.target.sessionKey,
+            runId: first ? getSessionEffectRun(first)?.runId : undefined,
+            interrupted: first ? Boolean(first.interrupted) : undefined,
+            sourcePhase: first?.sourceInput?.phase,
+            operationPhase: first?.ref.operation?.phase,
+            settling: first?.isSettling?.(),
+          };
+        },
         released: Promise.allSettled(cancellations).then((results) => {
-          const failures = results.flatMap((result) =>
-            result.status === "rejected" ? [result.reason] : [],
-          );
-          if (failures.length === 1) {
-            throw failures[0];
-          }
-          if (failures.length) {
-            throw new AggregateError(failures, "Gateway effect interruption failed");
-          }
+          throwIfSettledRejected(results, "Gateway effect interruption failed");
         }),
       };
     },
@@ -331,12 +319,7 @@ export function startSessionControllerInterruption(
         (settlement) => settlement !== params.deferSourceSettlement?.settlement.promise,
       ),
     ).then(() => {
-      if (failures.length === 1) {
-        throw failures[0];
-      }
-      if (failures.length) {
-        throw new AggregateError(failures, "Session interruption failed");
-      }
+      throwCollectedErrors(failures, "Session interruption failed");
     }),
   };
 }

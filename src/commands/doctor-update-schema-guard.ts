@@ -583,6 +583,8 @@ async function rehearseDeferredUpdateDoctorSchemaForParent(
   let resourceWarnings: import("../plugins/doctor-contract-module.js").PluginDoctorMigrationBackupWarning[] =
     [];
   try {
+    // Schema-only legacy admission retains its shipped isolated layout.
+    await rehearsal.prepareRuntime(assertParent);
     const env = { ...rehearsal.env, OPENCLAW_UPDATE_IN_PROGRESS: "0" };
     const { inspectPreparedDoctorRehearsal } =
       await import("./doctor-update-rehearsal-inventory.js");

@@ -78,7 +78,7 @@ export function createWorkerEnvironmentSessionAttachments(
     prepared.current.entry?.sessionId === identity.sessionId &&
     prepared.current.entry.incognito !== true &&
     prepared.current.entry.lifecycleRevision === identity.sessionLifecycleRevision;
-  // Runtime retry budgets reset on restart; the durable lease remains owned throughout.
+  // Retry counts are process-local; the automatic deadline follows the durable stop request.
   const cleanupRetries = new Map<
     string,
     {
@@ -139,7 +139,7 @@ export function createWorkerEnvironmentSessionAttachments(
       const retry = (!explicit && previous) || {
         ownerEpoch: record.ownerEpoch,
         leaseId: record.leaseId,
-        startedAtMs: options.now(),
+        startedAtMs: explicit ? options.now() : (record.destroyRequestedAtMs ?? options.now()),
         attempts: 0,
         nextAttemptAtMs: 0,
         lastError: "",

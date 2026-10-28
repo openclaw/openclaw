@@ -1,7 +1,9 @@
 // E2E: the shipped Gateway process bounds requester wakes restored from SQLite.
+import { once } from "node:events";
 import type { ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionsRecoverResult } from "../packages/gateway-protocol/src/index.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
@@ -16,13 +18,22 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../src/config/runtime-snapshot.js";
-import { loadSessionEntry, replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  persistSessionTranscriptTurn,
+  replaceSessionEntry,
+} from "../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { readUserTurnCompletionForTest } from "../src/gateway/pending-input-commit.test-support.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
-import { redactSensitiveText } from "../src/logging/redact.js";
+import { disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
+import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { extractAssistantPhaseText } from "../src/shared/chat-message-content.js";
 import type { Deferred } from "../src/shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import { connectProofClient, readRequestText } from "./helpers/gateway-integration-fixtures.js";
+import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
@@ -38,6 +49,10 @@ import { withSubagentRecoveryOperator } from "./helpers/subagent-recovery-operat
 
 const PROBE_MARKER = "restored wake ordering probe";
 const RESTORED_WAKE_MARKER = "Every subagent in this batch has now settled";
+const TOMBSTONED_CHILD_RESULT = "The retained child found exactly seven synthetic records.";
+const TOMBSTONED_RECOVERY_CYCLE = "tombstoned-requester-cycle";
+// Resume leaves the retained cohort to the 60s production sweep, then Gateway/model admission.
+const POST_RESUME_SETTLEMENT_TIMEOUT_MS = 60_000 + 30_000;
 
 type HeldModelServer = Awaited<ReturnType<typeof startHeldModelServer>>;
 
@@ -62,6 +77,156 @@ afterEach(async () => {
 });
 
 describe("Gateway restored requester settlement", () => {
+  it.skipIf(process.platform === "win32")(
+    "retains a tombstoned parent's completion across boots until an authorized in-place Resume",
+    { timeout: 240_000 },
+    async ({ signal }) => {
+      const { modelServer, instance } = await setupGateway(
+        "gateway-tombstoned-requester-settle",
+        {},
+        { signal, gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS },
+      );
+      instance.env.OPENCLAW_NO_RESPAWN = "1";
+      await seedRestoredRequesters(instance, 1, { tombstoned: true });
+      const sessionKey = "agent:main:gateway-restored-requester-0";
+      const runId = "run-gateway-restored-settle-0";
+      const scope = { agentId: "main", sessionKey };
+      const original = expectDefined(loadSessionEntryReadOnly(scope), "seeded requester");
+      closeOpenClawStateDatabaseForTest();
+      await instance.startGateway();
+      const connect = () =>
+        connectProofClient(instance, {
+          scopes: ["operator.read", "operator.write"],
+          signal,
+        });
+      let client = await connect();
+      const session = async () =>
+        (
+          await client.request<SessionsListResult>("sessions.list", { agentId: "main" })
+        ).sessions.find((row) => row.key === sessionKey);
+      const history = async () =>
+        (await client.request<{ messages: unknown[] }>("chat.history", { sessionKey })).messages;
+      const resumeNotices = (messages: unknown[]) =>
+        messages.filter((message) =>
+          extractAssistantPhaseText(message)?.includes(
+            "Its result is saved. Use Resume in WebChat to continue in this session.",
+          ),
+        );
+      const restart = async (settledRunId?: string) => {
+        await disconnectGatewayClient(client);
+        const process = expectDefined(instance.child, "running Gateway process");
+        const closed = once(process, "close", { signal });
+        expect(
+          writeGatewayRestartIntentSync({
+            env: instance.env,
+            targetPid: process.pid!,
+            intent: { reason: "gateway.restart", force: true, waitMs: 100 },
+          }),
+        ).toBe(true);
+        expect(process.kill("SIGTERM")).toBe(true);
+        expect(await closed, instance.logs()).toEqual([0, null]);
+        try {
+          const retained = loadSubagentRegistryFromSqlite().get(runId);
+          expect(retained?.completion?.resultText).toBe(TOMBSTONED_CHILD_RESULT);
+          expect(loadSessionEntryReadOnly(scope)).toMatchObject({
+            sessionId: original.sessionId,
+            lifecycleRevision: original.lifecycleRevision,
+          });
+          if (settledRunId) {
+            expect(retained?.requesterSettleWake).toBeUndefined();
+            expect(loadSessionEntryReadOnly(scope)?.lastRunId).toBe(settledRunId);
+            expect(
+              await readUserTurnCompletionForTest(
+                { ...scope, sessionId: original.sessionId },
+                settledRunId,
+              ),
+            ).toMatchObject({
+              run_id: settledRunId,
+              outcome: { status: "ok", reason: "completed" },
+            });
+          } else {
+            expect(retained?.requesterSettleWake?.batchRunIds).toEqual([runId]);
+            expect(loadSessionEntryReadOnly(scope)?.mainRestartRecovery?.tombstone).toBeDefined();
+          }
+        } finally {
+          closeOpenClawStateDatabaseForTest();
+        }
+        await instance.startGateway();
+        client = await connect();
+      };
+      try {
+        await vi.waitFor(async () => expect(resumeNotices(await history())).toHaveLength(1), {
+          timeout: 30_000,
+        });
+        expect(modelServer.requestCount(), instance.logs()).toBe(0);
+        await restart();
+        expect(await session()).toMatchObject({
+          sessionId: original.sessionId,
+          hasActiveRun: false,
+          restartRecoveryStatus: "tombstoned",
+        });
+        expect(resumeNotices(await history())).toHaveLength(1);
+        expect(modelServer.requestCount(), instance.logs()).toBe(0);
+
+        const recovered = await client.request<SessionsRecoverResult>("sessions.recover", {
+          key: sessionKey,
+          mode: "in-place",
+          sessionId: original.sessionId,
+          recoveryCycleId: TOMBSTONED_RECOVERY_CYCLE,
+        });
+        expect(recovered).toMatchObject({
+          key: sessionKey,
+          sessionId: original.sessionId,
+          continuation: { status: "started" },
+        });
+        if (recovered.continuation.status !== "started") {
+          throw new Error("In-place recovery did not start");
+        }
+        await vi.waitFor(() => expect(modelServer.requestCount()).toBe(1), { timeout: 30_000 });
+        modelServer.release(0);
+        await vi.waitFor(
+          () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(1),
+          { timeout: POST_RESUME_SETTLEMENT_TIMEOUT_MS },
+        );
+        expect(modelServer.requestCount()).toBe(2);
+        // Resume also sees pending child facts; only the settlement turn consumes the result.
+        expect(modelServer.requestBody(1)).toContain(RESTORED_WAKE_MARKER);
+        expect(modelServer.requestBody(1)).toContain(TOMBSTONED_CHILD_RESULT);
+        modelServer.release(1);
+        await vi.waitFor(
+          async () =>
+            expect(await session()).toMatchObject({ status: "done", hasActiveRun: false }),
+          { timeout: 30_000 },
+        );
+        const completedRunId = expectDefined(
+          (await session())?.lastRunId,
+          "completed settlement run",
+        );
+        expect(completedRunId).not.toBe(recovered.continuation.runId);
+        const privateReplies = (messages: unknown[]) =>
+          messages.filter(
+            (message) => extractAssistantPhaseText(message) === "restored requester response 1",
+          );
+        // Parent-only consumption has a durable processing receipt, not a public assistant reply.
+        expect(privateReplies(await history())).toHaveLength(0);
+        await restart(completedRunId);
+        expect(await session()).toMatchObject({
+          sessionId: original.sessionId,
+          lastRunId: completedRunId,
+          status: "done",
+          hasActiveRun: false,
+        });
+        expect(privateReplies(await history())).toHaveLength(0);
+        expect(resumeNotices(await history())).toHaveLength(1);
+        expect(modelServer.requestCount(), instance.logs()).toBe(2);
+      } finally {
+        await disconnectGatewayClient(client);
+        modelServer.releaseAll();
+        await instance.stopGateway();
+      }
+    },
+  );
+
   it.each(["final", "runtime timeout", "stop"] as const)(
     "keeps restored completion execution under the normal runtime budget: %s",
     { timeout: 180_000 },
@@ -74,17 +239,14 @@ describe("Gateway restored requester settlement", () => {
       // The final case also resumes a retained yielded fence and then admits a user follow-up.
       await seedRestoredRequesters(instance, 1, { yieldedFence: outcome === "final" });
       await instance.startGateway();
-      const client = await connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
-      });
+      const client = await connectProofClient(instance);
       const sessionKey = "agent:main:gateway-restored-requester-0";
       const session = async () =>
         (
           await client.request<SessionsListResult>("sessions.list", { agentId: "main" })
         ).sessions.find((row) => row.key === sessionKey);
       try {
-        await waitForGateway(instance, () => expect(modelServer.requestCount()).toBe(1));
+        await vi.waitFor(() => expect(modelServer.requestCount()).toBe(1), { timeout: 30_000 });
         await expect(session()).resolves.toMatchObject({ status: "running", hasActiveRun: true });
         // This elapsed wait is the regression itself: the real model socket must
         // remain open beyond the announcement budget, without a new sender turn.
@@ -159,36 +321,48 @@ describe("Gateway restored requester settlement", () => {
   );
 
   it(
-    "runs at most two restored wakes while leaving the third queued",
+    "admits every restored wake once earlier wakes are accepted, without delaying live turns",
     { timeout: 180_000 },
     async () => {
       const { modelServer, instance } = await setupGateway("gateway-restored-requester-settle");
       await seedRestoredRequesters(instance, 3);
 
       await instance.startGateway();
-      await waitForGateway(
-        instance,
-        () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(2),
-        20,
+      // The two-slot budget covers preparation only; accepted wakes keep their model turns open.
+      await vi.waitFor(
+        () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(3),
+        { timeout: 30_000, interval: 20 },
       );
-      expect(modelServer.active(), instance.logs()).toBe(2);
-      expect(modelServer.peakRestored(), instance.logs()).toBe(2);
+      expect(modelServer.active(), instance.logs()).toBe(3);
 
       const probe = instance.cli(["agent", "--message", PROBE_MARKER, "--json"]);
       await vi.waitFor(() => expect(modelServer.countRequestsContaining(PROBE_MARKER)).toBe(1), {
         interval: 20,
         timeout: 30_000,
       });
-      expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(2);
-
-      modelServer.release(0);
-      await vi.waitFor(
-        () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(3),
-        { interval: 20, timeout: 30_000 },
-      );
-      expect(modelServer.peakRestored(), instance.logs()).toBe(2);
       modelServer.releaseAll();
       await expect(probe).resolves.toMatchObject({ code: 0 });
+      const client = await connectProofClient(instance);
+      try {
+        await vi.waitFor(
+          async () => {
+            const { sessions } = await client.request<SessionsListResult>("sessions.list", {
+              agentId: "main",
+            });
+            for (const index of [0, 1, 2]) {
+              expect(
+                sessions.find(
+                  (row) => row.key === `agent:main:gateway-restored-requester-${index}`,
+                ),
+              ).toMatchObject({ status: "done", hasActiveRun: false });
+            }
+          },
+          { timeout: 30_000 },
+        );
+        expect(modelServer.requestCount(), instance.logs()).toBe(4);
+      } finally {
+        await disconnectGatewayClient(client);
+      }
     },
   );
 });
@@ -196,6 +370,10 @@ describe("Gateway restored requester settlement", () => {
 async function setupGateway(
   name: string,
   defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> = {},
+  processOptions: Pick<
+    Parameters<typeof createOpenClawTestInstance>[0],
+    "signal" | "gracefulShutdownTimeoutMs"
+  > = {},
 ) {
   const modelServer = await startHeldModelServer();
   modelServers.push(modelServer);
@@ -209,6 +387,7 @@ async function setupGateway(
   config.plugins = { enabled: false };
   Object.assign(config.agents!.defaults!, { maxConcurrent: 8 }, defaults);
   const instance = await createOpenClawTestInstance({
+    ...processOptions,
     name,
     config,
     env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
@@ -217,39 +396,10 @@ async function setupGateway(
   return { modelServer, instance };
 }
 
-async function waitForGateway(
-  instance: OpenClawTestInstance,
-  assertion: () => void,
-  interval?: number,
-) {
-  await vi.waitFor(assertion, { timeout: 30_000, interval }).catch((error: unknown) => {
-    const readiness = instance.readiness.map(
-      ({ outcome, elapsedMs, attempts, lastProbe, child }) => ({
-        outcome,
-        elapsedMs,
-        attempts,
-        lastProbe,
-        child,
-      }),
-    );
-    // Snapshot the existing bounded child buffers before normal fixture cleanup removes state.
-    let diagnostic = redactSensitiveText(
-      `${instance.name}\n${JSON.stringify({ readiness })}\n${instance.logs()}`,
-      { mode: "tools" },
-    );
-    for (const token of [instance.gatewayToken, instance.hookToken]) {
-      if (token) {
-        diagnostic = diagnostic.replaceAll(token, "[fixture token]");
-      }
-    }
-    throw new Error(diagnostic, { cause: error });
-  });
-}
-
 async function seedRestoredRequesters(
   instance: OpenClawTestInstance,
   count: number,
-  options: { yieldedFence?: boolean } = {},
+  options: { yieldedFence?: boolean; tombstoned?: boolean } = {},
 ) {
   instance.state.applyEnv();
   const gatewayConfig = loadConfig();
@@ -269,7 +419,12 @@ async function seedRestoredRequesters(
           const requesterSessionKey = `agent:main:${requesterName}`;
           const requesterTurnRunId = `yielded-${runId}`;
           const childSessionKey = `agent:main:subagent:gateway-restored-settle-${index}`;
-          const storePath = await writeChildSession(stateDir, requesterSessionKey, requesterName);
+          const storePath = await writeChildSession(
+            stateDir,
+            requesterSessionKey,
+            requesterName,
+            options.tombstoned ? `tombstoned-requester-lifecycle-${index}` : undefined,
+          );
           if (options.yieldedFence) {
             await replaceSessionEntry(
               { storePath, sessionKey: requesterSessionKey },
@@ -294,6 +449,46 @@ async function seedRestoredRequesters(
             loadSessionEntry({ agentId: "main", sessionKey: requesterSessionKey }),
             "restored requester session",
           );
+          if (options.tombstoned) {
+            // Start from the observed durable failure; creation of the authority mismatch is separate proof.
+            await replaceSessionEntry(
+              { storePath, sessionKey: requesterSessionKey },
+              {
+                ...requester,
+                status: "failed",
+                abortedLastRun: false,
+                mainRestartRecovery: {
+                  cycleId: TOMBSTONED_RECOVERY_CYCLE,
+                  revision: 4,
+                  chargedAttempts: 3,
+                  tombstone: {
+                    reason: "Restart recovery requester has no matching operator authority.",
+                  },
+                },
+              },
+            );
+            await persistSessionTranscriptTurn(
+              {
+                agentId: "main",
+                storePath,
+                sessionKey: requesterSessionKey,
+                sessionId: requester.sessionId,
+              },
+              {
+                cwd: instance.state.workspaceDir,
+                updateMode: "none",
+                messages: [
+                  {
+                    message: {
+                      role: "user",
+                      content: "Wait for the child result and report the synthetic record count.",
+                      timestamp: Date.now(),
+                    },
+                  },
+                ],
+              },
+            );
+          }
           // Admission captures the exact requester and operator source before the process restart.
           await registry.registerSubagentRun({
             runId,
@@ -327,6 +522,7 @@ async function seedRestoredRequesters(
           const endedAt = Date.now();
           restoredRuns.set(runId, {
             ...registered,
+            ...(options.tombstoned ? { completionTarget: "parent" as const } : {}),
             requesterTurnRunId: undefined,
             endedReason: "subagent-complete",
             execution: {
@@ -336,8 +532,14 @@ async function seedRestoredRequesters(
               endedAt,
               outcome: { status: "ok" },
             },
-            completion: { required: true, resultText: "done", capturedAt: endedAt },
-            delivery: { status: "delivered", deliveredAt: endedAt },
+            completion: {
+              required: true,
+              resultText: options.tombstoned ? TOMBSTONED_CHILD_RESULT : "done",
+              capturedAt: endedAt,
+            },
+            delivery: options.tombstoned
+              ? { status: "pending" }
+              : { status: "delivered", deliveredAt: endedAt },
             cleanupHandled: true,
             cleanupCompletedAt: endedAt,
             requesterSettleWake: {
@@ -370,25 +572,15 @@ async function startHeldModelServer() {
     startedAt: number;
   }[] = [];
   let active = 0;
-  let activeRestored = 0;
-  let peakRestored = 0;
   const server = await startOpenAiResponsesModelServer({
     modelId: "restored-settle",
     bindError: "restored requester model server did not bind",
     onRequest: async (request, response) => {
-      let body = "";
-      for await (const chunk of request) {
-        body += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-      }
+      const body = await readRequestText(request);
       const index = requests.length;
       const release = createDeferred();
       requests.push({ release, body, response, startedAt: Date.now() });
       active += 1;
-      const isRestored = body.includes(RESTORED_WAKE_MARKER);
-      if (isRestored) {
-        activeRestored += 1;
-        peakRestored = Math.max(peakRestored, activeRestored);
-      }
       try {
         await release.promise;
         if (!response.destroyed) {
@@ -400,9 +592,6 @@ async function startHeldModelServer() {
         }
       } finally {
         active -= 1;
-        if (isRestored) {
-          activeRestored -= 1;
-        }
       }
     },
   });
@@ -413,10 +602,10 @@ async function startHeldModelServer() {
     requestAgeMs: (index: number) => Date.now() - (requests[index]?.startedAt ?? Date.now()),
     countRequestsContaining: (marker: string) =>
       requests.filter(({ body }) => body.includes(marker)).length,
-    peakRestored: () => peakRestored,
     release: (index: number) => requests[index]?.release.resolve(undefined),
     releaseAll,
     requestCount: () => requests.length,
+    requestBody: (index: number) => requests[index]?.body,
     url: server.baseUrl,
     close: async () => {
       releaseAll();

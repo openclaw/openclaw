@@ -74,7 +74,7 @@ jobs:
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.x"
+          node-version: "24.22.1"
 
       - name: Clone publish repo
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''

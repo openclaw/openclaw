@@ -27,6 +27,20 @@ export function observeAttemptProjectionReady() {
   return () => activated.promise.then((turn) => turn.ready);
 }
 
+export function expectResumeRequest(
+  requests: Array<{ method: string; params: unknown }>,
+  params: Record<string, unknown>,
+) {
+  const request = requests.find((entry) => entry.method === "thread/resume");
+  if (!request) {
+    throw new Error("Expected thread/resume request");
+  }
+  const requestParams = request.params as Record<string, unknown> | undefined;
+  for (const [key, value] of Object.entries(params)) {
+    expect(requestParams?.[key]).toEqual(value);
+  }
+}
+
 export async function expectRetainedSuccessfulThread(
   client: CodexAppServerClient,
   threadId: string,

@@ -13,7 +13,18 @@ import type { DiffReadTiming } from "./diff-read-timing.js";
 import type { GitCommandBytesResult, GitCommandOptions } from "./git-exec.js";
 import type { GitReadOperations } from "./git-read-operations.js";
 
-export type GitWorkerOperations = Omit<GitReadOperations, "pull-request.branch-facts"> & {
+export type GitWorkerOperations = Omit<
+  GitReadOperations,
+  "pull-request.branch-facts" | "checkout.diff"
+> & {
+  "checkout.diff": {
+    input: GitReadOperations["checkout.diff"]["input"] & {
+      cleanWorktree?: NonNullable<
+        GitReadOperations["checkout.revision"]["output"]
+      >["cleanWorktree"];
+    };
+    output: GitReadOperations["checkout.diff"]["output"];
+  };
   "pull-request.branch-comparison": {
     input: Omit<GitReadOperations["pull-request.branch-facts"]["input"], "refreshIndex">;
     output: {

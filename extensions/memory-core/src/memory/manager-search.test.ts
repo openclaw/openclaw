@@ -9,6 +9,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function searchBodyAndPath(db: DatabaseSync, query: string, ftsTokenizer: "unicode61" | "trigram") {
+  const options = {
+    query,
+    ftsTokenizer,
+    limit: 10,
+    snippetMaxChars: 200,
+    sourceFilter: { sql: "", params: [] },
+  };
+  return searchKeywordWithFallback({
+    db,
+    body: { ...options, ftsTable: "memory_index_chunks_fts" },
+    path: { ...options, pathFtsTable: "memory_index_paths_fts" },
+  });
+}
+
 function supportsFts(ftsTokenizer: "unicode61" | "trigram" = "unicode61"): boolean {
   const { db, schema } = createMemorySearchDb({ ftsTokenizer });
   try {
@@ -173,20 +188,7 @@ it.each(["unicode61", "trigram"] as const)(
       insertKeywordFixture(db, row);
     }
     const prepare = vi.spyOn(db, "prepare");
-    const search = (query: string) => {
-      const options = {
-        query,
-        ftsTokenizer,
-        limit: 10,
-        snippetMaxChars: 200,
-        sourceFilter: { sql: "", params: [] },
-      };
-      return searchKeywordWithFallback({
-        db,
-        body: { ...options, ftsTable: "memory_index_chunks_fts" },
-        path: { ...options, pathFtsTable: "memory_index_paths_fts" },
-      });
-    };
+    const search = (query: string) => searchBodyAndPath(db, query, ftsTokenizer);
     const bodyQueries = () =>
       prepare.mock.calls.filter(([sql]) => /FROM memory_index_chunks_fts\b/.test(sql)).length;
 
@@ -223,25 +225,7 @@ describe("searchKeywordWithFallback statement reuse", () => {
         return db;
       };
       const search = (db: DatabaseSync, query: string) =>
-        searchKeywordWithFallback({
-          db,
-          body: {
-            query,
-            ftsTokenizer,
-            ftsTable: "memory_index_chunks_fts",
-            limit: 10,
-            snippetMaxChars: 200,
-            sourceFilter: { sql: "", params: [] },
-          },
-          path: {
-            query,
-            ftsTokenizer,
-            pathFtsTable: "memory_index_paths_fts",
-            limit: 10,
-            snippetMaxChars: 200,
-            sourceFilter: { sql: "", params: [] },
-          },
-        });
+        searchBodyAndPath(db, query, ftsTokenizer);
       const queries = ["alpha beta", "beta.md", "café"] as const;
       const db = createDb();
       try {

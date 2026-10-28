@@ -17,7 +17,8 @@
 }
 
 .session-hovercard__section--metadata,
-.session-hovercard__section--prs {
+.session-hovercard__section--prs,
+.session-hovercard__error {
   padding-block: 0 11px;
 }
 
@@ -26,6 +27,7 @@
 }
 
 .session-hovercard__automation-link {
+  padding-block: var(--space-1);
   border-radius: var(--radius-sm);
   color: inherit;
   text-decoration: none;
@@ -34,7 +36,6 @@
 .session-hovercard__automation-link:is(:hover, :focus-visible) {
   color: var(--text);
   background: var(--bg-hover);
-  text-decoration: underline;
 }
 
 .session-hovercard__header {
@@ -110,7 +111,10 @@
   padding: 3px 8px 3px 3px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 58%, transparent);
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--panel-strong) 72%, transparent);
+  background: var(
+    --session-hovercard-attribution-surface,
+    color-mix(in srgb, var(--panel-strong) 72%, transparent)
+  );
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   line-height: 1.35;
@@ -269,7 +273,7 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__context-icon {
   align-self: center;
-  color: var(--muted);
+  color: var(--icon-decorative, var(--muted));
 }
 
 .session-hovercard__context-icon svg,

@@ -6,6 +6,7 @@ import { waitForCommandSpawn } from "../../process/exec-spawn.js";
 import { createCommandTerminationController } from "../../process/exec-termination.js";
 import { spawnCommand } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { scheduleAbsoluteDeadline } from "../../utils/absolute-deadline.js";
 
 const DEFAULT_OUTPUT_LIMIT_CHARS = 16 * 1024 * 1024;
 const FORCE_KILL_GRACE_MS = 5000;
@@ -79,7 +80,7 @@ export async function execCommand(
   let acceptingOutput = true;
   let killed = false;
   let terminationStarted = false;
-  let timeoutId: NodeJS.Timeout | undefined;
+  let cancelDeadline: (() => void) | undefined;
   let terminationController: ReturnType<typeof createCommandTerminationController> | undefined;
   const killProcess = () => {
     killed = true;
@@ -109,7 +110,11 @@ export async function execCommand(
     });
     options?.signal?.addEventListener("abort", killProcess, { once: true });
     if (options?.timeout && options.timeout > 0) {
-      timeoutId = setTimeout(killProcess, options.timeout);
+      cancelDeadline = scheduleAbsoluteDeadline(
+        performance.now() + options.timeout,
+        killProcess,
+        () => performance.now(),
+      );
     }
     // Retain process cleanup after a canceled startup has returned to its caller.
     const completion = (async () => {
@@ -182,7 +187,7 @@ export async function execCommand(
           () => 1,
         );
         settled = true;
-        clearTimeout(timeoutId);
+        cancelDeadline?.();
         options?.signal?.removeEventListener("abort", killProcess);
         const cleanup = await termination.settle();
         for (const stream of ["stdout", "stderr"] as const) {
@@ -219,7 +224,7 @@ export async function execCommand(
     return await Promise.race([completion, startupCanceled.promise]);
   } finally {
     acceptingOutput = false;
-    clearTimeout(timeoutId);
+    cancelDeadline?.();
     options?.signal?.removeEventListener("abort", killProcess);
   }
 }

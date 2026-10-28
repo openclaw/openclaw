@@ -1,67 +1,86 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { StoredMention } from "./mention-inbox-projection.js";
+import { formatMentionSessionTitle } from "./mention-inbox-presentation.js";
+import { mentionTargetKey, type StoredMention } from "./mention-inbox-projection.js";
 import { MAX_MENTION_SOURCES } from "./mention-inbox-store.js";
 import type { SessionSharingTarget } from "./session-sharing-policy.js";
 import { prepareSessionSharingRead } from "./session-sharing-target-read.js";
 import { resolveSessionSharingTargetAsync } from "./session-sharing.js";
 
-type SharingTargets = Map<
-  string,
-  {
-    sessionKey: string;
-    aliases: Set<string>;
-    target: SessionSharingTarget;
-    facts: Awaited<ReturnType<typeof prepareSessionSharingRead>>;
-  }
->;
+type PreparedTarget = {
+  sessionKey: string;
+  aliases: Set<string>;
+  target: SessionSharingTarget;
+  sessionTitle: string;
+  facts: Awaited<ReturnType<typeof prepareSessionSharingRead>>;
+};
 
 /** One bounded set of retained sharing facts for the Inbox's current view. */
 export function createMentionTargetCache(params: {
   getRuntimeConfig: () => OpenClawConfig;
   readItems: () => Iterable<StoredMention>;
 }) {
-  const connectedTargets: SharingTargets = new Map();
+  const connectedTargets = new Map<string, PreparedTarget>();
   const targetAliases = new Map<string, string>();
 
-  function readTarget(sessionKey: string, agentId?: string): SessionSharingTarget | null {
-    const key = JSON.stringify([agentId, sessionKey]);
+  function readTarget(key: string): PreparedTarget | null {
     const prepared = connectedTargets.get(targetAliases.get(key) ?? key);
     if (!prepared) {
       return null;
     }
     try {
       const current = prepared.facts.readCurrent(params.getRuntimeConfig()).target;
-      return current
-        ? { ...prepared.target, ...current, entry: { ...prepared.target.entry, ...current.entry } }
-        : null;
+      if (!current) {
+        return null;
+      }
+      prepared.target = current;
+      return prepared;
     } catch {
       return null;
     }
   }
 
-  async function prepareTarget(sessionKey: string, agentId?: string): Promise<void> {
-    const key = JSON.stringify([agentId, sessionKey]);
-    if (readTarget(sessionKey, agentId)) {
+  function prepareTarget(
+    sessionKey: string,
+    agentId?: string,
+    key = mentionTargetKey(sessionKey, agentId),
+  ): Promise<void> | void {
+    if (readTarget(key)) {
       return;
     }
+    return prepareMissingTarget(sessionKey, agentId, key);
+  }
+
+  async function prepareMissingTarget(
+    sessionKey: string,
+    agentId: string | undefined,
+    key: string,
+  ) {
     removeTarget(targetAliases.get(key) ?? key);
     const cfg = params.getRuntimeConfig();
     const target = await resolveSessionSharingTargetAsync({ cfg, sessionKey, agentId });
     if (!target) {
       return;
     }
-    const canonicalKey = JSON.stringify([target.agentId, target.canonicalKey]);
-    if (readTarget(target.canonicalKey, target.agentId)) {
+    const canonicalKey = mentionTargetKey(target.canonicalKey, target.agentId);
+    const existing = readTarget(canonicalKey);
+    if (existing) {
       targetAliases.set(key, canonicalKey);
-      connectedTargets.get(canonicalKey)!.aliases.add(key);
+      existing.aliases.add(key);
       return;
     }
     removeTarget(canonicalKey);
     if (connectedTargets.size >= MAX_MENTION_SOURCES) {
-      pruneTargets(key);
+      pruneTargets();
     }
     const facts = await prepareSessionSharingRead({ cfg, sessionKey, agentId: target.agentId });
-    const prepared = { sessionKey, target, facts, aliases: new Set([key]) };
+    // Sharing facts omit display fields; row publications invalidate this prepared title.
+    const prepared = {
+      sessionKey,
+      target,
+      sessionTitle: formatMentionSessionTitle(target.entry),
+      facts,
+      aliases: new Set([key]),
+    };
     connectedTargets.set(canonicalKey, prepared);
     targetAliases.set(key, canonicalKey);
   }
@@ -69,7 +88,10 @@ export function createMentionTargetCache(params: {
   async function prepareTargets(): Promise<void> {
     for (const item of params.readItems()) {
       const { sessionKey, agentId } = item.message.content;
-      await prepareTarget(sessionKey, agentId);
+      const pending = prepareTarget(sessionKey, agentId, item.targetKey);
+      if (pending) {
+        await pending;
+      }
     }
   }
 
@@ -85,15 +107,10 @@ export function createMentionTargetCache(params: {
     }
   }
 
-  function pruneTargets(additionalKey?: string): void {
+  function pruneTargets(): void {
     const retained = new Set<string>();
     for (const item of params.readItems()) {
-      const { agentId, sessionKey } = item.message.content;
-      const key = JSON.stringify([agentId, sessionKey]);
-      retained.add(targetAliases.get(key) ?? key);
-    }
-    if (additionalKey) {
-      retained.add(targetAliases.get(additionalKey) ?? additionalKey);
+      retained.add(targetAliases.get(item.targetKey) ?? item.targetKey);
     }
     // The view owns its complete source set; aliases never consume another source slot.
     for (const key of connectedTargets.keys()) {
@@ -113,7 +130,7 @@ export function createMentionTargetCache(params: {
       return;
     }
     for (const [key, cached] of connectedTargets) {
-      if (cached.sessionKey === sessionKey || cached.target?.storeKeys.includes(sessionKey)) {
+      if (cached.sessionKey === sessionKey || cached.target.storeKeys.includes(sessionKey)) {
         removeTarget(key);
       }
     }

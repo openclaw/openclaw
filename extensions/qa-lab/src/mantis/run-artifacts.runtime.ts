@@ -15,7 +15,6 @@ type NormalizedScenarioSummary = {
   details?: string;
   screenshotPath?: string;
   status: string;
-  summaryPath: string;
   videoPath?: string;
 };
 
@@ -24,7 +23,6 @@ export type LaneResult = {
   scenarioDetails?: string;
   screenshotPath?: string;
   status: string;
-  summaryPath: string;
   videoPath?: string;
 };
 
@@ -34,19 +32,19 @@ export type MantisRunStaging = {
 };
 
 const MANTIS_STABLE_ENTRIES = [
-  { kind: "directory", path: "baseline" },
-  { kind: "directory", path: "candidate" },
-  { kind: "file", path: "comparison.json" },
-  { kind: "file", path: "mantis-report.md" },
-  { kind: "file", path: "mantis-evidence.json" },
+  "baseline",
+  "candidate",
+  "comparison.json",
+  "mantis-report.md",
+  "mantis-evidence.json",
 ] as const;
 
 type MantisOutputRoot = Pick<
   Awaited<ReturnType<typeof root>>,
-  "exists" | "mkdir" | "move" | "remove" | "stat"
+  "exists" | "mkdir" | "move" | "remove"
 >;
 
-async function removeMantisOutputTree(
+export async function removeMantisOutputTree(
   outputRoot: MantisOutputRoot,
   relativePath: string,
 ): Promise<void> {
@@ -57,40 +55,6 @@ async function removeMantisOutputTree(
     maxEntries: Infinity,
     maxDepth: Infinity,
   });
-}
-
-export async function createMantisRunStaging(params: {
-  outputDir: string;
-  outputRoot: MantisOutputRoot;
-  runId: string;
-}): Promise<MantisRunStaging> {
-  const relative = `.mantis-staged-${params.runId}`;
-  await params.outputRoot.mkdir(relative);
-  return { dir: path.join(params.outputDir, relative), relative };
-}
-
-export async function removeMantisRunStaging(params: {
-  outputRoot: MantisOutputRoot;
-  staging: MantisRunStaging;
-}): Promise<void> {
-  await removeMantisOutputTree(params.outputRoot, params.staging.relative);
-}
-
-async function validateMantisStagedOutput(params: {
-  outputRoot: MantisOutputRoot;
-  staging: MantisRunStaging;
-}): Promise<void> {
-  for (const entry of MANTIS_STABLE_ENTRIES) {
-    const source = await params.outputRoot.stat(
-      path.posix.join(params.staging.relative, entry.path),
-    );
-    if (
-      source.isSymbolicLink ||
-      (entry.kind === "directory" ? !source.isDirectory : !source.isFile)
-    ) {
-      throw new Error(`Mantis staged artifact has the wrong type: ${entry.path}`);
-    }
-  }
 }
 
 async function rollbackMantisStableOutput(params: {
@@ -146,27 +110,19 @@ export async function publishMantisRunOutput(params: {
   const backedUp: string[] = [];
   const installed: string[] = [];
   try {
-    // Validate the complete evidence set before moving any stable path. A failed
-    // lane or renderer must leave the preceding run internally consistent.
-    await validateMantisStagedOutput(params);
-    params.signal?.throwIfAborted();
     await params.outputRoot.mkdir(backupRelative);
     for (const entry of MANTIS_STABLE_ENTRIES) {
       params.signal?.throwIfAborted();
-      if (await params.outputRoot.exists(entry.path)) {
-        await params.outputRoot.move(entry.path, path.posix.join(backupRelative, entry.path), {
+      if (await params.outputRoot.exists(entry)) {
+        await params.outputRoot.move(entry, path.posix.join(backupRelative, entry), {
           overwrite: true,
         });
-        backedUp.push(entry.path);
+        backedUp.push(entry);
       }
-      await params.outputRoot.move(
-        path.posix.join(params.staging.relative, entry.path),
-        entry.path,
-        {
-          overwrite: true,
-        },
-      );
-      installed.push(entry.path);
+      await params.outputRoot.move(path.posix.join(params.staging.relative, entry), entry, {
+        overwrite: true,
+      });
+      installed.push(entry);
     }
     if (await params.outputRoot.exists("error.txt")) {
       await params.outputRoot.move("error.txt", path.posix.join(backupRelative, "error.txt"), {
@@ -243,7 +199,6 @@ export function remapMantisLaneResult(params: {
     ...params.result,
     outputDir: params.publishedLaneDir,
     screenshotPath: remap(params.result.screenshotPath),
-    summaryPath: remap(params.result.summaryPath) ?? params.result.summaryPath,
     videoPath: remap(params.result.videoPath),
   };
 }
@@ -290,7 +245,6 @@ async function readNormalizedLaneResult(params: {
           ? (outcome.status ?? "unknown")
           : "unknown"
         : (entry?.result.status ?? "fail"),
-    summaryPath,
     videoPath: artifacts.find((artifact) => artifact.kind === "video")?.path,
   };
 }
@@ -314,7 +268,6 @@ async function readLegacyLaneSummary(params: {
     screenshotPath:
       typeof artifactPaths?.screenshot === "string" ? artifactPaths.screenshot : undefined,
     status: typeof scenarioSummary?.status === "string" ? scenarioSummary.status : "fail",
-    summaryPath,
     videoPath: typeof artifactPaths?.video === "string" ? artifactPaths.video : undefined,
   };
 }
@@ -342,7 +295,6 @@ export async function readMantisLaneResult(params: {
     scenarioDetails: summary.details,
     screenshotPath: resolveArtifact(summary.screenshotPath),
     status: summary.status,
-    summaryPath: summary.summaryPath,
     videoPath: resolveArtifact(summary.videoPath),
   };
 }

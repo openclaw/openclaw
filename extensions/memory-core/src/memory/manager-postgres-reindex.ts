@@ -24,7 +24,7 @@ export async function withPostgresMemoryReindex<T>(
   Object.assign(stage.vector, published.vector);
   Object.assign(stage.fts, published.fts);
   try {
-    await stage.retryPublication(() =>
+    await stage.settlePublication(() =>
       stage.executePublication({ type: "database.stage.start", input: undefined }, assertCurrent),
     );
     return await run(stage);
@@ -50,7 +50,7 @@ export async function publishPostgresMemoryStage(
   if (!stageId) {
     throw new Error("Memory reindex has no PostgreSQL stage");
   }
-  await published.retryPublication(() =>
+  await published.settlePublication(() =>
     published.executePublication(
       {
         type: "database.stage.publish",

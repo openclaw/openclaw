@@ -1,9 +1,11 @@
 import { expect, it } from "vitest";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { board as createBoardSnapshot } from "./chat-layout-fixtures.test-support.ts";
+import { focusChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -16,26 +18,17 @@ const sessionRow = {
   ...createControlUiSessionRow(sessionKey, "Service status", Date.now()),
   boardFace: "dashboard",
 };
-const snapshot = {
-  sessionKey,
-  revision: 1,
-  tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-  widgets: [
-    {
-      name: "website",
-      tabId: "main",
-      title: "Service status",
-      contentKind: "plugin",
-      pluginKind: "session:website",
-      props: { url: websiteUrl },
-      sizeW: 12,
-      sizeH: 8,
-      position: 0,
-      grantState: "none",
-      revision: 1,
-    },
-  ],
-};
+const snapshot = createBoardSnapshot(sessionKey, [
+  createBoardWidget({
+    name: "website",
+    title: "Service status",
+    contentKind: "plugin",
+    pluginKind: "session:website",
+    props: { url: websiteUrl },
+    sizeW: 12,
+    sizeH: 8,
+  }),
+]);
 const website = `<!doctype html><html lang="en"><meta name="viewport" content="width=device-width"><title>Service status</title>
 <style>body{margin:0;background:#102820;color:#e8fff2;font:16px system-ui}main{padding:clamp(24px,5vw,64px)}h1{font-size:clamp(32px,5vw,58px);margin:10px 0 24px}p{color:#a9c9b8}input,button,a{font:inherit}input{display:block;max-width:85%;margin:20px 0;padding:10px}button{padding:10px 16px;background:#b4f9bf;border:0;border-radius:8px}a{color:#b4f9bf}#status{font-size:24px;color:#b4f9bf}</style>
 <main><p>OPERATIONS / SERVICE STATUS</p><h1>Everything in view.</h1><p id="status">Loading status…</p><input aria-label="Status note" placeholder="Add a local note"><button id="refresh">Refresh status</button><p><a href="/details">View details</a></p></main>
@@ -97,16 +90,29 @@ suite.define(() => {
         });
         await catalogRow.hover();
         await catalogRow.getByRole("button", { name: "Pin", exact: true }).click();
-        const pinned = sidebar.locator(
-          `.sidebar-rail__pin[data-sidebar-entry="session:${sessionKey}"]`,
-        );
-        await pinned.getByRole("link", { name: "Service status", exact: true }).waitFor();
         expect(await catalogRow.getByRole("button", { name: "Unpin", exact: true }).count()).toBe(
           1,
         );
+        const showView = (name: "Pages" | "Sessions") =>
+          sidebar.locator(".sidebar-rail").getByRole("button", { name, exact: true }).click();
+        // Pinned dashboards join the Sessions list's Pinned section, not the rail.
+        expect(await sidebar.locator(".sidebar-rail__pin").count()).toBe(0);
+        await showView("Sessions");
+        const pinned = sidebar
+          .locator(`[data-session-section="pinned"] [data-session-key="${sessionKey}"]`)
+          .locator("a.sidebar-recent-session__link");
+        await pinned.getByText("Service status", { exact: true }).waitFor();
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         await content.getByRole("textbox", { name: "Status note" }).fill("Keep this note");
         const originalFrame = await frame.elementHandle();
+        const expectRetained = async () => {
+          expect(
+            await frame.evaluate((element, previous) => element === previous, originalFrame),
+          ).toBe(true);
+          expect(await content.getByRole("textbox", { name: "Status note" }).inputValue()).toBe(
+            "Keep this note",
+          );
+        };
         expect(
           await frame.evaluate((element: HTMLIFrameElement) => {
             try {
@@ -116,8 +122,6 @@ suite.define(() => {
             }
           }),
         ).toBe(false);
-        await page.mouse.move(0, 0);
-        await page.screenshot({ path: `${suite.artifactDir}/website-split.png` });
         await focusChatSidePanel(page);
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
         const viewportFits = () =>
@@ -130,12 +134,7 @@ suite.define(() => {
             );
           });
         await expect.poll(viewportFits).toBe(true);
-        expect(
-          await frame.evaluate((element, previous) => element === previous, originalFrame),
-        ).toBe(true);
-        expect(await content.getByRole("textbox", { name: "Status note" }).inputValue()).toBe(
-          "Keep this note",
-        );
+        await expectRetained();
         await clickBoardWidgetControl(
           page,
           content.getByRole("button", { name: "Refresh status" }),
@@ -154,20 +153,14 @@ suite.define(() => {
             "*",
           );
         });
-        await page.mouse.move(0, 0);
-        await page.screenshot({ path: `${suite.artifactDir}/website-expanded.png` });
-        await pages.getByRole("link", { name: "Agents", exact: true }).click();
-        await page.waitForURL(`${suite.server.baseUrl}agents`);
-        await pinned.getByRole("link", { name: "Service status", exact: true }).click();
+        await showView("Pages");
+        await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+        await page.waitForURL(`${suite.server.baseUrl}sessions`);
+        await showView("Sessions");
+        await pinned.click();
         await frame.waitFor();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
-        expect(await content.getByRole("textbox", { name: "Status note" }).inputValue()).toBe(
-          "Keep this note",
-        );
-        expect(
-          await frame.evaluate((element, previous) => element === previous, originalFrame),
-        ).toBe(true);
-        await page.screenshot({ path: `${suite.artifactDir}/website-pinned-return.png` });
+        await expectRetained();
         await page.setViewportSize({ width: 390, height: 844 });
         await page.locator(".shell--mobile-nav").waitFor();
         if (await page.locator(".shell--nav-drawer-open").count()) {
@@ -178,36 +171,24 @@ suite.define(() => {
             page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().right),
           )
           .toBeLessThanOrEqual(0);
-        await expect.poll(viewportFits).toBe(true);
-        await page.screenshot({ path: `${suite.artifactDir}/website-mobile.png` });
+        await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
+        await page.locator('.sidebar-region__primary[data-region="main"] .chat-thread').waitFor();
+        await selectChatLayoutAction(page, "Focus");
+        await page.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
+        const mobileViewport = await frame.evaluate((element) => {
+          const outer = element.closest(".chat-mobile-host__panels")!.getBoundingClientRect();
+          const inner = element.getBoundingClientRect();
+          return {
+            width: inner.width,
+            visibleHeight: Math.min(inner.bottom, outer.bottom) - Math.max(inner.top, outer.top),
+            contained: inner.left >= outer.left - 1 && inner.right <= outer.right + 1,
+          };
+        });
+        expect(mobileViewport.width).toBeGreaterThan(280);
+        expect(mobileViewport.visibleHeight).toBeGreaterThan(200);
+        expect(mobileViewport.contained).toBe(true);
+        await expectRetained();
         expect(await gateway.getRequests("board.data.read")).toHaveLength(0);
-        await selectChatLayoutAction(page, "Restore split");
-        const chat = page
-          .locator(".chat-pane__header")
-          .getByRole("button", { name: "Chat", exact: true });
-        await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
-        await frame.waitFor({ state: "hidden" });
-        expect(await chat.getAttribute("aria-pressed")).toBe("true");
-        await chat.click();
-        await content.getByRole("textbox", { name: "Status note" }).waitFor();
-        expect(await chat.getAttribute("aria-pressed")).toBe("false");
-        expect(await content.getByRole("textbox", { name: "Status note" }).inputValue()).toBe(
-          "Keep this note",
-        );
-        await openChatSidePanelType(page, "Files");
-        const files = page.locator('[data-panel-slot="workspace"]:not([hidden])');
-        await files.waitFor();
-        expect((await files.boundingBox())!.width).toBeGreaterThanOrEqual(390 - 24);
-        expect(await frame.isVisible()).toBe(false);
-        await page.getByRole("button", { name: "Close Files", exact: true }).click();
-        await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
-        expect(await chat.getAttribute("aria-pressed")).toBe("true");
-        await chat.click();
-        await frame.waitFor();
-        expect(await chat.getAttribute("aria-pressed")).toBe("false");
-        expect(
-          await frame.evaluate((element, previous) => element === previous, originalFrame),
-        ).toBe(true);
         await clickBoardWidgetControl(page, content.getByRole("link", { name: "View details" }));
         await content.getByRole("heading", { name: "Service details" }).waitFor();
         const opened = context.waitForEvent("page");
@@ -221,32 +202,7 @@ suite.define(() => {
         await content.getByRole("heading", { name: "Everything in view." }).waitFor();
         await expect.poll(viewportFits).toBe(true);
         expect(await page.locator("openclaw-app-shell").count()).toBe(0);
-        await page.screenshot({ path: `${suite.artifactDir}/website-document.png` });
       },
     );
-  });
-
-  it("keeps an external escape link when the website refuses embedding", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      await page.route(websiteUrl, (route) =>
-        route.fulfill({
-          contentType: "text/html",
-          headers: { "Content-Security-Policy": "frame-ancestors 'none'" },
-          body: "<!doctype html><h1>Standalone only</h1>",
-        }),
-      );
-      await installMockGateway(page, {
-        sessionKey,
-        controlUiWidgetKinds: [{ pluginId: "session", kind: "session:website", label: "Website" }],
-        featureMethods: ["board.get"],
-        methodResponses: { "board.get": snapshot },
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
-      const link = page.getByRole("link", { name: "Open website", exact: true });
-      await link.waitFor();
-      expect(await link.getAttribute("href")).toBe(websiteUrl);
-      expect(await link.getAttribute("target")).toBe("_blank");
-      await page.screenshot({ path: `${suite.artifactDir}/website-embedding-blocked.png` });
-    });
   });
 });

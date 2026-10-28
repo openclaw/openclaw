@@ -6,10 +6,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { appendExpectedSessionTranscriptTurn } from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
 import type { SessionTranscriptWriteScope } from "../config/sessions/session-accessor.types.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
@@ -645,7 +643,6 @@ export async function closeRelayVoiceSessionRecord(
     sessionKey: string;
     voiceSessionId: string;
     config: OpenClawConfig;
-    now?: number;
   },
   retainedWriter?: ClientVoiceSessionWriter,
 ): Promise<void> {

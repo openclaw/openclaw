@@ -2,6 +2,7 @@ import { assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import {
   ensureSessionInputCompletionsSchema,
   ensureSessionPendingInputsSchema,
@@ -45,6 +46,7 @@ import { mutatePendingInput, readPendingInput } from "./session-pending-input-op
 import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { applySessionTurn } from "./session-turn.worker.js";
+import { timedMessageEvent, messageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: Session storage proof does not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -57,21 +59,85 @@ function kernelFixture() {
   const f = createSessionCompoundWorkerFixture();
   const { database } = f;
   const options = { agentId: database.agentId, path: database.path };
+  const scope = { ...f.scope, path: database.path };
   const target = sessionActorFileTarget(database, f.scope.sessionKey);
   const write = <T>(run: () => T) => runOpenClawAgentWriteTransaction(run, options);
+  const writeContext = (
+    admit: AgentWorkerOperationContext["admit"] = () => {},
+  ): Pick<AgentWorkerOperationContext, "admit" | "writeTransaction"> => ({
+    admit,
+    writeTransaction: (_label, _owner, run) => run(database),
+  });
+  const context = (admit?: AgentWorkerOperationContext["admit"]): AgentWorkerOperationContext => ({
+    ...writeContext(admit),
+    open: () => database,
+    options,
+  });
   return {
     ...f,
     options,
     target,
     write,
-    inState: <T>(state: SessionActorStoredState, run: () => T) => {
-      return write(() => withSessionActorTransactionState(database, state, run));
-    },
-    hydrate: () => {
-      return hydrateSessionActorState(database, target, { epoch: "window", sequence: 0 }, "");
-    },
+    writeContext,
+    context,
+    transcriptScope: scope,
+    append: <T>(eventId: string, message: T) =>
+      appendTranscriptMessageInTransaction(database, scope, { eventId, message })?.result,
+    seedWindow: (events: Parameters<typeof appendTranscriptEventsInTransaction>[2]) =>
+      write(() => {
+        appendTranscriptEventsInTransaction(database, scope, events, {
+          scheduleProjectionReconcile: false,
+        });
+        reconcileSessionTranscriptIndexInTransaction(database.db, scope.sessionId);
+      }),
+    parent: (request: Parameters<typeof resolveTranscriptMessageAppendParent>[2] = {}) =>
+      resolveTranscriptMessageAppendParent(database, scope.sessionId, request),
+    visibleTail: (id: string) =>
+      readTranscriptVisibleTailEntryIdInTransaction(database, scope.sessionId, id),
+    onActivePath: (id: string) =>
+      isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, id),
+    canRebase: (id: string) =>
+      canRebasePreparedAssistantInTransaction(database, scope.sessionId, id),
+    inState: <T>(state: SessionActorStoredState, run: () => T) =>
+      write(() => withSessionActorTransactionState(database, state, run)),
+    hydrate: () => hydrateSessionActorState(database, target, { epoch: "window", sequence: 0 }, ""),
   };
 }
+
+const withKernel = (run: (fixture: ReturnType<typeof kernelFixture>) => void | Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => await run(kernelFixture()));
+
+const header = (id: string) => ({
+  type: "session",
+  id,
+  version: 3,
+  timestamp: "2026-01-01T00:00:00.000Z",
+  cwd: "/synthetic",
+});
+const sideEvents = (parent: string, data?: object) =>
+  Array.from({ length: 520 }, (_, index) => ({
+    type: "custom",
+    id: `side-${index}`,
+    parentId: index === 0 ? parent : `side-${index - 1}`,
+    appendMode: "side",
+    ...(data ? { data } : {}),
+  }));
+const user = (content: string, idempotencyKey?: string) => ({
+  role: "user",
+  content,
+  ...(idempotencyKey ? { idempotencyKey } : {}),
+});
+const assistant = (content: string, idempotencyKey?: string) => ({
+  role: "assistant",
+  content,
+  ...(idempotencyKey ? { idempotencyKey } : {}),
+});
+const messageEnvelope = (id: string, parentId: string, second: number) => ({
+  type: "message" as const,
+  id,
+  parentId,
+  timestamp: `2026-01-01T00:00:0${second}.000Z`,
+});
 
 function expectReload(result: ReturnType<typeof applySessionActorAppend>, snapshot: object) {
   expect(result).toMatchObject({
@@ -80,29 +146,16 @@ function expectReload(result: ReturnType<typeof applySessionActorAppend>, snapsh
   });
 }
 
-it("hydrates once and commits, rejects, and rolls back against the exact actor preimage", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = kernelFixture();
-    const { database, options, target } = f;
+it("hydrates once and commits, rejects, and rolls back against the exact actor preimage", () =>
+  withKernel((f) => {
+    const { database, target, write, inState, context, writeContext } = f;
     const scope = { ...f.scope, path: database.path };
-    runOpenClawAgentWriteTransaction((db) => {
-      appendTranscriptEventsInTransaction(db, scope, [
-        {
-          type: "session",
-          id: "original",
-          version: 3,
-          timestamp: "2026-01-01T00:00:00.000Z",
-          cwd: "/synthetic",
-        },
-        {
-          type: "message",
-          id: "user",
-          parentId: null,
-          timestamp: "2026-01-01T00:00:01.000Z",
-          message: { role: "user", content: "hello", idempotencyKey: "first-user" },
-        },
+    write(() => {
+      appendTranscriptEventsInTransaction(database, scope, [
+        header("original"),
+        timedMessageEvent("user", null, "2026-01-01T00:00:01.000Z", user("hello", "first-user")),
       ]);
-    }, options);
+    });
     const expected = readPendingInput(database, {
       kind: "stage",
       sessionKey: scope.sessionKey,
@@ -121,11 +174,7 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
       requestHash: "hash",
       lifecycleGeneration: "lifecycle",
       trackCompletion: true,
-      messageJson: JSON.stringify({
-        role: "user",
-        content: "accepted",
-        idempotencyKey: "accepted-user",
-      }),
+      messageJson: JSON.stringify(user("accepted", "accepted-user")),
       expected,
     };
     const cachedEntries = () =>
@@ -148,73 +197,52 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
         reason: "projection",
         generation: state.hot.transcript.version.generation,
       });
-      expect(state.hot.transcript.idempotency).toEqual([]);
-      expect(state.hot.completionKeys).toEqual([]);
       counter.counts.reads = 0;
       reads.length = 0;
       const beforeCommit = structuredClone(state);
       const working = forkSessionActorStoredState(state);
-      runOpenClawAgentWriteTransaction(
-        (db) =>
-          withSessionActorTransactionState(db, working, () => {
-            const context = {
-              open: () => db,
-              options,
-              admit: () => {},
-              writeTransaction: <T>(
-                _label: string,
-                _owner: string,
-                run: (current: typeof db) => T,
-              ) => run(db),
-            };
-            mutatePendingInput(pending, context, () => {});
-            writeSessionEntry(db, scope.sessionKey, {
-              ...working.hot.entry!,
-              activeWriterRunId: "run",
-              updatedAt: 2,
-              label: "actor committed",
-            });
-            const result = applySessionTurn(
-              {
-                agentId: "main",
-                sessionKey: scope.sessionKey,
-                options: {
-                  expectedSessionId: scope.sessionId,
-                  expectedWriterRunId: "run",
-                  sessionFile: "synthetic.jsonl",
-                  messages: [
-                    {
-                      eventId: "assistant",
-                      message: {
-                        role: "assistant",
-                        content: "answer",
-                        idempotencyKey: "assistant-once",
-                      },
-                    },
-                  ],
-                  touchSessionEntry: true,
+      inState(working, () => {
+        const operationContext = context();
+        mutatePendingInput(pending, operationContext, () => {});
+        writeSessionEntry(database, scope.sessionKey, {
+          ...working.hot.entry!,
+          activeWriterRunId: "run",
+          updatedAt: 2,
+          label: "actor committed",
+        });
+        const result = applySessionTurn(
+          {
+            agentId: "main",
+            sessionKey: scope.sessionKey,
+            options: {
+              expectedSessionId: scope.sessionId,
+              expectedWriterRunId: "run",
+              sessionFile: "synthetic.jsonl",
+              messages: [
+                {
+                  eventId: "assistant",
+                  message: assistant("answer", "assistant-once"),
                 },
-              },
-              context,
-              (_database, candidate) => candidate,
-            );
-            expect(result.result.appendedMessages).toMatchObject([
-              { appended: true, messageId: "assistant", effectiveParentId: "user" },
-            ]);
-            expect(result.result.sessionEntry).toMatchObject({ activeWriterRunId: "run" });
-            expect(readSessionPendingInputByKey(db, scope, pending.idempotencyKey)?.input_id).toBe(
-              "accepted-input",
-            );
-          }),
-        options,
-      );
+              ],
+              touchSessionEntry: true,
+            },
+          },
+          operationContext,
+          (_database, candidate) => candidate,
+        );
+        expect(result.result.appendedMessages).toMatchObject([
+          { appended: true, messageId: "assistant", effectiveParentId: "user" },
+        ]);
+        expect(result.result.sessionEntry).toMatchObject({ activeWriterRunId: "run" });
+        expect(
+          readSessionPendingInputByKey(database, scope, pending.idempotencyKey)?.input_id,
+        ).toBe("accepted-input");
+      });
       expect(counter.counts.reads, reads.join("\n")).toBe(0);
       const postimage = projectSessionActorHotState(working);
       expect(postimage.pendingInputs).toMatchObject([
         { input_id: "accepted-input", state: "queued" },
       ]);
-      expect(postimage.transcript.anchorsState).toBe("unavailable");
-      expect(postimage.transcript.anchors).toEqual([]);
       expect(postimage.transcript.modelContext).toEqual({
         kind: "unavailable",
         reason: "projection",
@@ -238,111 +266,67 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
         .events,
     ).toMatchObject([{ type: "session" }, { id: "user" }, { id: "assistant" }]);
     expect(cachedEntries().entries.get(scope.sessionKey)?.label).toBe("actor committed");
-    const committed = projectSessionActorHotState(state);
-    const projectionState = {
-      ...state,
-      hot: {
-        ...state.hot,
-        entry: {
-          ...state.hot.entry!,
-          cliSessionIds: { synthetic: "original-session" },
-        },
-        participants: [
-          {
-            identity: { type: "profile" as const, id: "owner" },
-            contributionCount: 1,
-            firstPromptedAt: 1,
-            lastPromptedAt: 2,
-          },
-        ],
-        members: [{ identityId: "owner", addedBy: "owner", addedAt: 1 }],
-      },
-    };
-    const retained = structuredClone(projectionState);
-    const detached = projectSessionActorHotState(projectionState);
+    const retained = structuredClone(state);
+    const detached = projectSessionActorHotState(state);
     const original = structuredClone(detached);
-    detached.entry!.label = "caller edit";
-    detached.entry!.cliSessionIds!.synthetic = "caller edit";
-    Object.assign(detached.target.database, { birthtime: "caller edit" });
-    Object.assign(detached.version, { sequence: -1 });
-    detached.participants[0]!.identity.id = "caller edit";
-    detached.members[0]!.identityId = "caller edit";
+    // Internal projections retain replace-only metadata; publication owns detachment.
+    expect(detached.target).toBe(state.hot.target);
+    expect(detached.version).toBe(state.hot.version);
+    expect(detached.participants).toBe(state.hot.participants);
+    expect(detached.members).toBe(state.hot.members);
     detached.pendingInputs[0]!.input_id = "caller edit";
     detached.transcript.version.rawSeq = -1;
     detached.transcript.watermark.maxSeq = -1;
-    expect(projectionState).toEqual(retained);
-    expect(projectSessionActorHotState(projectionState)).toEqual(original);
-    const beforeRollback = structuredClone(state);
+    expect(state).toEqual(retained);
+    expect(projectSessionActorHotState(state)).toEqual(original);
     const abandoned = forkSessionActorStoredState(state);
     expect(() =>
-      runOpenClawAgentWriteTransaction(
-        (db) =>
-          withSessionActorTransactionState(db, abandoned, () => {
-            writeSessionEntry(db, scope.sessionKey, {
-              ...abandoned.hot.entry!,
-              label: "rolled back",
-            });
-            appendTranscriptEventsInTransaction(db, scope, [
-              {
-                type: "message",
-                id: "rolled-back-message",
-                parentId: "assistant",
-                timestamp: "2026-01-01T00:00:03.000Z",
-                message: {
-                  role: "assistant",
-                  content: [{ type: "text", text: "rolled back" }],
-                  idempotencyKey: "rolled-back-once",
-                },
-              },
-            ]);
-            mutatePendingInput(
-              {
-                ...pending,
-                kind: "complete",
-                outcome: buildAgentRunTerminalOutcome({ status: "ok" }),
-              },
-              {
-                admit: (stage) => {
-                  if (stage === "commit") {
-                    throw new Error("authority revoked");
-                  }
-                },
-                writeTransaction: (_label, _owner, run) => run(db),
-              },
-              () => {},
-            );
+      inState(abandoned, () => {
+        writeSessionEntry(database, scope.sessionKey, {
+          ...abandoned.hot.entry!,
+          label: "rolled back",
+        });
+        appendTranscriptEventsInTransaction(database, scope, [
+          timedMessageEvent("rolled-back-message", "assistant", "2026-01-01T00:00:03.000Z", {
+            role: "assistant",
+            content: [{ type: "text", text: "rolled back" }],
+            idempotencyKey: "rolled-back-once",
           }),
-        options,
-      ),
+        ]);
+        mutatePendingInput(
+          {
+            ...pending,
+            kind: "complete",
+            outcome: buildAgentRunTerminalOutcome({ status: "ok" }),
+          },
+          writeContext((stage) => {
+            if (stage === "commit") {
+              throw new Error("authority revoked");
+            }
+          }),
+          () => {},
+        );
+      }),
     ).toThrow("authority revoked");
-    expect(state).toEqual(beforeRollback);
-    expect(projectSessionActorHotState(state)).toEqual(committed);
+    expect(state).toEqual(retained);
     expect(readSessionInputCompletion(database, pending)).toBeUndefined();
     expect(readSessionPendingInputByKey(database, scope, pending.idempotencyKey)?.input_id).toBe(
       "accepted-input",
     );
     const completed = forkSessionActorStoredState(state);
-    runOpenClawAgentWriteTransaction(
-      (db) =>
-        withSessionActorTransactionState(db, completed, () => {
-          mutatePendingInput(
-            {
-              ...pending,
-              kind: "complete",
-              outcome: buildAgentRunTerminalOutcome({ status: "ok" }),
-            },
-            {
-              admit() {},
-              writeTransaction: (_label, _owner, run) => run(db),
-            },
-            () => {},
-          );
-        }),
-      options,
-    );
+    inState(completed, () => {
+      mutatePendingInput(
+        {
+          ...pending,
+          kind: "complete",
+          outcome: buildAgentRunTerminalOutcome({ status: "ok" }),
+        },
+        writeContext(),
+        () => {},
+      );
+    });
     const completedPostimage = projectSessionActorHotState(completed);
     expect(completedPostimage.pendingInputs).toEqual([]);
-    expect(completedPostimage.completionKeys).toEqual([]);
     expect(readSessionInputCompletion(database, pending)).toBeDefined();
     const rehydrated = hydrateSessionActorState(
       database,
@@ -351,39 +335,25 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
       state.hot.writeToken,
     );
     expect(projectSessionActorHotState(rehydrated)).toEqual(completedPostimage);
-  });
-});
+  }));
 
-it("initializes over a retained transcript and preserves prepared snapshots, reloads, replay, and fresh authority", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = kernelFixture();
-    const { database, options, target, scope, inState } = f;
-    runOpenClawAgentWriteTransaction((db) => {
-      appendTranscriptEventsInTransaction(db, { ...scope, path: database.path }, [
-        {
-          type: "session",
-          id: scope.sessionId,
-          version: 3,
-          timestamp: "2026-01-01T00:00:00.000Z",
-          cwd: "/synthetic",
-        },
-        {
-          type: "message",
-          id: "retained-user",
-          parentId: null,
-          timestamp: "2026-01-01T00:00:01.000Z",
-          message: { role: "user", content: "retained" },
-        },
+it("initializes over a retained transcript and preserves prepared snapshots, reloads, replay, and fresh authority", () =>
+  withKernel((f) => {
+    const { database, target, scope, inState, write } = f;
+    write(() => {
+      appendTranscriptEventsInTransaction(database, { ...scope, path: database.path }, [
+        header(scope.sessionId),
+        timedMessageEvent("retained-user", null, "2026-01-01T00:00:01.000Z", user("retained")),
       ]);
-      db.db
+      database.db
         .prepare(`UPDATE transcript_events
         SET navigation_type = NULL, navigation_custom_type = NULL,
             navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
             navigation_last_custom_type = NULL, navigation_valid = 1
         WHERE session_id = ?`)
         .run(scope.sessionId);
-      deleteSessionEntryRows(db, scope.sessionKey);
-    }, options);
+      deleteSessionEntryRows(database, scope.sessionKey);
+    });
     expect(f.events()).toHaveLength(2);
     const state = hydrateSessionActorState(
       database,
@@ -395,46 +365,28 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
     expect(state.transcript.navigation).toHaveLength(2);
     let rejectFresh = false;
     let freshChecks = 0;
-    const context = {
-      open: () => database,
-      options,
-      writeTransaction: <T>(
-        _label: string,
-        _owner: string,
-        write: (current: typeof database) => T,
-      ) => write(database),
-      admit: (_stage: "transaction" | "commit", facts?: unknown) => {
-        if (
-          facts &&
-          typeof facts === "object" &&
-          "kind" in facts &&
-          facts.kind === "session-message" &&
-          "check" in facts &&
-          facts.check === "fresh"
-        ) {
-          freshChecks += 1;
-          if (rejectFresh) {
-            throw new Error("fresh authority revoked");
-          }
+    const context = f.context((_stage, facts) => {
+      if (
+        facts &&
+        typeof facts === "object" &&
+        "kind" in facts &&
+        facts.kind === "session-message" &&
+        "check" in facts &&
+        facts.check === "fresh"
+      ) {
+        freshChecks += 1;
+        if (rejectFresh) {
+          throw new Error("fresh authority revoked");
         }
-      },
-    };
-    const append: SessionActorAppend = {
+      }
+    });
+    const append: Extract<SessionActorAppend, { kind: "metadata" }> = {
       kind: "metadata",
       input: {
         scope,
-        event: {
-          type: "message",
-          id: "prepared-assistant",
-          parentId: "retained-user",
-          timestamp: "2026-01-01T00:00:02.000Z",
-        },
+        event: messageEnvelope("prepared-assistant", "retained-user", 2),
         message: {
-          messageJson: JSON.stringify({
-            role: "assistant",
-            content: "prepared bytes",
-            idempotencyKey: "prepared-once",
-          }),
+          messageJson: JSON.stringify(assistant("prepared bytes", "prepared-once")),
           cwd: "/synthetic",
           validateTurn: true,
           freshMessageCheck: true,
@@ -453,6 +405,10 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
     };
     const execute = (input: SessionActorAppend, working = state) =>
       inState(working, () => applySessionActorAppend(input, working, context));
+    const metadata = (
+      event: typeof append.input.event,
+      message: typeof append.input.message = append.input.message,
+    ): SessionActorAppend => ({ kind: "metadata", input: { ...append.input, event, message } });
     const retainedReads = trackSqliteStatementExecutions(
       database.db,
       ["entry", "newer", "parents", "projection"],
@@ -521,26 +477,10 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
     const abandoned = forkSessionActorStoredState(state);
     expect(() =>
       execute(
-        {
-          kind: "metadata",
-          input: {
-            ...append.input,
-            event: {
-              type: "message",
-              timestamp: "2026-01-01T00:00:03.000Z",
-              id: "refused",
-              parentId: "prepared-assistant",
-            },
-            message: {
-              ...append.input.message!,
-              messageJson: JSON.stringify({
-                role: "assistant",
-                content: "must not persist",
-                idempotencyKey: "refused",
-              }),
-            },
-          },
-        },
+        metadata(messageEnvelope("refused", "prepared-assistant", 3), {
+          ...append.input.message!,
+          messageJson: JSON.stringify(assistant("must not persist", "refused")),
+        }),
         abandoned,
       ),
     ).toThrow("fresh authority revoked");
@@ -553,11 +493,9 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
             scope,
             cwd: "/synthetic",
             freshMessageCheck: true,
-            messageJson: JSON.stringify({
-              role: "assistant",
-              content: "direct append must check fresh authority",
-              idempotencyKey: "direct-refused",
-            }),
+            messageJson: JSON.stringify(
+              assistant("direct append must check fresh authority", "direct-refused"),
+            ),
           },
         },
         directAbandoned,
@@ -571,23 +509,13 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
       ),
     ).toEqual(projectSessionActorHotState(state));
     rejectFresh = false;
-    const advanced = execute({
-      kind: "metadata",
-      input: {
-        ...append.input,
-        event: {
-          type: "message",
-          id: "newer-user",
-          parentId: "prepared-assistant",
-          timestamp: "2026-01-01T00:00:04.000Z",
-        },
-        message: {
-          ...append.input.message!,
-          messageJson: JSON.stringify({ role: "user", content: "a different turn" }),
-          validateTurn: false,
-        },
-      },
-    });
+    const advanced = execute(
+      metadata(messageEnvelope("newer-user", "prepared-assistant", 4), {
+        ...append.input.message!,
+        messageJson: JSON.stringify(user("a different turn")),
+        validateTurn: false,
+      }),
+    );
     expectReload(advanced, {
       parents: new Map([
         ["retained-user", null],
@@ -596,18 +524,7 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
       ]),
     });
     expect(() =>
-      execute({
-        kind: "metadata",
-        input: {
-          ...append.input,
-          event: {
-            type: "message",
-            id: "stale-assistant",
-            parentId: "prepared-assistant",
-            timestamp: "2026-01-01T00:00:05.000Z",
-          },
-        },
-      }),
+      execute(metadata(messageEnvelope("stale-assistant", "prepared-assistant", 5))),
     ).toThrow("changed");
     expect(f.events().at(-1)).toMatchObject({ id: "newer-user" });
     const reset = execute({
@@ -629,12 +546,10 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
       events: [{ id: scope.sessionId }, { id: "reset" }],
       parents: new Map([["reset", "newer-user"]]),
     });
-  });
-});
+  }));
 
-it("bounds completion residency while preserving old retries, committed writes, and rollback", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = kernelFixture();
+it("bounds completion residency while preserving old retries, committed writes, and rollback", () =>
+  withKernel((f) => {
     const { database } = f;
     const { write, inState } = f;
     const scope = (idempotencyKey: string) => ({
@@ -701,82 +616,36 @@ it("bounds completion residency while preserving old retries, committed writes, 
       expect(readSessionInputCompletion(database, newScope)?.outcome).toEqual(success);
       expect(readSessionInputCompletion(database, scope("receipt-000"))?.outcome).toEqual(success);
     });
-  });
-});
+  }));
 
-it("preserves historical replay and branch ancestry outside the actor's retained window", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = kernelFixture();
-    const { database } = f;
-    const scope = { ...f.scope, path: database.path };
-    const { write, inState } = f;
-    const originalMessage = { role: "user", content: "first", idempotencyKey: "first-once" };
-    write(() => {
-      appendTranscriptEventsInTransaction(
-        database,
-        scope,
-        [
-          { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
-          { type: "message", id: "first", parentId: null, message: originalMessage },
-          {
-            type: "message",
-            id: "answer",
-            parentId: "first",
-            message: { role: "assistant", content: "answer" },
-          },
-          {
-            type: "message",
-            id: "second",
-            parentId: "answer",
-            message: { role: "user", content: "second" },
-          },
-          ...Array.from({ length: 520 }, (_, index) => ({
-            type: "custom",
-            id: `side-${index}`,
-            parentId: index === 0 ? "second" : `side-${index - 1}`,
-            appendMode: "side",
-            data: { synthetic: true },
-          })),
-        ],
-        { scheduleProjectionReconcile: false },
-      );
-      reconcileSessionTranscriptIndexInTransaction(database.db, scope.sessionId);
-    });
+it("preserves historical replay and branch ancestry outside the actor's retained window", () =>
+  withKernel((f) => {
+    const { transcriptScope: scope, inState } = f;
+    const originalMessage = user("first", "first-once");
+    f.seedWindow([
+      { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
+      { type: "message", id: "first", parentId: null, message: originalMessage },
+      messageEvent("answer", "first", assistant("answer")),
+      messageEvent("second", "answer", user("second")),
+      ...sideEvents("second", { synthetic: true }),
+    ]);
     const state = f.hydrate();
     expect(state.transcript.complete).toBe(false);
     expect(state.transcript.identities.has("first")).toBe(false);
     inState(state, () => {
-      expect(
-        resolveTranscriptMessageAppendParent(database, scope.sessionId, {
-          appendIntent: "active-branch",
-          parentId: "first",
-        }),
-      ).toBe("side-519");
-      expect(
-        readTranscriptVisibleTailEntryIdInTransaction(database, scope.sessionId, "first"),
-      ).toBe("second");
-      expect(isTranscriptEntryOnActivePathInTransaction(database, scope.sessionId, "first")).toBe(
-        true,
-      );
-      expect(canRebasePreparedAssistantInTransaction(database, scope.sessionId, "first")).toBe(
-        false,
-      );
-      expect(canRebasePreparedAssistantInTransaction(database, scope.sessionId, "second")).toBe(
-        true,
-      );
-      expect(
-        appendTranscriptMessageInTransaction(database, scope, {
-          message: originalMessage,
-          eventId: "must-not-append",
-        })?.result,
-      ).toMatchObject({
+      expect(f.parent({ appendIntent: "active-branch", parentId: "first" })).toBe("side-519");
+      expect(f.visibleTail("first")).toBe("second");
+      expect(f.onActivePath("first")).toBe(true);
+      expect(f.canRebase("first")).toBe(false);
+      expect(f.canRebase("second")).toBe(true);
+      expect(f.append("must-not-append", originalMessage)).toMatchObject({
         appended: false,
         messageId: "first",
         message: originalMessage,
         anchor: { entryId: "first", effectiveParentId: null },
       });
 
-      appendTranscriptEventsInTransaction(database, scope, [
+      appendTranscriptEventsInTransaction(f.database, scope, [
         {
           type: "leaf",
           id: "historical-branch",
@@ -785,113 +654,66 @@ it("preserves historical replay and branch ancestry outside the actor's retained
           appendParentId: "answer",
         },
       ]);
-      expect(resolveTranscriptMessageAppendParent(database, scope.sessionId, {})).toBe("answer");
+      expect(f.parent()).toBe("answer");
+      expect(f.visibleTail("first")).toBe("first");
+      expect(f.append("next", assistant("continued branch", "next-once"))).toMatchObject({
+        appended: true,
+        messageId: "next",
+        effectiveParentId: "answer",
+      });
+      expect(f.parent()).toBe("next");
       expect(
-        readTranscriptVisibleTailEntryIdInTransaction(database, scope.sessionId, "first"),
-      ).toBe("first");
-      expect(
-        appendTranscriptMessageInTransaction(database, scope, {
-          message: {
-            role: "assistant",
-            content: "continued branch",
-            idempotencyKey: "next-once",
-          },
-          eventId: "next",
-        })?.result,
-      ).toMatchObject({ appended: true, messageId: "next", effectiveParentId: "answer" });
-      expect(resolveTranscriptMessageAppendParent(database, scope.sessionId, {})).toBe("next");
-      expect(
-        appendTranscriptMessageInTransaction(database, scope, {
-          message: {
-            role: "assistant",
-            content: "continued branch",
-            idempotencyKey: "next-once",
-          },
-          eventId: "also-must-not-append",
-        })?.result,
+        f.append("also-must-not-append", assistant("continued branch", "next-once")),
       ).toMatchObject({ appended: false, messageId: "next" });
     });
     const events = f.events();
     expect(events).toHaveLength(526);
     expect(events.at(-1)).toMatchObject({ id: "next", parentId: "answer" });
-  });
-});
+  }));
 
-it("keeps partial actor appends after a reset when a leaf targets older history", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = kernelFixture();
-    const { database } = f;
-    const scope = { ...f.scope, path: database.path };
-    const { write, inState } = f;
-    write(() => {
-      appendTranscriptEventsInTransaction(
-        database,
-        scope,
-        [
-          { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
-          {
-            type: "message",
-            id: "before-reset",
-            parentId: null,
-            message: { role: "user", content: "old question" },
-          },
-          { type: "reset", id: "reset", parentId: "before-reset" },
-          {
-            type: "message",
-            id: "after-reset",
-            parentId: "reset",
-            message: { role: "user", content: "current question" },
-          },
-          ...Array.from({ length: 520 }, (_, index) => ({
-            type: "custom",
-            id: `side-${index}`,
-            parentId: index === 0 ? "after-reset" : `side-${index - 1}`,
-            appendMode: "side",
-          })),
-          {
-            type: "leaf",
-            id: "stale-leaf",
-            parentId: "side-519",
-            targetId: "before-reset",
-          },
-        ],
-        { scheduleProjectionReconcile: false },
-      );
-      reconcileSessionTranscriptIndexInTransaction(database.db, scope.sessionId);
-    });
+it("keeps partial actor appends after a reset when a leaf targets older history", () =>
+  withKernel((f) => {
+    f.seedWindow([
+      { type: "session", id: f.scope.sessionId, version: 3, cwd: "/synthetic" },
+      messageEvent("before-reset", null, user("old question")),
+      { type: "reset", id: "reset", parentId: "before-reset" },
+      messageEvent("after-reset", "reset", user("current question")),
+      ...sideEvents("after-reset"),
+      {
+        type: "leaf",
+        id: "stale-leaf",
+        parentId: "side-519",
+        targetId: "before-reset",
+      },
+    ]);
     const state = f.hydrate();
     expect(state.transcript.complete).toBe(false);
-    inState(state, () => {
-      expect(resolveTranscriptMessageAppendParent(database, scope.sessionId, {})).toBe(
-        "after-reset",
-      );
-      expect(
-        appendTranscriptMessageInTransaction(database, scope, {
-          eventId: "continued",
-          message: { role: "assistant", content: "current answer" },
-        })?.result,
-      ).toMatchObject({ appended: true, effectiveParentId: "after-reset" });
+    f.inState(state, () => {
+      expect(f.parent()).toBe("after-reset");
+      expect(f.append("continued", assistant("current answer"))).toMatchObject({
+        appended: true,
+        effectiveParentId: "after-reset",
+      });
     });
     expect(f.events().at(-1)).toMatchObject({ id: "continued", parentId: "after-reset" });
-  });
-});
+  }));
 
-it("bounds committed actor growth across the window limit without retaining rolled-back events", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = kernelFixture();
+it("bounds committed actor growth across the window limit without retaining rolled-back events", () =>
+  withKernel((f) => {
     const { database } = f;
     const scope = { ...f.scope, path: database.path };
     const { write, inState } = f;
-    const originalMessage = { role: "assistant", content: "first", idempotencyKey: "first-once" };
+    const originalMessage = assistant("first", "first-once");
     write(() =>
       appendTranscriptEventsInTransaction(database, scope, [
         { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
-        ...Array.from({ length: 511 }, (_, index) => ({
-          type: "message",
-          id: `message-${index}`,
-          parentId: index === 0 ? null : `message-${index - 1}`,
-          message: index === 0 ? originalMessage : { role: "assistant", content: "synthetic" },
-        })),
+        ...Array.from({ length: 511 }, (_, index) =>
+          messageEvent(
+            `message-${index}`,
+            index === 0 ? null : `message-${index - 1}`,
+            index === 0 ? originalMessage : assistant("synthetic"),
+          ),
+        ),
       ]),
     );
     const resident = f.hydrate();
@@ -901,12 +723,7 @@ it("bounds committed actor growth across the window limit without retaining roll
     const append = (state: SessionActorStoredState) =>
       withSessionActorTransactionState(database, state, () => {
         for (const eventId of ["next-one", "next-two"]) {
-          expect(
-            appendTranscriptMessageInTransaction(database, scope, {
-              eventId,
-              message: { role: "assistant", content: eventId },
-            })?.result.appended,
-          ).toBe(true);
+          expect(f.append(eventId, assistant(eventId))?.appended).toBe(true);
         }
       });
     expect(() =>
@@ -923,21 +740,30 @@ it("bounds committed actor growth across the window limit without retaining roll
 
     const committed = forkSessionActorStoredState(resident);
     write(() => append(committed));
+    const { navigation, identities, active } = committed.transcript;
     residency.remember(committed);
+    // Appending already detached these collections from the rollback preimage.
+    expect(committed.transcript.navigation).toBe(navigation);
+    expect(committed.transcript.identities).toBe(identities);
+    expect(committed.transcript.active).toBe(active);
     expect(committed.transcript.complete).toBe(false);
     expect(committed.transcript.navigation).toHaveLength(512);
-    expect(committed.transcript.identities.size).toBeLessThanOrEqual(512);
-    expect(committed.transcript.active.size).toBeLessThanOrEqual(512);
+    expect(committed.transcript.navigation.at(0)?.seq).toBe(2);
+    expect(committed.transcript.navigation.at(-1)?.seq).toBe(513);
+    expect(committed.transcript.identities.size).toBe(512);
+    expect(committed.transcript.active.size).toBe(512);
     expect(committed.transcript.identities.has("message-0")).toBe(false);
+    expect(resident.transcript.navigation).toHaveLength(512);
+    expect(resident.transcript.navigation.at(0)?.seq).toBe(0);
+    expect(resident.transcript.identities.has("message-0")).toBe(true);
+    expect(resident.transcript.identities.has("next-one")).toBe(false);
+    expect(resident.transcript.active.size).toBe(511);
     inState(committed, () => {
-      expect(
-        appendTranscriptMessageInTransaction(database, scope, {
-          eventId: "must-not-append",
-          message: originalMessage,
-        })?.result,
-      ).toMatchObject({ appended: false, messageId: "message-0" });
+      expect(f.append("must-not-append", originalMessage)).toMatchObject({
+        appended: false,
+        messageId: "message-0",
+      });
     });
     expect(f.events()).toHaveLength(514);
     residency.clear();
-  });
-});
+  }));

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { runManagerCloseSession } from "./manager.close-session.js";
+import { gate as barrier } from "./manager.ownership.test-support.js";
 import { getAcpSessionResetControls } from "./manager.reset-controls.js";
 import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import {
@@ -16,6 +16,7 @@ import {
   installAcpSessionManagerTestLifecycle,
   installMutableAcpSessionMetaUpsert,
   readySessionMeta,
+  runtimeHandle,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 import type { WriteManagerSessionMeta } from "./manager.types.js";
@@ -24,19 +25,6 @@ installAcpSessionManagerTestLifecycle();
 
 const sessionTarget = { cfg: baseCfg, sessionKey: "agent:codex:acp:actor-epoch-fencing" };
 const initialization = { ...sessionTarget, agent: "codex", mode: "persistent" as const };
-
-function barrier() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  return {
-    entered: entered.promise,
-    release: () => release.resolve(),
-    wait: () => {
-      entered.resolve();
-      return release.promise;
-    },
-  };
-}
 
 function expectIdle(...mocks: unknown[]) {
   for (const mock of mocks) {
@@ -64,12 +52,9 @@ function createFixture(beforeCommit?: () => Promise<void>, initialMeta?: Session
   });
   runtimeState.ensureSession.mockImplementation(async (input) => {
     const callNumber = ++ensureCount;
-    return {
-      sessionKey: input.sessionKey,
-      backend: "acpx",
-      runtimeSessionName: `runtime-${callNumber}`,
+    return runtimeHandle(input.sessionKey, `runtime-${callNumber}`, {
       backendSessionId: `backend-${callNumber}`,
-    };
+    });
   });
   hoisted.readAcpSessionEntryMock.mockImplementation(
     ({ sessionKey: key }: { sessionKey: string }) => stored(key),
@@ -427,7 +412,7 @@ it("captures the expected owner before waiting for the session actor", async () 
   const ensure = barrier();
   state.ensureSession.mockImplementation(async () => {
     await ensure.wait();
-    return { sessionKey, backend: "acpx", runtimeSessionName: meta.runtimeSessionName };
+    return runtimeHandle(sessionKey, meta.runtimeSessionName);
   });
   const manager = new AcpSessionManager();
   const status = manager.getSessionStatus({ cfg: baseCfg, sessionKey });

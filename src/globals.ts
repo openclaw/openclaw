@@ -22,13 +22,6 @@ export function logVerbose(message: string) {
   console.log(theme.muted(message));
 }
 
-export function logVerboseConsole(message: string) {
-  if (!isVerbose()) {
-    return;
-  }
-  console.log(theme.muted(message));
-}
-
 type ThemeFormatter = (value: string) => string;
 
 export const success: ThemeFormatter = theme.success;

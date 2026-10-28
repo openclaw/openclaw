@@ -7,6 +7,7 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
+import { t } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -15,18 +16,13 @@ import { SessionHovercard, type SessionHovercardInput } from "./session-hovercar
 function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSession {
   return {
     key: "agent:main:work",
-    label: "Ship the release",
     hasActiveRun: true,
-    createdAt: Date.now() - 2 * 60 * 60_000,
-    startedAt: Date.now() - 2 * 60 * 60_000,
-    updatedAt: Date.now() - 5 * 60_000,
     createdActor: {
       type: "human",
       id: "alice",
       identity: { type: "profile", id: "alice" },
       label: "Alice Baker",
     },
-    subtitle: "openclaw ⎇ feature/session-hovercard",
     workContext: {
       kind: "project",
       name: "openclaw",
@@ -67,6 +63,9 @@ function renderCard(input: SessionHovercardInput, container = document.createEle
         const [current, setCurrent] = createSignal(input);
         updateCards.set(container, (next) => setCurrent(next));
         return createComponent(SessionHovercard, {
+          get connected() {
+            return current().connected;
+          },
           get row() {
             return current().row;
           },
@@ -633,7 +632,8 @@ describe("session hovercard", () => {
       expect(container.querySelector(".session-hovercard__files")).toBeNull();
       expect(createLink?.textContent).toBe("Create PR");
       expect(createLink?.href).toBe(branch.createUrl);
-      expect(createLink?.title).toBe("Create a pull request for feature");
+      expect(createLink?.getAttribute("aria-label")).toBe("Create PR for feature");
+      expect(createLink?.title).toBe("Create PR for feature");
     } else {
       expect(createLink).toBeNull();
       expect(container.querySelector(".session-hovercard__branch-label")?.textContent).toBe(
@@ -655,7 +655,7 @@ describe("session hovercard", () => {
   });
 
   it.each(["active", "markdown-only", "completed"])(
-    "keeps Agent Notepad separate from %s plan metadata",
+    "keeps Task progress separate from %s plan metadata",
     (mode) => {
       const card = progressCard();
       const container = renderCard({
@@ -663,7 +663,15 @@ describe("session hovercard", () => {
           ...(mode === "active" ? { lastMessagePreview: "This must not appear." } : {}),
           ...(mode === "completed" ? { status: "done" } : {}),
         }),
-        progressCard: { ...card, steps: mode === "markdown-only" ? undefined : card.steps },
+        progressCard: {
+          ...card,
+          steps:
+            mode === "markdown-only"
+              ? undefined
+              : mode === "completed"
+                ? [{ step: "Verify", status: "completed" }]
+                : card.steps,
+        },
       });
 
       const plan = container.querySelector(".session-hovercard__plan-row");
@@ -677,7 +685,7 @@ describe("session hovercard", () => {
       const notepad = container.querySelector(".session-hovercard__notepad");
       expect(notepad).not.toBeNull();
       expect(notepad?.querySelector(".session-hovercard__notepad-title")?.textContent).toBe(
-        "Agent Notepad",
+        "Task progress",
       );
       expect(notepad?.querySelector("strong")?.textContent).toBe("Release");
       expect(container.querySelector(".session-progress-card")).toBeNull();
@@ -708,7 +716,42 @@ describe("session hovercard", () => {
     expect(plan?.querySelector("polyline")).not.toBeNull();
   });
 
-  it("pins a labeled markdown progress bar above the Agent Notepad copy", () => {
+  it("follows delegated activity, connection loss, and a matching run failure", () => {
+    const card = { ...progressCard(), updatedAt: 101 };
+    const session = row({
+      startedAt: 100,
+      endedAt: 110,
+      status: "done",
+      hasActiveRun: false,
+      hasActiveSubagentRun: true,
+    });
+    const container = renderCard({ row: session, progressCard: card, connected: true });
+    const runtime = () => container.querySelector(".session-progress-card__runtime")?.textContent;
+    expect(runtime()).toContain(t("sessionProgressCard.runtime.delegated"));
+    expect(
+      container.querySelector(".session-hovercard__plan-row")?.getAttribute("aria-label"),
+    ).toBe("Verify, in progress");
+    renderCard({ row: session, progressCard: card, connected: false }, container);
+    expect(runtime()).toContain(t("sessionProgressCard.runtime.offline"));
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    const failed = {
+      ...session,
+      status: "failed" as const,
+      hasActiveSubagentRun: false,
+      lastRunError: "Validation service unavailable",
+    };
+    renderCard({ row: failed, progressCard: card, connected: true }, container);
+    expect(runtime()).toContain(t("sessionProgressCard.outcome.failed"));
+    expect(runtime()).toContain("Validation service unavailable");
+    renderCard(
+      { row: { ...failed, startedAt: 200, endedAt: 210 }, progressCard: card, connected: true },
+      container,
+    );
+    expect(runtime()).not.toContain("Validation service unavailable");
+    expect(runtime()).not.toContain(t("sessionProgressCard.outcome.failed"));
+  });
+
+  it("pins a labeled markdown progress bar above the Task progress copy", () => {
     const container = renderCard({
       row: row(),
       progressCard: {

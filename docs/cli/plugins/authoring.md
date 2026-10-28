@@ -7,7 +7,7 @@ read_when:
 ---
 
 This page covers the authoring commands: `plugins init`, `plugins build`,
-`plugins validate`, and `plugins pack`, plus the tool, feature, and provider
+`plugins validate`, `plugins lint`, and `plugins pack`, plus the tool, feature, and provider
 scaffolds they generate.
 
 ## Author
@@ -32,6 +32,14 @@ current entry export still agree. Pass `--json` for a machine-readable
 validation result. See [Tool Plugins](/plugins/tool-plugins) for the full
 authoring workflow.
 
+Authoring metadata must be regular files containing valid UTF-8 JSON. Symlinks to
+regular files are supported; pipes and other special files are rejected before reading.
+
+`plugins lint --root <path>` inspects a plugin and its materialized runtime
+dependencies without importing plugin code or reading operator configuration.
+Use `--json` for structured compatibility warnings. Findings do not block installs;
+see [Runtime compatibility](/plugins/runtime-compatibility) for scope and limits.
+
 The scaffold writes TypeScript source but generates metadata from the built
 `./dist/index.js` entry, so the workflow also works with the published CLI. Use
 `--entry <path>` when the entry is not the default package entry. Use
@@ -52,9 +60,9 @@ and composer replacement. Run `npm install`, `npm run build`, and
 `package.json.openclaw.controlUi`; `plugins build` writes immutable bundled
 assets and their manifest declaration.
 
-Plugin APIs are [experimental](/plugins/sdk-overview#api-stability). To load the
-scaffold's native browser UI, enable **Settings → Labs → Custom plugin UI**, then
-restart the Gateway and reload the browser. See
+Plugin APIs are [experimental](/plugins/sdk-overview#api-stability). The
+scaffold’s native browser UI is available by default once the plugin is enabled;
+there is no Labs opt-in. Existing advanced opt-outs remain honored. See
 [Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui).
 
 `plugins pack` validates a built project, bundles its backend dependencies, and

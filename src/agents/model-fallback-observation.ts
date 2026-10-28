@@ -131,8 +131,6 @@ function resolveAuthDecisionLogCoalescing(
   const suppressedDuplicateCount = recentAgeMs < staleWindowMs ? recent?.suppressed : undefined;
   if (recentAgeMs >= staleWindowMs) {
     authDecisionLogCoalesceEntries.delete(key);
-  }
-  if (!authDecisionLogCoalesceEntries.has(key)) {
     for (const [entryKey, entry] of authDecisionLogCoalesceEntries) {
       if (entry.lastLoggedAt < now - staleWindowMs) {
         authDecisionLogCoalesceEntries.delete(entryKey);

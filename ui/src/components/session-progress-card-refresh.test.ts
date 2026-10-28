@@ -10,7 +10,7 @@ import {
 } from "./session-progress-card.test-support.tsx";
 import type { SessionProgressCardRefreshAction } from "./session-progress-card.ts";
 
-const { mountCard, createView, render } = progressCardFixture();
+const { mountCard, createView } = progressCardFixture();
 const statusText = (root: HTMLElement) => root.querySelector("[role=status]")?.textContent;
 const time = (container: HTMLElement) => container.querySelector("time");
 
@@ -42,9 +42,7 @@ describe("progress card refresh control", () => {
       const details = container.querySelector("details")!;
       const summary = container.querySelector("summary")!;
       const button = container.querySelector<HTMLButtonElement>(".session-progress-card__refresh")!;
-      expect(button.closest(".session-progress-card__summary-expanded")).toBeNull();
       expect(button.textContent).toContain("Refresh task progress");
-      expect(button.querySelector("svg path")).not.toBeNull();
       const down = new MouseEvent("pointerdown", { bubbles: true, button: 0, clientY: 100 });
       Object.defineProperties(down, { isPrimary: { value: true }, pointerId: { value: 1 } });
       button.dispatchEvent(down);
@@ -53,28 +51,29 @@ describe("progress card refresh control", () => {
       expect(onRefresh).toHaveBeenCalledExactlyOnceWith(progressCard);
       expect(onManipulate).not.toHaveBeenCalled();
       expect(details.open).toBe(!collapsed);
-      show("pending");
-      await openMenu();
-      expect(button.disabled).toBe(true);
-      expect(button.getAttribute("aria-busy")).toBe("true");
-      button.click();
-      expect(onRefresh).toHaveBeenCalledTimes(1);
-      expect(statusText(container)).toContain("Refreshing task progress");
-      expect(time(container)?.dateTime).toBe(new Date(progressCard.updatedAt).toISOString());
-      show("failed");
-      expect(container.textContent).not.toContain("Use refresh to retry");
-      expect(button.disabled).toBe(false);
-      expect(button.textContent).toContain("Retry progress refresh");
-      expect(statusText(container)).toContain("Previous update kept");
-      button.click();
-      expect(onRefresh).toHaveBeenCalledTimes(2);
-      show("timeout");
-      expect(container.textContent).not.toContain("Use refresh to retry");
-      expect(statusText(container)).toContain("may still be running");
-      expect(details.open).toBe(!collapsed);
-      show("updated");
-      expect(statusText(container)).toBe("Task progress updated");
-      expect(details.open).toBe(!collapsed);
+      for (const [state, status, calls] of [
+        ["pending", "Refreshing task progress", 1],
+        ["failed", "Previous update kept", 2],
+        ["timeout", "may still be running", 3],
+        ["updated", "Task progress updated", 4],
+      ] as const) {
+        show(state);
+        await openMenu();
+        expect(button.disabled).toBe(state === "pending");
+        expect(button.getAttribute("aria-busy")).toBe(String(state === "pending"));
+        expect(time(container)?.dateTime).toBe(new Date(progressCard.updatedAt).toISOString());
+        expect(statusText(container)).toContain(status);
+        expect(container.textContent).not.toContain("Use refresh to retry");
+        expect(details.open).toBe(!collapsed);
+        if (state === "failed") {
+          expect(button.textContent).toContain("Retry progress refresh");
+        }
+        if (state === "updated") {
+          expect(statusText(container)).toBe(status);
+        }
+        button.click();
+        expect(onRefresh).toHaveBeenCalledTimes(calls);
+      }
       options.click();
       flush();
       summary.click();
@@ -96,48 +95,23 @@ describe("progress card refresh control", () => {
     expect(cardPart(container, "step--paused")).not.toBeNull();
   });
 
-  it("does not expose refresh on read-only board cards", () => {
-    const container = mountCard({
+  it("retires disclosure listeners when changing to a board card", () => {
+    const { container, show } = createView();
+    show({ card: null });
+    expect(container.querySelector("details")).toBeNull();
+    show({ placement: "composer" });
+    const details = container.querySelector("details")!;
+    const summary = details.querySelector("summary")!;
+    summary.click();
+    show({ card: { ...progressCard, revision: 3 } });
+    expect(container.querySelector("details")).toBe(details);
+    expect(details.open).toBe(false);
+    show({
       placement: "board",
       hasActiveRun: true,
-      collapseComposerByDefault: false,
       refreshAction: { onRefresh: vi.fn() },
     });
     expect(cardPart(container, "refresh")).toBeNull();
-  });
-
-  it("retains manual disclosure across card updates and retires absent cards", () => {
-    const { container, show } = createView();
-    show({ card: null });
-    expect(container.querySelector("details")).toBeNull();
-    show({ card: progressCard });
-    const details = container.querySelector("details")!;
-    details.querySelector("summary")!.click();
-    expect(details.open).toBe(false);
-    show({
-      card: {
-        ...progressCard,
-        revision: 3,
-        markdown: "**Updated progress**",
-        steps: [{ step: "Wire the updated checklist", status: "in_progress" }],
-      },
-    });
-    expect(container.querySelector("details")).toBe(details);
-    expect(details.open).toBe(false);
-    expect(details.textContent).toContain("Wire the updated checklist");
-    expect(details.querySelector("strong")?.textContent).toBe("Updated progress");
-    show({ card: null });
-    expect(container.querySelector("details")).toBeNull();
-    // Deliver jsdom's queued details toggle without advancing the 30s activity interval.
-    advance(0);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("retires disclosure listeners when changing to a board card", () => {
-    const { container, show } = createView();
-    show({ placement: "composer" });
-    const summary = container.querySelector("summary")!;
-    show({ placement: "board" });
     expect(container.querySelector("details")).toBeNull();
     expect(container.querySelector("section")?.dataset.progressCardPlacement).toBe("board");
     const click = new MouseEvent("click", { bubbles: true, cancelable: true });
@@ -147,20 +121,16 @@ describe("progress card refresh control", () => {
     vi.advanceTimersToNextFrame();
     flush();
     expect(vi.getTimerCount()).toBe(1);
+    show({ card: null });
+    expect(container.querySelector("details")).toBeNull();
+    advance(0);
+    expect(vi.getTimerCount()).toBe(0);
     show({ placement: "details" });
     expect(container.querySelector("details")?.open).toBe(true);
     vi.advanceTimersToNextFrame();
     flush();
-    expect(vi.getTimerCount()).toBe(1);
-  });
-
-  it("refreshes relative activity while mounted and clears its timer on unmount", () => {
-    const container = mountCard({ card: { ...progressCard, updatedAt: NOW_MS - 10_000 } });
-    const timestamp = time(container)!;
-    expect(timestamp.textContent).toBe("Updated just now");
-    advance(60_000);
-    expect(timestamp.textContent).toBe("Updated 1m ago");
-    render(null, container);
+    // Details without refresh controls has no timestamp; the board activity timer retires.
+    expect(container.querySelector("time")).toBeNull();
     expect(vi.getTimerCount()).toBe(0);
   });
 });

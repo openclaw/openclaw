@@ -1,18 +1,17 @@
 import { EventEmitter } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { getFreePort } from "../test-utils/ports.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { NodeRegistry } from "./node-registry.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
-import { createGatewayKernel } from "./server-kernel.js";
+import { createKernelFixture } from "./server-kernel.fixture-test-support.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import {
@@ -45,183 +44,191 @@ vi.mock("./server/ws-connection/request-start.js", async (importOriginal) => {
   };
 });
 
+function profileSync(
+  client: ReturnType<typeof createOperatorWsClient>,
+  pause: () => Promise<void>,
+) {
+  return async () => {
+    await pause();
+    client.authenticatedUserProfile = {
+      profileId: "entry-profile",
+      displayName: "Entry",
+      avatarRevision: "entry-avatar",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    return { profileId: "entry-profile", updatedAt: 1 };
+  };
+}
+
+function entryMethods(name: string, handler: GatewayRequestHandler) {
+  return createGatewayMethodRegistry([
+    { name, owner: { kind: "aux", area: "entry-test" }, scope: "operator.admin", handler },
+  ]);
+}
+
+const restarting = {
+  code: "UNAVAILABLE",
+  retryable: true,
+  details: { reason: "gateway-restarting" },
+};
+
 describe("Gateway request entry lifetime", { concurrent: false }, () => {
-  let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
-  let kernel: Awaited<ReturnType<typeof createGatewayKernel>>;
-  let port: number;
+  type Fixture = Awaited<ReturnType<typeof createKernelFixture>>;
+  let fixture: Fixture;
+  let kernel: Awaited<ReturnType<Fixture["open"]>>;
+  let releases: (() => void)[];
+  let pending: Promise<unknown>[];
+  const track = <T>(work: Promise<T>) => {
+    pending.push(work);
+    return work;
+  };
+  const createEntryBarrier = () => {
+    const held = createDeferredCore();
+    const reached = createDeferredCore();
+    releases.push(held.resolve);
+    return {
+      held,
+      reached,
+      pause: async () => {
+        reached.resolve();
+        await held.promise;
+      },
+    };
+  };
+  const createHarness = (options: Parameters<typeof createDispatchTestHarness>[0]) =>
+    createDispatchTestHarness({
+      buildRequestContext: () => kernel.gatewayRequestContext,
+      ...options,
+    });
+  const dispatch = (
+    harness: ReturnType<typeof createHarness>,
+    id: string,
+    method = "test.entry",
+    client = createOperatorWsClient(),
+  ) => {
+    void track(harness.awaitResponseFrame(id));
+    return track(harness.dispatcher.dispatch({ type: "req", id, method, params: {} }, client));
+  };
+  const request = (
+    method: string,
+    options: Partial<Parameters<typeof dispatchGatewayRequestInProcessRaw>[2]> = {},
+    params: unknown = {},
+  ) =>
+    dispatchGatewayRequestInProcessRaw(method, params, {
+      context: kernel.gatewayRequestContext,
+      client: createOperatorWsClient(),
+      ...options,
+    });
+  const settled = <T>(work: Promise<T>) =>
+    work.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
 
   beforeAll(async () => {
-    state = await createOpenClawTestState({
-      label: "gateway-request-entry",
+    fixture = await createKernelFixture("gateway-request-entry", {
       layout: "home",
-      env: {
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
-      },
+      token: "request-entry-test",
     });
-    port = await getFreePort();
-    await state.writeConfig({
-      gateway: {
-        auth: { mode: "token", token: "request-entry-test" },
-        controlUi: { enabled: false },
-        port,
-      },
-    });
-    state.applyEnv();
+    await fixture.configure();
   });
   beforeEach(async () => {
+    releases = [];
+    pending = [];
     boundaries.router.mockReset();
     boundaries.start.mockReset();
-    kernel = await createGatewayKernel(port, {
-      auth: { mode: "token", token: "request-entry-test" },
-      bind: "loopback",
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
+    kernel = await fixture.open();
     kernel.kernel.setDispatchReady(true);
   });
   afterEach(async () => {
-    await kernel?.closeOnStartupFailure();
+    // Release gates and join requests before disposing the kernel, even after an assertion fails.
+    releases.forEach((release) => release());
+    try {
+      await Promise.all(pending);
+      await nextTurn();
+    } finally {
+      await kernel?.closeOnStartupFailure();
+    }
   });
   afterAll(async () => {
-    await state?.cleanup();
+    await fixture.state.cleanup();
   });
 
   it.each(["router", "start", "profile", "family", "family rejection", "nested family"] as const)(
     "joins %s preparation and rejects handler entry before close returns",
     async (boundary) => {
-      const held = createDeferredCore();
-      const reached = createDeferredCore();
-      const pause = async () => {
-        reached.resolve();
-        await held.promise;
-      };
+      const { held, reached, pause } = createEntryBarrier();
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
         respond(true, { entered: true }),
       );
       const client = createOperatorWsClient();
-      const lazy = createLazyCoreHandlers({
-        methods: ["test.entry"],
-        loadHandlers: async () => {
-          if (boundary === "nested family") {
-            return createLazyCoreHandlers({
-              methods: ["test.entry"],
-              loadHandlers: async () => {
-                await pause();
-                return { "test.entry": handler };
-              },
-            });
-          }
-          if (boundary.startsWith("family")) {
-            await pause();
-          }
-          if (boundary === "family rejection") {
-            throw new Error("expected family preparation failure");
-          }
-          return { "test.entry": handler };
-        },
-      });
+      const loadHandlers = async () => {
+        if (boundary.includes("family")) {
+          await pause();
+        }
+        if (boundary === "family rejection") {
+          throw new Error("expected family preparation failure");
+        }
+        return { "test.entry": handler };
+      };
+      const family = { methods: ["test.entry"], loadHandlers };
+      const lazy = createLazyCoreHandlers(
+        boundary === "nested family"
+          ? { ...family, loadHandlers: async () => createLazyCoreHandlers(family) }
+          : family,
+      );
       if (boundary === "router" || boundary === "start") {
         boundaries[boundary].mockImplementation(pause);
       } else if (boundary === "profile") {
-        client.authenticatedGitHubIdentitySync = async () => {
-          await pause();
-          client.authenticatedUserProfile = {
-            profileId: "entry-profile",
-            displayName: "Entry",
-            avatarRevision: "entry-avatar",
-            hasAvatar: false,
-            updatedAt: 1,
-          };
-          return { profileId: "entry-profile", updatedAt: 1 };
-        };
+        client.authenticatedGitHubIdentitySync = profileSync(client, pause);
       }
-      const harness = createDispatchTestHarness({
-        buildRequestContext: () => kernel.gatewayRequestContext,
-        extraHandlers: lazy,
-      });
-      let closeSettled = false;
-      let closing: Promise<void> | undefined;
-      let dispatch: Promise<void> | undefined;
-      const lateResponses: unknown[] = [];
-      harness.send.mockImplementation((frame) => {
-        if (closeSettled) {
-          lateResponses.push(frame);
+      const harness = createHarness({ extraHandlers: lazy });
+      const closed = vi.fn();
+      const lateEffects: unknown[] = [];
+      const recordLate = (value: unknown) => {
+        if (closed.mock.calls.length) {
+          lateEffects.push(value);
         }
+      };
+      harness.send.mockImplementation((frame) => {
+        recordLate(frame);
         return { kind: "sent" };
       });
-      const lateErrors: string[] = [];
-      harness.logGateway.error.mockImplementation((message) => {
-        if (closeSettled) {
-          lateErrors.push(message);
-        }
-      });
-      try {
-        dispatch = harness.dispatcher.dispatch(
-          { type: "req", id: "held", method: "test.entry", params: {} },
-          client,
-        );
-        await reached.promise;
-        closing = kernel.prepareClose().then(() => {
-          closeSettled = true;
-        });
-        await nextTurn();
-        expect.soft(closeSettled).toBe(false);
-        held.resolve();
-        const response = await harness.awaitResponseFrame("held");
-        if (boundary !== "family rejection") {
-          expect.soft(response).toMatchObject({
-            ok: false,
-            error: {
-              code: "UNAVAILABLE",
-              retryable: true,
-              details: { reason: "gateway-restarting" },
-            },
-          });
-        }
-        await dispatch;
-        await closing;
-        expect.soft(handler).not.toHaveBeenCalled();
-        expect.soft(lateResponses).toEqual([]);
-        expect.soft(lateErrors).toEqual([]);
-      } finally {
-        held.resolve();
-        await harness.awaitResponseFrame("held");
-        await dispatch;
-        await closing;
+      harness.logGateway.error.mockImplementation(recordLate);
+      const dispatched = dispatch(harness, "held", "test.entry", client);
+      await reached.promise;
+      const closing = track(kernel.prepareClose().then(closed));
+      await nextTurn();
+      expect.soft(closed).not.toHaveBeenCalled();
+      held.resolve();
+      const response = await harness.awaitResponseFrame("held");
+      if (boundary !== "family rejection") {
+        expect.soft(response).toMatchObject({ ok: false, error: restarting });
       }
+      await dispatched;
+      await closing;
+      expect.soft(handler).not.toHaveBeenCalled();
+      expect.soft(lateEffects).toEqual([]);
     },
   );
 
   it.each(["test.entry", "device.token.rotate"])(
     "refuses credential-barrier waiter %s before joining close without draining its predecessor",
     async (method) => {
-      const held = createDeferredCore();
-      const reached = createDeferredCore();
-      const finished = createDeferredCore();
-      let mutationFinished = false;
+      const { reached, pause } = createEntryBarrier();
+      const mutationFinished = vi.fn();
       const mutation = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
-        reached.resolve();
         try {
-          await held.promise;
+          await pause();
           respond(true, { mutated: true });
         } finally {
-          mutationFinished = true;
-          finished.resolve();
+          mutationFinished();
         }
       });
       const waiter = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true));
       const client = createOperatorWsClient();
-      const harness = createDispatchTestHarness({
-        buildRequestContext: () => kernel.gatewayRequestContext,
+      const harness = createHarness({
         extraHandlers: { "device.token.revoke": mutation, [method]: waiter },
       });
       const events: string[] = [];
@@ -229,106 +236,60 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
         events.push("response");
         return { kind: "sent" };
       });
-      let queued: Promise<void> | undefined;
-      let dispatchedMutation: Promise<void> | undefined;
-      let closing: Promise<void> | undefined;
-      try {
-        dispatchedMutation = harness.dispatcher.dispatch(
-          { type: "req", id: "mutation", method: "device.token.revoke", params: {} },
-          client,
-        );
-        await reached.promise;
-        queued = harness.dispatcher.dispatch({ type: "req", id: "waiting", method }, client);
-        await nextTurn();
-        expect(waiter).not.toHaveBeenCalled();
-        expect(harness.send).not.toHaveBeenCalled();
-        closing = kernel.prepareClose().then(() => {
+      void dispatch(harness, "mutation", "device.token.revoke", client);
+      await reached.promise;
+      void dispatch(harness, "waiting", method, client);
+      await nextTurn();
+      expect(waiter).not.toHaveBeenCalled();
+      expect(harness.send).not.toHaveBeenCalled();
+      void track(
+        kernel.prepareClose().then(() => {
           events.push("closed");
-        });
-        await vi.waitFor(() => expect(events).toContain("closed"));
-        expect.soft(events).toEqual(["response", "closed"]);
-        expect(harness.send).toHaveBeenCalledWith(
-          expect.objectContaining({
-            id: "waiting",
-            ok: false,
-            error: expect.objectContaining({
-              code: "UNAVAILABLE",
-              retryable: true,
-              details: { reason: "gateway-restarting" },
-            }),
-          }),
-        );
-        expect(harness.close).not.toHaveBeenCalled();
-        expect(waiter).not.toHaveBeenCalled();
-        expect(mutationFinished).toBe(false);
-        expect(mutation.mock.calls[0]?.[0].signal).toBeUndefined();
-      } finally {
-        held.resolve();
-        await finished.promise;
-        await dispatchedMutation;
-        await queued;
-        await closing;
-        await harness.awaitResponseFrame("mutation");
-        await nextTurn();
-      }
+        }),
+      );
+      await vi.waitFor(() => expect(events).toContain("closed"));
+      expect.soft(events).toEqual(["response", "closed"]);
+      expect(harness.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: "waiting",
+          ok: false,
+          error: expect.objectContaining(restarting),
+        }),
+      );
+      expect(harness.close).not.toHaveBeenCalled();
+      expect(waiter).not.toHaveBeenCalled();
+      expect(mutationFinished).not.toHaveBeenCalled();
+      expect(mutation.mock.calls[0]?.[0].signal).toBeUndefined();
     },
   );
 
   it("permits ordinary entry after disconnect while its Gateway is live", async () => {
-    const held = createDeferredCore();
-    const reached = createDeferredCore();
-    boundaries.start.mockImplementation(async () => {
-      reached.resolve();
-      await held.promise;
-    });
+    const { held, reached, pause } = createEntryBarrier();
+    boundaries.start.mockImplementation(pause);
     const socket = new EventEmitter();
     const client = createOperatorWsClient({ socket });
     let disconnected = false;
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { entered: true }));
-    const harness = createDispatchTestHarness({
-      buildRequestContext: () => kernel.gatewayRequestContext,
+    const harness = createHarness({
       extraHandlers: { "test.entry": handler },
       isClosed: () => disconnected,
     });
-    let dispatch: Promise<void> | undefined;
-    try {
-      dispatch = harness.dispatcher.dispatch(
-        { type: "req", id: "disconnected", method: "test.entry" },
-        client,
-      );
-      await reached.promise;
-      disconnected = true;
-      socket.emit("close");
-      held.resolve();
-      expect(await harness.awaitResponseFrame("disconnected")).toMatchObject({ ok: true });
-      expect(handler).toHaveBeenCalledOnce();
-    } finally {
-      held.resolve();
-      await harness.awaitResponseFrame("disconnected");
-      await dispatch;
-    }
+    void dispatch(harness, "disconnected", "test.entry", client);
+    await reached.promise;
+    disconnected = true;
+    socket.emit("close");
+    held.resolve();
+    expect(await harness.awaitResponseFrame("disconnected")).toMatchObject({ ok: true });
+    expect(handler).toHaveBeenCalledOnce();
   });
 
   it("hands execution off before a handler initiates close", async () => {
-    const result = await dispatchGatewayRequestInProcessRaw(
-      "test.close",
-      {},
-      {
-        context: kernel.gatewayRequestContext,
-        client: createOperatorWsClient(),
-        methodRegistry: createGatewayMethodRegistry([
-          {
-            name: "test.close",
-            owner: { kind: "aux", area: "entry-test" },
-            scope: "operator.admin",
-            handler: async ({ respond }: Parameters<GatewayRequestHandler>[0]) => {
-              await kernel.prepareClose();
-              respond(true, { closed: true });
-            },
-          },
-        ]),
-      },
-    );
+    const result = await request("test.close", {
+      methodRegistry: entryMethods("test.close", async ({ respond }) => {
+        await kernel.prepareClose();
+        respond(true, { closed: true });
+      }),
+    });
     expect(result).toMatchObject({ ok: true, payload: { closed: true } });
   });
 
@@ -360,27 +321,19 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       isDispatchAuthorized: () => true,
       onDispatchReady: ready.resolve,
     });
-    const settled = invoked.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
+    const outcome = settled(invoked);
     try {
-      const id = await Promise.race([
-        ready.promise,
-        settled.then(() => {
-          throw new Error("invoke did not dispatch");
-        }),
-      ]);
-      const response = await dispatchGatewayRequestInProcessRaw(
+      const id = await awaitGateBeforeSettlement(ready.promise, outcome, "invoke did not dispatch");
+      const response = await request(
         "node.invoke.result",
-        { id, nodeId: "entry-node", ok: true },
         { context, client: node },
+        { id, nodeId: "entry-node", ok: true },
       );
       expect(response).toMatchObject({ ok: true });
-      expect(await settled).toMatchObject({ value: { ok: true } });
+      expect(await outcome).toMatchObject({ value: { ok: true } });
     } finally {
       registry.unregister(node.connId);
-      await settled;
+      await outcome;
       resetGatewayWorkAdmission();
     }
   });
@@ -388,79 +341,37 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
   it("keeps a retired context closed when a replacement Gateway starts", async () => {
     const retired = kernel.gatewayRequestContext;
     await kernel.closeOnStartupFailure();
-    kernel = await createGatewayKernel(port, {
-      auth: { mode: "token", token: "request-entry-test" },
-      bind: "loopback",
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
+    kernel = await fixture.open();
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { entered: true }));
-    const methodRegistry = createGatewayMethodRegistry([
-      {
-        name: "test.entry",
-        owner: { kind: "aux", area: "entry-test" },
-        scope: "operator.admin",
-        handler,
-      },
-    ]);
+    const methodRegistry = entryMethods("test.entry", handler);
     const options = { client: createOperatorWsClient(), methodRegistry };
-    await expect(
-      dispatchGatewayRequestInProcessRaw("test.entry", {}, { ...options, context: retired }),
-    ).rejects.toThrow(/closed|closing/);
+    await expect(request("test.entry", { ...options, context: retired })).rejects.toThrow(
+      /closed|closing/,
+    );
     expect(handler).not.toHaveBeenCalled();
-    await expect(
-      dispatchGatewayRequestInProcessRaw(
-        "test.entry",
-        {},
-        { ...options, context: kernel.gatewayRequestContext },
-      ),
-    ).resolves.toMatchObject({ ok: true });
+    await expect(request("test.entry", options)).resolves.toMatchObject({ ok: true });
   });
 
   it("joins typed authorization before allowing its service to start", async () => {
-    const held = createDeferredCore();
-    const reached = createDeferredCore();
+    const { held, reached, pause } = createEntryBarrier();
     const client = createOperatorWsClient();
-    client.authenticatedGitHubIdentitySync = async () => {
-      reached.resolve();
-      await held.promise;
-      client.authenticatedUserProfile = {
-        profileId: "typed-profile",
-        displayName: "Typed",
-        avatarRevision: "typed-avatar",
-        hasAvatar: false,
-        updatedAt: 1,
-      };
-      return { profileId: "typed-profile", updatedAt: 1 };
-    };
+    client.authenticatedGitHubIdentitySync = profileSync(client, pause);
     const facade = createInternalAgentTurnFacade({
       client,
       getContext: () => kernel.gatewayRequestContext,
     });
     kernel.dedupe.set("agent:entry-typed", { ts: Date.now(), ok: true, payload: { cached: true } });
     const result = facade.dispatchRaw({ message: "cached", idempotencyKey: "entry-typed" });
-    const settled = result.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
-    let closeSettled = false;
-    let closing: Promise<void> | undefined;
-    try {
-      await reached.promise;
-      closing = kernel.prepareClose().then(() => {
-        closeSettled = true;
-      });
-      await nextTurn();
-      expect.soft(closeSettled).toBe(false);
-      held.resolve();
-      expect(await settled).toMatchObject({
-        error: expect.objectContaining({ message: expect.stringMatching(/closed|closing/) }),
-      });
-      await closing;
-    } finally {
-      held.resolve();
-      await settled;
-      await closing;
-    }
+    const outcome = track(settled(result));
+    const closed = vi.fn();
+    await reached.promise;
+    const closing = track(kernel.prepareClose().then(closed));
+    await nextTurn();
+    expect.soft(closed).not.toHaveBeenCalled();
+    held.resolve();
+    expect(await outcome).toMatchObject({
+      error: expect.objectContaining({ message: expect.stringMatching(/closed|closing/) }),
+    });
+    await closing;
   });
 });

@@ -103,7 +103,6 @@ export {
   managedStreamCleanupRegistrations,
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
-  withTrustedEnvProxyGuardedFetchModeMock,
 };
 
 export function installProviderTransportFetchTestHooks() {

@@ -1,5 +1,6 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import type { SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
 import type {
   SessionEntryReplacementSelection,
@@ -13,7 +14,6 @@ import type {
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
@@ -111,7 +111,17 @@ export type SessionExactEntriesWorkerSelection =
       projection: "list";
     };
 
-export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
+export type SessionExactEntriesWorkerRequest = (
+  | SessionExactEntriesWorkerSelection
+  | {
+      sessionKeys: readonly string[];
+      selection: {
+        kind: "transcript-aliases";
+        sessionIds: readonly string[];
+      };
+      projection: "list";
+    }
+) & {
   /** Validate current entry and conversation predicates in one reader snapshot. */
   sourceChecks?: SessionSourcePredicate[];
   manualCompact?: { sessionId: string; sources: SessionSourcePredicate[] };

@@ -1,3 +1,5 @@
+import { setImmediate as yieldToScheduler } from "node:timers/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { codeModeGcAttribution, logCodeModeFailure } from "../logging/code-mode-diagnostic.js";
 import type { AgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
@@ -13,6 +15,7 @@ import {
 import {
   usableResumeBudgetMs,
   waitForCodeModePending,
+  isCodeModePendingReady,
   type CodeModeCallBudget,
 } from "./code-mode-execution-budget.js";
 import type {
@@ -61,7 +64,7 @@ import {
   type CodeModeRunOwner,
 } from "./code-mode-state.js";
 import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
-import { codeModeWaitRunUnavailableMessage } from "./code-mode-wait-errors.js";
+import { resolveCodeModeWaitRun } from "./code-mode-wait-errors.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
 import { resolveCatalog } from "./tool-search-catalog.js";
@@ -274,6 +277,19 @@ function dispatchCodeModeRequests(
   );
 }
 
+function codeModeDiagnosticError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  // Worker notifications serialize Errors. Only native names may select a diagnostic category.
+  const name = isRecord(error) ? error.name : undefined;
+  const Constructor =
+    [EvalError, RangeError, ReferenceError, SyntaxError, TypeError, URIError].find(
+      (candidate) => candidate.name === name,
+    ) ?? Error;
+  return new Constructor(codeModeFailureMessage(error));
+}
+
 function createInlineHost(
   params: Omit<CodeModeSettlementContext, "result">,
   pending: PendingBridgeState[],
@@ -290,7 +306,7 @@ function createInlineHost(
       if (failurePhase === "bridge") {
         return;
       }
-      logCodeModeFailure(error, {
+      logCodeModeFailure(codeModeDiagnosticError(error), {
         sessionId: params.ctx.sessionId,
         sessionKey: params.ctx.sessionKey,
         runId: params.ctx.runId,
@@ -320,13 +336,20 @@ function createInlineHost(
       // Own an existing run slot before any host effect, through internal parking.
       reserve();
       dispatchCodeModeRequests(params, pending, boundary.pendingRequests);
-      // Required waits park the VM, not the caller. The same owner resumes its
-      // exact continuation on settlement without returning an abandonable handle.
+      // A ready required reply needs no checkpoint. Give immediate bridge promise
+      // chains one turn to settle, charged to the original allowance. Actual waits
+      // still park to pause guest time and release compute; pressure always wins.
+      const signal = AbortSignal.any([params.signal, context.signal, context.yieldSignal]);
       if (params.owner.completionRequired) {
-        return { kind: "checkpoint" };
+        if (signal.aborted || params.budget.deadlineMs <= performance.now()) {
+          return { kind: "checkpoint" };
+        }
+        await yieldToScheduler();
+        if (!isCodeModePendingReady(pending, boundary.settlementMode)) {
+          return { kind: "checkpoint" };
+        }
       }
       // Pressure parks the VM, never the cell-owned host operations.
-      const signal = AbortSignal.any([params.signal, context.signal, context.yieldSignal]);
       const ready = await waitForCodeModePending(
         pending,
         boundary.settlementMode,
@@ -628,25 +651,7 @@ export async function runWait(params: {
   onRuntime?: (runtime: ToolSearchRuntime) => void;
 }) {
   removeExpiredRuns();
-  if (resumingRunIds.has(params.runId)) {
-    throw new ToolInputError(
-      "code mode run is already being resumed by another wait. Use that wait’s result before deciding the next step; do not issue another concurrent wait or replay earlier actions.",
-    );
-  }
-  const state = activeRuns.get(params.runId);
-  if (!state) {
-    throw new ToolInputError(codeModeWaitRunUnavailableMessage(params.ctx));
-  }
-  if (state.ctx.runId && state.ctx.runId !== params.ctx.runId) {
-    throw new ToolInputError("code mode run belongs to a different agent run.");
-  }
-  if (
-    (state.ctx.sessionId && state.ctx.sessionId !== params.ctx.sessionId) ||
-    (state.ctx.sessionKey && state.ctx.sessionKey !== params.ctx.sessionKey) ||
-    (state.ctx.agentId && state.ctx.agentId !== params.ctx.agentId)
-  ) {
-    throw new ToolInputError("code mode run belongs to a different session.");
-  }
+  const state = resolveCodeModeWaitRun(params.runId, params.ctx);
   params.onRuntime?.(state.runtime);
   resumingRunIds.add(state.runId);
   // One wait call shares a single monotonic deadline across draining the prior

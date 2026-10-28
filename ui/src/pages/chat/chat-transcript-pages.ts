@@ -1,4 +1,4 @@
-import { readChatThreadMessageIdentity } from "./chat-thread-items.ts";
+import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 
 function transcriptEntryKey(message: unknown): string | undefined {
   const identity = readChatThreadMessageIdentity(message);

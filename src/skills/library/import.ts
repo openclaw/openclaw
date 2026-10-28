@@ -15,6 +15,7 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { installSkillFromClawHub } from "../lifecycle/clawhub.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import {
+  decodeSkillLibraryFile,
   prepareSkillLibraryBundle,
   readSkillLibraryTree,
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
@@ -39,7 +40,7 @@ async function publishDirectory(
     {
       slug,
       expectedRevision: null,
-      content: Buffer.from(markdown.content, "base64").toString("utf8"),
+      content: decodeSkillLibraryFile(markdown).toString("utf8"),
       files: files.filter(
         (file) => file !== markdown && !/^\.(?:clawhub|clawdhub)\//u.test(file.path),
       ),

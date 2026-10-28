@@ -65,20 +65,16 @@ export type ResolvedIdentityAvatar =
   | { kind: "profile"; url: string }
   | { kind: "initials"; initials: string; colorSeed: number };
 
-function initialsFromLabel(label: string): string {
-  const words = label.trim().split(/\s+/u).filter(Boolean).slice(0, 2);
-  const initials = words.map((word) => takeGraphemes(word, 1)).join("");
-  return initials.toUpperCase() || "?";
-}
-
 export function resolveAvatarInitials(
   input: IdentityAvatarInput,
 ): Extract<ResolvedIdentityAvatar, { kind: "initials" }> {
   const id = input.id?.trim();
   const label = formatSenderLabel(input) ?? "?";
+  const words = label.trim().split(/\s+/u).filter(Boolean).slice(0, 2);
+  const initials = words.map((word) => takeGraphemes(word, 1)).join("");
   return {
     kind: "initials",
-    initials: initialsFromLabel(label),
+    initials: initials.toUpperCase() || "?",
     colorSeed: fnv1aUtf16(id || label),
   };
 }

@@ -12,14 +12,11 @@ vi.mock("./cli-utils.js", async (importOriginal) => ({
   runNodesCommand: async (_label: string, action: () => Promise<void>) => action(),
 }));
 
-vi.mock("./rpc.js", async () => {
-  const actual = await vi.importActual<typeof import("./rpc.js")>("./rpc.js");
-  return {
-    ...actual,
-    resolveCliNodeId: mocks.resolveCliNodeId,
-    callNodesGatewayCli: mocks.callNodesGatewayCli,
-  };
-});
+vi.mock("./rpc.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./rpc.js")>()),
+  resolveCliNodeId: mocks.resolveCliNodeId,
+  callNodesGatewayCli: mocks.callNodesGatewayCli,
+}));
 
 vi.mock("../../gateway/call.js", () => ({
   randomIdempotencyKey: () => "location-test-key",
@@ -32,10 +29,13 @@ vi.mock("../../runtime.js", () => ({
   },
 }));
 
-async function createNodesCommand(): Promise<Command> {
+async function getLocation(...options: string[]) {
   const program = new Command();
   await registerNodesCli(program, ["node", "openclaw", "nodes", "location"]);
-  return program.exitOverride().configureOutput({ writeErr: () => {}, writeOut: () => {} });
+  program.exitOverride().configureOutput({ writeErr: () => {}, writeOut: () => {} });
+  return program.parseAsync(["nodes", "location", "get", "--node", "node-1", ...options], {
+    from: "user",
+  });
 }
 
 describe("nodes location get validation", () => {
@@ -44,40 +44,16 @@ describe("nodes location get validation", () => {
   });
 
   it("rejects unsupported accuracy values before resolving or invoking a node", async () => {
-    const nodes = await createNodesCommand();
-
-    await expect(
-      nodes.parseAsync([
-        "node",
-        "openclaw",
-        "nodes",
-        "location",
-        "get",
-        "--node",
-        "node-1",
-        "--accuracy",
-        "approximate",
-      ]),
-    ).rejects.toThrow("invalid --accuracy (use coarse|balanced|precise)");
+    await expect(getLocation("--accuracy", "approximate")).rejects.toThrow(
+      "invalid --accuracy (use coarse|balanced|precise)",
+    );
 
     expect(mocks.resolveCliNodeId).not.toHaveBeenCalled();
     expect(mocks.callNodesGatewayCli).not.toHaveBeenCalled();
   });
 
   it("normalizes and forwards supported accuracy values", async () => {
-    const nodes = await createNodesCommand();
-
-    await nodes.parseAsync([
-      "node",
-      "openclaw",
-      "nodes",
-      "location",
-      "get",
-      "--node",
-      "node-1",
-      "--accuracy",
-      "PRECISE",
-    ]);
+    await getLocation("--accuracy", "PRECISE");
 
     expect(mocks.callNodesGatewayCli).toHaveBeenCalledWith(
       "node.invoke",
@@ -91,21 +67,9 @@ describe("nodes location get validation", () => {
   it.each(["", " \t "])(
     "rejects explicit blank --location-timeout %j before resolving or invoking a node",
     async (locationTimeout) => {
-      const nodes = await createNodesCommand();
-
-      await expect(
-        nodes.parseAsync([
-          "node",
-          "openclaw",
-          "nodes",
-          "location",
-          "get",
-          "--node",
-          "node-1",
-          "--location-timeout",
-          locationTimeout,
-        ]),
-      ).rejects.toThrow("--location-timeout must be a positive integer");
+      await expect(getLocation("--location-timeout", locationTimeout)).rejects.toThrow(
+        "--location-timeout must be a positive integer",
+      );
 
       expect(mocks.resolveCliNodeId).not.toHaveBeenCalled();
       expect(mocks.callNodesGatewayCli).not.toHaveBeenCalled();

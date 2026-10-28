@@ -1,8 +1,10 @@
 /* @vitest-environment jsdom */
 
+import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { switchChatSetting } from "./chat-session.ts";
@@ -12,7 +14,10 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 
-beforeEach(installTranscriptDomMocks);
+beforeEach(() => {
+  installTranscriptDomMocks();
+  vi.stubGlobal("indexedDB", new IDBFactory());
+});
 afterEach(resetTranscriptTestDom);
 
 it.each(["confirmed", "rejected"] as const)(
@@ -52,8 +57,9 @@ it.each(["confirmed", "rejected"] as const)(
       await refreshPane(pane);
       first = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "off" });
       latest = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" });
-      expect(patch).toHaveBeenCalledOnce();
       expect(selectedChatSessionRow(pane.state)).toMatchObject({ thinkingLevel: "low" });
+      await withSessionMutationOperations(() => undefined);
+      expect(patch).toHaveBeenCalledOnce();
 
       firstReply.reject(new Error("Synthetic superseded settings rejection"));
       await expect(first).resolves.toBe(false);

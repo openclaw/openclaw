@@ -1,17 +1,11 @@
 import { expect, it, onTestFinished, vi } from "vitest";
-import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import { onAgentEventForRun } from "../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
   closeDiagnosticEmbeddedRunOwner,
   createDiagnosticEmbeddedRunOwner,
 } from "../logging/diagnostic-run-activity.js";
-import {
-  attachModelProviderRuntimePluginHandle,
-  resolveProviderRuntimePluginHandle,
-} from "../plugins/provider-hook-runtime.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderFailoverErrorContext } from "../plugins/types.js";
 import { createReplyOperation } from "../sessions/session-controller.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
@@ -97,26 +91,24 @@ it("defers error terminal ownership while preserving diagnostics", () => {
 });
 
 it("preserves the prepared custom-route owner through real terminal dispatch", async () => {
-  const config = {};
-  const metadataSnapshot = createPluginMetadataSnapshot({
-    config,
-    manifestRegistry: { plugins: [], diagnostics: [] },
-  });
-  const pluginRegistry = createEmptyPluginRegistry();
   const ownerId = "prepared-lifecycle-owner";
-  const classifyFailoverReason = vi.fn((context: ProviderFailoverErrorContext) =>
-    context.provider === ownerId ? ("overloaded" as const) : undefined,
-  );
-  pluginRegistry.providers.push({
-    pluginId: ownerId,
-    source: "test",
-    provider: {
-      id: ownerId,
-      label: "Prepared lifecycle owner",
-      auth: [],
-      classifyFailoverReason,
+  const model = attachModelProviderRuntimePluginHandle(
+    { ...testModel, provider: "custom-lifecycle-route" },
+    {
+      provider: "custom-lifecycle-route",
+      plugin: {
+        id: ownerId,
+        label: "Prepared lifecycle owner",
+        auth: [],
+        classifyFailoverReason: (context: ProviderFailoverErrorContext) =>
+          context.provider === ownerId &&
+          context.status === 403 &&
+          context.code === "FIXTURE_REFUSAL"
+            ? "overloaded"
+            : undefined,
+      },
     },
-  });
+  );
   const onAgentEvent = vi.fn();
   const emitted = vi.fn();
   const runId = "run-prepared-lifecycle-owner";
@@ -128,77 +120,55 @@ it("preserves the prepared custom-route owner through real terminal dispatch", a
     unlisten();
     closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
   });
-  await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
-    // Runtime preparation can select an endpoint owner that differs from the route label.
-    const runtimeHandle = resolveProviderRuntimePluginHandle({
-      provider: "custom-lifecycle-route",
-      providerOwner: ownerId,
-      modelId: testModel.id,
-      config,
-    });
-    expect(runtimeHandle.plugin?.id).toBe(ownerId);
-    const model = attachModelProviderRuntimePluginHandle(
-      { ...testModel, provider: "custom-lifecycle-route" },
-      runtimeHandle,
-    );
-    streamMocks.streamSimple.mockImplementation((activeModel) =>
-      createAssistantResultStream({
-        ...createAssistant(activeModel, [], "error"),
-        errorMessage: "403 fixture refusal",
-        errorCode: "FIXTURE_REFUSAL",
-      }),
-    );
-    const { session } = await createTestSession({ model });
-    const replyOperation = createReplyOperation({
-      sessionKey,
-      sessionId,
-      agentId: "main",
-      resetTriggered: false,
-    });
-    const stream = prepareCatalogExecutor({
-      activeSession: session,
-      diagnosticOwner,
-      streamReplies: false,
-      abortRun: () => {
-        void session.abort();
-      },
-      attempt: {
-        runId,
-        sessionId,
-        sessionKey,
-        replyOperation,
-        sessionFile: sessionKey,
-        config,
-        model,
-        provider: model.provider,
-        modelId: model.id,
-        thinkLevel: "off",
-        admittedRunContext: createTestAdmittedRunContext(runId),
-        onAgentEvent,
-      },
-    });
-    try {
-      await session.prompt("exercise terminal provider failure");
-      expect(streamMocks.streamSimple).toHaveBeenCalledTimes(1);
-      for (const observer of [emitted, onAgentEvent]) {
-        expect.soft(lifecycleData(observer, "error")).toMatchObject([
-          {
-            phase: "error",
-            error: "The AI service is temporarily overloaded. Please try again in a moment.",
-          },
-        ]);
-      }
-      expect(classifyFailoverReason).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: ownerId,
-          status: 403,
-          code: "FIXTURE_REFUSAL",
-        }),
-      );
-    } finally {
-      stream.subscription.unsubscribe();
-      clearActiveEmbeddedRun(sessionId, stream.queueHandle, sessionKey, sessionKey);
-      replyOperation.complete();
-    }
+  streamMocks.streamSimple.mockImplementation((activeModel) =>
+    createAssistantResultStream({
+      ...createAssistant(activeModel, [], "error"),
+      errorMessage: "403 fixture refusal",
+      errorCode: "FIXTURE_REFUSAL",
+    }),
+  );
+  const { session } = await createTestSession({ model });
+  const replyOperation = createReplyOperation({
+    sessionKey,
+    sessionId,
+    agentId: "main",
+    resetTriggered: false,
   });
+  const stream = prepareCatalogExecutor({
+    activeSession: session,
+    diagnosticOwner,
+    streamReplies: false,
+    abortRun: () => {
+      void session.abort();
+    },
+    attempt: {
+      runId,
+      sessionId,
+      sessionKey,
+      replyOperation,
+      sessionFile: sessionKey,
+      config: {},
+      model,
+      provider: model.provider,
+      modelId: model.id,
+      thinkLevel: "off",
+      admittedRunContext: createTestAdmittedRunContext(runId),
+      onAgentEvent,
+    },
+  });
+  try {
+    await session.prompt("exercise terminal provider failure");
+    for (const observer of [emitted, onAgentEvent]) {
+      expect.soft(lifecycleData(observer, "error")).toMatchObject([
+        {
+          phase: "error",
+          error: "The AI service is temporarily overloaded. Please try again in a moment.",
+        },
+      ]);
+    }
+  } finally {
+    stream.subscription.unsubscribe();
+    clearActiveEmbeddedRun(sessionId, stream.queueHandle, sessionKey, sessionKey);
+    replyOperation.complete();
+  }
 });

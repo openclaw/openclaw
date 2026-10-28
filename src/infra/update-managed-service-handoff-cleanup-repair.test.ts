@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { readManagedHandoffRepairFacts } from "./update-managed-service-handoff-cleanup.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease-types.js";
 import { retainedCheckpointBinding } from "./update-retained-checkpoint.test-support.js";
@@ -14,6 +15,7 @@ import {
 import { createUpdateRun } from "./update-run-ledger.js";
 import { listUpdateRunsAsync } from "./update-run-reader.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { createUpdateRunRecordFixture } from "./update-run-record.test-support.js";
 import { assertUpdateRecoveryAdmission } from "./update-run-recovery-admission.js";
 
 vi.mock("./update-run-reader.js", () => ({ listUpdateRunsAsync: vi.fn() }));
@@ -47,9 +49,10 @@ beforeEach(async () => {
   history.mockReset().mockResolvedValue([]);
   vi.mocked(assertUpdateRecoveryAdmission).mockReset().mockResolvedValue(undefined);
 });
+afterEach(() => vi.restoreAllMocks());
 
-async function helper(name: string, fields: Record<string, unknown> = {}) {
-  const directory = path.join(root, `openclaw-update-run-handoff-${name}`);
+async function helper(name: string, fields: Record<string, unknown> = {}, parent = root) {
+  const directory = path.join(parent, `openclaw-update-run-handoff-${name}`);
   await fs.mkdir(directory, { mode: 0o700 });
   await fs.writeFile(
     path.join(directory, "handoff.json"),
@@ -69,25 +72,13 @@ function run(
   runId: string,
   origin: UpdateRunRecord["origin"] = { driver: localDriver() },
 ): UpdateRunRecord {
-  return {
-    runId,
+  return createUpdateRunRecordFixture(runId, {
     origin,
-    target: {},
-    before: {},
-    after: {},
-    trigger: "cli",
-    phase: "finished",
-    status: "failed",
     reason: "update-failed",
-    steps: [],
-    verification: {},
-    repair: [],
     createdAtMs: 10,
     updatedAtMs: 20,
-    confirmedAtMs: null,
     finishedAtMs: 20,
-    downtimeMs: null,
-  };
+  });
 }
 
 async function expectFacts(
@@ -124,6 +115,25 @@ describe("managed handoff repair facts", () => {
     history.mockResolvedValue([run("retained-run", {})]);
 
     await expectFacts("retained-run", [directory, context, capture]);
+  });
+
+  it("finds a Gateway-started macOS helper under the service TMPDIR", async () => {
+    // The LaunchAgent's TMPDIR is <state>/tmp; this CLI's os.tmpdir() is another root.
+    const serviceTmp = path.join(env.OPENCLAW_STATE_DIR!, "tmp");
+    await fs.mkdir(serviceTmp, { recursive: true, mode: 0o700 });
+    const directory = await helper("gateway", {}, serviceTmp);
+    history.mockResolvedValue([run("retained-run", {})]);
+
+    const realpath = fs.realpath.bind(fs);
+    const platform = mockProcessPlatform("darwin");
+    vi.spyOn(fs, "realpath").mockImplementation(async (...args: Parameters<typeof fs.realpath>) => {
+      if (String(args[0]) === serviceTmp) {
+        platform.mockRestore();
+      }
+      return await realpath(...args);
+    });
+
+    await expectFacts("retained-run", [directory]);
   });
 
   it("correlates ledger drivers only by matching PID, start identity, and hostname", async () => {

@@ -13,18 +13,16 @@ import { environmentDeviceDisabledReason } from "./hosted-environments.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 import { resolveNewSessionWhere } from "./preferences.ts";
 
-type DraftTargetPlace = {
-  requiredPlacement: boolean;
-  hostedEnvironment: unknown;
-  devices: () => DevicePlacementOption[];
-  worktree: boolean;
-  folder: string;
-  deviceFolderAvailable: boolean;
-  suggestedCloudProfile: DraftSuggestedCloudProfile;
-};
-
 type DraftTargetContext = {
-  place: DraftTargetPlace;
+  place: {
+    requiredPlacement: boolean;
+    hostedEnvironment: unknown;
+    devices: () => DevicePlacementOption[];
+    worktree: boolean;
+    folder: string;
+    deviceFolderAvailable: boolean;
+    suggestedCloudProfile: DraftSuggestedCloudProfile;
+  };
   read: () => DraftPlaceSnapshot;
   selection: ReturnType<typeof createDraftPlaceRestoreState>;
   callbacks: DraftPlaceCallbacks;

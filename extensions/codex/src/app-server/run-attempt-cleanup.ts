@@ -4,17 +4,14 @@ import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { scheduleCodexNativeHookRelayUnregister } from "./native-hook-relay.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { clearCodexBindingForClient } from "./session-binding.js";
-import {
-  isSameCodexAppServerThreadOwner,
-  withExclusiveCodexAppServerThread,
-} from "./thread-ownership.js";
+import { withExclusiveCodexAppServerThread } from "./thread-ownership.js";
 
 export async function cleanupCodexAttempt(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
@@ -54,6 +51,11 @@ export async function cleanupCodexAttempt(
   freezeRunTerminalOutcome();
   // Finalization already owns the bounded checkpoint join. Exceptional exits
   // still fence immediately, without restarting a timed-out settlement's wait.
+  if (!state.projectionClosed) {
+    activeTurn.activeProjector.prepareTerminalToolResultCheckpoint(
+      prompt.context.attemptTools.toolBridge.telemetry,
+    );
+  }
   const projectionClose = state.projectionClosed
     ? undefined
     : activeTurn.activeProjector.closeProjection();
@@ -143,14 +145,6 @@ export async function cleanupCodexAttempt(
           bindingStore.withLease(
             bindingIdentity,
             async () => {
-              if (
-                !isSameCodexAppServerThreadOwner(
-                  await bindingStore.readAsync(bindingIdentity),
-                  resourceState.thread,
-                )
-              ) {
-                throw new Error("Codex plugin refresh lost its managed thread binding.");
-              }
               if (!(await releaseThreadSubscription(connection.assertCurrent))) {
                 throw new Error("Plugin reload could not release the previous Codex thread.");
               }
@@ -172,7 +166,9 @@ export async function cleanupCodexAttempt(
       // Codex keeps approvals in its native session; independent conversations
       // must retain their own subscriptions instead of evicting one another.
       const bindingReleased =
-        incognito && !retainLiveThread ? await resources.clearThreadBinding() : true;
+        incognito && !retainLiveThread
+          ? await resources.clearThreadBinding(resourceState.thread)
+          : true;
       // Clear first: a newer binding owner keeps its live subscription.
       if (
         !retainLiveThread &&

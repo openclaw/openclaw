@@ -1,6 +1,5 @@
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   mergeDiscordAccountConfig,
@@ -27,7 +26,6 @@ export function createDiscordRuntimeAccountContext(
 
 export function resolveDiscordClientAccountContext(
   opts: Pick<DiscordClientOpts, "cfg" | "accountId">,
-  runtime?: Pick<RuntimeEnv, "error">,
 ) {
   const resolvedCfg = requireRuntimeConfig(opts.cfg, "Discord client");
   const accountId = normalizeAccountId(opts.accountId);
@@ -44,7 +42,7 @@ export function resolveDiscordClientAccountContext(
   return {
     cfg: resolvedCfg,
     account,
-    proxyFetch: resolveDiscordProxyFetchForAccount(account, resolvedCfg, runtime),
+    proxyFetch: resolveDiscordProxyFetchForAccount(account, resolvedCfg),
   };
 }
 

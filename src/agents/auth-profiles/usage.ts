@@ -11,6 +11,7 @@ import {
   resolveExpiresAtMsFromEpochSeconds,
 } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
+import { omitNullRequestHeaders } from "../../../packages/llm-core/src/utils/request-headers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cancelUnreadResponseBody } from "../../infra/http-body.js";
@@ -224,7 +225,7 @@ async function probeWhamForCooldown(
 
     const res = await fetch(WHAM_USAGE_URL, {
       method: "GET",
-      headers,
+      headers: omitNullRequestHeaders(headers),
       signal: AbortSignal.timeout(WHAM_TIMEOUT_MS),
     });
 
@@ -556,6 +557,7 @@ export async function markAuthProfileFailure(params: {
   agentDir?: string;
   runId?: string;
   modelId?: string;
+  retryAfterMs?: number;
 }): Promise<void> {
   const { store, profileId, reason, agentDir, modelId } = params;
   const profile = store.profiles[profileId];
@@ -591,6 +593,7 @@ export async function markAuthProfileFailure(params: {
         observedAt,
         reason,
         modelId,
+        retryAfterMs: params.retryAfterMs,
         whamResult,
         probeEligible: shouldProbeWham,
       });
@@ -660,10 +663,7 @@ export async function markAuthProfileBlockedUntil(params: {
         cooldownClassification: undefined,
         cooldownModel: undefined,
         lastFailureAt: now,
-        failureCounts: {
-          ...previousStats?.failureCounts,
-          rate_limit: (previousStats?.failureCounts?.rate_limit ?? 0) + 1,
-        },
+        lastRateLimitAt: now,
       };
       freshStore.usageStats ??= {};
       freshStore.usageStats[profileId] = nextStats;

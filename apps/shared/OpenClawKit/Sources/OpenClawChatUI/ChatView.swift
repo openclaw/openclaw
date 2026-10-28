@@ -481,10 +481,17 @@ extension OpenClawChatView {
             .safeAreaInset(edge: .top, spacing: 0) {
                 self.messageListNoticeBanner(hasVisibleContent: hasVisibleContent)
             }
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                let distanceFromBottom = geometry.contentSize.height - geometry.visibleRect.maxY
-                return distanceFromBottom <= Layout.liveEdgeThreshold
-            } action: { _, isAtLiveEdge in
+            // Let native layout follow a growing live bubble without issuing a command per word.
+            .defaultScrollAnchor(
+                self.followTarget == .latest && !self.isUserScrolling ? .bottom : nil,
+                for: .sizeChanges)
+            // Lazy row sizing can cross the threshold repeatedly within one layout. Observe the
+            // distance so a coalesced update still reconciles the stored live-edge state.
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentSize.height - geometry.visibleRect.maxY
+            } action: { _, distanceFromBottom in
+                let isAtLiveEdge = distanceFromBottom <= Layout.liveEdgeThreshold
+                guard self.isAtLiveEdge != isAtLiveEdge else { return }
                 self.isAtLiveEdge = isAtLiveEdge
                 guard self.hasPerformedInitialScroll else { return }
                 if isAtLiveEdge, !self.isUserScrolling, !self.isFollowingTurn, self.searchMessageID == nil {
@@ -685,9 +692,9 @@ extension OpenClawChatView {
         case let .message(message):
             self.messageRow(
                 for: message,
-                metadata: metadata[message.id],
+                metadata: message.presentationOwnsFooter ? metadata[message.id] : nil,
                 contextWindowTokens: contextWindowTokens,
-                showsActions: !isGrouped || message.id == answerID)
+                showsActions: !isGrouped || message.presentationID == answerID)
                 .background(
                     RoundedRectangle(cornerRadius: 12)
                         .fill(OpenClawChatTheme.accent.opacity(self.searchMessageID == message.id ? 0.08 : 0)))
@@ -706,7 +713,7 @@ extension OpenClawChatView {
             ChatCompletedWorkDisclosure(work: work) { message in
                 self.messageRow(
                     for: message,
-                    metadata: metadata[message.id],
+                    metadata: message.presentationOwnsFooter ? metadata[message.id] : nil,
                     contextWindowTokens: contextWindowTokens,
                     showsActions: !isGrouped)
             }
@@ -715,21 +722,23 @@ extension OpenClawChatView {
 
     @ViewBuilder
     private var liveAssistantContent: some View {
-        if self.showsWorkingIndicator {
-            ChatTypingIndicatorBubble(
-                style: self.style,
-                assistantName: self.assistantName,
-                assistantAvatarText: self.assistantAvatarText,
-                assistantAvatarTint: self.assistantAvatarTint,
-                showsAssistantAvatar: self.showsAssistantAvatars,
-                isClean: self.composerChrome == .clean,
-                runIdentity: self.viewModel.workingIndicatorIdentity,
-                outputTokens: self.viewModel.liveRunOutputTokens,
-                status: self.viewModel.runStartupStatus)
-                .equatable()
+        ChatRunStatusContent {
+            if self.showsWorkingIndicator {
+                ChatTypingIndicatorBubble(
+                    style: self.style,
+                    assistantName: self.assistantName,
+                    assistantAvatarText: self.assistantAvatarText,
+                    assistantAvatarTint: self.assistantAvatarTint,
+                    showsAssistantAvatar: self.showsAssistantAvatars,
+                    isClean: self.composerChrome == .clean,
+                    runIdentity: self.viewModel.workingIndicatorIdentity,
+                    outputTokens: self.viewModel.liveRunOutputTokens,
+                    status: self.viewModel.runStartupStatus)
+                    .equatable()
+            }
         }
 
-        if let text = viewModel.liveAssistantText {
+        ChatLiveAssistantText(viewModel: self.viewModel) { text in
             let preparedText = ChatStreamingAssistantText(
                 sourceText: text,
                 includesThinking: self.displayOptions.contains(.reasoning))
@@ -755,6 +764,8 @@ extension OpenClawChatView {
         contextWindowTokens: Int?,
         showsActions: Bool = true) -> some View
     {
+        let actionMessage = msg.presentationBlockIndex == nil ? msg :
+            self.viewModel.transcriptMessages.first(where: { $0.id == msg.id }) ?? msg
         let isUser = msg.role.lowercased() == "user"
         let bubble = ChatMessageBubble(
             message: msg,
@@ -805,12 +816,14 @@ extension OpenClawChatView {
                 alignment: isUser ? .trailing : .leading)
         let row = VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
             bubble
-            ChatMessageReactions(viewModel: self.viewModel, message: msg)
+            if msg.presentationOwnsFooter {
+                ChatMessageReactions(viewModel: self.viewModel, message: msg)
+            }
             if let outboxState = self.viewModel.outboxState(for: msg.id) {
-                ChatOutboxStatusLabel(state: outboxState)
+                ChatOutboxStatusLabel(state: outboxState, queueMode: self.viewModel.outboxQueueMode(for: msg.id))
                     .padding(.trailing, 8)
             }
-            if let speech = self.speech,
+            if msg.presentationOwnsFooter, let speech = self.speech,
                let isPreparing = self.speechChipIsPreparing(speech, messageID: msg.id)
             {
                 ChatSpeechStatusChip(isPreparing: isPreparing) { speech.stop() }
@@ -818,7 +831,7 @@ extension OpenClawChatView {
             }
             #if os(iOS)
             if !isUser, showsActions {
-                self.messageActionsMenu(for: msg)
+                self.messageActionsMenu(for: actionMessage)
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
                     .font(OpenClawChatTypography.caption)
@@ -834,15 +847,15 @@ extension OpenClawChatView {
             #if os(macOS)
             if self.isDesktopLayout, showsActions, isUser || self.isListenable(msg) {
                 HStack(spacing: 12) {
-                    self.copyMessageButton(for: msg)
+                    self.copyMessageButton(for: actionMessage)
                         .help("Copy message")
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
-                    self.replyMessageButton(for: msg)
+                    self.replyMessageButton(for: actionMessage)
                         .help("Reply")
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
-                    self.listenMessageButton(for: msg)
+                    self.listenMessageButton(for: actionMessage)
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
-                    self.messageActionsMenu(for: msg)
+                    self.messageActionsMenu(for: actionMessage)
                         .help("Message actions")
                         .modifier(ChatHoverAction(revealed: self.hoveredMessageID == msg.id))
                 }
@@ -864,7 +877,7 @@ extension OpenClawChatView {
                 self.hoveredMessageID = nil
             }
         }
-        row.contextMenu { ChatDeferredContent { self.messageMenuActions(for: msg) } }
+        row.contextMenu { ChatDeferredContent { self.messageMenuActions(for: actionMessage) } }
     }
 
     private func messageActionsMenu(for message: OpenClawChatMessage) -> some View {
@@ -958,7 +971,7 @@ extension OpenClawChatView {
             base = messages
         }
         var rows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: base))
-        let runWorking = self.viewModel.hasBlockingRunActivity || self.viewModel.streamingAssistantText != nil
+        let runWorking = self.viewModel.hasBlockingRunActivity || self.viewModel.hasStreamingAssistantText
         let activeRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
         // Footers and visible rows share the merged, onboarding-trimmed input, before work moves into disclosures.
         let metadata = ChatTranscriptRow.footerMetadata(
@@ -1068,7 +1081,7 @@ extension OpenClawChatView {
     }
 
     private var hasVisibleStreamingAssistantText: Bool {
-        guard let text = self.viewModel.liveAssistantText else { return false }
+        guard let text = self.viewModel.liveAssistantTextShape else { return false }
         return AssistantTextParser.hasVisibleContent(
             in: text,
             includeThinking: self.displayOptions.contains(.reasoning))
@@ -1210,7 +1223,7 @@ extension OpenClawChatView {
         if self.viewModel.messages.isEmpty,
            !self.viewModel.hasBlockingRunActivity,
            self.viewModel.pendingToolCalls.isEmpty,
-           self.viewModel.streamingAssistantText == nil
+           !self.viewModel.hasStreamingAssistantText
         {
             self.lastTurnStartID = nil
             self.followTarget = .latest
@@ -1583,5 +1596,26 @@ extension OpenClawChatView {
         #else
         .infinity
         #endif
+    }
+}
+
+/// Keep frequently changing run telemetry outside the transcript's observation scope.
+private struct ChatRunStatusContent<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        self.content()
+    }
+}
+
+/// Owns the observation of the paced words; its parent only observes live-content shape.
+private struct ChatLiveAssistantText<Content: View>: View {
+    let viewModel: OpenClawChatViewModel
+    @ViewBuilder var content: (String) -> Content
+
+    var body: some View {
+        if let text = self.viewModel.liveAssistantDisplayText {
+            self.content(text)
+        }
     }
 }

@@ -96,7 +96,7 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
   });
 
   it("preserves secret-shaped text in exact assistant transcript appends", async () => {
-    const { sessionId, sessionKey, storePath } = await seedSessionEntry();
+    const scope = await seedSessionEntry();
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
     const signature = JSON.stringify({
       id: "A".repeat(416),
@@ -104,49 +104,28 @@ describe("appendExactAssistantMessageToSessionTranscript - source fidelity", () 
       summary: [],
       encrypted_content: "Q".repeat(32) + "/LTAI" + "B".repeat(20) + "/" + "C".repeat(6),
     });
-    const result = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath,
-      config: {},
-      message: createExactAssistantMessage({
-        content: [
-          { type: "text", text: `Here is your key: ${fakeApiKey}` },
-          { type: "thinking", thinking: "", thinkingSignature: signature },
-        ],
-        provider: "github-copilot",
-        model: "test-model",
-      }),
-    });
-    expect(result.ok).toBe(true);
-    const stored = await readStoredMessages({ sessionId, sessionKey, storePath });
-    expect(stored).toMatchObject([
-      { content: [{ type: "text" }, { thinkingSignature: signature }] },
-    ]);
-    const raw = JSON.stringify(stored);
-    expect(raw).toContain(fakeApiKey);
-  });
-
-  it("emits the persisted assistant source text for inline transcript updates", async () => {
-    const { sessionId, sessionKey, storePath } = await seedSessionEntry();
-    const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
     const updates: Array<{ message?: unknown }> = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
-
     try {
       const result = await appendExactAssistantMessageToSessionTranscript({
-        sessionKey,
-        storePath,
+        ...scope,
         config: {},
         message: createExactAssistantMessage({
-          content: [{ type: "text", text: `Here is your key: ${fakeApiKey}` }],
-          provider: "openclaw",
+          content: [
+            { type: "text", text: `Here is your key: ${fakeApiKey}` },
+            { type: "thinking", thinking: "", thinkingSignature: signature },
+          ],
+          provider: "github-copilot",
           model: "test-model",
         }),
       });
-
       expect(result.ok).toBe(true);
-
-      const [diskMessage] = await readStoredMessages({ sessionId, sessionKey, storePath });
+      const stored = await readStoredMessages(scope);
+      expect(stored).toHaveLength(1);
+      const [diskMessage] = stored;
+      expect(diskMessage).toMatchObject({
+        content: [{ type: "text" }, { thinkingSignature: signature }],
+      });
       expect(JSON.stringify(diskMessage)).toContain(fakeApiKey);
       expect(updates).toHaveLength(1);
       expect(updates[0]?.message).toEqual(diskMessage);

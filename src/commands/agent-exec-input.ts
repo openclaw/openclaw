@@ -2,6 +2,7 @@ import { createReadStream, existsSync } from "node:fs";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mergeDeep } from "../infra/deep-merge.js";
 import { isPlainObject } from "../infra/plain-object.js";
@@ -26,35 +27,13 @@ export type AgentExecCliOptions = {
   json?: boolean;
 };
 
-function decodePrompt(bytes: Buffer, source: string): string {
-  let value: string;
-  try {
-    value = UTF8_DECODER.decode(bytes).replace(/^\uFEFF/, "");
-  } catch {
-    throw new Error(`${source} must be valid UTF-8`);
-  }
-  if (!value.trim()) {
-    throw new Error(`${source} is empty`);
-  }
-  return value;
-}
-
-async function readPromptStream(stream: AsyncIterable<unknown>, source: string): Promise<string> {
-  const bytes = await readByteStreamWithLimit(stream, {
-    maxBytes: AGENT_EXEC_MESSAGE_MAX_BYTES,
-    onOverflow: () => new Error(`${source} exceeds ${String(AGENT_EXEC_MESSAGE_MAX_BYTES)} bytes`),
-  });
-  return decodePrompt(bytes, source);
-}
-
 /** Resolve the one allowed prompt source for `agent exec`. */
 export async function resolveAgentExecPrompt(
   positionalMessage: string | undefined,
   messageFile: string | undefined,
 ): Promise<string> {
-  const file = messageFile?.trim();
-  const hasPositional = positionalMessage !== undefined;
-  if (hasPositional && file) {
+  const file = readNonBlankString(messageFile);
+  if (positionalMessage !== undefined && file) {
     throw new Error("Use either the prompt argument or --message-file, not both.");
   }
   if (messageFile !== undefined && !file) {
@@ -63,7 +42,22 @@ export async function resolveAgentExecPrompt(
   if (file) {
     const stream = file === "-" ? process.stdin : createReadStream(file);
     try {
-      return await readPromptStream(stream, file === "-" ? "stdin" : `Message file ${file}`);
+      const source = file === "-" ? "stdin" : `Message file ${file}`;
+      const bytes = await readByteStreamWithLimit(stream, {
+        maxBytes: AGENT_EXEC_MESSAGE_MAX_BYTES,
+        onOverflow: () =>
+          new Error(`${source} exceeds ${String(AGENT_EXEC_MESSAGE_MAX_BYTES)} bytes`),
+      });
+      let value: string;
+      try {
+        value = UTF8_DECODER.decode(bytes).replace(/^\uFEFF/, "");
+      } catch {
+        throw new Error(`${source} must be valid UTF-8`);
+      }
+      if (!value.trim()) {
+        throw new Error(`${source} is empty`);
+      }
+      return value;
     } catch (error) {
       if (file === "-" || !(error instanceof Error) || !("code" in error)) {
         throw error;
@@ -79,37 +73,6 @@ export async function resolveAgentExecPrompt(
     throw new Error("Missing prompt. Pass text or use --message-file <path>.");
   }
   return positionalMessage;
-}
-
-/**
- * Keep state under exec's lock and bind every agent to the requested folder.
- * Per-agent workspaces outrank defaults; ACP cwd can redirect the native harness.
- * Channel binding cwd needs no adjustment because exec matches no channel.
- */
-function pinExecAgentLocations(base: OpenClawConfig, cwd: string): OpenClawConfig {
-  const { session, ...root } = base;
-  const { store: _store, ...sessionWithoutStore } = session ?? {};
-  const withoutSessionStore = session ? { ...root, session: sessionWithoutStore } : base;
-  const entries = withoutSessionStore.agents?.entries;
-  if (!entries) {
-    return withoutSessionStore;
-  }
-  return {
-    ...withoutSessionStore,
-    agents: {
-      ...withoutSessionStore.agents,
-      entries: Object.fromEntries(
-        Object.entries(entries).map(([id, entry]) => {
-          const { agentDir: _agentDir, runtime, ...rest } = entry;
-          if (runtime?.type !== "acp" || runtime.acp?.cwd === undefined) {
-            return [id, { ...rest, workspace: cwd, ...(runtime ? { runtime } : {}) }];
-          }
-          const { cwd: _cwd, ...acp } = runtime.acp;
-          return [id, { ...rest, workspace: cwd, runtime: { ...runtime, acp } }];
-        }),
-      ),
-    },
-  };
 }
 
 /**
@@ -202,7 +165,32 @@ export function buildExecRunConfig(params: {
   opts?: Pick<AgentExecCliOptions, "localModelLean">;
 }): OpenClawConfig {
   const opts = params.opts ?? {};
-  const base = pinExecAgentLocations(params.base, params.cwd);
+  // Keep state under exec's lock and bind every agent to the requested folder.
+  // Per-agent workspaces outrank defaults; ACP cwd can redirect the native harness.
+  // Channel binding cwd needs no adjustment because exec matches no channel.
+  const { base: inheritedBase, cwd } = params;
+  const { session, ...root } = inheritedBase;
+  const { store: _store, ...sessionWithoutStore } = session ?? {};
+  const withoutSessionStore = session ? { ...root, session: sessionWithoutStore } : inheritedBase;
+  const entries = withoutSessionStore.agents?.entries;
+  const base: OpenClawConfig = entries
+    ? {
+        ...withoutSessionStore,
+        agents: {
+          ...withoutSessionStore.agents,
+          entries: Object.fromEntries(
+            Object.entries(entries).map(([id, entry]) => {
+              const { agentDir: _agentDir, runtime, ...rest } = entry;
+              if (runtime?.type !== "acp" || runtime.acp?.cwd === undefined) {
+                return [id, { ...rest, workspace: cwd, ...(runtime ? { runtime } : {}) }];
+              }
+              const { cwd: _cwd, ...acp } = runtime.acp;
+              return [id, { ...rest, workspace: cwd, runtime: { ...runtime, acp } }];
+            }),
+          ),
+        },
+      }
+    : withoutSessionStore;
   return mergeDeep(mergeDeep(buildExecConfigDefaults(), base), {
     agents: {
       defaults: {

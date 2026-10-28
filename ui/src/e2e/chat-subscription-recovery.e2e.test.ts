@@ -18,7 +18,10 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { width: 1280, height: 900 },
-        recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
+        recordVideo:
+          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+            ? { dir: suite.artifactDir, size: { width: 1280, height: 900 } }
+            : undefined,
       },
       async ({ page }) => {
         await page.clock.install();
@@ -47,6 +50,8 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
         await gateway.waitForRequest("sessions.messages.subscribe", { match: { key } });
+        // Early transport may send before the pane's read-retry owner attaches.
+        await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
         await pauseVirtualClock(page);
         await gateway.setMethodResponse("sessions.messages.subscribe", {
           key,

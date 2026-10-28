@@ -1,5 +1,9 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
-import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
+import {
+  answerCliHistoryOwnerProbe,
+  type CliHistoryWriter,
+} from "../../config/sessions/cli-history-boundary.js";
 import type {
   SessionMetadataOperations,
   SessionMetadataWorkerOperations,
@@ -72,8 +76,16 @@ export async function withSessionMetadataWorker<T>(
     {
       moduleUrl,
       input: undefined,
-      assertAdmission: (request) =>
-        admission.assertAdmission(transcriptPublication.unwrap(request)),
+      assertAdmission: (request) => {
+        let admitted = request;
+        // The worker's coverage check, answered by the host right before the grant.
+        if (isRecord(request.facts) && "cliHistoryOwnerProbe" in request.facts) {
+          const { cliHistoryOwnerProbe, ...facts } = request.facts;
+          answerCliHistoryOwnerProbe(cliHistoryOwnerProbe, cliWriter);
+          admitted = { ...request, facts: Object.keys(facts).length ? facts : undefined };
+        }
+        return admission.assertAdmission(transcriptPublication.unwrap(admitted));
+      },
       onAdmitted: transcriptPublication.onAdmitted,
       observeAdmission: transcriptPublication.observeAdmission,
     },

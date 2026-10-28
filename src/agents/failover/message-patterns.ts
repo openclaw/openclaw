@@ -230,6 +230,8 @@ const ERROR_PATTERNS = {
   ],
   billing: [
     BILLING_ERROR_HARD_402_RE,
+    // Already rendered billing copy re-enters classification; "usage limits" in it must not read as rate_limit.
+    /\breturned a billing error\b/i,
     /\b(?:got|returned|received)\s+(?:a\s+)?402\b(?!\s+records\b)/i,
     "payment required",
     "insufficient credits",

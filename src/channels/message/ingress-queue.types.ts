@@ -81,27 +81,6 @@ export type ChannelIngressQueueDeadLetterRecord<
   lastAttemptAt?: number;
 };
 
-type ChannelIngressQueueResubmitResult<
-  TPayload,
-  TMetadata = unknown,
-  TCompletedMetadata = unknown,
-> =
-  | {
-      kind: "resubmitted";
-      record: ChannelIngressQueueRecord<TPayload, TMetadata>;
-      previous: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
-    }
-  | { kind: "not-found" }
-  | {
-      kind: "completed";
-      record: ChannelIngressQueueCompletedRecord<TCompletedMetadata>;
-    }
-  | { kind: "active"; status: "pending" | "claimed" }
-  | {
-      kind: "unrecoverable";
-      record: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
-    };
-
 type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
   | {
       kind: "accepted";
@@ -129,16 +108,23 @@ type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
       record: ChannelIngressQueueFailedRecord;
     };
 
+type ChannelIngressQueueInput<TPayload, TMetadata> = {
+  id: string;
+  payload: TPayload;
+  metadata?: TMetadata;
+  receivedAt?: number;
+  laneKey?: string;
+};
+
 export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown> = {
   /** One durable admission for a transport batch; optional for external queue implementations. */
   enqueueBatch?(
-    events: ReadonlyArray<{
-      id: string;
-      payload: TPayload;
-      metadata?: TMetadata;
-      receivedAt?: number;
-      laneKey?: string;
-    }>,
+    events: ReadonlyArray<ChannelIngressQueueInput<TPayload, TMetadata>>,
+  ): Promise<Array<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>>>;
+  /** Atomic batch admission under current policy authority; absence is unsupported. */
+  enqueueBatchAuthorized?(
+    events: ReadonlyArray<ChannelIngressQueueInput<TPayload, TMetadata>>,
+    options: { assertCurrent: () => void },
   ): Promise<Array<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>>>;
   /** Claim a fresh singleton only when no pending or claimed row precedes it. */
   enqueueAndClaim?(
@@ -227,7 +213,23 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
   resubmit?(
     id: string,
     options?: { resubmittedAt?: number },
-  ): Promise<ChannelIngressQueueResubmitResult<TPayload, TMetadata, TCompletedMetadata>>;
+  ): Promise<
+    | {
+        kind: "resubmitted";
+        record: ChannelIngressQueueRecord<TPayload, TMetadata>;
+        previous: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
+      }
+    | { kind: "not-found" }
+    | {
+        kind: "completed";
+        record: ChannelIngressQueueCompletedRecord<TCompletedMetadata>;
+      }
+    | { kind: "active"; status: "pending" | "claimed" }
+    | {
+        kind: "unrecoverable";
+        record: ChannelIngressQueueDeadLetterRecord<TPayload, TMetadata>;
+      }
+  >;
   delete(
     idOrClaim:
       | string

@@ -106,7 +106,18 @@ struct LocalChatFixture {
         responsePrefix: "OpenClaw is connected to your gateway.",
         seedMessages: ProcessInfo.processInfo.arguments.contains("--openclaw-empty-chat-fixture")
             ? []
-            : ["Ready when you are. I can check a project, coordinate an agent, or prepare the next step."],
+            : [
+                "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
+                """
+                A small release workflow:
+
+                ```mermaid
+                flowchart TD
+                  Draft --> Review
+                  Review --> Ship
+                ```
+                """,
+            ],
         agents: [
             AgentSummary(
                 id: "main",
@@ -555,6 +566,11 @@ private actor LocalFixtureChatStore {
             let events = try JSONDecoder().decode([OpenClawAgentEventPayload].self, from: wire)
             startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: events)
         }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture"),
+           let runID = self.activeRunID
+        {
+            startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: self.externalRunEvents)
+        }
         let historyMessages: [OpenClawChatMessage] = if self.fixture.sessionIDPrefix == "screenshot-fixture",
                                                         ProcessInfo.processInfo.arguments
                                                             .contains("--openclaw-subagent-wait-fixture"),
@@ -728,8 +744,52 @@ private actor LocalFixtureChatStore {
         // Chat and its session sidebar independently subscribe to the fixture transport.
         let id = UUID()
         self.eventContinuations[id] = continuation
+        if self.fixture.sessionIDPrefix == "screenshot-fixture",
+           ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture"),
+           !self.externalRunStarted
+        {
+            self.externalRunStarted = true
+            Task {
+                try? await Task.sleep(for: .seconds(4))
+                self.publishExternalRunStatus()
+                try? await Task.sleep(for: .seconds(8))
+                self.publishExternalRunTool()
+            }
+        }
         continuation.onTermination = { [weak self] _ in
             Task { await self?.removeEventContinuation(id) }
+        }
+    }
+
+    private var externalRunStarted = false
+    private var externalRunEvents: [OpenClawAgentEventPayload] = []
+
+    private func publishExternalRunStatus() {
+        self.activeRunID = "fixture-external-run"
+        let wire = Data(#"""
+        {"runId":"fixture-external-run","sessionKey":"main","state":"status",
+         "phase":"starting_model","seq":1}
+        """#.utf8)
+        if let event = try? JSONDecoder().decode(OpenClawChatEventPayload.self, from: wire) {
+            let statusWire = Data(#"""
+            {"runId":"fixture-external-run","seq":1,"stream":"run_status","data":{"phase":"starting_model"}}
+            """#.utf8)
+            if let status = try? JSONDecoder().decode(OpenClawAgentEventPayload.self, from: statusWire) {
+                self.externalRunEvents.append(status)
+            }
+            self.publish(.chat(event))
+        }
+    }
+
+    private func publishExternalRunTool() {
+        let wire = Data(#"""
+        {"runId":"fixture-external-run","seq":2,"stream":"tool",
+         "data":{"phase":"start","name":"read","toolCallId":"external-read",
+                 "args":{"path":"external-fixture.txt"}}}
+        """#.utf8)
+        if let event = try? JSONDecoder().decode(OpenClawAgentEventPayload.self, from: wire) {
+            self.externalRunEvents.append(event)
+            self.publish(.agent(event))
         }
     }
 
@@ -966,6 +1026,13 @@ private actor LocalFixtureChatStore {
 
     private static func seedMessages(fixture: LocalChatFixture) -> [OpenClawChatMessage] {
         let now = Date().timeIntervalSince1970 * 1000
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture") {
+            return [Self.message(
+                role: "user",
+                text: "Read external-fixture.txt. Sent from another client.",
+                timestamp: now,
+                transcriptMessageID: "fixture-external-user")]
+        }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-system-notices-fixture") {
             return [
                 OpenClawChatMessage(
@@ -1025,6 +1092,62 @@ private actor LocalFixtureChatStore {
                     transcriptMessageID: "fixture-voice-prompt-2"),
                 row("CONSULT_FIRST: The previous build went on yesterday.", at: 4, spoken: false),
                 row("VOICE_SPOKEN_AFTER: The one before went on yesterday.", at: 5, spoken: true),
+            ]
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-anthropic-work-chunks-fixture") {
+            // Synthetic Anthropic-style envelopes: narration and tool_use share each
+            // assistant message; tool results separate the two narration boundaries.
+            return [
+                self.message(
+                    role: "user",
+                    text: "Check the sample project.",
+                    timestamp: now,
+                    transcriptMessageID: "work-chunks-user"),
+                OpenClawChatMessage(
+                    role: "assistant",
+                    content: [
+                        .init(type: "text", text: "I will read the sample file."),
+                        .init(
+                            type: "tool_use",
+                            id: "work-chunks-read",
+                            name: "read",
+                            arguments: AnyCodable(["path": "sample.txt"])),
+                    ],
+                    timestamp: now + 1,
+                    transcriptMessageID: "work-chunks-first",
+                    stopReason: "tool_use"),
+                OpenClawChatMessage(
+                    role: "toolResult",
+                    content: [.init(type: "text", text: "Sample configuration is valid.")],
+                    timestamp: now + 2,
+                    transcriptMessageID: "work-chunks-read-result",
+                    toolCallId: "work-chunks-read",
+                    toolName: "read"),
+                OpenClawChatMessage(
+                    role: "assistant",
+                    content: [
+                        .init(type: "text", text: "The file looks good. I will run the check."),
+                        .init(
+                            type: "tool_use",
+                            id: "work-chunks-exec",
+                            name: "exec",
+                            arguments: AnyCodable(["command": "printf checked"])),
+                    ],
+                    timestamp: now + 3,
+                    transcriptMessageID: "work-chunks-second",
+                    stopReason: "tool_use"),
+                OpenClawChatMessage(
+                    role: "toolResult",
+                    content: [.init(type: "text", text: "checked")],
+                    timestamp: now + 4,
+                    transcriptMessageID: "work-chunks-exec-result",
+                    toolCallId: "work-chunks-exec",
+                    toolName: "exec"),
+                self.message(
+                    role: "assistant",
+                    text: "All checks passed.",
+                    timestamp: now + 5,
+                    transcriptMessageID: "work-chunks-final"),
             ]
         }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {

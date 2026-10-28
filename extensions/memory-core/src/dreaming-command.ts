@@ -49,10 +49,7 @@ function lacksAdminOrOwnerForDreamingMutation(params: {
 
 export async function handleDreamingCommand(api: OpenClawPluginApi, ctx: PluginCommandContext) {
   const args = ctx.args?.trim() ?? "";
-  const [firstToken = ""] = args
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((token) => normalizeLowercaseStringOrEmpty(token));
+  const firstToken = normalizeLowercaseStringOrEmpty(args.split(/\s+/, 1)[0]);
   const currentConfig = ctx.config;
 
   if (!firstToken || firstToken === "help" || firstToken === "options" || firstToken === "phases") {

@@ -32,7 +32,7 @@ export const GITHUB_PUBLICATION_CONFIG_GUARD = {
 const scopes = ["--local"];
 const worktreeConfig = spawnSync("git", ${JSON.stringify(worktreeConfigArgs.slice(1))}, { cwd, env, timeout: 60000, maxBuffer: 128 * 1024 });
 if (worktreeConfig.error || worktreeConfig.status !== 0) {
-  throw Error("Publication workspace has unsupported Git transport configuration");
+  throw new Error("Publication workspace has unsupported Git transport configuration");
 }
 // Git rejects --worktree on linked checkouts unless the separate config is enabled.
 if (worktreeConfig.stdout.toString("utf8").trim() === "true") scopes.push("--worktree");
@@ -42,7 +42,7 @@ for (const scope of scopes) {
     cwd, env, timeout: 60000, maxBuffer: 128 * 1024,
   });
   if (result.error || result.status !== 1 || result.stdout.length) {
-    throw Error("Publication workspace has unsupported Git transport configuration");
+    throw new Error("Publication workspace has unsupported Git transport configuration");
   }
 }
 `,

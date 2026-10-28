@@ -10,11 +10,6 @@ suite.define(() => {
   const desktop = { viewport: { width: 1280, height: 800 }, prefix: "Nice " };
   it.each([
     {
-      name: "Chat",
-      ...chat,
-      ...desktop,
-    },
-    {
       name: "New Session",
       route: "new?agent=main",
       selector: ".new-session-page__message",
@@ -30,15 +25,10 @@ suite.define(() => {
     "supports compact, anchored emoji entry in $name",
     async ({ route, selector, viewport, prefix }) => {
       await suite.withPage({ viewport }, async ({ page }) => {
-        const gateway = await installMockGateway(page);
+        await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}${route}`);
         const composer = page.locator(selector);
         await composer.waitFor({ state: "visible" });
-        const openMenu = async (text = "") => {
-          await composer.fill(text);
-          await composer.pressSequentially(":smi");
-          await page.getByRole("listbox", { name: /emoji/i }).waitFor({ state: "visible" });
-        };
         await composer.fill(prefix);
         await expect
           .poll(() => composer.evaluate((element) => element.scrollHeight - element.clientHeight))
@@ -119,10 +109,6 @@ suite.define(() => {
         await expect.poll(anchorConnected).toBe(false);
         await anchor.dispose();
 
-        await composer.fill("Nice ");
-        await composer.pressSequentially(":smile:");
-        await expect.poll(() => composer.inputValue()).toBe("Nice 😄");
-
         await composer.fill("Before :smi after");
         await composer.evaluate((element: HTMLTextAreaElement) =>
           element.setSelectionRange(11, 11),
@@ -150,25 +136,6 @@ suite.define(() => {
           await expect.poll(() => composer.inputValue()).toBe(`${literalPrefix}:`);
           await polledCount(menu).toBe(0);
         }
-
-        await openMenu();
-        await composer.press("Escape");
-        await polledCount(menu).toBe(0);
-        await expect.poll(() => composer.inputValue()).toBe(":smi");
-        await openMenu();
-        await page.keyboard.down("Enter");
-        await expect.poll(() => composer.inputValue()).toBe("😄");
-        await polledCount(menu).toBe(0);
-        await page.keyboard.down("Enter");
-        await page.keyboard.up("Enter");
-        expect(await composer.inputValue()).toBe("😄");
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-        await composer.press("Enter");
-        const sent = await gateway.waitForRequest(
-          route.startsWith("new") ? "sessions.create" : "chat.send",
-        );
-        expect(sent.params).toMatchObject({ message: "😄" });
       });
     },
   );

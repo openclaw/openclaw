@@ -14,7 +14,7 @@ import {
   waitForSessionTranscriptProjection,
 } from "./session-accessor.sqlite-active-events.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
@@ -23,44 +23,24 @@ const transactionInjection = vi.hoisted(() => ({ run: null as (() => void) | nul
 
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
-  const withDelivery = (
-    owner: ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution>,
-  ): typeof owner => {
-    return {
-      ...owner,
-      get fileIdentity() {
-        return owner.fileIdentity;
-      },
-      runExisting: (source, operation, options) =>
-        owner.runExisting(
-          source,
-          (worker) =>
-            operation({
-              execute: (command, commandOptions) => {
-                if (
-                  command.type === "session.lifecycle.reset" ||
-                  command.type === "session.lifecycle.project"
-                ) {
-                  // The snapshot is prepared, but the worker has not begun its transaction.
-                  const inject = transactionInjection.run;
-                  transactionInjection.run = null;
-                  inject?.();
-                }
-                return worker.execute(command, commandOptions);
-              },
-            }),
-          options,
-        ),
-    };
-  };
+  const { decorateSessionExecutionCaptures } =
+    await import("./session-execution-delivery.test-support.js");
   return {
     ...actual,
-    captureOpenClawAgentDatabaseExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ) => withDelivery(actual.captureOpenClawAgentDatabaseExecution(...args)),
-    captureOpenClawAgentDatabasePreparationExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabasePreparationExecution>
-    ) => withDelivery(actual.captureOpenClawAgentDatabasePreparationExecution(...args)),
+    ...decorateSessionExecutionCaptures(actual, (worker) => ({
+      execute: (command, commandOptions) => {
+        if (
+          command.type === "session.lifecycle.reset" ||
+          command.type === "session.lifecycle.project"
+        ) {
+          // The snapshot is prepared, but the worker has not begun its transaction.
+          const inject = transactionInjection.run;
+          transactionInjection.run = null;
+          inject?.();
+        }
+        return worker.execute(command, commandOptions);
+      },
+    })),
   };
 });
 

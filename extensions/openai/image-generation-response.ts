@@ -2,7 +2,6 @@ import {
   inlineOpenAiCompatibleImageUrls,
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
-  type GeneratedImageAsset,
 } from "openclaw/plugin-sdk/image-generation";
 import {
   assertOkOrThrowHttpError,
@@ -11,6 +10,36 @@ import {
   type postJsonRequest,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
+import { asOptionalRecord, asSafeIntegerInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+function resolveOpenAIImageUsage(payload: unknown) {
+  const usage = asOptionalRecord(asOptionalRecord(payload)?.usage);
+  if (!usage) {
+    return undefined;
+  }
+  const projectTokenCounts = (record: Record<string, unknown>, fields: readonly string[]) =>
+    Object.fromEntries(
+      fields.flatMap((field) => {
+        const count = asSafeIntegerInRange(record[field], { min: 0 });
+        return count === undefined ? [] : [[field, count]];
+      }),
+    );
+  const counts: Record<string, number | Record<string, number>> = projectTokenCounts(usage, [
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+  ]);
+  for (const field of ["input_tokens_details", "output_tokens_details"]) {
+    const details = asOptionalRecord(usage[field]);
+    if (details) {
+      const projected = projectTokenCounts(details, ["text_tokens", "image_tokens"]);
+      if (Object.keys(projected).length > 0) {
+        counts[field] = projected;
+      }
+    }
+  }
+  return Object.keys(counts).length > 0 ? counts : undefined;
+}
 
 type ResponseParams = Pick<
   Parameters<typeof postJsonRequest>[0],
@@ -29,7 +58,7 @@ type ResponseParams = Pick<
 export async function readOpenAIImageGenerationResponse(
   response: Response,
   params: ResponseParams,
-): Promise<GeneratedImageAsset[]> {
+) {
   const timeoutMs = () =>
     resolveProviderOperationTimeoutMs({
       deadline: params.deadline,
@@ -63,5 +92,5 @@ export async function readOpenAIImageGenerationResponse(
   if (images.length === 0) {
     throw new Error(`${params.operation} response missing image data`);
   }
-  return images;
+  return { images, usage: resolveOpenAIImageUsage(payload) };
 }

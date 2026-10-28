@@ -10,6 +10,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
+import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import {
@@ -153,6 +154,29 @@ export function expectRespondError(
   expect(mockCallArg(mock)).toBe(false);
   expect(mockCallArg(mock, 0, 1)).toBeUndefined();
   return expectRecordFields(mockCallArg(mock, 0, 2), expected);
+}
+
+export function createElevatedExecApprovalFixture(approvalId: string, count: 1 | 2 = 1) {
+  const bashElevated = {
+    enabled: true,
+    allowed: true,
+    defaultLevel: "on" as const,
+  };
+  const register = () =>
+    registerExecApprovalFollowupRuntimeHandoff({
+      approvalId,
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+  return {
+    bashElevated,
+    registration: register(),
+    secondRegistration: count === 2 ? register() : undefined,
+  };
+}
+
+export function mockTelegramSessionEntry(sessionId = "existing-session-id") {
+  mockMainSessionEntry({ sessionId, lastChannel: "telegram", lastTo: "123" });
 }
 
 export function mockMainSessionEntry(
@@ -308,9 +332,8 @@ export function cronMediaCompletionEvent(): AgentInternalEvent {
   };
 }
 
-export function setupCronContinuationReleaseFixture() {
-  const sessionKey = "agent:main:cron:job-1:run:run-1";
-  const entry: SessionEntry = {
+export function readyCronContinuationEntry(): SessionEntry {
+  return {
     sessionId: "run-1",
     updatedAt: Date.now(),
     lifecycleRevision: "revision-1",
@@ -322,6 +345,11 @@ export function setupCronContinuationReleaseFixture() {
       basePersisted: true,
     },
   };
+}
+
+export function setupCronContinuationReleaseFixture() {
+  const sessionKey = "agent:main:cron:job-1:run:run-1";
+  const entry: SessionEntry = readyCronContinuationEntry();
   mocks.loadSessionEntry.mockReturnValue({
     cfg: {},
     storePath: mocks.userTurnStorePath ?? getAgentTestStorePath(),

@@ -1,15 +1,18 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { MCP_EVENTS_PROTOCOL_VERSION, requestMcpEvent } from "../../agents/mcp-event-request.js";
 import {
   prepareMcpEventConnection,
+  projectMcpEventRequester,
   type McpEventPrincipal,
 } from "../../plugins/service-mcp-events.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { readCronCallerScope } from "./cron-caller-scope.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function boundedString(value: unknown, maximum: number): value is string {
@@ -40,7 +43,7 @@ function projectCatalog(value: unknown) {
     return {
       name: event.name,
       ...(typeof event.description === "string"
-        ? { description: event.description.slice(0, 4096) }
+        ? { description: truncateUtf16Safe(event.description, 4096) }
         : {}),
       delivery: event.delivery,
       inputSchema: event.inputSchema,
@@ -62,10 +65,10 @@ export const mcpEventsHandlers: GatewayRequestHandlers = {
       (params.agentId !== undefined && !boundedString(params.agentId, 128)) ||
       (params.cursor !== undefined && !boundedString(params.cursor, 16_384))
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Expected {agentId?, serverName, cursor?}."),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Expected {agentId?, serverName, cursor?}.",
       );
       return;
     }
@@ -78,10 +81,10 @@ export const mcpEventsHandlers: GatewayRequestHandlers = {
         ?.descriptors()
         .some((entry) => entry.owner.kind === "plugin" && entry.owner.pluginId === "mcp-events")
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "Enable the MCP Events plugin to browse event sources."),
+      respondError(
+        respond,
+        ErrorCodes.UNAVAILABLE,
+        "Enable the MCP Events plugin to browse event sources.",
       );
       return;
     }
@@ -95,10 +98,10 @@ export const mcpEventsHandlers: GatewayRequestHandlers = {
       return;
     }
     if (caller && caller.agentId !== resolved.agentId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.FORBIDDEN, "MCP Events catalog is bound to the caller's agent."),
+      respondError(
+        respond,
+        ErrorCodes.FORBIDDEN,
+        "MCP Events catalog is bound to the caller's agent.",
       );
       return;
     }
@@ -117,15 +120,7 @@ export const mcpEventsHandlers: GatewayRequestHandlers = {
             },
           }
         : {}),
-      ...(requester
-        ? {
-            requester: {
-              requesterSenderId: requester.senderId,
-              messageChannel: requester.channel,
-              agentAccountId: requester.accountId,
-            },
-          }
-        : {}),
+      ...(requester ? { requester: projectMcpEventRequester(requester) } : {}),
     };
     // UI callers without native channel provenance may browse shared connectors,
     // but never borrow another user's requester-scoped OAuth/resolver connection.
@@ -197,13 +192,10 @@ export const mcpEventsHandlers: GatewayRequestHandlers = {
       }
     } catch {
       // Resolver URLs, auth headers, and remote diagnostic bodies are not catalog data.
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "MCP event catalog unavailable. Check the server's Events support, your account connection, and current access.",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.UNAVAILABLE,
+        "MCP event catalog unavailable. Check the server's Events support, your account connection, and current access.",
       );
     }
   },

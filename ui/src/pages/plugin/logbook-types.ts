@@ -18,8 +18,6 @@ export type LogbookStatusPayload = {
   timeZone: string;
 };
 
-type LogbookDistractionPayload = { startMs: number; endMs: number; title: string };
-
 export type LogbookCardPayload = {
   id: number;
   day: string;
@@ -31,21 +29,19 @@ export type LogbookCardPayload = {
   category: string;
   appPrimary?: string;
   appSecondary?: string;
-  distractions: LogbookDistractionPayload[];
+  distractions: { startMs: number; endMs: number; title: string }[];
   keyframeId?: number;
-};
-
-type LogbookDayStatsPayload = {
-  trackedMs: number;
-  distractionMs: number;
-  categories: Array<{ category: string; ms: number }>;
-  apps: Array<{ domain: string; ms: number }>;
 };
 
 export type LogbookTimelinePayload = {
   day: string;
   cards: LogbookCardPayload[];
-  stats: LogbookDayStatsPayload;
+  stats: {
+    trackedMs: number;
+    distractionMs: number;
+    categories: Array<{ category: string; ms: number }>;
+    apps: Array<{ domain: string; ms: number }>;
+  };
 };
 
 export type LogbookUiState = {

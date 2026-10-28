@@ -12,6 +12,8 @@ import {
   downloadClawHubSkillArchiveUrl,
 } from "./clawhub-artifacts.js";
 import { normalizeClawHubSha256Integrity, normalizeClawHubSha256Hex } from "./clawhub-integrity.js";
+import { captureClawHubResponse } from "./clawhub.test-support.js";
+import { makeStallingStream } from "./http-body.test-support.js";
 
 vi.mock("@openclaw/fs-safe/temp", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/temp")>()),
@@ -80,15 +82,8 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 function unendingArchive(headers: HeadersInit, firstChunk?: Uint8Array) {
   const cancel = vi.fn();
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      if (firstChunk) {
-        controller.enqueue(firstChunk);
-      }
-    },
-    cancel(reason) {
-      cancel(reason);
-    },
+  const body = makeStallingStream(firstChunk ? [firstChunk] : [], (reason) => {
+    cancel(reason);
   });
   return {
     response: new Response(body, { headers }),
@@ -173,20 +168,16 @@ describe("clawhub artifacts", () => {
 
   it("downloads ClawPack package artifacts from the version route and verifies response headers", async () => {
     const sha256Hex = digest("sha256");
-    let requestedUrl = "";
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      requestedUrl = input instanceof Request ? input.url : String(input);
-      return archiveResponse({
+    const request = captureClawHubResponse(() =>
+      archiveResponse({
         "content-type": "application/octet-stream",
         "X-ClawHub-Artifact-Sha256": sha256Hex,
-      });
-    });
+      }),
+    );
     const archive = await downloadClawHubPackageArchive(clawpackOptions);
 
     await withArchive(archive, async () => {
-      expect(new URL(requestedUrl).pathname).toBe(
-        "/api/v1/packages/demo/versions/1.2.3/artifact/download",
-      );
+      expect(request.url().pathname).toBe("/api/v1/packages/demo/versions/1.2.3/artifact/download");
       expect(path.basename(archive.archivePath)).toBe("demo-1.2.3.tgz");
       expect(archive).toMatchObject({
         artifact: "clawpack",
@@ -267,7 +258,6 @@ describe("clawhub artifacts", () => {
       if (artifact === "clawpack") {
         expect(archive).toMatchObject({
           clawpackHeaderSha256: sha256Digest,
-          clawpackHeaderSpecVersion: 3,
           npmIntegrity: `sha512-${digest("sha512", "base64")}`,
           npmShasum: digest("sha1"),
           npmTarballName: "NUL.tgz",
@@ -355,21 +345,15 @@ describe("clawhub artifacts", () => {
 
   it("does not send ambient ClawHub auth tokens to off-registry resolver archive URLs", async () => {
     process.env.CLAWHUB_TOKEN = "test-auth-token";
-    let requestedUrl = "";
-    let requestedInit: RequestInit | undefined;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      requestedUrl = input instanceof Request ? input.url : String(input);
-      requestedInit = init;
-      return archiveResponse();
-    });
+    const request = captureClawHubResponse(() => archiveResponse());
     const archive = await downloadClawHubSkillArchiveUrl({
       baseUrl: "https://clawhub.ai",
       url: "https://codeload.github.com/NVIDIA/skills/zip/abcdef",
     });
 
     await withArchive(archive, async () => {
-      expect(requestedUrl).toBe("https://codeload.github.com/NVIDIA/skills/zip/abcdef");
-      expect(new Headers(requestedInit?.headers).get("Authorization")).toBeNull();
+      expect(request.url().toString()).toBe("https://codeload.github.com/NVIDIA/skills/zip/abcdef");
+      expect(new Headers(request.init()?.headers).get("Authorization")).toBeNull();
       await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([7, 8, 9]));
     });
   });

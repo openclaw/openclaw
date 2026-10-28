@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -6,116 +6,64 @@ import {
 import { withSessionTranscriptWriteLock } from "../plugin-sdk/session-transcript-runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewaySession } from "./session-create-service.js";
+import type { CreatedGatewaySession } from "./session-create-service.types.js";
 
-async function appendImportedMessage(params: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}) {
-  await withSessionTranscriptWriteLock(
-    {
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    async (transcript) => {
-      await transcript.appendMessage({
-        message: { role: "user", content: "Imported snapshot", timestamp: 1 },
-      });
-    },
-  );
+async function appendImportedMessage({ agentId, entry, key, storePath }: CreatedGatewaySession) {
+  const scope = { agentId, sessionId: entry.sessionId, sessionKey: key, storePath };
+  await withSessionTranscriptWriteLock(scope, async (transcript) => {
+    await transcript.appendMessage({
+      message: { role: "user", content: "Imported snapshot", timestamp: 1 },
+    });
+  });
+  return scope;
 }
 
-describe("atomic Gateway session initialization", () => {
-  it("publishes a usable session only after its transcript initializer succeeds", async () => {
-    await withOpenClawTestState({ label: "atomic-session-success" }, async () => {
-      let transcriptScope:
-        | { agentId: string; sessionId: string; sessionKey: string; storePath: string }
-        | undefined;
-      const created = await createGatewaySession({
-        cfg: {},
-        key: "agent:main:atomic-success",
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-        atomicInitialization: true,
-        afterCreate: async (entry) => {
-          expect(entry.entry.initializationPending).toBe(true);
-          transcriptScope = {
-            agentId: entry.agentId,
-            sessionId: entry.entry.sessionId,
-            sessionKey: entry.key,
-            storePath: entry.storePath,
-          };
-          await appendImportedMessage(transcriptScope);
-        },
-      });
-
-      expect(created).toMatchObject({
-        ok: true,
-        postCommit: { status: "completed" },
-      });
-      if (!created.ok) {
-        throw new Error(created.error.message);
-      }
-      expect(created.entry.initializationPending).toBeUndefined();
-      expect(loadSessionEntryReadOnly({ sessionKey: created.key })?.initializationPending).toBe(
-        undefined,
-      );
-      expect(transcriptScope).toBeDefined();
-      expect(JSON.stringify(await loadTranscriptEvents(transcriptScope!))).toContain(
-        "Imported snapshot",
-      );
+it.each([
+  ["atomic success", true, undefined],
+  ["atomic rollback", true, "snapshot changed"],
+  ["ordinary post-commit failure", false, "initial turn failed"],
+] as const)("initializes sessions: %s", async (label, atomic, failure) => {
+  await withOpenClawTestState({ label }, async () => {
+    const key = "agent:main:initializer";
+    let scope: Awaited<ReturnType<typeof appendImportedMessage>> | undefined;
+    const created = await createGatewaySession({
+      cfg: {},
+      key,
+      commandSource: "test",
+      operatorRoleActor: { kind: "system" },
+      atomicInitialization: atomic ? true : undefined,
+      afterCreate: async (session) => {
+        if (atomic) {
+          expect(session.entry.initializationPending).toBe(true);
+          scope = await appendImportedMessage(session);
+        }
+        if (failure) {
+          throw new Error(failure);
+        }
+      },
     });
-  });
-
-  it("removes the new session and transcript when initialization fails", async () => {
-    await withOpenClawTestState({ label: "atomic-session-failure" }, async () => {
-      const sessionKey = "agent:main:atomic-failure";
-      const created = await createGatewaySession({
-        cfg: {},
-        key: sessionKey,
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-        atomicInitialization: true,
-        afterCreate: async (entry) => {
-          await appendImportedMessage({
-            agentId: entry.agentId,
-            sessionId: entry.entry.sessionId,
-            sessionKey: entry.key,
-            storePath: entry.storePath,
-          });
-          throw new Error("snapshot changed");
-        },
-      });
-
+    if (atomic && failure) {
       expect(created).toMatchObject({
         ok: false,
-        error: { code: "UNAVAILABLE", message: "session initialization failed: snapshot changed" },
+        error: { code: "UNAVAILABLE", message: `session initialization failed: ${failure}` },
       });
-      expect(loadSessionEntryReadOnly({ sessionKey })).toBeUndefined();
+      expect(loadSessionEntryReadOnly({ sessionKey: key })).toBeUndefined();
+      return;
+    }
+    expect(created).toMatchObject({
+      ok: true,
+      postCommit: failure
+        ? { status: "failed", error: expect.any(Error) }
+        : { status: "completed" },
     });
-  });
-
-  it("preserves the existing post-commit contract for ordinary session creation", async () => {
-    await withOpenClawTestState({ label: "ordinary-session-initializer" }, async () => {
-      const sessionKey = "agent:main:ordinary-initializer";
-      const created = await createGatewaySession({
-        cfg: {},
-        key: sessionKey,
-        commandSource: "test",
-        operatorRoleActor: { kind: "system" },
-        afterCreate: async () => {
-          throw new Error("initial turn failed");
-        },
-      });
-
-      expect(created).toMatchObject({
-        ok: true,
-        postCommit: { status: "failed", error: expect.any(Error) },
-      });
-      expect(loadSessionEntryReadOnly({ sessionKey })?.initializationPending).toBeUndefined();
-    });
+    if (!created.ok) {
+      throw new Error(created.error.message);
+    }
+    expect(created.entry.initializationPending).toBeUndefined();
+    expect(loadSessionEntryReadOnly({ sessionKey: key })?.initializationPending).toBeUndefined();
+    if (!failure) {
+      expect(scope).toBeDefined();
+      expect(JSON.stringify(await loadTranscriptEvents(scope!))).toContain("Imported snapshot");
+    }
   });
 });

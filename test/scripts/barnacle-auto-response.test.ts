@@ -101,6 +101,7 @@ function barnacleGithub(
     removeLabelNotFound?: string[];
     repositoryRoles?: Record<string, string>;
   } = {},
+  context?: ReturnType<typeof barnacleContext> | ReturnType<typeof barnacleIssueContext>,
 ) {
   const maintainerLogins = new Set(
     (options.maintainerLogins ?? []).map((login) => login.toLowerCase()),
@@ -119,17 +120,51 @@ function barnacleGithub(
     removeLabel: [] as Array<{ issue_number: number; name: string }>,
     update: [] as Array<{ issue_number: number; state?: string }>,
   };
-  const record =
-    <T>(target: T[]) =>
-    async (params: T) => {
-      target.push(params);
-    };
+  const payload: Record<string, any> = context?.payload ?? {};
+  const target = payload.issue ?? payload.pull_request ?? {};
+  const state: Record<string, any> = {
+    state: "open",
+    locked: false,
+    assignees: [],
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...structuredClone(target),
+    node_id: "item",
+    user: { id: 123, type: "User", ...target.user },
+    ...(payload.pull_request
+      ? { head: { sha: "a".repeat(40), ref: "feature", repo: { id: 55 } }, pull_request: {} }
+      : {}),
+  };
+  const comments: Record<string, any>[] = [];
+  const data = (value: unknown) => ({ data: structuredClone(value) });
   const github = {
     paginate: async () => files,
     rest: {
       issues: {
-        addLabels: record(calls.addLabels),
-        createComment: record(calls.createComment),
+        get: async () => data(state),
+        listComments: async () => data(comments),
+        listEventsForTimeline: async () => data([]),
+        getComment: async ({ comment_id }: { comment_id: number }) =>
+          data(comments.find((comment) => comment.id === comment_id)),
+        addLabels: async (params: { issue_number: number; labels: string[] }) => {
+          calls.addLabels.push(params);
+          state.labels.push(...params.labels.map((name) => ({ name })));
+          return data(state.labels);
+        },
+        createComment: async (params: { issue_number: number; body: string }) => {
+          calls.createComment.push(params);
+          const comment = {
+            ...params,
+            id: comments.length + 1,
+            node_id: `comment-${comments.length + 1}`,
+            user: { id: 257215752, type: "Bot" },
+            performed_via_github_app: { id: 2729701 },
+            created_at: "2026-10-19T00:00:00Z",
+            updated_at: "2026-10-19T00:00:00Z",
+          };
+          comments.push(comment);
+          return data(comment);
+        },
         createLabel: async () => undefined,
         getLabel: async (params: { name: string }) => ({
           data: {
@@ -139,17 +174,32 @@ function barnacleGithub(
               managedLabelSpecs[params.name as keyof typeof managedLabelSpecs]?.description ?? "",
           },
         }),
-        lock: record(calls.lock),
+        lock: async (params: { issue_number: number; lock_reason?: string }) => {
+          calls.lock.push(params);
+          state.locked = true;
+          return data(state);
+        },
         removeLabel: async (params: { issue_number: number; name: string }) => {
           calls.removeLabel.push(params);
+          state.labels = state.labels.filter(
+            (label: { name: string }) => label.name !== params.name,
+          );
           if (removeLabelNotFound.has(params.name)) {
             throw Object.assign(new Error("not found"), { status: 404 });
           }
         },
-        update: record(calls.update),
+        update: async (params: { issue_number: number; state?: string; state_reason?: string }) => {
+          calls.update.push(params);
+          Object.assign(state, params, { closed_by: { id: 257215752 } });
+          return data(state);
+        },
         updateLabel: async () => undefined,
       },
-      pulls: { listFiles: async () => files },
+      pulls: {
+        listFiles: async () => files,
+        get: async () => data(state),
+        listReviewComments: async () => data([]),
+      },
       repos: {
         getCollaboratorPermissionLevel: async ({ username }: { username: string }) => {
           const role = repositoryRoles[username.toLowerCase()] ?? "read";
@@ -166,11 +216,38 @@ function barnacleGithub(
       },
     },
   };
+  Object.assign(github, {
+    graphql: async (_query: string, variables: { ids?: string[]; head?: string }) => ({
+      rateLimit: { remaining: 5000, cost: 1 },
+      ...(variables.ids
+        ? {
+            nodes: variables.ids.map((id) => ({
+              id,
+              lastEditedAt: null,
+              userContentEdits: {
+                totalCount: 0,
+                nodes: [],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            })),
+          }
+        : {
+            repository: {
+              issue: { id: "item", lastEditedAt: null },
+              pullRequest: {
+                id: "item",
+                lastEditedAt: null,
+                reviews: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+              },
+            },
+          }),
+    }),
+  });
   return { calls, github };
 }
 
 function expectedIssueUpdate(issue_number: number, state: string) {
-  return { ...repo, issue_number, state };
+  return { ...repo, issue_number, state, state_reason: "not_planned" };
 }
 
 function expectedRemoveLabel(issue_number: number, name: string) {
@@ -206,8 +283,13 @@ async function runBarnacle(
   files: Parameters<typeof barnacleGithub>[0],
   options?: Parameters<typeof barnacleGithub>[1],
 ) {
-  const { calls, github } = barnacleGithub(files, options);
-  await runBarnacleAutoResponse({ github, context, core: { info: () => undefined } });
+  const { calls, github } = barnacleGithub(files, options, context);
+  await runBarnacleAutoResponse({
+    github,
+    context,
+    expectedAppId: 2729701,
+    core: { info: () => undefined },
+  });
   return calls;
 }
 
@@ -359,28 +441,42 @@ describe("barnacle-auto-response", () => {
     }
   });
 
-  it("does not close GitHub App-authored PRs when stale PR-limit label removal returns 404", async () => {
-    const calls = await runBarnacle(
-      barnacleContext(
-        {
-          user: {
-            login: "renovate[bot]",
-            type: "Bot",
-          },
-        },
-        ["r: too-many-prs"],
-      ),
-      [file("README.md")],
+  it("preserves an app-authored PR on unconfirmed label removal and resumes from live state", async () => {
+    const context = barnacleContext(
       {
-        removeLabelNotFound: ["r: too-many-prs"],
+        user: {
+          login: "renovate[bot]",
+          type: "Bot",
+        },
       },
+      ["r: too-many-prs"],
     );
+    const { calls, github } = barnacleGithub(
+      [file("README.md")],
+      { removeLabelNotFound: ["r: too-many-prs"] },
+      context,
+    );
+    const run = () =>
+      runBarnacleAutoResponse({ github, context, expectedAppId: 2729701, core: { info() {} } });
+    // A 404 does not confirm our write: fresh admission stops on the changed
+    // live label set. A new invocation can safely observe that missing label.
+    await expect(run()).rejects.toThrow("Barnacle target changed during response admission");
+    expectNoActions(calls, ["createComment", "update"]);
+    await run();
     expect(calls.removeLabel).toStrictEqual([expectedRemoveLabel(123, "r: too-many-prs")]);
     expectNoActions(calls, ["createComment", "update"]);
   });
 
-  it("still adds candidate labels to broad contributor PRs", async () => {
-    const calls = await runBarnacle(barnacleContext({}), broadFiles());
+  it("adds candidate labels with a GitHub Actions context repo getter", async () => {
+    class ActionsContext {
+      payload = barnacleContext({}).payload;
+
+      get repo() {
+        return repo;
+      }
+    }
+
+    const calls = await runBarnacle(new ActionsContext(), broadFiles());
     expect(calls.addLabels).toStrictEqual([
       expectedAddLabels(123, [
         candidateLabels.blankTemplate,

@@ -67,6 +67,10 @@ Advantages:
 }
 ```
 
+SearXNG uses `tools.web.search.maxResults` for the default result count and
+`tools.web.search.timeoutSeconds` for its request deadline. A search's `count`
+argument overrides the configured result count.
+
 Plugin-level settings for the SearXNG instance:
 
 ```json5

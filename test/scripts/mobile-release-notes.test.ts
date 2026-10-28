@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,39 +6,40 @@ import {
   renderMobileReleaseNotes,
 } from "../../scripts/lib/mobile-release-notes.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  commit as commitRepo,
+  git,
+  initGit,
+  write as writeFile,
+} from "./mobile-release-git.test-support.js";
 
-const api = vi.hoisted(() => ({ parse: vi.fn() }));
-vi.mock("openai", () => ({
-  default: class {
-    responses = { parse: api.parse };
-  },
-}));
+const api = vi.hoisted(() => ({ parse: vi.fn(), useSdk: false }));
+vi.mock("openai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openai")>();
+  return {
+    ...actual,
+    default: class {
+      responses: Pick<InstanceType<typeof actual.default>["responses"], "parse">;
+      constructor(options: ConstructorParameters<typeof actual.default>[0]) {
+        this.responses = api.useSdk ? new actual.default(options).responses : { parse: api.parse };
+      }
+    },
+  };
+});
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
   api.parse.mockReset();
+  api.useSdk = false;
 });
-
-const git = (root: string, ...args: string[]) =>
-  execFileSync("git", args, {
-    cwd: root,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
 
 function fixture(platform: "ios" | "android" = "ios") {
   const rootDir = temporary.make("mobile-notes-");
-  const write = (file: string, text: string) => {
-    const target = path.join(rootDir, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, text);
-  };
+  const write = (file: string, text: string) => writeFile(rootDir, file, text);
   const ref = (name: string, sha: string) => git(rootDir, "update-ref", name, sha);
-  git(rootDir, "init", "-b", "main");
-  git(rootDir, "config", "user.name", "Notes Fixture");
-  git(rootDir, "config", "user.email", "notes@example.invalid");
-  git(rootDir, "config", "commit.gpgsign", "false");
+  initGit(rootDir, { name: "Notes Fixture", email: "notes@example.invalid" });
   git(rootDir, "remote", "add", "origin", rootDir);
   const file =
     platform === "ios" ? "apps/ios/Sources/Chat.swift" : "apps/android/app/src/play/java/Chat.kt";
@@ -51,9 +51,7 @@ function fixture(platform: "ios" | "android" = "ios") {
       "object SensitiveFeatureConfig {\n  const val smsEnabled = false\n  const val accessibilityControlEnabled = false\n}\n",
     );
   }
-  git(rootDir, "add", ".");
-  git(rootDir, "commit", "-m", "Published app");
-  const base = git(rootDir, "rev-parse", "HEAD");
+  const base = commitRepo(rootDir, "Published app");
   ref(
     `refs/openclaw/mobile-releases/${platform}/2026.7.3-${platform === "ios" ? "1" : "2026070301"}`,
     base,
@@ -61,9 +59,10 @@ function fixture(platform: "ios" | "android" = "ios") {
   write(file, 'let label = "Send message"\n');
   write("src/gateway/new-feature.ts", "export const unrelated = true;\n");
   write("apps/ios/Tests/Fixture.swift", "let unsupported = true\n");
-  git(rootDir, "add", ".");
-  git(rootDir, "commit", "-m", "Clarify send button; commit prose is supporting evidence only");
-  const sourceSha = git(rootDir, "rev-parse", "HEAD");
+  const sourceSha = commitRepo(
+    rootDir,
+    "Clarify send button; commit prose is supporting evidence only",
+  );
   const baselines = (platform === "ios" ? ["ios"] : ["phone", "wear"]).map((audience) => ({
     audience,
     version: "2026.7.3",
@@ -101,9 +100,7 @@ const labelEvidence = (file: string, fields: object = {}) =>
     ...fields,
   });
 function commit(f: ReturnType<typeof fixture>, message: string, ...files: string[]) {
-  git(f.rootDir, "add", ...files);
-  git(f.rootDir, "commit", "-m", message);
-  f.sourceSha = git(f.rootDir, "rev-parse", "HEAD");
+  f.sourceSha = commitRepo(f.rootDir, message, ...files);
   f.plan.sourceSha = f.sourceSha;
 }
 const renderOptions = (f: ReturnType<typeof fixture>) => ({
@@ -111,14 +108,17 @@ const renderOptions = (f: ReturnType<typeof fixture>) => ({
   ...renderIdentity,
   artifactPath: f.outputPath,
 });
+type Inventory = { files: Array<{ id: string; file: string; summary?: unknown }> };
+function selection(inventory: Inventory, file: string, focus = "label") {
+  const entry = inventory.files.find((candidate) => candidate.file === file);
+  if (!entry) {
+    throw new Error(`Missing fixture selection: ${file}`);
+  }
+  return { id: entry.id, focus: [focus] };
+}
 function select(file: string, focus = "label") {
   api.parse.mockImplementationOnce((request: { input: string }) => {
-    const inventory: { files: Array<{ id: string; file: string }> } = JSON.parse(request.input);
-    const entry = inventory.files.find((candidate) => candidate.file === file);
-    if (!entry) {
-      throw new Error(`Missing fixture selection: ${file}`);
-    }
-    return completed({ files: [{ id: entry.id, focus: [focus] }] });
+    return completed({ files: [selection(JSON.parse(request.input), file, focus)] });
   });
 }
 
@@ -128,6 +128,97 @@ function accept(file: string, changes = [claim], focus = "label") {
 }
 
 describe("generated mobile store notes", () => {
+  it.each(["timeout", "server", "permanent", "exhausted", "deadline"] as const)(
+    "handles %s transport failures without bypassing review or its generation deadline",
+    async (failure) => {
+      const f = fixture("android");
+      api.useSdk = true;
+      const stages: string[] = [];
+      let reviewAttempts = 0;
+      const started = Date.now();
+      let now = started;
+      if (failure === "deadline") {
+        vi.spyOn(Date, "now").mockImplementation(() => now);
+      }
+      const transport = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        if (typeof init?.body !== "string") {
+          throw new Error("Expected a serialized Responses request.");
+        }
+        const request: { instructions: string; input: string; text: { format: { name: string } } } =
+          JSON.parse(init.body);
+        const stage = request.text.format.name;
+        const isWear = request.instructions.includes("Target audience: wear.");
+        stages.push(`${isWear ? "wear" : "phone"}:${stage}`);
+        let output: unknown;
+        if (stage === "release_notes_selection") {
+          output = { files: [selection(JSON.parse(request.input), f.file)] };
+        } else if (stage === "release_notes") {
+          output = { changes: isWear ? [] : [claim] };
+          if (failure === "deadline") {
+            now = started + 299_990;
+          }
+        } else if (stage === "release_notes_review") {
+          if (!isWear) {
+            reviewAttempts++;
+          }
+          expect(fs.existsSync(f.outputPath)).toBe(false);
+          if (
+            !isWear &&
+            (failure === "permanent" || failure === "exhausted" || reviewAttempts === 1)
+          ) {
+            if (failure === "timeout" || failure === "deadline") {
+              throw new DOMException("The operation was aborted.", "AbortError");
+            }
+            return Response.json(
+              { error: { message: "Synthetic provider failure", type: "api_error" } },
+              { status: failure === "permanent" ? 401 : 503, headers: { "retry-after-ms": "1" } },
+            );
+          }
+          output = { approved: true, problems: [] };
+        } else {
+          throw new Error(`Unexpected notes stage: ${stage}`);
+        }
+        return Response.json({
+          status: "completed",
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: JSON.stringify(output), annotations: [] }],
+            },
+          ],
+        });
+      });
+      vi.stubGlobal("fetch", transport);
+      if (failure === "timeout" || failure === "server") {
+        const saved = await generateMobileReleaseNotes(f);
+        expect(saved.entries.map(({ audience, text }) => [audience, text])).toEqual([
+          ["phone", `- ${claim.text}`],
+          ["wear", "Bug fixes and improvements."],
+        ]);
+        expect(JSON.parse(readNotes(f))).toEqual(saved);
+        expect(reviewAttempts).toBe(2);
+      } else {
+        await expect(generateMobileReleaseNotes(f)).rejects.toThrow(
+          failure === "deadline" ? /aborted|budget/iu : /Synthetic provider failure/u,
+        );
+        expect(fs.existsSync(f.outputPath)).toBe(false);
+        expect(reviewAttempts).toBe(failure === "exhausted" ? 2 : 1);
+      }
+      expect(stages.slice(0, 3)).toEqual([
+        "phone:release_notes_selection",
+        "phone:release_notes",
+        "phone:release_notes_review",
+      ]);
+      expect(stages.slice(3)).toEqual([
+        ...(reviewAttempts === 2 ? ["phone:release_notes_review"] : []),
+        ...(failure === "timeout" || failure === "server"
+          ? ["wear:release_notes_selection", "wear:release_notes", "wear:release_notes_review"]
+          : []),
+      ]);
+    },
+  );
+
   it("selects bounded app evidence and freezes notes for replay with source, identity, baseline, and text validation", async () => {
     const f = fixture();
     const watchFile = "apps/shared/OpenClawWatchRTC/src/lib.rs";
@@ -148,18 +239,11 @@ describe("generated mobile store notes", () => {
       ]),
     );
     f.write(localizationFile, JSON.stringify({ sourceLanguage: "en", version: "1.0", strings }));
-    commit(
-      f,
-      "Refresh generated declarations, translations, and UI checks",
-      generatedFile,
-      uiTestFile,
-      localizationFile,
-    );
+    commit(f, "Refresh non-feature changes", generatedFile, uiTestFile, localizationFile);
     savePlan(f);
     api.parse.mockImplementationOnce((request: { input: string }) => {
       expect(request.input.length).toBeLessThan(60_000);
-      const inventory: { files: Array<{ id: string; file: string; summary?: unknown }> } =
-        JSON.parse(request.input);
+      const inventory: Inventory = JSON.parse(request.input);
       for (const file of [generatedFile, uiTestFile]) {
         expect(inventory.files).not.toContainEqual(expect.objectContaining({ file }));
       }
@@ -167,16 +251,8 @@ describe("generated mobile store notes", () => {
       expect(localization?.summary).toBeDefined();
       expect(JSON.stringify(localization)).toContain("es");
       expect(request.input).not.toContain("LOCALIZATION_ONLY_NOISE");
-      const selected = inventory.files.find((entry) => entry.file === f.file);
-      expect(selected).toBeDefined();
       return completed({
-        files: [
-          { id: selected?.id, focus: ["label"] },
-          {
-            id: inventory.files.find((entry) => entry.file === watchFile)?.id,
-            focus: ["reconnect_enabled"],
-          },
-        ],
+        files: [selection(inventory, f.file), selection(inventory, watchFile, "reconnect_enabled")],
       });
     });
     api.parse
@@ -184,7 +260,6 @@ describe("generated mobile store notes", () => {
       .mockResolvedValueOnce(approvedReview);
 
     const saved = await generateMobileReleaseNotes(f);
-    expect(api.parse).toHaveBeenCalledTimes(3);
     for (const index of [1, 2]) {
       const request = api.parse.mock.calls[index]![0];
       expect(request.input.length).toBeLessThan(60_000);
@@ -234,13 +309,12 @@ describe("generated mobile store notes", () => {
     f.write(wearFile, 'val label = "Start talking"\n');
     commit(f, "Clarify watch voice action", wearFile);
     f.ref(sourceRef, f.base);
-    Object.assign(f.plan.releaseNotesBaselines[0]!, { version: "2026.7.30", build: "2026070449" });
-    savePlan(f, {
-      releaseNotesBaselines: [
-        { ...f.plan.releaseNotesBaselines[0], sourceRef },
-        f.plan.releaseNotesBaselines[1],
-      ],
+    Object.assign(f.plan.releaseNotesBaselines[0]!, {
+      version: "2026.7.30",
+      build: "2026070449",
+      sourceRef,
     });
+    savePlan(f);
     accept(f.file);
     accept(wearFile, [{ text: "Clearer watch voice controls.", evidenceIds: ["e1"] }]);
     const saved = await generateMobileReleaseNotes(f);
@@ -269,9 +343,8 @@ describe("generated mobile store notes", () => {
     expect(await generateMobileReleaseNotes(f)).toEqual(saved);
     fs.rmSync(f.outputPath);
     vi.stubEnv("OPENAI_API_KEY", "synthetic-key");
-    const plan = JSON.parse(fs.readFileSync(f.planPath, "utf8"));
-    plan.releaseNotesBaselines[0].build = "2026070450";
-    fs.writeFileSync(f.planPath, JSON.stringify(plan));
+    f.plan.releaseNotesBaselines[0]!.build = "2026070450";
+    savePlan(f);
     await expect(generateMobileReleaseNotes(f)).rejects.toThrow(
       "does not match its recorded store identity",
     );

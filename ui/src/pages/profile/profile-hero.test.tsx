@@ -4,10 +4,10 @@ import { t } from "../../i18n/index.ts";
 /* @vitest-environment jsdom */
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid as waitForFast } from "../../test-helpers/solid-settle.ts";
-import { ProfileHero, type ProfileHeroProps } from "./profile-hero.tsx";
+import { ProfileHero } from "./profile-hero.tsx";
 import { createConnectedContext, mountProfilePage } from "./profile-page.test-support.tsx";
 let unmount: (() => void) | undefined;
-function mountHero(props: ProfileHeroProps, container: HTMLElement) {
+function mountHero(props: Parameters<typeof ProfileHero>[0], container: HTMLElement) {
   unmount?.();
   unmount = mountSolid(() => <ProfileHero {...props} />, { container }).unmount;
   flush();

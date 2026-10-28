@@ -2,7 +2,11 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import {
+  classifyGatewayConnectFailure,
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+} from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -26,7 +30,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
 import type { PortUsage } from "../../infra/ports-types.js";
-import { sleep } from "../../utils.js";
+import { sleep, tryParseJson } from "../../utils.js";
 import type {
   GatewayPortHealthSnapshot,
   UnavailablePluginHealthSummary,
@@ -78,13 +82,29 @@ export type GatewayReachability = {
   channelRuntimeWarnings?: Array<{ id: string; error: string }>;
   probeError?: string;
   authenticationError?: string;
+  protocolMismatch?: string;
   staleConnection?: GatewayStaleConnectionReason;
 };
 
 type GatewayHttpReadiness = {
   healthz: number | null;
   readyz: number | null;
+  coreReady?: boolean;
+  failingChannels?: string[];
 };
+
+function readGatewayFailingChannels(response: { statusCode: number; body: string } | null) {
+  const readiness = asOptionalRecord(tryParseJson(response?.body ?? ""));
+  const failing = readiness?.failing;
+  return response?.statusCode === 503 &&
+    readiness?.ready === false &&
+    readiness.coreReady === true &&
+    Array.isArray(failing) &&
+    failing.length > 0 &&
+    failing.every((id): id is string => typeof id === "string" && id.trim().length > 0)
+    ? failing
+    : undefined;
+}
 
 /** Waits for the unauthenticated HTTP(S) readiness contracts reported by service start. */
 export async function waitForGatewayHttpReadiness(params: {
@@ -95,6 +115,8 @@ export async function waitForGatewayHttpReadiness(params: {
   delayMs: number;
   probeTimeoutMs?: number;
   port: number;
+  /** Software activation may finish while a channel needs operator attention. */
+  requireChannelHealth?: boolean;
   signal?: AbortSignal;
   onObservation?: (readiness: GatewayHttpReadiness) => void;
 }): Promise<GatewayHttpReadiness> {
@@ -107,21 +129,28 @@ export async function waitForGatewayHttpReadiness(params: {
     if (remainingMs <= 0) {
       return latest;
     }
-    const probeStatus = async (pathname: "/healthz" | "/readyz") => {
-      const result = await probe.requestHttp({
+    const request = (pathname: "/healthz" | "/readyz") =>
+      probe.requestHttp({
         host: "127.0.0.1",
         pathname,
         port: params.port,
         timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS),
         ...(params.signal ? { signal: params.signal } : {}),
       });
-      return result?.statusCode ?? null;
-    };
-    const [healthz, readyz] = await Promise.all([probeStatus("/healthz"), probeStatus("/readyz")]);
+    const [health, ready] = await Promise.all([request("/healthz"), request("/readyz")]);
+    const healthz = health?.statusCode ?? null;
+    const readyz = ready?.statusCode ?? null;
     params.signal?.throwIfAborted();
     latest = { healthz, readyz };
+    if (params.requireChannelHealth === false) {
+      const failingChannels = readGatewayFailingChannels(ready);
+      latest.coreReady = healthz === 200 && (readyz === 200 || failingChannels !== undefined);
+      if (failingChannels) {
+        latest.failingChannels = failingChannels;
+      }
+    }
     params.onObservation?.(latest);
-    if (healthz === 200 && readyz === 200) {
+    if (latest.coreReady ?? (healthz === 200 && readyz === 200)) {
       return latest;
     }
     if (attempt + 1 < params.attempts) {
@@ -177,6 +206,16 @@ function isGatewayAuthRejection(reason: string): boolean {
   );
 }
 
+function isVerifiedUserRequiredResponse(error: unknown): boolean {
+  // The exact close-reason allowlist does not include this sentence. The
+  // structured code is the Gateway's correlated refusal, so the probe can stop.
+  return (
+    isGatewayProtocolResponseError(error) &&
+    readConnectErrorDetailCode(error.details) ===
+      ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED
+  );
+}
+
 function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] {
   const errors = asOptionalRecord(asOptionalRecord(health)?.plugins)?.errors;
   if (!Array.isArray(errors)) {
@@ -204,41 +243,6 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
     }
     return [error];
   });
-}
-
-function readChannelProbeFailures(health: unknown) {
-  const errors: GatewayReachability["channelProbeErrors"] = [];
-  const timeouts: GatewayReachability["channelProbeErrors"] = [];
-  const warnings: GatewayReachability["channelProbeErrors"] = [];
-  const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
-  for (const [id, summary] of Object.entries(channels ?? {})) {
-    const accounts = Object.entries(asOptionalRecord(asOptionalRecord(summary)?.accounts) ?? {});
-    for (const [accountId, value] of accounts.length ? accounts : Object.entries({ "": summary })) {
-      const account = asOptionalRecord(value);
-      if (account?.enabled === false || account?.configured === false) {
-        continue;
-      }
-      if (account?.running === false || account?.healthState === "not-running") {
-        warnings.push({
-          id: accountId ? `${id}/${accountId}` : id,
-          error:
-            typeof account.lastError === "string" && account.lastError.trim()
-              ? account.lastError
-              : "not running",
-        });
-      }
-    }
-    const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
-    if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
-      continue;
-    }
-    // Retain the explicit timeout marker from older Gateways that also sent ok:false.
-    (probe.timedOut === true ? timeouts : errors).push({
-      id,
-      error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
-    });
-  }
-  return { errors, timeouts, warnings };
 }
 
 function readUnavailablePlugins(health: unknown): UnavailablePluginHealthSummary[] {
@@ -272,8 +276,10 @@ export async function confirmGatewayReachable(params: {
   allowHttpVerification?: boolean;
   signal?: AbortSignal;
   timeoutMs?: number;
+  assertCurrent?: () => void;
 }): Promise<GatewayReachability> {
   params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   const result: GatewayReachability = {
     reachable: false,
     gatewayVersion: null,
@@ -307,6 +313,8 @@ export async function confirmGatewayReachable(params: {
       ...controlAuth,
       tlsFingerprint: target.tlsFingerprint,
       method: "health",
+      assertConnectionCurrent: params.assertCurrent,
+      assertDispatchCurrent: params.assertCurrent,
       scopes: [READ_SCOPE],
       timeoutMs: params.timeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
       ...(params.signal ? { signal: params.signal } : {}),
@@ -319,7 +327,39 @@ export async function confirmGatewayReachable(params: {
     result.reachable = true;
     result.activatedPluginErrors = readActivatedPluginErrors(health);
     result.unavailablePlugins = readUnavailablePlugins(health);
-    const { errors, timeouts, warnings } = readChannelProbeFailures(health);
+    const errors: GatewayReachability["channelProbeErrors"] = [];
+    const timeouts: GatewayReachability["channelProbeErrors"] = [];
+    const warnings: GatewayReachability["channelProbeErrors"] = [];
+    const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
+    for (const [id, summary] of Object.entries(channels ?? {})) {
+      const accounts = Object.entries(asOptionalRecord(asOptionalRecord(summary)?.accounts) ?? {});
+      for (const [accountId, value] of accounts.length
+        ? accounts
+        : Object.entries({ "": summary })) {
+        const account = asOptionalRecord(value);
+        if (account?.enabled === false || account?.configured === false) {
+          continue;
+        }
+        if (account?.running === false || account?.healthState === "not-running") {
+          warnings.push({
+            id: accountId ? `${id}/${accountId}` : id,
+            error:
+              typeof account.lastError === "string" && account.lastError.trim()
+                ? account.lastError
+                : "not running",
+          });
+        }
+      }
+      const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
+      if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
+        continue;
+      }
+      // Retain the explicit timeout marker from older Gateways that also sent ok:false.
+      (probe.timedOut === true ? timeouts : errors).push({
+        id,
+        error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
+      });
+    }
     result.channelProbeErrors = errors;
     result.channelRuntimeWarnings = warnings.length ? warnings : undefined;
     if (timeouts.length) {
@@ -327,13 +367,26 @@ export async function confirmGatewayReachable(params: {
     }
   } catch (error) {
     params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     const reason = isGatewayProtocolResponseError(error)
       ? error.message
       : isGatewayTransportError(error) && error.code === 1008
         ? error.reason
         : undefined;
-    if ((reason && isGatewayAuthRejection(reason)) || isGatewayCredentialsRequiredError(error)) {
+    if (
+      (reason && isGatewayAuthRejection(reason)) ||
+      isGatewayCredentialsRequiredError(error) ||
+      isVerifiedUserRequiredResponse(error)
+    ) {
       result.authenticationError = formatGatewayRestartProbeError(reason ?? error);
+    }
+    // Updates verify with the previous package, so any protocol change between it and the
+    // restarted Gateway rejects this handshake. HTTP identity is protocol-independent.
+    if (
+      isGatewayProtocolResponseError(error) &&
+      readConnectErrorDetailCode(error.details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH
+    ) {
+      result.protocolMismatch = formatGatewayRestartProbeError(error);
     }
     // A close frame alone cannot prove a Gateway. Preserve the correlated
     // liveness contract; update verification additionally needs HTTP identity.
@@ -343,7 +396,11 @@ export async function confirmGatewayReachable(params: {
       ((isGatewayAuthRejection(error.message) && error.message !== "device identity required") ||
         (params.allowDeviceIdentityRequired === true &&
           error.message === "device identity required"));
-    if (result.authenticationError && params.allowHttpVerification && configuredProbe) {
+    if (
+      (result.authenticationError || result.protocolMismatch) &&
+      params.allowHttpVerification &&
+      configuredProbe
+    ) {
       result.reachable = false;
       const httpProbe = configuredProbe;
       const request = (pathname: "/startupz" | "/readyz") =>
@@ -371,7 +428,16 @@ export async function confirmGatewayReachable(params: {
           result.gatewayVersion = identity.version;
           result.gatewayBuildId =
             typeof identity.buildId === "string" ? identity.buildId : undefined;
-          result.reachable = ready?.statusCode === 200 && readiness?.ready === true;
+          const failingChannels = readGatewayFailingChannels(ready);
+          result.reachable =
+            (ready?.statusCode === 200 && readiness?.ready === true) ||
+            failingChannels !== undefined;
+          if (failingChannels) {
+            result.channelRuntimeWarnings = failingChannels.map((id) => ({
+              id,
+              error: "channel readiness unavailable",
+            }));
+          }
         }
       } catch {
         // Older or non-Gateway HTTP listeners cannot supply candidate identity.

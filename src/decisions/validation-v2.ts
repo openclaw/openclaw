@@ -5,6 +5,7 @@ import {
   decisionJsonLimits,
   finiteJson,
   isPlainDecisionRecord,
+  validDecisionCriteria,
 } from "./validation-common.js";
 import { DecisionContractError, exactKeys } from "./validation.js";
 
@@ -138,36 +139,15 @@ export function validateDecisionBatchV2(batch: unknown): batch is DecisionBatchV
     ) {
       throw new DecisionContractError();
     }
-    if (q.type === "choice" || q.type === "tags") {
-      if (
-        !isPlainDecisionRecord(q.criteria) ||
-        Object.keys(q.criteria).length < (q.type === "choice" ? 2 : 1) ||
-        !Object.entries(q.criteria).every(
-          ([label, entry]) => label.length > 0 && decisionEntry(entry),
-        )
-      ) {
-        throw new DecisionContractError();
-      }
-    } else if (q.type === "score") {
-      if (!Array.isArray(q.criteria) || q.criteria.length < 2 || !q.criteria.every(decisionEntry)) {
-        throw new DecisionContractError();
-      }
-    } else if (q.type === "boolean") {
-      if (
-        q.criteria !== undefined &&
-        q.criteria !== null &&
-        (!isPlainDecisionRecord(q.criteria) ||
-          !Object.entries(q.criteria).every(
-            ([key, entry]) => (key === "true" || key === "false") && decisionEntry(entry),
-          ))
-      ) {
-        throw new DecisionContractError();
-      }
-    } else if (q.type === "box") {
+    if (q.type === "box") {
       if (state.type !== "image" || q.instructions == null) {
         throw new DecisionContractError();
       }
-    } else if (q.type !== "sort" || state.type !== "list") {
+    } else if (q.type === "sort") {
+      if (state.type !== "list") {
+        throw new DecisionContractError();
+      }
+    } else if (!validDecisionCriteria(q.type, q.criteria)) {
       throw new DecisionContractError();
     }
   }
@@ -180,7 +160,7 @@ export function validateDecisionBatchV2(batch: unknown): batch is DecisionBatchV
         : batch;
   return (
     !oversized &&
-    questions.length <= 256 &&
+    questions.length <= 400 &&
     finiteJson(jsonEnvelope, { rejectProxies: true }) === "valid"
   );
 }

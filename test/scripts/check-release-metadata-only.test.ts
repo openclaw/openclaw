@@ -1,16 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  copyFileSync,
-  mkdirSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseArgs } from "../../scripts/check-release-metadata-only.mts";
-import { createPnpmRunnerSpawnSpec } from "../../scripts/pnpm-runner.mts";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -19,11 +11,9 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
-const scriptPath = path.join(repoRoot, "scripts/check-release-metadata-only.mts");
 const scriptArgs = resolveRuntimeWorkerArgv(
   resolveRuntimeWorkerUrl(toolingMtsEntrypoints.releaseMetadata),
 );
-const tsconfigPath = path.join(repoRoot, "tsconfig.json");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const itUnix = process.platform === "win32" ? it.skip : it;
 
@@ -58,57 +48,37 @@ describe("check-release-metadata-only", () => {
     });
   });
 
-  it("preserves refs, staged bytes, and worktree overlay through the package command", () => {
+  it("preserves refs, staged bytes, and worktree overlay through the CLI", () => {
     const root = tempDirs.make("openclaw-release-metadata-mobile-");
-    const fixtureTsconfigPath = path.join(root, "tsconfig.json");
-    const { scripts } = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
-    writeFileSync(
-      path.join(root, "package.json"),
-      JSON.stringify({
-        private: true,
-        scripts: {
-          "release-metadata:check": scripts["release-metadata:check"],
-          "changelog:check": scripts["changelog:check"],
-        },
-      }),
-    );
-    copyFileSync(tsconfigPath, fixtureTsconfigPath);
-    mkdirSync(path.join(root, "scripts"));
-    copyFileSync(scriptPath, path.join(root, "scripts/check-release-metadata-only.mts"));
-    for (const file of ["tsx.mjs", "changed-lanes.mts"]) {
-      symlinkSync(path.join(repoRoot, "scripts", file), path.join(root, "scripts", file), "file");
-    }
-    symlinkSync(path.join(repoRoot, "scripts/lib"), path.join(root, "scripts/lib"), "junction");
-    symlinkSync(path.join(repoRoot, "packages"), path.join(root, "packages"), "junction");
-    const runMetadata = (args: string[]) => {
-      const spec = createPnpmRunnerSpawnSpec({
+    const at = (file: string) => path.join(root, file);
+    const runMetadata = (args: string[]) =>
+      spawnSync(process.execPath, [...scriptArgs, ...args], {
         cwd: root,
-        pnpmArgs: ["run", "release-metadata:check", ...args],
-        env: { ...process.env, TSX_TSCONFIG_PATH: fixtureTsconfigPath },
-        stdio: "pipe",
+        env: { ...process.env, TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json") },
+        encoding: "utf8",
       });
-      return spawnSync(spec.command, spec.args, { ...spec.options, encoding: "utf8" });
-    };
-    const manifestPath = path.join(root, "apps/android/version.json");
+    const manifestPath = at("apps/android/version.json");
+    const writeVersion = (version: string, channel?: string) =>
+      fs.writeFileSync(manifestPath, JSON.stringify({ version, ...(channel ? { channel } : {}) }));
     const git = (...args: string[]) =>
       execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
     const compareHead = (head = "HEAD") =>
       runMetadata(["--base", head, "--head", head, "--", "apps/android/version.json"]);
-    mkdirSync(path.dirname(manifestPath), { recursive: true });
-    writeFileSync(manifestPath, '{\n  "version": "2026.8.1"\n}\n');
+    fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+    writeVersion("2026.8.1");
     git("init", "-q");
     git("config", "user.name", "OpenClaw Test");
     git("config", "user.email", "test@openclaw.invalid");
-    git("add", "package.json", "apps/android/version.json");
+    git("add", "apps/android/version.json");
     git("commit", "-qm", "baseline");
 
-    writeFileSync(manifestPath, '{\n  "version": "2026.8.2"\n}\n');
+    writeVersion("2026.8.2");
     const accepted = compareHead();
     expect(accepted.status, accepted.stderr).toBe(0);
     expect(accepted.stderr).toContain("[release-metadata] ok (1 files)");
 
     git("add", "apps/android/version.json");
-    writeFileSync(manifestPath, '{\n  "version": "2026.8.2",\n  "channel": "stable"\n}\n');
+    writeVersion("2026.8.2", "stable");
     const staged = runMetadata(["--staged"]);
     expect(staged.status, staged.stderr).toBe(0);
     const head = git("rev-parse", "HEAD");
@@ -125,7 +95,7 @@ describe("check-release-metadata-only", () => {
     git("commit", "-qm", "incoming metadata");
     const incoming = git("rev-parse", "HEAD");
     git("switch", "--detach", head);
-    writeFileSync(manifestPath, '{\n  "version": "2026.8.3",\n  "channel": "stable"\n}\n');
+    writeVersion("2026.8.3", "stable");
     git("add", "apps/android/version.json");
     const based = runMetadata(["--staged", "--base", incoming]);
     expect(based.status, based.stderr).toBe(0);
@@ -136,12 +106,12 @@ describe("check-release-metadata-only", () => {
   itUnix("fails with an actionable timeout when git diff hangs", () => {
     const tempDir = tempDirs.make("openclaw-release-metadata-git-");
     const gitPath = path.join(tempDir, "git");
-    writeFileSync(
+    fs.writeFileSync(
       gitPath,
       '#!/usr/bin/env node\nif (process.argv.includes("diff")) { setInterval(() => {}, 1000); }\n',
       "utf8",
     );
-    chmodSync(gitPath, 0o755);
+    fs.chmodSync(gitPath, 0o755);
 
     const run = (timeout: string) =>
       spawnSync(process.execPath, scriptArgs, {

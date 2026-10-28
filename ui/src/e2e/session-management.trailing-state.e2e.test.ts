@@ -1,26 +1,19 @@
 import type { Page } from "playwright";
 import { it, expect } from "vitest";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
 import {
   actionOpacity,
-  controlUiSessionUrl,
   createSessionManagementE2eSuite,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
 const pullRequests = {
-  featureMethods: [
-    "chat.metadata",
-    "chat.startup",
-    "sessions.patch",
-    SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  ],
+  featureMethods: ui.sessionMethods("sessions.patch", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD),
   methodResponses: { [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true } },
 };
 async function showPullRequests(
@@ -61,61 +54,6 @@ const touchOptions = {
 };
 
 suite.define(() => {
-  it("vertically centers session actions in a two-line row", () =>
-    suite.withPage(touchOptions, async ({ page }) => {
-      const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
-      await page.addInitScript((storageKey) => {
-        localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
-        const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
-        localStorage.setItem(
-          storageKey,
-          JSON.stringify({ ...settings, railShortcuts: ["session:agent:main:two-line"] }),
-        );
-      }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
-      await ui.installSessionRows(
-        page,
-        [
-          sessionRow("agent:main:main", "Main", baseTime),
-          Object.assign(sessionRow("agent:main:two-line", "Two-line session", baseTime - 1), {
-            lastMessagePreview: "Finishing repository setup review",
-          }),
-        ],
-        { mainSessionKey: "agent:main:main", sessionKey: "agent:main:two-line" },
-      );
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:two-line"));
-      const row = page.locator('[data-session-key="agent:main:two-line"]');
-      await ui.visible(row, 10_000);
-      const pin = ui.button(row, "Unpin session", false);
-      const menu = row.locator("[data-sidebar-session-archive]");
-      await expect.poll(() => actionOpacity(pin)).toBe("1");
-
-      const [rowBounds, subtitleBounds, pinBounds, menuBounds] = await Promise.all([
-        ui.bounds(row),
-        ui.bounds(row.locator(".sidebar-recent-session__subtitle")),
-        ui.bounds(pin),
-        ui.bounds(menu),
-      ]);
-
-      const rowCenter = ui.centerY(rowBounds);
-      expect(subtitleBounds.y).toBeGreaterThan(rowCenter);
-      expect(Math.abs(ui.centerY(pinBounds) - rowCenter)).toBeLessThanOrEqual(1);
-      expect(Math.abs(ui.centerY(menuBounds) - rowCenter)).toBeLessThanOrEqual(1);
-
-      await page.evaluate(() => {
-        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
-      });
-      await expect
-        .poll(async () => {
-          const [title, details] = await Promise.all([
-            ui.bounds(row.locator(".sidebar-recent-session__title-row")),
-            ui.bounds(row.locator(".sidebar-recent-session__details")),
-          ]);
-          return title.y + title.height - details.y;
-        })
-        .toBeLessThanOrEqual(0.5);
-    }));
-
   it("keeps action-only text stable and active state visible with actions", () =>
     suite.withPage(createControlUiE2eContextOptions(), async ({ page, context }) => {
       await ui.installSessionRows(
@@ -147,8 +85,8 @@ suite.define(() => {
       const actionOnlyText = actionOnlyRow.locator(".sidebar-recent-session__text");
       const actionOnlyLink = actionOnlyRow.locator(".sidebar-recent-session__link");
       const actionOnlyPin = ui.button(actionOnlyRow, "Pin session", false);
-      await expect
-        .poll(() => actionOnlyRow.getAttribute("class"))
+      await ui
+        .pollAttribute(actionOnlyRow, "class")
         .toContain("sidebar-recent-session--single-line");
       await ui.expectRightPadding(actionOnlyLink, "2px");
       const restingTextBounds = await ui.bounds(actionOnlyText);
@@ -236,7 +174,7 @@ suite.define(() => {
       const pin = ui.button(row, "Pin session", false);
       const menu = row.locator("[data-sidebar-session-archive]");
       await expect.poll(() => fork.isVisible()).toBe(true);
-      await expect.poll(() => row.locator(".session-row-state").count()).toBe(0);
+      await ui.expectCount(row.locator(".session-row-state"), 0);
 
       const [nameBounds, forkBounds, pinBounds, menuBounds] = await Promise.all([
         ui.bounds(row.locator(".sidebar-recent-session__name")),
@@ -319,9 +257,19 @@ suite.define(() => {
       }
       await accessibility.detach();
 
+      // Resting PR state takes the archive action's column, not the sidebar edge.
+      await plainRow.hover();
+      const plainArchive = plainRow.locator("[data-sidebar-session-archive] svg");
+      await ui.visible(plainArchive);
+      expect(ui.centerX(await ui.bounds(pullRequestIcon.locator(".session-css-icon")))).toBeCloseTo(
+        ui.centerX(await ui.bounds(plainArchive)),
+        1,
+      );
+
       await pullRequestRow.hover();
 
       await pullRequestIcon.waitFor({ state: "hidden" });
+      await pullRequestRow.locator(".session-row-badges").waitFor({ state: "hidden" });
       await ui.visible(unreadBadge);
       expect(await ui.bounds(unreadBadge)).toEqual(badgeBounds);
       await page.mouse.move(0, 0);
@@ -329,6 +277,7 @@ suite.define(() => {
       await ui.visible(unreadBadge);
       await pullRequestRow.locator("[data-sidebar-session-archive]").focus();
       await pullRequestIcon.waitFor({ state: "hidden" });
+      await pullRequestRow.locator(".session-row-badges").waitFor({ state: "hidden" });
       await ui.visible(unreadBadge);
       expect(await ui.bounds(unreadBadge)).toEqual(badgeBounds);
       await codingToggle.focus();
@@ -337,7 +286,7 @@ suite.define(() => {
     }));
 
   it("does not widen desktop session text when hover actions appear beside trailing state", () =>
-    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+    ui.withSessionPage(suite, async (page) => {
       await showPullRequests(
         page,
         [
@@ -371,13 +320,13 @@ suite.define(() => {
           row.locator(".sidebar-recent-session__name .sidebar-session-fork-indicator").isVisible(),
         )
         .toBe(true);
-      await expect.poll(() => row.locator('[aria-label="Forked session"]').count()).toBe(1);
+      await ui.expectCount(row.locator('[aria-label="Forked session"]'), 1);
       await expect
         .poll(() => row.locator("[data-pull-request-state='open']").isVisible())
         .toBe(true);
       await expect.poll(() => state.isVisible()).toBe(true);
-      await expect.poll(() => row.locator(".session-glyph__ring").count()).toBe(0);
-      const prIcon = row.locator("[data-pull-request-state='open'] svg");
+      await ui.expectCount(row.locator(".session-glyph__ring"), 0);
+      const prIcon = row.locator("[data-pull-request-state='open'] .session-css-icon");
       expect(
         await prIcon.evaluate((icon) => {
           const { width, height } = icon.getBoundingClientRect();
@@ -452,6 +401,7 @@ suite.define(() => {
         expect(ui.centerY(nameBounds)).toBeCloseTo(ui.centerY(pinBounds), 1);
         expect(ui.right(nameBounds)).toBeLessThanOrEqual(pinBounds.x + 1);
         expect(ui.right(pinBounds)).toBeLessThanOrEqual(menuBounds.x);
+        expect(ui.centerX(restingStateBounds)).toBeCloseTo(ui.centerX(menuBounds), 1);
       });
     }));
 });

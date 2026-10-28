@@ -2,10 +2,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { UsageOverviewLoad } from "../../infra/session-cost-usage-overview-load.js";
 import { createSessionCostSummaryAccumulator } from "../../infra/session-cost-usage-rollup.js";
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
+  loadSessionUsageOverviewFromCache,
   type DiscoveredSession,
   type SessionCostSummary,
   type UsageDailyBucket,
@@ -18,9 +20,11 @@ import {
   getAsyncWorkSignal,
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
+import type { SessionUsageEntry } from "../../shared/usage-types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { usageOverviewRowKey, type UsageOverviewUsage } from "./usage-overview-report.js";
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
 
@@ -33,7 +37,7 @@ export type UsageSessionSummaryTarget = {
 
 const USAGE_AGENT_LOAD_CONCURRENCY = 12;
 const USAGE_REPORT_PUBLICATION_WAIT_MS = 100;
-const USAGE_REPORT_INITIAL_BATCH_SIZE = 256;
+const USAGE_REPORT_BATCH_SIZE = 256;
 
 export async function runUsageAgentTasks<T>(tasks: Array<() => Promise<T>>): Promise<T[]> {
   const result = await runTasksWithConcurrency({
@@ -54,6 +58,7 @@ export async function discoverAllSessionsForUsage(params: {
   agentId?: string;
   startMs: number;
   endMs: number;
+  statistics?: false;
 }): Promise<DiscoveredSessionWithAgent[]> {
   return readWithSessionStoreTopology(async () => {
     const requestedAgentId = normalizeOptionalString(params.agentId);
@@ -67,11 +72,13 @@ export async function discoverAllSessionsForUsage(params: {
           agentId,
           startMs: params.startMs,
           endMs: params.endMs,
+          statistics: params.statistics,
         });
         return sessions.map((session) => Object.assign({}, session, { agentId }));
       }),
     );
-    return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
+    // oxlint-disable-next-line unicorn/no-array-sort -- flat returns a fresh, private array.
+    return discovered.flat().sort((a, b) => b.mtime - a.mtime);
   });
 }
 
@@ -106,7 +113,6 @@ export async function loadUsageSessionSummaries(params: {
   endMs: number;
   includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
-  committedOnly?: boolean;
 }) {
   const {
     entries: mergedEntries,
@@ -147,10 +153,8 @@ export async function loadUsageSessionSummaries(params: {
       let usage: ReturnType<typeof createSessionCostSummaryAccumulator> | undefined;
       let reportBudgetBytes: number | undefined;
       for (let offset = 0; offset < agentSessions.length;) {
-        const batch = agentSessions.slice(
-          offset,
-          offset === 0 ? USAGE_REPORT_INITIAL_BATCH_SIZE : undefined,
-        );
+        // Concurrent reports share the worker pool's input-byte budget.
+        const batch = agentSessions.slice(offset, offset + USAGE_REPORT_BATCH_SIZE);
         const loaded = await params.read(
           () =>
             loadSessionCostSummariesFromCache({
@@ -163,7 +167,6 @@ export async function loadUsageSessionSummaries(params: {
               dayBucket,
               maxPublicationWaitMs: USAGE_REPORT_PUBLICATION_WAIT_MS,
               reportBudgetBytes,
-              committedOnly: params.committedOnly,
             }),
           () => ({
             summaries: batch.map(() => null),
@@ -210,6 +213,91 @@ export async function loadUsageSessionSummaries(params: {
   return { summaries: usageByEntryIndex, computing, cacheStatus };
 }
 
+/**
+ * Overview usage per entry: private sessions return summaries, quarter folds stay
+ * packed and each entry references its row for the off-thread overview report.
+ */
+export async function loadUsageOverviewSummaries(params: {
+  entries: Array<UsageSessionSummaryTarget & { key: string }>;
+  read: <T>(load: () => Promise<T>, partial: () => T) => Promise<T>;
+  config: OpenClawConfig;
+  startMs: number;
+  endMs: number;
+  includeUntimestamped?: boolean;
+  dayBucket?: UsageDailyBucket;
+}) {
+  const summaries: Array<SessionUsageEntry["usage"]> = Array.from(
+    { length: params.entries.length },
+    () => null,
+  );
+  const usage: UsageOverviewUsage = { packed: [], refs: new Map() };
+  const computing = Array<boolean>(params.entries.length).fill(false);
+  const byAgent = new Map<string, number[]>();
+  for (const [index, entry] of params.entries.entries()) {
+    const indexes = byAgent.get(entry.agentId) ?? [];
+    indexes.push(index);
+    byAgent.set(entry.agentId, indexes);
+  }
+  let cacheStatus: UsageCacheStatus | undefined;
+  let summarizing = 0;
+  let instances = 0;
+  await runUsageAgentTasks(
+    Array.from(byAgent, ([agentId, indexes]) => async () => {
+      const families = indexes.map((index) => params.entries[index]!.instances);
+      const count = families.reduce((sum, family) => sum + family.length, 0);
+      const loaded = await params.read(
+        () =>
+          loadSessionUsageOverviewFromCache({
+            families,
+            config: params.config,
+            agentId,
+            startMs: params.startMs,
+            endMs: params.endMs,
+            includeUntimestamped: params.includeUntimestamped,
+            dayBucket: params.dayBucket,
+          }),
+        (): UsageOverviewLoad => ({
+          kind: "overview",
+          usage: { kind: "rows", rows: families.map(() => null) },
+          computing: families.map(() => true),
+          summarizing: count,
+          staleSessionFiles: [],
+          invalidRows: [],
+          cacheStatus: {
+            status: "partial",
+            cachedFiles: 0,
+            pendingFiles: count,
+            staleFiles: 0,
+          },
+        }),
+      );
+      instances += count;
+      summarizing += loaded.summarizing;
+      cacheStatus = mergeUsageCacheStatus(cacheStatus, loaded.cacheStatus);
+      const loadedUsage = loaded.usage;
+      const packedIndex = loadedUsage.kind === "packed" ? usage.packed.push(loadedUsage) - 1 : -1;
+      for (const [position, index] of indexes.entries()) {
+        const entry = params.entries[index]!;
+        let present: boolean;
+        if (loadedUsage.kind === "packed") {
+          present = loadedUsage.batch.offsets[position]! >= 0;
+          if (present) {
+            usage.refs.set(usageOverviewRowKey(entry), [packedIndex, position]);
+          }
+        } else {
+          const row = loadedUsage.rows[position];
+          summaries[index] = row
+            ? Object.assign(row, { sessionId: entry.sessionId, sessionFile: entry.sessionFile })
+            : null;
+          present = Boolean(row);
+        }
+        computing[index] = loaded.computing[position] === true || !present;
+      }
+    }),
+  );
+  return { summaries, usage, computing, cacheStatus, summarizing, instances };
+}
+
 type UsageRequestBudget = {
   hint: string;
   exhausted: () => boolean;
@@ -238,8 +326,7 @@ export function withUsageRequestBudget(
       caller.beginClose(parent.reason);
       data.beginClose(parent.reason);
     };
-    const timer = setTimeout(() => data.beginClose(exhausted), 15_000);
-    timer.unref?.();
+    const timer = setTimeout(() => data.beginClose(exhausted), 15_000).unref();
     parent.addEventListener("abort", cancel, { once: true });
     if (parent.aborted) {
       cancel();

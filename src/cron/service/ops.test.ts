@@ -14,7 +14,7 @@ import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-h
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
-import type { CronJob } from "../types.js";
+import type { CronEvent, CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add, remove, removeStaleJobFamily, update } from "./ops-mutations.js";
 import { list } from "./ops-read.js";
@@ -22,7 +22,6 @@ import { run } from "./ops-run.js";
 import { createOkIsolatedCronStateFactory } from "./ops.test-support.js";
 import * as taskRuns from "./run-history.js";
 import { claimCronRecoveryReceipt } from "./run-recovery.test-support.js";
-import type { CronEvent } from "./state.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",

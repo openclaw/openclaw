@@ -4,21 +4,22 @@ import {
   SettingsDefaultDescription,
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { ConfigProps } from "./view-types.ts";
 
-type LocalToggle =
-  | "chatShowTaskProgress"
-  | "chatCollapseTaskProgress"
-  | "composerHoldToRecord"
-  | "sidebarLiveActivity"
-  | "sessionDeleteConfirm"
-  | "lobsterPetVisits"
-  | "lobsterPetSounds";
+registerEnglishCatalog(registerPreferencesEnglish);
 
 export function LocalToggleRow(props: {
   config: ConfigProps;
-  setting: LocalToggle;
+  setting:
+    | "chatShowTaskProgress"
+    | "chatCollapseTaskProgress"
+    | "composerHoldToRecord"
+    | "sidebarLiveActivity"
+    | "sessionDeleteConfirm"
+    | "lobsterPetVisits"
+    | "lobsterPetSounds";
   title: string;
   hint: JSX.Element;
   extraDescription?: JSX.Element;

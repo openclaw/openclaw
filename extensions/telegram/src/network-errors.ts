@@ -81,8 +81,6 @@ const RECOVERABLE_ERROR_NAMES = new Set([
 ]);
 
 const ALWAYS_RECOVERABLE_MESSAGES = new Set(["fetch failed", "typeerror: fetch failed"]);
-const GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE =
-  /^network request(?:\s+for\s+["']?[^"']+["']?)?\s+failed\s+after\b.*[!.]?$/i;
 
 const RECOVERABLE_MESSAGE_SNIPPETS = [
   "undici",
@@ -194,15 +192,6 @@ export function isTelegramMisdirectedRequestError(err: unknown): boolean {
   return false;
 }
 
-type TelegramNetworkErrorContext =
-  | "polling"
-  | "send"
-  | "webhook"
-  | "delete"
-  | "react"
-  | "edit"
-  | "action"
-  | "unknown";
 /** True only for channel-owned no-send proof or proven pre-connect failures. */
 export function isSafeToRetrySendError(err: unknown): boolean {
   if (!err) {
@@ -308,21 +297,13 @@ export function isTelegramBadRequestError(err: unknown): boolean {
   return hasTelegramErrorCode(err, (code) => code === 400);
 }
 
-export function isRecoverableTelegramNetworkError(
-  err: unknown,
-  options: { context?: TelegramNetworkErrorContext; allowMessageMatch?: boolean } = {},
-): boolean {
+export function isRecoverableTelegramNetworkError(err: unknown): boolean {
   if (!err) {
     return false;
   }
   if (isTelegramRequestNotStartedError(err)) {
     return true;
   }
-  const allowMessageMatch =
-    typeof options.allowMessageMatch === "boolean"
-      ? options.allowMessageMatch
-      : options.context !== "send";
-
   for (const candidate of collectTelegramErrorCandidates(err)) {
     if (classifyTelegramTransientNetworkError(candidate)) {
       return true;
@@ -337,9 +318,7 @@ export function isRecoverableTelegramNetworkError(
     if (
       message &&
       (ALWAYS_RECOVERABLE_MESSAGES.has(message) ||
-        GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message) ||
-        (allowMessageMatch &&
-          RECOVERABLE_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))))
+        RECOVERABLE_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet)))
     ) {
       return true;
     }
@@ -348,12 +327,9 @@ export function isRecoverableTelegramNetworkError(
   return false;
 }
 
-export function isRetryableTelegramApiError(
-  err: unknown,
-  options: { context?: TelegramNetworkErrorContext; allowMessageMatch?: boolean } = {},
-): boolean {
+export function isRetryableTelegramApiError(err: unknown): boolean {
   return (
-    isRecoverableTelegramNetworkError(err, options) ||
+    isRecoverableTelegramNetworkError(err) ||
     isTelegramServerError(err) ||
     isTelegramRateLimitError(err)
   );

@@ -9,6 +9,7 @@ import { CodexAppServerClient } from "./client.js";
 import { createCodexDesktopGenerationOwner } from "./desktop-generation-owner.js";
 import * as desktopGenerationRuntime from "./desktop-generation.js";
 import * as managedBinary from "./managed-binary.js";
+import { appInfo } from "./plugin-inventory.test-helpers.js";
 import {
   isJsonObject,
   type CodexThread,
@@ -186,19 +187,8 @@ export async function createCanonicalForkNativeFixture(
         const app = isJsonObject(apps) ? apps["synthetic-app"] : undefined;
         return codexAppInventoryResponse(method, [
           {
-            id: "synthetic-app",
+            ...appInfo("synthetic-app", true, isJsonObject(app) && app.enabled === true),
             name: "Synthetic App",
-            description: null,
-            logoUrl: null,
-            logoUrlDark: null,
-            distributionChannel: null,
-            branding: null,
-            appMetadata: null,
-            labels: null,
-            installUrl: null,
-            isAccessible: true,
-            isEnabled: isJsonObject(app) && app.enabled === true,
-            pluginDisplayNames: [],
           },
         ]);
       }

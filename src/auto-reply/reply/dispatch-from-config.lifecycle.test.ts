@@ -26,7 +26,7 @@ describe("dispatchReplyFromConfig", () => {
       racePromiseWithAbortSignal(new Promise<never>(() => {}), abortSignal),
     );
     const runtimeLoaders = await import("./dispatch-from-config.runtime-loaders.js");
-    const preparedLoader = vi.spyOn(runtimeLoaders, "loadPreparedModelRuntime").mockResolvedValue({
+    using _ = vi.spyOn(runtimeLoaders, "loadPreparedModelRuntime").mockResolvedValue({
       loadPublishedGatewayReplyDispatchRuntime: preparedLookup,
     } as never);
     const dispatch = withDispatchProcessedOutcomeSink(() =>
@@ -41,38 +41,39 @@ describe("dispatchReplyFromConfig", () => {
         replyOptions: { abortSignal: abort.signal },
       }),
     );
-    try {
-      await vi.waitFor(() => expect(preparedLookup).toHaveBeenCalledOnce());
-      abort.abort(new Error("request cancelled"));
-      const outcome = await dispatch;
 
-      expect(outcome.result).toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
-      expect(outcome.processedOutcome).toEqual({
+    await vi.waitFor(() => expect(preparedLookup).toHaveBeenCalledOnce());
+    abort.abort(new Error("request cancelled"));
+    const outcome = await dispatch;
+
+    expect(outcome.result).toMatchObject({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    expect(outcome.processedOutcome).toEqual({
+      outcome: "skipped",
+      reason: "reply_operation_aborted",
+    });
+    expect(messageAuditEvents()[0]).toMatchObject({
+      status: "blocked",
+      outcome: "skipped",
+      reasonCode: "reply_operation_aborted",
+    });
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({
         outcome: "skipped",
         reason: "reply_operation_aborted",
-      });
-      expect(messageAuditEvents()[0]).toMatchObject({
-        status: "blocked",
-        outcome: "skipped",
-        reasonCode: "reply_operation_aborted",
-      });
-      expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-        expect.objectContaining({
-          outcome: "skipped",
-          reason: "reply_operation_aborted",
-        }),
-      );
-      expect(preparedLookup).toHaveBeenCalledWith({
-        agentId: "main",
-        demand: "interactive",
-        abortSignal: abort.signal,
-        onRuntimeLease: expect.any(Function),
-      });
-    } finally {
-      preparedLoader.mockRestore();
-    }
+      }),
+    );
+    const preparedSignal = preparedLookup.mock.calls[0]?.[0].abortSignal;
+    expect(preparedSignal).toBeInstanceOf(AbortSignal);
+    expect(preparedSignal?.aborted).toBe(true);
+    expect(preparedSignal?.reason).toBe(abort.signal.reason);
+    expect(preparedLookup).toHaveBeenCalledWith({
+      agentId: "main",
+      demand: "interactive",
+      abortSignal: abort.signal,
+      onRuntimeLease: expect.any(Function),
+    });
   });
 });

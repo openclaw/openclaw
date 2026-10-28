@@ -1,36 +1,26 @@
-/**
- * Shared WebSocket connection fixtures for gateway server tests.
- */
 import { EventEmitter } from "node:events";
 import type { Socket } from "node:net";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import type { WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { prepareGatewayIngressAttribution } from "../ingress-attribution.js";
+import type { SerializedGatewayFrame } from "../serialized-json.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import type { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 
 type AttachGatewayWsConnectionParams = Parameters<typeof attachGatewayWsConnectionHandler>[0];
+type SendCallback = (error?: Error) => void;
 
 export type GatewayWsTestSocket = ReturnType<typeof createGatewayWsTestSocket>;
 
 export function createGatewayWsTestLogger() {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
+  return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
 
 export function createResolvedGatewayTokenAuth(token: string): ResolvedGatewayAuth {
-  return {
-    mode: "token",
-    allowTailscale: false,
-    token,
-  };
+  return { mode: "token", allowTailscale: false, token };
 }
 
 export function createGatewayWsTestRequestContext(
@@ -67,9 +57,9 @@ export function createGatewayWsTestSocket(
     bufferedAmount: 0,
     send: vi.fn(
       (
-        data: string | Buffer,
-        options?: { binary: false } | ((err?: Error) => void),
-        cb?: (err?: Error) => void,
+        data: string | Buffer | SerializedGatewayFrame,
+        options?: { binary: false } | SendCallback,
+        cb?: SendCallback,
       ) => {
         params.onSend?.(String(data));
         (typeof options === "function" ? options : cb)?.();
@@ -155,15 +145,7 @@ export function attachGatewayWsForTest(params: {
     ...params.options,
   });
 
-  const onConnection = listeners.get("connection");
-  expect(onConnection).toBeTypeOf("function");
-  onConnection?.(socket, upgradeReq);
+  listeners.get("connection")!(socket, upgradeReq);
 
-  return {
-    clients,
-    listeners,
-    socket,
-    upgradeReq,
-    wss,
-  };
+  return { clients, listeners, socket, upgradeReq, wss };
 }

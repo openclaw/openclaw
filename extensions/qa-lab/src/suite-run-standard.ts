@@ -76,10 +76,10 @@ export async function runQaFlowSuiteStandard(
   let preserveGatewayRuntimeDir: string | undefined;
   let runFailed = false;
   let runError: unknown;
-  let completionProgress: string | undefined;
+  let completionProgress: string;
   let terminalScenarios: QaSuiteScenarioResult[] | undefined;
   let transportArtifacts: QaRunnerTransportArtifacts | undefined;
-  let publishTerminalResult: (() => Promise<QaSuiteResult>) | undefined;
+  let publishTerminalResult: () => Promise<QaSuiteResult>;
   const startedScenarioIds: string[] = [];
   try {
     writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
@@ -345,6 +345,7 @@ export async function runQaFlowSuiteStandard(
             scenarioResult: runtimeParityScenario,
             ...runtimeParityCellTiming,
             mockBaseUrl: activeMock?.baseUrl,
+            pendingToolResultWaitMs: params.forcedRuntime === "codex" ? 10_000 : 0,
           })
         : undefined;
     const scenarioFinishedAt = new Date();
@@ -429,9 +430,6 @@ export async function runQaFlowSuiteStandard(
       runError,
       scenarios: terminalScenarios,
     });
-  }
-  if (!publishTerminalResult || !completionProgress) {
-    throw new Error("QA suite completed without terminal result metadata");
   }
   const result = await publishTerminalResult();
   if (!params?.captureRuntimeParityCell && !isQaSuiteNestedRun(params)) {

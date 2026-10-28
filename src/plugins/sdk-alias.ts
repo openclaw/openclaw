@@ -1,5 +1,4 @@
 // Resolves plugin SDK aliases for public package imports.
-import type fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +23,9 @@ import {
   readPluginCacheDirectory,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
+import type { PluginDirectoryEntry } from "./plugin-cache-files.types.js";
 import {
+  cachePluginSdkAliases,
   getPluginSdkAliasFacts,
   getPluginSdkHostFacts,
   type PluginRuntimeModuleResolution,
@@ -600,7 +601,7 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(
     return cached;
   }
   const extensionsRoot = path.join(packageRoot, "extensions");
-  let extensionDirs: fs.Dirent[];
+  let extensionDirs: PluginDirectoryEntry[];
   try {
     extensionDirs = readPluginCacheDirectory(extensionsRoot);
   } catch {
@@ -947,8 +948,7 @@ export function preparePluginLoaderAliases(
       });
     },
   };
-  cache.sdk.contexts.set(cacheKey, prepared);
-  return prepared;
+  return cachePluginSdkAliases(cache.sdk, prepared);
 }
 
 // SDK and workspace namespaces are canonical above. Bundled package names are
@@ -987,14 +987,12 @@ export function buildPluginLoaderAliasMap(
 }
 
 export function resolvePluginRuntimeModulePathWithDiagnostics(
-  params: LoaderModuleResolveParams = {},
+  params: Omit<LoaderModuleResolveParams, "cwd" | "moduleUrl"> = {},
 ): PluginRuntimeModuleResolution {
   const cache = getPluginCache().sdk.runtimeModules;
   const key = JSON.stringify([
     params.modulePath,
     params.argv1 ?? process.argv[1],
-    params.cwd,
-    params.moduleUrl,
     resolveDevSourceRootParam(params),
     params.pluginSdkResolution,
     process.cwd(),

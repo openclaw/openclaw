@@ -11,19 +11,28 @@ import {
   loadChatMetadataRefresh,
   retireChatMetadataRefresh,
 } from "../../lib/chat/chat-metadata-store.ts";
+import {
+  applyRemoteSlashCommandsResult,
+  refreshSlashCommands,
+} from "../../lib/chat/slash-command-catalog.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
-import { loadModelCatalog, peekModelCatalog } from "../../lib/model-catalog-store.ts";
+import {
+  loadModelCatalog,
+  peekModelCatalog,
+  resolveModelCatalogState,
+} from "../../lib/model-catalog-store.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import {
   isUiSelectedGlobalSessionKey,
   parseAgentSessionKey,
+  createUiSessionRowMatcher,
 } from "../../lib/sessions/session-key.ts";
 import { isPersistedSessionRow } from "../../lib/sessions/session-row-reconcile.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
-import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
+import { cacheChatComposerSnapshot } from "./chat-composer-snapshot.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -50,10 +59,6 @@ type ChatRefreshOptions = {
   startup?: boolean;
 };
 
-type ChatStartupMetadataHandler = (
-  metadata: Partial<ChatMetadataResult> | undefined,
-) => void | Promise<void>;
-
 type ChatMetadataBinding = {
   client: GatewayBrowserClient;
   sessions: ChatPageHost["sessions"];
@@ -67,7 +72,7 @@ type ChatMetadataBinding = {
   sessionFactsRetryPending?: boolean;
   sessionFactsRequest?: { version: number; promise: Promise<void> };
   refreshPending?: { refresh: ChatMetadataRefresh; promise: Promise<void> };
-  catalogRequest?: { version: number; controller: AbortController; promise: Promise<boolean> };
+  catalogRequest?: { controller: AbortController; promise: Promise<boolean> };
   isCurrent: () => boolean;
   unsubscribe: () => void;
 };
@@ -203,10 +208,12 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
         if (update.type === "invalidated" || update.type === "loading") {
           binding.sessionRefreshPending =
             update.type === "invalidated" && update.scope === "session";
-          binding.version += 1;
-          if (binding.sessionFactsRequest) {
-            binding.sessionFactsInvalidated = true;
-            binding.sessionFactsRetryPending = true;
+          if (update.type === "loading" || update.refreshSessionFacts) {
+            binding.version += 1;
+            if (binding.sessionFactsRequest) {
+              binding.sessionFactsInvalidated = true;
+              binding.sessionFactsRetryPending = true;
+            }
           }
         }
         if (update.type === "invalidated") {
@@ -350,6 +357,7 @@ function refreshChatSessionFacts(host: ChatPageHost, binding: ChatMetadataBindin
           ...host.sessionsResult,
           sessions: binding.sessions.projectRows(host.sessionsResult.sessions),
         };
+        applyCachedChatModelCatalog(host, binding);
       }
     })
     .catch(() => {
@@ -368,20 +376,22 @@ function refreshChatSessionFacts(host: ChatPageHost, binding: ChatMetadataBindin
   return promise;
 }
 
-export async function refreshChatModelAuthStatus(host: ChatPageHost) {
+export async function refreshChatModelAuthStatus(host: ChatPageHost, runId?: string) {
   if (!host.client || !host.connected) {
     return;
   }
   const client = host.client;
   const connectionIsCurrent = captureChatConnectionOwner(host);
   const agentId = resolveChatAgentId(host);
+  const sessionKey = host.sessionKey;
   const requestVersion = ++host.modelAuthStatusRequestVersion;
   const ownsRequest = () =>
     connectionIsCurrent() &&
     host.modelAuthStatusRequestVersion === requestVersion &&
+    host.sessionKey === sessionKey &&
     resolveChatAgentId(host) === agentId;
   try {
-    const result = await loadModelAuthStatus(client, { agentId });
+    const result = await loadModelAuthStatus(client, { agentId, refreshUsage: Boolean(runId) });
     if (!ownsRequest()) {
       return;
     }
@@ -390,7 +400,10 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost) {
     if (!ownsRequest()) {
       return;
     }
-    host.modelAuthStatusResult = { ts: 0, providers: [] };
+    // Auxiliary post-run failures must not erase the last displayed usage.
+    if (!runId) {
+      host.modelAuthStatusResult = { ts: 0, providers: [] };
+    }
   }
 }
 
@@ -401,12 +414,10 @@ async function loadChatModelCatalog(
   if (applyCachedChatModelCatalog(host, binding)) {
     return true;
   }
-  if (binding.catalogRequest?.version === binding.version) {
+  if (binding.catalogRequest) {
     return binding.catalogRequest.promise;
   }
-  binding.catalogRequest?.controller.abort();
   const controller = new AbortController();
-  const version = binding.version;
   const ownsRequest = () =>
     binding.isCurrent() && binding.catalogRequest?.controller === controller;
   host.chatModelsLoading =
@@ -443,8 +454,26 @@ async function loadChatModelCatalog(
         host.chatModelsLoading = false;
       }
     });
-  binding.catalogRequest = { version, controller, promise };
+  binding.catalogRequest = { controller, promise };
   return promise;
+}
+
+export function readChatModelCatalogState(host: ChatPageHost) {
+  return resolveModelCatalogState(
+    {
+      models: host.chatModelCatalog,
+      refreshFailed: host.chatModelCatalogRefreshFailed,
+      pendingProviders: host.chatModelCatalogPendingProviders,
+      modelSelectionPolicy: host.chatModelSelectionPolicy,
+    },
+    {
+      connected: host.connected,
+      loading: host.chatModelsLoading,
+      error: host.chatModelCatalogError,
+      retired: host.chatModelCatalogRetired,
+      initialized: host.chatModelCatalogInitialized,
+    },
+  );
 }
 
 function applyChatModelCatalog(host: ChatPageHost, result?: ModelCatalogResult) {
@@ -470,12 +499,18 @@ function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBi
     binding.catalogRequest = undefined;
   }
   if (binding.catalogResult === result && !host.chatModelsLoading && !host.chatModelCatalogError) {
+    if (fresh) {
+      cacheChatComposerSnapshot(host, result);
+    }
     return Boolean(fresh);
   }
   binding.catalogResult = result;
   const previousError = host.chatModelCatalogError;
   const previousLoading = host.chatModelsLoading;
   applyChatModelCatalog(host, result);
+  if (fresh) {
+    cacheChatComposerSnapshot(host, result);
+  }
   // A stale display receipt cannot settle this pane's newer failed or pending read.
   if (!fresh) {
     host.chatModelCatalogError = previousError;
@@ -514,29 +549,50 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
   }
 }
 
-async function refreshChat(
-  host: ChatPageHost,
-  opts: ChatRefreshOptions,
-  onStartupMetadata: ChatStartupMetadataHandler,
-) {
+export async function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
+  const binding = opts?.startup ? bindChatMetadata(host) : undefined;
+  const publication = binding
+    ? beginChatMetadataPublication(binding.client, binding.scope)
+    : undefined;
+  if (binding) {
+    void refreshChatMetadata(host, { startup: true });
+  }
+  const refreshOptions = { ...opts };
+  const onStartupMetadata = async (metadata: Partial<ChatMetadataResult> | undefined) => {
+    // The publication belongs to the shared scope, not the pane that started history.
+    // Final subscriber release or invalidation retires it; one pane closing must not.
+    if (!binding || !publication?.isCurrent()) {
+      return;
+    }
+    if (metadata) {
+      publication.publish(metadata);
+    } else {
+      // Startup can omit its bounded projection. Read the same session scope without history.
+      const fallback = loadChatMetadataRefresh(binding.client, binding.scope, {
+        kind: "metadata",
+        revalidateMetadata: () => publication.isCurrent(),
+      });
+      await fallback.completed;
+    }
+  };
   const refreshedSessions = host.sessions;
-  const connectionIsCurrent = captureChatConnectionOwner(host);
+  const refreshConnectionIsCurrent = captureChatConnectionOwner(host);
   const refreshedSessionKey = host.sessionKey;
   const refreshedAgentId = resolveAgentIdForSession(host);
   const ownsRefresh = () =>
-    connectionIsCurrent() &&
+    refreshConnectionIsCurrent() &&
     host.sessions === refreshedSessions &&
     host.sessionKey === refreshedSessionKey &&
     resolveAgentIdForSession(host) === refreshedAgentId;
   const previousSessionsResult = host.sessionsResult;
   const historyLoad =
-    opts?.historyLoad ??
+    refreshOptions?.historyLoad ??
     loadChatHistory(host, {
-      deferBranches: opts?.deferBranches === true,
-      startup: opts?.startup === true,
+      deferBranches: refreshOptions?.deferBranches === true,
+      startup: refreshOptions?.startup === true,
     });
   const historyRefresh = historyLoad.finally(() => {
-    if (opts?.scheduleScroll !== false) {
+    if (refreshOptions?.scheduleScroll !== false) {
       scheduleChatScroll(host);
     }
   });
@@ -560,12 +616,20 @@ async function refreshChat(
     if (!admitted || !ownsRefresh()) {
       return;
     }
+    const presentation = host.sessions.presentation;
     // The shared roster may belong to another agent. Keep this pane's accepted
     // history separate rather than relabeling or borrowing that roster.
     const scopedHistory =
       host.sessions.state.agentId !== refreshedAgentId &&
       (isUiSelectedGlobalSessionKey(host, refreshedSessionKey) ||
         isPersistedSessionRow(history.sessionInfo));
+    const matchesSession = createUiSessionRowMatcher(host, refreshedSessionKey);
+    // Reconciliation already projected the observed row into this pane. A bounded
+    // roster can omit it; retain that projection without overriding roster metadata.
+    const retainObserved =
+      !scopedHistory &&
+      selectedChatSessionRow(host) &&
+      !presentation.result?.sessions.some((row) => matchesSession(row.key, row.agentId));
     host.sessionsResult = scopedHistory
       ? reconcileSessionHistory(
           host.sessionsResultAgentId === refreshedAgentId ? host.sessionsResult : null,
@@ -582,8 +646,16 @@ async function refreshChat(
             (host.sessionsResultAgentId === refreshedAgentId &&
               host.sessionsResult !== previousSessionsResult),
         )
-      : host.sessions.state.result;
-    host.sessionsResultAgentId = scopedHistory ? refreshedAgentId : host.sessions.state.agentId;
+      : retainObserved
+        ? host.sessionsResult
+        : presentation.result;
+    host.sessionsResultAgentId =
+      scopedHistory || retainObserved ? refreshedAgentId : presentation.agentId;
+    // Catalog and history arrive independently; persist the selection once both owners know it.
+    const currentBinding = metadataBindings.get(host);
+    if (currentBinding) {
+      applyCachedChatModelCatalog(host, currentBinding);
+    }
     // Defaults-only admission cannot update descriptor flags or run state from stale history.
     if (admitted === "defaults-only") {
       return;
@@ -625,7 +697,7 @@ async function refreshChat(
     }
   });
   const startupMetadataRefresh =
-    opts.startup === true
+    refreshOptions.startup === true
       ? historyLoad.then(
           (history) => onStartupMetadata(history?.metadata),
           () => onStartupMetadata(undefined),
@@ -640,36 +712,7 @@ async function refreshChat(
     () => void flushChatQueueForEvent(host),
   );
   void Promise.allSettled([sessionsRefresh, startupMetadataRefresh]);
-  if (opts?.awaitHistory === true) {
-    await historyRefresh;
-  }
-}
 
-export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
-  const binding = opts?.startup ? bindChatMetadata(host) : undefined;
-  const publication = binding
-    ? beginChatMetadataPublication(binding.client, binding.scope)
-    : undefined;
-  if (binding) {
-    void refreshChatMetadata(host, { startup: true });
-  }
-  const refresh = refreshChat(host, { ...opts }, async (metadata) => {
-    // The publication belongs to the shared scope, not the pane that started history.
-    // Final subscriber release or invalidation retires it; one pane closing must not.
-    if (!binding || !publication?.isCurrent()) {
-      return;
-    }
-    if (metadata) {
-      publication.publish(metadata);
-    } else {
-      // Startup can omit its bounded projection. Read the same session scope without history.
-      const fallback = loadChatMetadataRefresh(binding.client, binding.scope, {
-        kind: "metadata",
-        revalidateMetadata: () => publication.isCurrent(),
-      });
-      await fallback.completed;
-    }
-  });
   const sessionKey = host.sessionKey;
   const connectionIsCurrent = captureChatConnectionOwner(host);
   scheduleChatMetadataRefresh(() => {
@@ -681,5 +724,7 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
       ...(!opts?.startup ? [refreshChatMetadata(host)] : []),
     ]);
   });
-  return refresh;
+  if (refreshOptions.awaitHistory === true) {
+    await historyRefresh;
+  }
 }

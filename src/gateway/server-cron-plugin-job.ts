@@ -1,8 +1,14 @@
+import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
+import type { CronEvent } from "../cron/service.js";
 import type { CronJob } from "../cron/types.js";
-import type { PluginHookGatewayCronJob } from "../plugins/hook-gateway.types.js";
+import type {
+  PluginHookCronChangedEvent,
+  PluginHookGatewayCronJob,
+} from "../plugins/hook-gateway.types.js";
+import { pickDefined } from "./server-cron-completion.js";
 
 /** Map internal CronJob to the public plugin SDK shape. */
-export function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
+function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
   return {
     id: job.id,
     agentId: job.agentId,
@@ -38,5 +44,43 @@ export function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
     },
     createdAtMs: job.createdAtMs,
     updatedAtMs: job.updatedAtMs,
+  };
+}
+
+/** Omit internal delivery and usage detail; redact command output before plugin delivery. */
+export function toPluginCronChangedEvent(
+  evt: CronEvent,
+  jobSnapshot: CronJob | undefined,
+): PluginHookCronChangedEvent {
+  const pluginJob = jobSnapshot ? toPluginCronJob(jobSnapshot) : undefined;
+  const hookSummary =
+    jobSnapshot?.payload?.kind === "command" && typeof evt.summary === "string"
+      ? redactCronCommandSummaryForExternalDelivery(evt.summary)
+      : evt.summary;
+  return {
+    action: evt.action,
+    jobId: evt.jobId,
+    ...(pluginJob ? { job: pluginJob } : {}),
+    // Top-level routing fields so plugins don't have to dig into job.
+    sessionTarget: jobSnapshot?.sessionTarget,
+    agentId: jobSnapshot?.agentId,
+    ...pickDefined(evt, [
+      "runAtMs",
+      "durationMs",
+      "status",
+      "completionStatus",
+      "error",
+      "delivered",
+      "deliveryStatus",
+      "deliveryError",
+      "deliverySuppressionReason",
+      "sessionId",
+      "sessionKey",
+      "runId",
+      "nextRunAtMs",
+      "model",
+      "provider",
+    ]),
+    ...(hookSummary !== undefined ? { summary: hookSummary } : {}),
   };
 }

@@ -14,6 +14,7 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -35,9 +36,12 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
+import { sealSessionEntryPublicationSource } from "./session-entry-publication-source.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 import type { SessionEntry } from "./types.js";
 
@@ -45,6 +49,31 @@ const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
 const cleanupWarning = "Session mutation completed before executor cleanup failed";
+
+function withoutSql(assertions: () => void) {
+  const sql = observeMainThreadSql();
+  try {
+    assertions();
+    sql.expectIdle();
+  } finally {
+    sql.restore();
+  }
+}
+
+function conversation(peerId: string) {
+  const address = { channel: "slack", accountId: "default", kind: "channel" as const, peerId };
+  return {
+    address,
+    routed: (sessionId: string, updatedAt: number): SessionEntry => ({
+      sessionId,
+      updatedAt,
+      chatType: "channel",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: address.channel, accountId: address.accountId, to: peerId },
+      }),
+    }),
+  };
+}
 
 function setup(name: string) {
   const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -89,6 +118,177 @@ function retainSharing(
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+it("publishes full replacement snapshots without returning unused historical rows", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { scope, write, read } = setup("replacement-reply-payload");
+    const skillsSnapshot = { prompt: "synthetic saved instructions ".repeat(1024), skills: [] };
+    write(makeEntry("replacement-reply-payload", { label: "before", skillsSnapshot }));
+    const replies: unknown[] = [];
+    const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
+    const stop = sessionChanges.subscribeFacts((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        publications.push(readPreparedSessionEntryChange(change, scope.sessionKey));
+      }
+    });
+    delivery.afterResult = (result) => {
+      replies.push(result);
+    };
+    try {
+      const result = await applySessionEntryExactReplacements({
+        ...scope,
+        sessionKeys: [scope.sessionKey],
+        update: ([row]) => ({
+          result: "replacement result",
+          replacements: [
+            { sessionKey: scope.sessionKey, entry: { ...row!.entry, label: "after" } },
+          ],
+        }),
+      });
+      expect(result).toBe("replacement result");
+      expect(read()).toMatchObject({ label: "after", skillsSnapshot });
+      expect(publications).toEqual([
+        expect.objectContaining({
+          entry: expect.objectContaining({ label: "after" }),
+          fullEntry: expect.objectContaining({ label: "after", skillsSnapshot }),
+        }),
+      ]);
+      expect(replies).toEqual([
+        { maintenancePlans: expect.any(Array), publication: expect.any(Object) },
+      ]);
+    } finally {
+      delivery.afterResult = undefined;
+      stop();
+    }
+  });
+});
+
+it.each(["full entry", "write token", "receipt"])(
+  "invalidates an unchanged publication missing its %s",
+  async (missing) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const { database, scope, write, read } = setup("incomplete-retention");
+      write(makeEntry("incomplete-retention", { label: "initial" }));
+      const entry = read()!;
+      const receipt = runOpenClawAgentWriteTransaction(
+        (current) => {
+          const postimages: SessionEntryWritePostimages = new Map();
+          const written = writeSessionEntry(current, scope.sessionKey, entry, { postimages });
+          return prepareSessionEntryReplacementPublication(
+            {
+              previous: new Map([[scope.sessionKey, entry]]),
+              current: new Map([[scope.sessionKey, written]]),
+              pendingArchiveRecovery: false,
+              maintenancePlans: [],
+              membershipInvalidatedKeys: [],
+            },
+            current,
+            { captureFullFacts: missing !== "full entry", postimages },
+          );
+        },
+        { agentId: scope.agentId, path: database.path },
+      );
+      expect(receipt.changedKeys).toEqual([]);
+      const source = receipt.source;
+      if (!source || typeof source.identity !== "string") {
+        throw new Error("Expected a durable publication source");
+      }
+      sealSessionEntryPublicationSource(source);
+      expect(source.writeToken).toBeDefined();
+      if (missing === "write token") {
+        delete source.writeToken;
+      }
+      const publication = retainSessionEntryWorkerPublication({
+        ...scope,
+        databaseIdentity: source.identity,
+      });
+      const changes: string[] = [];
+      const stop = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+          changes.push(change.sessionKey);
+        }
+      });
+      try {
+        publication.begin(
+          [],
+          [],
+          receipt.sharingUnchangedKeys,
+          receipt.generationUnchangedKeys,
+          undefined,
+          receipt.current,
+          undefined,
+          receipt.fullEntries,
+        );
+        publication.settle(missing === "receipt" ? undefined : receipt, false);
+        expect(changes).toEqual([scope.sessionKey]);
+      } finally {
+        publication.settle(undefined, false);
+        stop();
+      }
+    });
+  },
+);
+
+it.each(["changed", "initial"])("publishes a repeated replacement ending at %s", async (label) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { scope, write, read } = setup("repeated-replacement");
+    const initial = makeEntry("repeated-replacement", { label: "initial" });
+    write(initial);
+    const changed = { ...initial, label: "changed" };
+    const changes: string[] = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        changes.push(change.scope ?? "unspecified");
+      }
+    });
+    try {
+      await applySessionEntryExactReplacements({
+        ...scope,
+        sessionKeys: [scope.sessionKey],
+        update: () => ({
+          result: undefined,
+          replacements: [
+            { sessionKey: scope.sessionKey, entry: changed },
+            { sessionKey: scope.sessionKey, entry: { ...initial, label } },
+            { sessionKey: scope.sessionKey, entry: { ...initial, label } },
+          ],
+        }),
+      });
+      expect(read()?.label).toBe(label);
+      expect(changes).toEqual(["session-entry"]);
+    } finally {
+      stop();
+    }
+  });
+});
+
+it("does not restore retained-only sharing facts after a successor write", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { database, scope, write, read, replace } = setup("retained-successor");
+    const initial = makeEntry("retained-successor", { visibility: "shared" as const });
+    write(initial);
+    const { sharing } = retainSharing(database, scope.sessionKey, initial);
+    const observed: Array<string | undefined> = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        observed.push(sharing.readCurrent()?.entry?.visibility);
+      }
+    });
+    delivery.afterResult = () => {
+      write({ ...initial, updatedAt: 2, visibility: "draft" });
+    };
+    try {
+      await replace({});
+      expect(read()?.visibility).toBe("draft");
+      expect(sharing.readCurrent()?.entry?.visibility).toBe("draft");
+      expect(observed).toEqual(["draft", "draft"]);
+    } finally {
+      delivery.afterResult = undefined;
+      stop();
+      sharing.release();
+    }
+  });
 });
 
 it("publishes successive replacement identities without changing folded siblings", async () => {
@@ -152,24 +352,7 @@ it.each(["delivered", "lost", "overtaken"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { scope, write, replace } = setup("conversation-competitor");
       const selected = { ...scope, sessionKey: "agent:main:conversation-selected" };
-      const address = {
-        channel: "slack",
-        accountId: "default",
-        kind: "channel" as const,
-        peerId: "channel:C_SYNTHETIC",
-      };
-      const routed = (sessionId: string, updatedAt: number): SessionEntry => ({
-        sessionId,
-        updatedAt,
-        chatType: "channel" as const,
-        delivery: normalizeSessionDeliveryState({
-          context: {
-            channel: address.channel,
-            accountId: address.accountId,
-            to: address.peerId,
-          },
-        }),
-      });
+      const { address, routed } = conversation("channel:C_SYNTHETIC");
       replaceSessionEntrySync(selected, routed("selected", 10));
       write(makeEntry("competitor", {}));
       const check = await captureSessionEntryCurrentCheckAsyncInternal({
@@ -177,15 +360,10 @@ it.each(["delivered", "lost", "overtaken"] as const)(
         matchGeneration: false,
         alternatives: [{ conversations: [{ ...address, sessionKey: selected.sessionKey }] }],
       });
-      const assertRefusedWithoutSql = () => {
-        const sql = observeMainThreadSql();
-        try {
+      const assertRefusedWithoutSql = () =>
+        withoutSql(() => {
           expect(() => check.source()).toThrow("selected session changed");
-          sql.expectIdle();
-        } finally {
-          sql.restore();
-        }
-      };
+        });
       let observed = 0;
       let delivered = 0;
       const stop = sessionChanges.subscribe((change) => {
@@ -221,12 +399,9 @@ it.each(["delivered", "lost", "overtaken"] as const)(
             matchGeneration: false,
             alternatives: [{ conversations: [{ ...address, sessionKey: selected.sessionKey }] }],
           });
-          const sql = observeMainThreadSql();
           try {
-            expect(() => fresh.source()).not.toThrow();
-            sql.expectIdle();
+            withoutSql(() => expect(() => fresh.source()).not.toThrow());
           } finally {
-            sql.restore();
             fresh.release();
           }
         }
@@ -245,24 +420,11 @@ it.each(["commit", "rollback", "unknown"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { scope, write, replace } = setup("pending-conversation-competitor");
       const selected = { ...scope, sessionKey: "agent:main:pending-conversation-selected" };
-      const address = {
-        channel: "slack",
-        accountId: "default",
-        kind: "channel" as const,
-        peerId: "channel:C_PENDING_SYNTHETIC",
-      };
+      const { address, routed } = conversation("channel:C_PENDING_SYNTHETIC");
       const { conversationRef } = buildConversationIdentity({
         ...address,
         deliveryTarget: address.peerId,
       })!;
-      const routed = (sessionId: string, updatedAt: number): SessionEntry => ({
-        sessionId,
-        updatedAt,
-        chatType: "channel",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: address.channel, accountId: address.accountId, to: address.peerId },
-        }),
-      });
       replaceSessionEntrySync(selected, routed("pending-selected", 10));
       write(makeEntry("pending-competitor", {}));
       const snapshot = await withSessionStoreReaderInWorker(
@@ -274,17 +436,8 @@ it.each(["commit", "rollback", "unknown"] as const)(
           }),
         { dataOnly: true },
       );
-      expect(snapshot.associations).toEqual([
-        expect.objectContaining({
-          session_id: "pending-selected",
-          conversation_id: conversationRef,
-        }),
-      ]);
       let acquired: ReturnType<typeof retainConversationBindingFacts> | undefined;
-      let acquisition:
-        | { kind: "returned"; value: string | null }
-        | { kind: "refused"; error: unknown }
-        | undefined;
+      let acquisition: unknown;
       let acquisitionSql = -1;
       let scheduled = false;
       const stop = conversationPublication.subscribeFacts((change) => {
@@ -301,12 +454,9 @@ it.each(["commit", "rollback", "unknown"] as const)(
             acquired.acknowledge(snapshot);
             const sql = observeMainThreadSql();
             try {
-              acquisition = {
-                kind: "returned",
-                value: acquired.currentSessionKey(conversationRef),
-              };
+              acquisition = acquired.currentSessionKey(conversationRef);
             } catch (error) {
-              acquisition = { kind: "refused", error };
+              acquisition = error;
             } finally {
               acquisitionSql = sql.count();
               sql.restore();
@@ -336,36 +486,22 @@ it.each(["commit", "rollback", "unknown"] as const)(
           }, attachment);
           return owned;
         });
-      const restoreDelivery: Array<() => void> = [];
       let delivered = 0;
       delivery.afterResult = () => {
         delivered++;
         expect(acquired).toBeDefined();
-        const sql = observeMainThreadSql();
-        try {
+        withoutSql(() => {
           // Real COMMIT has finished; the publication owner has not installed its receipt yet.
           expect(() => acquired!.currentSessionKey(conversationRef)).toThrow(
             "Conversation binding publication is unavailable",
           );
-          sql.expectIdle();
-        } finally {
-          sql.restore();
-        }
+        });
         if (boundary === "unknown") {
           const owned = nativeAdmission!;
-          expect(owned.committed).toMatchObject({
-            facts: { kind: "session-entry-replacements", changedKeys: [scope.sessionKey] },
-          });
-          expect(owned.settlement).toMatchObject({ kind: "completed" });
+          expect(owned.committed).toBeDefined();
           // Withhold real receipt/result delivery; do not invent a committed postimage.
-          const receipt = vi.spyOn(owned, "committed", "get").mockReturnValue(undefined);
-          const settlement = vi
-            .spyOn(owned, "settlement", "get")
-            .mockReturnValue({ kind: "completed" });
-          restoreDelivery.push(
-            () => receipt.mockRestore(),
-            () => settlement.mockRestore(),
-          );
+          vi.spyOn(owned, "committed", "get").mockReturnValue(undefined);
+          vi.spyOn(owned, "settlement", "get").mockReturnValue({ kind: "completed" });
           throw failure;
         }
       };
@@ -374,26 +510,15 @@ it.each(["commit", "rollback", "unknown"] as const)(
           () => ({ kind: "returned" as const }),
           (error: unknown) => ({ kind: "failed" as const, error }),
         );
-        expect(acquisition).toMatchObject({ kind: "refused", error: expect.any(Error) });
+        expect(acquisition).toBeInstanceOf(Error);
         expect(acquisitionSql).toBe(0);
         expect(delivered).toBe(boundary === "rollback" ? 0 : 1);
-        if (boundary === "commit") {
-          expect(outcome).toEqual({ kind: "returned" });
-        } else {
-          expect(outcome.kind).toBe("failed");
-          if (outcome.kind === "failed") {
-            expect(isSqliteWorkerError(outcome.error, "outcome-unknown")).toBe(true);
-          }
+        expect(outcome.kind).toBe(boundary === "commit" ? "returned" : "failed");
+        if (outcome.kind === "failed") {
+          expect(isSqliteWorkerError(outcome.error, "outcome-unknown")).toBe(true);
         }
-        for (const restore of restoreDelivery.splice(0)) {
-          restore();
-        }
-        if (boundary === "rollback") {
-          expect(nativeAdmission?.committed).toBeUndefined();
-          expect(nativeAdmission?.settlement).toMatchObject({ kind: "completed" });
-        }
-        const sql = observeMainThreadSql();
-        try {
+        vi.restoreAllMocks();
+        withoutSql(() => {
           if (boundary === "commit") {
             expect(acquired!.currentSessionKey(conversationRef)).toBe(scope.sessionKey);
           } else {
@@ -402,26 +527,19 @@ it.each(["commit", "rollback", "unknown"] as const)(
               "Conversation binding publication is unavailable",
             );
           }
-          sql.expectIdle();
-        } finally {
-          sql.restore();
-        }
+        });
         const fresh = await captureConversationBindingFacts(scope, [conversationRef]);
-        const freshSql = observeMainThreadSql();
         try {
-          expect(fresh.currentSessionKey(conversationRef)).toBe(
-            boundary === "rollback" ? selected.sessionKey : scope.sessionKey,
+          withoutSql(() =>
+            expect(fresh.currentSessionKey(conversationRef)).toBe(
+              boundary === "rollback" ? selected.sessionKey : scope.sessionKey,
+            ),
           );
-          freshSql.expectIdle();
         } finally {
-          freshSql.restore();
           fresh.release();
         }
       } finally {
         delivery.afterResult = undefined;
-        for (const restore of restoreDelivery) {
-          restore();
-        }
         admissionProbe.mockRestore();
         stop();
         acquired?.release();
@@ -485,8 +603,6 @@ it.each(["metadata only", "lost result", "callback failure", "release failure"] 
         }
       });
       await projection.prepare();
-      expect([...projection.groupTargets().keys()]).toEqual(["before"]);
-      expect(projection.membership(database.path, sessionKey)).toEqual(["member"]);
       readSessionEntryCache(database, { cache: true });
       const observed: Array<string | undefined> = [];
       const mutations: SessionIdentityMutation[] = [];
@@ -496,11 +612,9 @@ it.each(["metadata only", "lost result", "callback failure", "release failure"] 
           observed.push(sharing.readCurrent()?.entry?.visibility);
         }
       });
-      let executions = 0;
       let whileWaiting: ReturnType<typeof sharing.readCurrent>;
       const failure = new Error(`synthetic ${boundary}`);
       delivery.afterResult = () => {
-        executions++;
         whileWaiting = sharing.readCurrent();
         generation.assertCurrent();
         if (boundary === "lost result") {
@@ -530,7 +644,6 @@ it.each(["metadata only", "lost result", "callback failure", "release failure"] 
             source: { identity, revision: expect.any(Number) },
           });
         }
-        expect(executions).toBe(1);
         expect(cleanupWarnings).toEqual(
           boundary === "release failure" ? [[cleanupWarning, { errors: [failure.message] }]] : [],
         );

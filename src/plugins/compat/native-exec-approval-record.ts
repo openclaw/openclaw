@@ -4,7 +4,6 @@ export const NATIVE_EXEC_APPROVAL_COMPAT_RECORD = {
   code: "native-approval-commit-guard",
   status: "deprecated",
   owner: "sdk",
-  introduced: "2026-09-04",
   deprecated: "2026-10-09",
   warningStarts: "2026-10-09",
   removalGate: "stable-deprecation-period",
@@ -13,10 +12,4 @@ export const NATIVE_EXEC_APPROVAL_COMPAT_RECORD = {
   docsPath: "/plugins/sdk-migration/how-to-migrate#use-worker-owned-approval-requests",
   surfaces: ["GatewayRequestHandlerOptions.sessionMutationCommitGuard for approval methods"],
   diagnostics: ["Shared per-plugin capability-family warning on legacy callback use"],
-  tests: [
-    "test/type-contracts/exec-approval-compat.ts",
-    "src/gateway/server-plugin-in-process-dispatch.commit-guards.test.ts",
-  ],
-  releaseNote:
-    "Bundled approval requests, including reads that expire rows, execute in workers; released opaque commit guards use the same worker precommit boundary.",
 } as const satisfies PluginCompatRecord;

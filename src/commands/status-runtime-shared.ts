@@ -39,7 +39,6 @@ export async function resolveStatusSecurityAudit(params: {
     deep: false,
     ...(params.timeoutMs !== undefined ? { deepTimeoutMs: params.timeoutMs } : {}),
     includeFilesystem: true,
-    includeChannelSecurity: true,
     loadPluginSecurityCollectors: false,
   });
 }
@@ -207,11 +206,7 @@ async function buildDaemonStatusSummary(serviceLabel: "gateway" | "node", timeou
       ...(wrapperPath ? { wrapperPath } : {}),
       ...(installationDrift
         ? {
-            installationDrift: formatGatewayServiceInstallationDrift(
-              installationDrift,
-              undefined,
-              state.env,
-            ),
+            installationDrift: formatGatewayServiceInstallationDrift(installationDrift, state.env),
           }
         : {}),
     };

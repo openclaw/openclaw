@@ -16,7 +16,7 @@ import { createTestRpcSource, testRpcSourceController } from "./rpc-source.test-
 export function createExecution(
   options: {
     aborted?: boolean;
-    assertContextCurrent?: () => void;
+    assertGatewayLifetimeCurrent?: () => void;
     pendingInputSettlement?: () => Promise<void>;
   } = {},
 ) {
@@ -37,7 +37,7 @@ export function createExecution(
     callerRelease,
     runtimeRelease,
     params: {
-      assertContextCurrent: options.assertContextCurrent,
+      assertGatewayLifetimeCurrent: options.assertGatewayLifetimeCurrent,
       prepared: {
         releaseCallerAuthority: callerRelease,
         activeGatewayWorkAdmission: {
@@ -45,19 +45,12 @@ export function createExecution(
           isActive: () => gatewayActive,
           run: async (run: () => Promise<void>) => await run(),
         },
-        activeRunAbort: {
-          cleanup: abortCleanup,
-          controller,
-          registered: false,
-        },
+        activeRunAbort: { cleanup: abortCleanup, controller, registered: false },
         effectiveAllowModelOverride: false,
         lifecycleStorePath: "",
         operationalRunInstance: {},
         preparedModelRuntimeLease: { [Symbol.asyncDispose]: runtimeRelease, snapshot: {} },
-        replyDispatchRuntime: {
-          config: { runtime: "A" },
-          pluginGeneration: "generation-A",
-        },
+        replyDispatchRuntime: { config: { runtime: "A" }, pluginGeneration: "generation-A" },
         unpersistedOffloadedRefs: [],
         userTurn: {
           recorder: options.pendingInputSettlement
@@ -96,10 +89,7 @@ export function createExecution(
         deps: {},
         logGateway: { error: vi.fn(), warn: vi.fn() },
       },
-      io: {
-        emitAcceptance: vi.fn(),
-        emitFinal: vi.fn(),
-      },
+      io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
       releaseCronContinuationClaimWithRecovery: async () => true,
     } as unknown as Parameters<typeof startAgentRunExecution>[0],
   };
@@ -110,8 +100,9 @@ export async function bindRegisteredExecution(
   sessionKey: string,
   sessionId: string,
 ) {
+  const { params } = execution;
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
-  const operationalRunInstance = createOperationalRunInstanceRef(execution.params.runId);
+  const operationalRunInstance = createOperationalRunInstanceRef(params.runId);
   const target = captureSessionTarget({
     storeScope: `/synthetic/agent-execution/${sessionId}/sessions.db`,
     sessionKey,
@@ -121,7 +112,7 @@ export async function bindRegisteredExecution(
   const sourceWork = createDeferred();
   const registration = registerChatAbortController({
     target,
-    runId: execution.params.runId,
+    runId: params.runId,
     sessionKey,
     sessionId,
     agentId: "main",
@@ -134,12 +125,12 @@ export async function bindRegisteredExecution(
   if (!registration.entry) {
     throw new Error("Expected an owned execution registration");
   }
-  Object.assign(execution.params, {
+  Object.assign(params, {
     resolvedSessionKey: sessionKey,
     resolvedSessionId: sessionId,
     lifecycleGeneration,
   });
-  Object.assign(execution.params.prepared, {
+  Object.assign(params.prepared, {
     activeRunAbort: registration,
     operationalRunInstance,
     lifecycleStorePath: target.storeScope,
@@ -153,12 +144,12 @@ export async function bindRegisteredExecution(
   onTestFinished(() => {
     sourceWork.resolve();
     registration.cleanup();
-    execution.params.prepared.activeGatewayWorkAdmission?.release();
+    params.prepared.activeGatewayWorkAdmission?.release();
   });
   return {
     ...registration,
     run: () => {
-      const completion = startAgentRunExecution(execution.params);
+      const completion = startAgentRunExecution(params);
       // Execution has installed its own cleanup custody before preparation releases.
       sourceWork.resolve();
       return completion;
@@ -168,20 +159,18 @@ export async function bindRegisteredExecution(
 
 export function createVisibleExecution() {
   const execution = createExecution();
+  const { params } = execution;
   const sessionKey = "agent:main:task-access-liveness";
-  Object.assign(execution.params, {
+  Object.assign(params, {
     suppressVisibleSessionEffects: false,
     requestedSessionKey: sessionKey,
     resolvedSessionKey: sessionKey,
   });
-  Object.assign(execution.params.context, {
-    getRuntimeConfig: () => ({}),
-    getSessionEventSubscriberConnIds: () => new Set(),
-  });
-  execution.params.prepared.activeRunAbort.markExecutionStarted = vi.fn(() => true);
-  execution.params.prepared.userTurn.recorder = {
+  params.context.getRuntimeConfig = () => ({});
+  params.prepared.activeRunAbort.markExecutionStarted = vi.fn(() => true);
+  params.prepared.userTurn.recorder = {
     finishPendingInput: vi.fn(),
-  } as unknown as NonNullable<typeof execution.params.prepared.userTurn.recorder>;
+  } as unknown as NonNullable<typeof params.prepared.userTurn.recorder>;
   return execution;
 }
 

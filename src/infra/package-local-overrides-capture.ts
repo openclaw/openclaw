@@ -19,30 +19,9 @@ import {
   packageRootExists,
   resolveSafePackagePath,
   writeFileWithMode,
-  type LocalOverridePackageRoot,
   type LocalPackageOverrideChange,
   type LocalPackageOverridesPlan,
 } from "./package-local-overrides-shared.js";
-
-async function copyOverridePayload(params: {
-  packageFs: LocalOverridePackageRoot;
-  recoveryDir: string;
-  relativePath: string;
-}): Promise<{ savedPath: string; mode: number }> {
-  const source = await params.packageFs.read(params.relativePath, {
-    hardlinks: "allow",
-    maxBytes: Number.POSITIVE_INFINITY,
-    symlinks: "reject",
-  });
-  const mode = normalizeFileMode(source.stat.mode);
-  const savedPath = path.join(
-    params.recoveryDir,
-    "files",
-    normalizeLocalOverridePathSeparators(params.relativePath),
-  );
-  await writeFileWithMode(source.buffer, savedPath, mode);
-  return { savedPath, mode };
-}
 
 const BEST_EFFORT_LOCAL_PATH_LITERAL_PATTERN = /["'`]([^"'`\r\n]+)["'`]/gu;
 const CONTENT_HASHED_DIST_ARTIFACT_PATTERN = /-([A-Za-z0-9_]{8,})\.(?:cjs|css|js|mjs)(?:\.map)?$/u;
@@ -50,107 +29,6 @@ const CONTENT_HASHED_DIST_ARTIFACT_PATTERN = /-([A-Za-z0-9_]{8,})\.(?:cjs|css|js
 function isLikelyContentHashedDistArtifact(relativePath: string): boolean {
   const filename = path.posix.basename(normalizeDistPath(relativePath));
   return CONTENT_HASHED_DIST_ARTIFACT_PATTERN.test(filename);
-}
-
-function resolveReferencedDistPath(params: {
-  fromPath: string;
-  specifier: string;
-  actualSet: Set<string>;
-}): string | null {
-  const specifierPath = params.specifier.split(/[?#]/u, 1)[0] ?? "";
-  if (!specifierPath.startsWith(".")) {
-    return null;
-  }
-  const basePath = normalizeDistPath(
-    path.posix.join(path.posix.dirname(params.fromPath), specifierPath),
-  );
-  const candidates = [
-    basePath,
-    `${basePath}.js`,
-    `${basePath}.mjs`,
-    `${basePath}.cjs`,
-    `${basePath}.json`,
-    path.posix.join(basePath, "index.js"),
-  ];
-  return candidates.find((candidate) => params.actualSet.has(candidate)) ?? null;
-}
-
-async function collectReferencedAddedOverridePaths(params: {
-  packageFs: LocalOverridePackageRoot;
-  changes: LocalPackageOverrideChange[];
-  actualSet: Set<string>;
-  baselineSet: Set<string>;
-  standaloneAddedPaths: string[];
-}): Promise<{
-  addedPaths: string[];
-  dependenciesByChangePath: Map<string, string[]>;
-}> {
-  const addedPaths = new Set<string>();
-  const dependenciesByChangePath = new Map<string, Set<string>>();
-  const scannedPathsByRoot = new Set<string>();
-  const modifiedChangesByPath = new Map(
-    params.changes
-      .filter((change) => change.kind === "modified")
-      .map((change) => [change.path, change]),
-  );
-  const queue = [...modifiedChangesByPath.keys(), ...params.standaloneAddedPaths].map(
-    (relativePath) => ({ path: relativePath, rootPath: relativePath }),
-  );
-
-  for (const current of queue) {
-    // Shared added files are rescanned per override root to retain each
-    // importer's complete dependency closure in the recovery manifest.
-    const scanKey = `${current.rootPath}\0${current.path}`;
-    if (scannedPathsByRoot.has(scanKey)) {
-      continue;
-    }
-    scannedPathsByRoot.add(scanKey);
-    const modified = modifiedChangesByPath.get(current.path);
-    const source = modified
-      ? await fs.readFile(modified.savedPath, "utf8").catch(() => "")
-      : await params.packageFs
-          .readText(current.path, {
-            hardlinks: "allow",
-            maxBytes: Number.POSITIVE_INFINITY,
-            symlinks: "reject",
-          })
-          .catch(() => "");
-    for (const match of source.matchAll(BEST_EFFORT_LOCAL_PATH_LITERAL_PATTERN)) {
-      const specifier = match[1] ?? "";
-      const referencedPath = resolveReferencedDistPath({
-        fromPath: current.path,
-        specifier,
-        actualSet: params.actualSet,
-      });
-      if (!referencedPath) {
-        continue;
-      }
-      const referencedModifiedChange = modifiedChangesByPath.get(referencedPath);
-      if (params.baselineSet.has(referencedPath) && !referencedModifiedChange) {
-        continue;
-      }
-      const dependencies = dependenciesByChangePath.get(current.rootPath) ?? new Set<string>();
-      dependencies.add(referencedPath);
-      dependenciesByChangePath.set(current.rootPath, dependencies);
-      if (!params.baselineSet.has(referencedPath)) {
-        addedPaths.add(referencedPath);
-      }
-      const referencedScanKey = `${current.rootPath}\0${referencedPath}`;
-      if (!scannedPathsByRoot.has(referencedScanKey)) {
-        queue.push({ path: referencedPath, rootPath: current.rootPath });
-      }
-    }
-  }
-
-  return {
-    addedPaths: [...addedPaths].toSorted((left, right) => left.localeCompare(right)),
-    dependenciesByChangePath: new Map(
-      [...dependenciesByChangePath].map(([changePath, dependencies]) => [
-        changePath,
-        [...dependencies].toSorted((left, right) => left.localeCompare(right)),
-      ]),
-    ),
-  };
 }
 
 export async function captureLocalPackageOverrides(params: {
@@ -166,6 +44,25 @@ export async function captureLocalPackageOverrides(params: {
     hardlinks: "reject",
     symlinks: "reject",
   });
+
+  async function copyOverridePayload(
+    recoveryDir: string,
+    relativePath: string,
+  ): Promise<{ savedPath: string; mode: number }> {
+    const source = await packageFs.read(relativePath, {
+      hardlinks: "allow",
+      maxBytes: Number.POSITIVE_INFINITY,
+      symlinks: "reject",
+    });
+    const mode = normalizeFileMode(source.stat.mode);
+    const savedPath = path.join(
+      recoveryDir,
+      "files",
+      normalizeLocalOverridePathSeparators(relativePath),
+    );
+    await writeFileWithMode(source.buffer, savedPath, mode);
+    return { savedPath, mode };
+  }
 
   const actualFiles = (
     await collectPackageDistInventory(params.packageRoot, {
@@ -197,7 +94,7 @@ export async function captureLocalPackageOverrides(params: {
       // Preserve its dist artifact (excluding dependency trees), without claiming a classified/replayable delta.
       const snapshotDir = await ensureRecoveryDir();
       for (const relativePath of actualFiles) {
-        await copyOverridePayload({ packageFs, recoveryDir: snapshotDir, relativePath });
+        await copyOverridePayload(snapshotDir, relativePath);
       }
       const packageRoot = params.recordedPackageRoot ?? params.packageRoot;
       await fs.writeFile(
@@ -248,11 +145,7 @@ export async function captureLocalPackageOverrides(params: {
       ) {
         continue;
       }
-      const payload = await copyOverridePayload({
-        packageFs,
-        recoveryDir: await ensureRecoveryDir(),
-        relativePath: entry.path,
-      });
+      const payload = await copyOverridePayload(await ensureRecoveryDir(), entry.path);
       changes.push({
         kind: "modified",
         path: entry.path,
@@ -265,13 +158,92 @@ export async function captureLocalPackageOverrides(params: {
       (relativePath) =>
         !baselineSet.has(relativePath) && !isLikelyContentHashedDistArtifact(relativePath),
     );
-    const referencedAdded = await collectReferencedAddedOverridePaths({
-      packageFs,
-      changes,
-      actualSet,
-      baselineSet,
-      standaloneAddedPaths,
-    });
+    const referencedAdded = await (async (): Promise<{
+      addedPaths: string[];
+      dependenciesByChangePath: Map<string, string[]>;
+    }> => {
+      function resolveReferencedDistPath(fromPath: string, specifier: string): string | null {
+        const specifierPath = specifier.split(/[?#]/u, 1)[0] ?? "";
+        if (!specifierPath.startsWith(".")) {
+          return null;
+        }
+        const basePath = normalizeDistPath(
+          path.posix.join(path.posix.dirname(fromPath), specifierPath),
+        );
+        const candidates = [
+          basePath,
+          `${basePath}.js`,
+          `${basePath}.mjs`,
+          `${basePath}.cjs`,
+          `${basePath}.json`,
+          path.posix.join(basePath, "index.js"),
+        ];
+        return candidates.find((candidate) => actualSet.has(candidate)) ?? null;
+      }
+
+      const addedPaths = new Set<string>();
+      const dependenciesByChangePath = new Map<string, Set<string>>();
+      const scannedPathsByRoot = new Set<string>();
+      const modifiedChangesByPath = new Map(
+        changes
+          .filter((change) => change.kind === "modified")
+          .map((change) => [change.path, change]),
+      );
+      const queue = [...modifiedChangesByPath.keys(), ...standaloneAddedPaths].map(
+        (relativePath) => ({ path: relativePath, rootPath: relativePath }),
+      );
+
+      for (const current of queue) {
+        // Shared added files are rescanned per override root to retain each
+        // importer's complete dependency closure in the recovery manifest.
+        const scanKey = `${current.rootPath}\0${current.path}`;
+        if (scannedPathsByRoot.has(scanKey)) {
+          continue;
+        }
+        scannedPathsByRoot.add(scanKey);
+        const modified = modifiedChangesByPath.get(current.path);
+        const source = modified
+          ? await fs.readFile(modified.savedPath, "utf8").catch(() => "")
+          : await packageFs
+              .readText(current.path, {
+                hardlinks: "allow",
+                maxBytes: Number.POSITIVE_INFINITY,
+                symlinks: "reject",
+              })
+              .catch(() => "");
+        for (const match of source.matchAll(BEST_EFFORT_LOCAL_PATH_LITERAL_PATTERN)) {
+          const specifier = match[1] ?? "";
+          const referencedPath = resolveReferencedDistPath(current.path, specifier);
+          if (!referencedPath) {
+            continue;
+          }
+          const referencedModifiedChange = modifiedChangesByPath.get(referencedPath);
+          if (baselineSet.has(referencedPath) && !referencedModifiedChange) {
+            continue;
+          }
+          const dependencies = dependenciesByChangePath.get(current.rootPath) ?? new Set<string>();
+          dependencies.add(referencedPath);
+          dependenciesByChangePath.set(current.rootPath, dependencies);
+          if (!baselineSet.has(referencedPath)) {
+            addedPaths.add(referencedPath);
+          }
+          const referencedScanKey = `${current.rootPath}\0${referencedPath}`;
+          if (!scannedPathsByRoot.has(referencedScanKey)) {
+            queue.push({ path: referencedPath, rootPath: current.rootPath });
+          }
+        }
+      }
+
+      return {
+        addedPaths: [...addedPaths].toSorted((left, right) => left.localeCompare(right)),
+        dependenciesByChangePath: new Map(
+          [...dependenciesByChangePath].map(([changePath, dependencies]) => [
+            changePath,
+            [...dependencies].toSorted((left, right) => left.localeCompare(right)),
+          ]),
+        ),
+      };
+    })();
     for (const change of changes) {
       if (change.kind === "modified") {
         change.dependencies = referencedAdded.dependenciesByChangePath.get(change.path) ?? [];
@@ -280,11 +252,7 @@ export async function captureLocalPackageOverrides(params: {
     const replayableAddedPaths = new Set([...standaloneAddedPaths, ...referencedAdded.addedPaths]);
     const allAddedPaths = actualFiles.filter((relativePath) => !baselineSet.has(relativePath));
     for (const relativePath of allAddedPaths.toSorted((left, right) => left.localeCompare(right))) {
-      const payload = await copyOverridePayload({
-        packageFs,
-        recoveryDir: await ensureRecoveryDir(),
-        relativePath,
-      });
+      const payload = await copyOverridePayload(await ensureRecoveryDir(), relativePath);
       changes.push({
         kind: "added",
         path: relativePath,

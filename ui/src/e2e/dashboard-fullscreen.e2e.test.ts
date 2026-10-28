@@ -1,10 +1,11 @@
 import type { Server as HttpServer } from "node:http";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -86,7 +87,8 @@ const scrollTop = (page: Locator) => page.evaluate((element) => element.scrollTo
 const scrollRemaining = (board: Locator) =>
   board.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
 async function expectWidgetReady(board: Locator, frame: Locator) {
-  await expect.poll(() => frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+  await expect.poll(() => frame.getAttribute("inert")).toBeNull();
+  expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
   expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(0);
 }
 
@@ -316,10 +318,7 @@ suite.define(() => {
               },
             ],
           };
-          let releaseDocument!: () => void;
-          const documentGate = new Promise<void>((resolve) => {
-            releaseDocument = resolve;
-          });
+          const { promise: documentGate, resolve: releaseDocument } = createDeferred();
           await page.route(widgetUrl, async (route) => {
             await documentGate;
             await route.fulfill({
@@ -347,14 +346,13 @@ suite.define(() => {
               )
               .toBe(true);
             await page.screenshot({ path: `${suite.artifactDir}/dashboard-loading.png` });
-            expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+            expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
             expect(await frame.getAttribute("inert")).toBe("");
             await board.getByRole("status", { name: "Loading…", exact: true }).waitFor();
           } finally {
             releaseDocument();
           }
           await expectWidgetReady(board, frame);
-          expect(await frame.getAttribute("inert")).toBeNull();
           await page.screenshot({ path: `${suite.artifactDir}/dashboard-ready.png` });
           await expect
             .poll(() => board.evaluate((element) => element.scrollHeight > element.clientHeight))
@@ -482,7 +480,7 @@ suite.define(() => {
     }
   });
 
-  it("makes dashboard main and restores chat after focus", async () => {
+  it("expands dashboard and restores split without replacing its iframe", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const widgetUrl = `${suite.server.baseUrl}__widget/seamless-dashboard`;
       await page.route(widgetUrl, (route) =>
@@ -524,11 +522,6 @@ suite.define(() => {
       expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
         "1px",
       );
-      await focusChatSidePanel(page);
-      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
-      await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
-      await page.mouse.move(0, 0);
-      await page.screenshot({ path: `${suite.artifactDir}/single-widget-focused.png` });
       const frameInsets = () =>
         frame.evaluate((element) => {
           const board = element.closest("openclaw-board-view")!;
@@ -541,6 +534,11 @@ suite.define(() => {
             bottom: outer.bottom - inner.bottom,
           };
         });
+      await focusChatSidePanel(page);
+      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
+      await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
+      await page.mouse.move(0, 0);
+      await page.screenshot({ path: `${suite.artifactDir}/single-widget-focused.png` });
       await expect.poll(frameInsets).toEqual({ left: 12, right: 12, top: 12, bottom: 12 });
       expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
         "0px",
@@ -550,11 +548,12 @@ suite.define(() => {
       );
       await selectChatLayoutAction(page, "Restore split");
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
-      await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
-      await page.locator('[data-panel-slot="dashboard"][data-region="main"]').waitFor();
-      await expect.poll(frameInsets).toEqual({ left: 12, right: 12, top: 12, bottom: 12 });
+      await page.locator('.sidebar-region__primary[data-region="main"] .chat-thread').waitFor();
+      await page.locator('[data-panel-slot="dashboard"][data-region="side"]').waitFor();
+      // Side cards scroll as the widget reports new content height.
+      await expect.poll(frameInsets).toMatchObject({ left: 29, right: 29, top: 25 });
       expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
-        "0px",
+        "1px",
       );
       expect(await frame.evaluate((element, previous) => element === previous, frameHandle)).toBe(
         true,

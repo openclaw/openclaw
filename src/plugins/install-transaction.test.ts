@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import {
   attachPluginInstallTransaction,
+  copyPluginInstallTransactionRequest,
   requestDeferredPluginInstall,
   resolvePluginInstallTransactionRequest,
   retainPluginInstallTransaction,
@@ -27,7 +29,7 @@ function install(
   params: InstallParams = {},
   assertOwned = () => {},
 ) {
-  return withPluginInstallTransactions(params, assertOwned, run);
+  return withPluginInstallTransactions(params, { assertCurrent: assertOwned, assertOwned }, run);
 }
 function refuse(reason: unknown): never {
   throw reason;
@@ -43,6 +45,21 @@ function authority(refusal: unknown = 0) {
   };
 }
 
+it("carries the original awaited settlement owner through copied install requests", async () => {
+  const refusal = new Error("original durable owner retired");
+  const prepareSettlement = vi.fn(async () => {
+    throw refusal;
+  });
+  const source = requestDeferredPluginInstall({}, undefined, () => {}, prepareSettlement);
+  const copied = copyPluginInstallTransactionRequest(source, {});
+  await expect(
+    install(async (owned) => {
+      await owned.beforePersistentEffect?.();
+    }, copied),
+  ).rejects.toBe(refusal);
+  expect(prepareSettlement).toHaveBeenCalledOnce();
+});
+
 it("keeps synchronous planning callbacks synchronous", async () => {
   const beforePersistentEffect = vi.fn(() => {});
   await install(
@@ -54,77 +71,53 @@ it("keeps synchronous planning callbacks synchronous", async () => {
   expect(beforePersistentEffect).toHaveBeenCalledOnce();
 });
 
-it("does not compensate earlier installs after an asynchronous planning refusal", async () => {
-  const { commit, rollback } = makeTransaction();
-  const operation = install(
-    async (owned) => {
-      retainTransaction(owned, { commit, rollback });
-      try {
-        await owned.beforePersistentEffect!();
-      } catch {}
-      return { ok: false };
-    },
-    { beforePersistentEffect: async () => refuse(false) },
-  );
-  await expect(operation).rejects.toBe(false);
-  expect(commit).not.toHaveBeenCalled();
-  expect(rollback).not.toHaveBeenCalled();
-});
-
-it("commits direct installs after their operation succeeds", async () => {
-  const { commit, rollback } = makeTransaction();
-  await install(async (owned) => {
-    retainTransaction(owned, { commit, rollback });
-    expect(commit).not.toHaveBeenCalled();
-  });
-  expect(commit).toHaveBeenCalledOnce();
-  expect(rollback).not.toHaveBeenCalled();
-});
-
-it("retains the original install failure when rollback also fails", async () => {
-  const failure = new Error("record write failed");
-  const recoveryFailure = new Error("backup restore failed");
-  const rollback = vi.fn<() => Promise<void>>().mockRejectedValue(recoveryFailure);
-  const outcome = await install(async (owned) => {
-    retainTransaction(owned, { commit: vi.fn(), rollback });
-    throw failure;
-  }).catch((error: unknown) => error);
-  expect(outcome).toBeInstanceOf(AggregateError);
-  expect(outcome).toMatchObject({ cause: failure, errors: [failure, recoveryFailure] });
-  expect(String(outcome)).toContain(failure.message);
-  expect(rollback).toHaveBeenCalledOnce();
-});
-
-it("preserves published state when final cleanup fails after the record commit", async () => {
-  const { rollback } = makeTransaction();
+it.each([false, true])("commits after publication (cleanupFails=%s)", async (cleanupFails) => {
+  const transaction = makeTransaction();
   const failure = new Error("backup identity changed");
-  let recordCommitted = false;
-  const commit = vi.fn(async () => {
-    expect(recordCommitted).toBe(true);
-    throw failure;
+  transaction.commit.mockImplementation(async () => {
+    if (cleanupFails) {
+      throw failure;
+    }
   });
   const operation = install(async (owned) => {
-    retainTransaction(owned, { commit, rollback });
-    recordCommitted = true;
+    retainTransaction(owned, transaction);
+    expect(transaction.commit).not.toHaveBeenCalled();
   });
-  await expect(operation).rejects.toMatchObject({ errors: [failure] });
-  expect(commit).toHaveBeenCalledOnce();
-  expect(rollback).not.toHaveBeenCalled();
+  if (cleanupFails) {
+    await expect(operation).rejects.toMatchObject({ errors: [failure] });
+  } else {
+    await operation;
+  }
+  expect(transaction.commit).toHaveBeenCalledOnce();
+  expect(transaction.rollback).not.toHaveBeenCalled();
 });
 
-it("rolls back admitted installs in reverse order when the operation fails", async () => {
+it.each([false, true])("rolls back in reverse order (rollbackFails=%s)", async (rollbackFails) => {
   const settled: string[] = [];
   const failure = new Error("record write failed");
+  const recoveryFailure = new Error("backup restore failed");
   const operation = install(async (owned) => {
     for (const name of ["first", "second"]) {
       retainTransaction(owned, {
         commit: async () => void settled.push(`commit:${name}`),
-        rollback: async () => void settled.push(`rollback:${name}`),
+        rollback: async () => {
+          settled.push(`rollback:${name}`);
+          if (rollbackFails && name === "second") {
+            throw recoveryFailure;
+          }
+        },
       });
     }
     throw failure;
   });
-  await expect(operation).rejects.toBe(failure);
+  if (rollbackFails) {
+    const outcome: unknown = await operation.catch((error: unknown) => error);
+    expect(outcome).toBeInstanceOf(AggregateError);
+    expect(outcome).toMatchObject({ cause: failure, errors: [failure, recoveryFailure] });
+    expect(String(outcome)).toContain(failure.message);
+  } else {
+    await expect(operation).rejects.toBe(failure);
+  }
   expect(settled).toEqual(["rollback:second", "rollback:first"]);
 });
 
@@ -153,39 +146,48 @@ it("leaves deferred settlement with its caller and retains the original assertio
   expect(commit).not.toHaveBeenCalled();
 });
 
-it.each(["commit", "operation"] as const)("keeps a falsy %s refusal sticky", async (phase) => {
-  const owner = authority();
-  const { rollback } = makeTransaction();
-  const operation = install(
-    async (owned, assertCurrent) => {
-      const revoke = () => {
-        owner.active = false;
-        assertCurrent();
-      };
-      if (phase === "commit") {
-        retainTransaction(owned, {
-          commit: async () => {
-            await Promise.resolve();
-            revoke();
-          },
-          rollback,
+it.each(["planning", "commit", "operation"] as const)(
+  "keeps a falsy %s refusal sticky",
+  async (phase) => {
+    const refusal = phase === "planning" ? false : 0;
+    const owner = authority(refusal);
+    const transaction = makeTransaction();
+    const operation = install(
+      async (owned, assertCurrent) => {
+        const revoke = () => {
+          owner.active = false;
+          assertCurrent();
+        };
+        transaction.commit.mockImplementation(async () => {
+          await Promise.resolve();
+          revoke();
         });
-        return undefined;
-      }
-      try {
-        revoke();
-      } catch {
-        /* The installer reports a regular failed result. */
-      }
-      owner.active = true;
-      return { ok: false };
-    },
-    {},
-    () => owner.assertCurrent(),
-  );
-  await expect(operation).rejects.toBe(0);
-  expect(rollback).not.toHaveBeenCalled();
-});
+        retainTransaction(owned, transaction);
+        if (phase === "commit") {
+          return undefined;
+        }
+        try {
+          if (phase === "planning") {
+            await owned.beforePersistentEffect!();
+          } else {
+            revoke();
+          }
+        } catch {}
+        owner.active = true;
+        return { ok: false };
+      },
+      {
+        beforePersistentEffect: async () => refuse(refusal),
+      },
+      () => owner.assertCurrent(),
+    );
+    await expect(operation).rejects.toBe(refusal);
+    expect(transaction.rollback).not.toHaveBeenCalled();
+    if (phase !== "commit") {
+      expect(transaction.commit).not.toHaveBeenCalled();
+    }
+  },
+);
 it.each(["commit", "rollback"] as const)(
   "settles %s once across concurrent and later calls",
   async (action) => {
@@ -221,13 +223,12 @@ it.each([false, true])("retains peer-link failure (rollbackFails=%s)", async (ro
   const root = new Error("Cannot repair OpenClaw peer link: target is not a directory");
   const cleanup = new Error("Cannot restore plugin backup");
   repairPeerLinks.mockRejectedValueOnce(root);
-  const rollback = vi.fn(async () => {
-    if (rollbackFails) {
-      throw cleanup;
-    }
-  });
+  const transaction = makeTransaction();
+  if (rollbackFails) {
+    transaction.rollback.mockRejectedValueOnce(cleanup);
+  }
   const transactionState = createPluginUpdateTransactionState({});
-  transactionState.transactions.push({ commit: vi.fn(), rollback });
+  transactionState.transactions.push(transaction);
 
   const summary = { config: {}, changed: true, outcomes: [], ranNpmInstaller: true, logger: {} };
   const failure: unknown = await finalizePluginUpdateSummary({
@@ -242,5 +243,48 @@ it.each([false, true])("retains peer-link failure (rollbackFails=%s)", async (ro
   } else {
     expect(failure).toBe(root);
   }
-  expect(rollback).toHaveBeenCalledOnce();
+  expect(transaction.rollback).toHaveBeenCalledOnce();
 });
+
+it.each(["commit", "rollback"] as const)(
+  "awaits current durable authority before %s effects",
+  async (action) => {
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const refusal = new Error("install lease replaced");
+    const transaction = makeTransaction();
+    let current = true;
+    const operation = withPluginInstallTransactions(
+      {},
+      {
+        assertCurrent() {},
+        async assertOwned() {
+          entered.resolve();
+          await release.promise;
+          if (!current) {
+            throw refusal;
+          }
+        },
+      },
+      async (owned) => {
+        retainTransaction(owned, transaction);
+        if (action === "rollback") {
+          throw new Error("publication failed");
+        }
+      },
+    );
+    const rejected = expect(operation).rejects.toBe(refusal);
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      operation,
+      "settlement never verified authority",
+    );
+    expect(transaction.commit).not.toHaveBeenCalled();
+    expect(transaction.rollback).not.toHaveBeenCalled();
+    current = false;
+    release.resolve();
+    await rejected;
+    expect(transaction.commit).not.toHaveBeenCalled();
+    expect(transaction.rollback).not.toHaveBeenCalled();
+  },
+);

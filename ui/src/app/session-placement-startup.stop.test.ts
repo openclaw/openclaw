@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { requestCloudWorkerStop } from "../components/cloud-worker-stop.runtime.ts";
 import {
   pauseSessionPlacementRecovery,
@@ -12,6 +12,7 @@ import {
 import * as toast from "../lib/toast.ts";
 import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
 import { PendingSessionPlacementRecoveryState } from "../pages/new-session/session-placement-recovery-state.ts";
+import { restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
@@ -19,6 +20,10 @@ import createRuntime from "./session-placement-startup.runtime.ts";
 import {
   blockStorageWrites,
   createPlacementStartupHarness,
+  readStartupRecovery,
+  startupCalls,
+  startupRequest,
+  startupMethods,
   createStartupPlacement,
   flushStartupMicrotasks,
 } from "./session-placement-startup.test-support.ts";
@@ -32,36 +37,27 @@ describe("placement startup Stop", () => {
   const recoveryAccess = { readSessionPlacementRecovery, pauseSessionPlacementRecovery };
 
   beforeEach(() => sessionStorage.clear());
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => restoreMocksAndGlobals());
 
   function createStopHarness(phase: string) {
     const moduleLoad = createDeferred<{ default: typeof createRuntime }>();
     const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
     const reclaim = createDeferred<{ ok: true }>();
     let nextDispatch = 0;
-    const request = vi.fn((method: string, params: { idempotencyKey?: string }) => {
-      if (method === "sessions.describe") {
-        return Promise.resolve({
+    const request = startupRequest({
+      "sessions.describe": () =>
+        Promise.resolve({
           session: { placement: createStartupPlacement("reclaimed", 2) },
-        });
-      }
-      if (method === "sessions.dispatch") {
-        return nextDispatch++ === 0
+        }),
+      "sessions.dispatch": () =>
+        nextDispatch++ === 0
           ? dispatch.promise
-          : Promise.resolve({ placement: createStartupPlacement("active", 2) });
-      }
-      if (method === "sessions.reclaim") {
-        return reclaim.promise;
-      }
-      if (method === "sessions.send") {
-        return Promise.resolve({ status: "started", runId: params.idempotencyKey });
-      }
-      throw new Error(`Unexpected ${method}`);
+          : Promise.resolve({ placement: createStartupPlacement("active", 2) }),
+      "sessions.reclaim": () => reclaim.promise,
+      "chat.send": (params: { idempotencyKey?: string }) =>
+        Promise.resolve({ status: "started", runId: params.idempotencyKey }),
     });
-    const { startup, input, client, gateway, dependencies } = createPlacementStartupHarness(
+    const { key, startup, input, client, gateway, dependencies } = createPlacementStartupHarness(
       request,
       {
         loadRuntime: () => moduleLoad.promise,
@@ -74,6 +70,7 @@ describe("placement startup Stop", () => {
     }
     expect(stopClient).toBe(client);
     return {
+      key,
       startup,
       input,
       client,
@@ -110,6 +107,7 @@ describe("placement startup Stop", () => {
       "pauses $phase (storage failure: $storageFails) before reclaim and rejects late active dispatch until explicit Retry",
       async ({ phase, storageFails }) => {
         const {
+          key,
           startup,
           input,
           client,
@@ -137,11 +135,7 @@ describe("placement startup Stop", () => {
           if (storageFails) {
             blockStorageWrites();
           }
-          const stopped = requestCloudWorkerStop(
-            stopClient,
-            { key: input.recovery.sessionKey },
-            startup,
-          );
+          const stopped = requestCloudWorkerStop(stopClient, { key }, startup);
           expect(request).toHaveBeenCalledWith("sessions.reclaim", expect.anything(), {
             timeoutMs: null,
           });
@@ -149,14 +143,8 @@ describe("placement startup Stop", () => {
           dispatch.resolve({ placement: createStartupPlacement("active", 1) });
           await flushStartupMicrotasks();
           await flushStartupMicrotasks();
-          expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(
-            0,
-          );
-          const saved = readSessionPlacementRecovery(
-            input.recovery.gatewayUrl,
-            input.recovery.recoveryScope,
-            input.recovery.sessionKey,
-          );
+          expect(startupCalls(request, "chat.send")).toHaveLength(0);
+          const saved = readStartupRecovery(input.recovery);
           if (!storageFails) {
             expect(saved).toMatchObject({
               phase: "paused",
@@ -170,17 +158,13 @@ describe("placement startup Stop", () => {
           await stopped;
           reconnectGateway(gateway, client);
           await flushStartupMicrotasks();
-          expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(
-            0,
-          );
-          expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+          expect(startupCalls(request, "chat.send")).toHaveLength(0);
+          expect(startup.get(key)).toMatchObject({
             phase: "failed",
             action: "retry",
             initialTurn: { text: input.recovery.message, sendRunId: input.recovery.messageId },
           });
-          expect(
-            request.mock.calls.filter(([method]) => method === "sessions.reclaim"),
-          ).toHaveLength(1);
+          expect(startupCalls(request, "sessions.reclaim")).toHaveLength(1);
           vi.unstubAllGlobals();
           if (!storageFails) {
             startup.dispose();
@@ -188,19 +172,11 @@ describe("placement startup Stop", () => {
               default: createRuntime,
             }));
             activeStartup.resumeRecovery();
-            await vi.waitFor(() =>
-              expect(activeStartup.get(input.recovery.sessionKey)?.action).toBe("retry"),
-            );
-            expect(
-              request.mock.calls.filter(([method]) => method === "sessions.send"),
-            ).toHaveLength(0);
+            await vi.waitFor(() => expect(activeStartup.get(key)?.action).toBe("retry"));
+            expect(startupCalls(request, "chat.send")).toHaveLength(0);
           }
-          activeStartup.retry(input.recovery.sessionKey);
-          await vi.waitFor(() =>
-            expect(
-              request.mock.calls.filter(([method]) => method === "sessions.send"),
-            ).toHaveLength(1),
-          );
+          activeStartup.retry(key);
+          await vi.waitFor(() => expect(startupCalls(request, "chat.send")).toHaveLength(1));
         } finally {
           reclaim.resolve({ ok: true });
           activeStartup.dispose();
@@ -214,43 +190,34 @@ describe("placement startup Stop", () => {
           ? dispatch.promise
           : Promise.resolve({ status: "started", runId: params.idempotencyKey }),
       );
-      const { startup, input, client, gateway } = createPlacementStartupHarness(request);
+      const { key, startup, input, client, gateway } = createPlacementStartupHarness(request);
       const stopClient = gateway.snapshot.client;
       if (!stopClient) {
         throw new Error("Expected the startup fixture client");
       }
       expect(stopClient).toBe(client);
-      try {
-        startup.start(input);
-        startup.start({
-          ...input,
-          recovery: {
-            ...input.recovery,
-            sessionKey: "agent:cloud:other",
-            messageId: "other-message",
-          },
-        });
-        await vi.waitFor(() =>
-          expect(
-            request.mock.calls.filter(([method]) => method === "sessions.dispatch"),
-          ).toHaveLength(2),
-        );
-        await requestCloudWorkerStop(stopClient, { key: input.recovery.sessionKey }, startup);
-        dispatch.resolve({ placement: createStartupPlacement("active", 1) });
-        await vi.waitFor(() =>
-          expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(
-            1,
-          ),
-        );
-        expect(request).toHaveBeenCalledWith(
-          "sessions.send",
-          expect.objectContaining({ key: "agent:cloud:other", idempotencyKey: "other-message" }),
-          expect.anything(),
-        );
-        expect(startup.get(input.recovery.sessionKey)?.action).toBe("retry");
-      } finally {
-        startup.dispose();
-      }
+      startup.start(input);
+      startup.start({
+        ...input,
+        recovery: {
+          ...input.recovery,
+          sessionKey: "agent:cloud:other",
+          messageId: "other-message",
+        },
+      });
+      await vi.waitFor(() => expect(startupCalls(request, "sessions.dispatch")).toHaveLength(2));
+      await requestCloudWorkerStop(stopClient, { key }, startup);
+      dispatch.resolve({ placement: createStartupPlacement("active", 1) });
+      await vi.waitFor(() => expect(startupCalls(request, "chat.send")).toHaveLength(1));
+      expect(request).toHaveBeenCalledWith(
+        "chat.send",
+        expect.objectContaining({
+          sessionKey: "agent:cloud:other",
+          idempotencyKey: "other-message",
+        }),
+        expect.anything(),
+      );
+      expect(startup.get(key)?.action).toBe("retry");
     });
 
     it.each(["disposed", "credential", "connection"] as const)(
@@ -258,7 +225,7 @@ describe("placement startup Stop", () => {
       async (retirement) => {
         const moduleLoad = createDeferred<{ default: typeof createRuntime }>();
         const request = vi.fn();
-        const { startup, input, client, gateway } = createPlacementStartupHarness(request, {
+        const { key, startup, input, client, gateway } = createPlacementStartupHarness(request, {
           loadRuntime: () => moduleLoad.promise,
         });
         startup.start(input);
@@ -270,14 +237,8 @@ describe("placement startup Stop", () => {
           Object.assign(gateway, { connectionRevision: gateway.connectionRevision + 1 });
           Object.assign(gateway.connection, { gatewayUrl: "ws://replacement.example" });
         }
-        startup.pause(input.recovery.sessionKey, "stopped", recoveryAccess);
-        expect(
-          readSessionPlacementRecovery(
-            input.recovery.gatewayUrl,
-            input.recovery.recoveryScope,
-            input.recovery.sessionKey,
-          )?.phase,
-        ).toBe("dispatching");
+        startup.pause(key, "stopped", recoveryAccess);
+        expect(readStartupRecovery(input.recovery)?.phase).toBe("dispatching");
         expect(request).not.toHaveBeenCalled();
         startup.dispose();
         moduleLoad.resolve({ default: createRuntime });
@@ -290,92 +251,65 @@ describe("placement startup Stop", () => {
       async (replacement) => {
         const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
         const request = vi.fn((_method: string) => dispatch.promise);
-        const { startup, input, client } = createPlacementStartupHarness(request);
-        try {
-          startup.start(input);
-          await vi.waitFor(() =>
-            expect(request).toHaveBeenCalledWith("sessions.dispatch", expect.anything()),
-          );
-          const replacementRecovery = { ...input.recovery, messageId: "replacement-message" };
-          if (replacement === "credential") {
-            client.recoveryScope = "principal-b";
-          } else {
-            expect(writeSessionPlacementRecovery(replacementRecovery)).toBe(true);
-          }
-          startup.pause(input.recovery.sessionKey, "stopped", recoveryAccess);
-          dispatch.resolve({ placement: createStartupPlacement("active", 1) });
-          await flushStartupMicrotasks();
-          expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(
-            0,
-          );
-          expect(
-            readSessionPlacementRecovery(
-              input.recovery.gatewayUrl,
-              input.recovery.recoveryScope,
-              input.recovery.sessionKey,
-            ),
-          ).toMatchObject({
-            phase: "dispatching",
-            messageId:
-              replacement === "message" ? replacementRecovery.messageId : input.recovery.messageId,
-          });
-        } finally {
-          startup.dispose();
+        const { key, startup, input, client } = createPlacementStartupHarness(request);
+        startup.start(input);
+        await vi.waitFor(() =>
+          expect(request).toHaveBeenCalledWith("sessions.dispatch", expect.anything()),
+        );
+        const replacementRecovery = { ...input.recovery, messageId: "replacement-message" };
+        if (replacement === "credential") {
+          client.recoveryScope = "principal-b";
+        } else {
+          expect(writeSessionPlacementRecovery(replacementRecovery)).toBe(true);
         }
+        startup.pause(key, "stopped", recoveryAccess);
+        dispatch.resolve({ placement: createStartupPlacement("active", 1) });
+        await flushStartupMicrotasks();
+        expect(startupCalls(request, "chat.send")).toHaveLength(0);
+        expect(readStartupRecovery(input.recovery)).toMatchObject({
+          phase: "dispatching",
+          messageId:
+            replacement === "message" ? replacementRecovery.messageId : input.recovery.messageId,
+        });
       },
     );
-    it("keeps delivery uncertain when Stop follows an in-flight send", async () => {
+    it("keeps a stopped in-flight send for explicit retry with the original key", async () => {
       const sent = createDeferred<{ status: string; runId: string }>();
-      const request = vi.fn((method: string) => {
-        if (method === "sessions.dispatch") {
-          return Promise.resolve({ placement: createStartupPlacement("active", 1) });
-        }
-        if (method === "sessions.send") {
-          return sent.promise;
-        }
-        if (method === "chat.history") {
-          return Promise.resolve({ messages: [] });
-        }
-        if (method === "sessions.reclaim") {
-          return Promise.resolve({ ok: true });
-        }
-        throw new Error(`Unexpected ${method}`);
+      const request = startupRequest({
+        "sessions.dispatch": () =>
+          Promise.resolve({ placement: createStartupPlacement("active", 1) }),
+        "chat.send": () => sent.promise,
+        "sessions.describe": () =>
+          Promise.resolve({ session: { placement: createStartupPlacement("active", 1) } }),
+        "sessions.reclaim": () => Promise.resolve({ ok: true }),
       });
-      const { startup, input, client, gateway } = createPlacementStartupHarness(request);
+      const { key, startup, input, client, gateway } = createPlacementStartupHarness(request);
       const stopClient = gateway.snapshot.client;
       if (!stopClient) {
         throw new Error("Expected the startup fixture client");
       }
       expect(stopClient).toBe(client);
-      try {
-        startup.start(input);
-        await vi.waitFor(() =>
-          expect(request).toHaveBeenCalledWith(
-            "sessions.send",
-            expect.anything(),
-            expect.anything(),
-          ),
-        );
-        await requestCloudWorkerStop(stopClient, { key: input.recovery.sessionKey }, startup);
-        sent.resolve({ status: "started", runId: input.recovery.messageId });
-        await flushStartupMicrotasks();
-        expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-          phase: "failed",
-          action: "check-delivery",
-          initialTurn: { sendRunId: input.recovery.messageId, sendState: "unconfirmed" },
-        });
-        startup.retry(input.recovery.sessionKey);
-        await vi.waitFor(() =>
-          expect(request).toHaveBeenCalledWith("chat.history", expect.anything()),
-        );
-        await flushStartupMicrotasks();
-        for (const method of ["sessions.dispatch", "sessions.send", "sessions.reclaim"]) {
-          expect(request.mock.calls.filter(([name]) => name === method)).toHaveLength(1);
-        }
-        expect(startup.get(input.recovery.sessionKey)?.action).toBe("check-delivery");
-      } finally {
-        startup.dispose();
-      }
+      startup.start(input);
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("chat.send", expect.anything(), expect.anything()),
+      );
+      await requestCloudWorkerStop(stopClient, { key }, startup);
+      sent.resolve({ status: "started", runId: input.recovery.messageId });
+      await flushStartupMicrotasks();
+      expect(startup.get(key)).toMatchObject({
+        phase: "failed",
+        action: "retry",
+        initialTurn: { sendRunId: input.recovery.messageId, sendState: "failed" },
+      });
+      startup.retry(key);
+      await vi.waitFor(() => expect(startup.get(key)).toBeNull());
+      await flushStartupMicrotasks();
+      expect(startupCalls(request, "sessions.dispatch")).toHaveLength(1);
+      expect(startupCalls(request, "sessions.reclaim")).toHaveLength(1);
+      expect(startupCalls(request, "chat.send")).toHaveLength(2);
+      expect(startupCalls(request, "chat.send")[1]?.[1]).toMatchObject({
+        idempotencyKey: input.recovery.messageId,
+      });
     });
   });
 });
@@ -452,70 +386,66 @@ describe("placement startup Retry", () => {
     it("reuses a worker that becomes active after recovery times out and sends only once", async () => {
       vi.useFakeTimers();
       let placement = createStartupPlacement("provisioning", 1);
-      const request = vi.fn(async (method: string, params?: { idempotencyKey?: string }) => {
-        if (method === "sessions.describe") {
-          return { session: { sessionId: "session-startup", placement } };
-        }
-        if (method === "sessions.dispatch") {
+      const request = startupRequest({
+        "sessions.describe": async () => ({
+          session: { sessionId: "physical-startup-session", placement },
+        }),
+        "sessions.dispatch": async () => {
           // The Gateway rejects redispatch once an existing placement is active.
           throw new GatewayRequestError({
             code: "INVALID_REQUEST",
             message: `session cannot dispatch from placement ${placement.state}`,
           });
-        }
-        if (method === "sessions.send") {
-          return { status: "started", runId: params?.idempotencyKey };
-        }
-        throw new Error(`Unexpected ${method}`);
+        },
+        "chat.send": async (params?: { idempotencyKey?: string }) => ({
+          status: "started",
+          runId: params?.idempotencyKey,
+        }),
       });
       const { startup, input, chatSubmissions, client } = createPlacementStartupHarness(request, {
         recoveryBeforeStartup: true,
       });
       const { sessionKey, gatewayUrl, recoveryScope, messageId } = input.recovery;
-      try {
-        startup.resumeRecovery();
-        await vi.runAllTimersAsync();
-        expect(startup.get(sessionKey)).toMatchObject({
-          phase: "failed",
-          action: "retry",
-          error:
-            "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.",
-          initialTurn: { text: input.recovery.message, sendRunId: messageId },
-        });
-        expect(readSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey)).toMatchObject({
-          phase: "paused",
-          reason: "not-sent",
-          messageId,
-        });
-        expect(request.mock.calls.some(([method]) => method === "sessions.reclaim")).toBe(false);
+      startup.resumeRecovery();
+      await vi.runAllTimersAsync();
+      expect(startup.get(sessionKey)).toMatchObject({
+        phase: "failed",
+        action: "retry",
+        error:
+          "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.",
+        initialTurn: { text: input.recovery.message, sendRunId: messageId },
+      });
+      expect(readSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey)).toMatchObject({
+        phase: "paused",
+        reason: "not-sent",
+        messageId,
+      });
+      expect(request.mock.calls.some(([method]) => method === "sessions.reclaim")).toBe(false);
 
-        placement = createStartupPlacement("active", 2);
-        startup.retry(sessionKey);
-        startup.retry(sessionKey);
-        await vi.runAllTimersAsync();
+      placement = createStartupPlacement("active", 2);
+      startup.retry(sessionKey);
+      startup.retry(sessionKey);
+      await vi.runAllTimersAsync();
 
-        expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toEqual([
-          [
-            "sessions.send",
-            expect.objectContaining({
-              key: sessionKey,
-              message: input.recovery.message,
-              idempotencyKey: messageId,
-            }),
-            expect.objectContaining({
-              timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
-              signal: expect.any(AbortSignal),
-              retainSentResultOnAbort: true,
-            }),
-          ],
-        ]);
-        expect(request.mock.calls.some(([method]) => method === "sessions.dispatch")).toBe(false);
-        expect(startup.get(sessionKey)).toBeNull();
-        expect(readSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey)).toBeNull();
-        expect(chatSubmissions.readInitial(sessionKey, client)).not.toBeNull();
-      } finally {
-        startup.dispose();
-      }
+      expect(startupCalls(request, "chat.send")).toEqual([
+        [
+          "chat.send",
+          expect.objectContaining({
+            sessionKey,
+            message: input.recovery.message,
+            idempotencyKey: messageId,
+          }),
+          expect.objectContaining({
+            timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+            signal: expect.any(AbortSignal),
+            retainSentResultOnAbort: true,
+          }),
+        ],
+      ]);
+      expect(request.mock.calls.some(([method]) => method === "sessions.dispatch")).toBe(false);
+      expect(startup.get(sessionKey)).toBeNull();
+      expect(readSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey)).toBeNull();
+      expect(chatSubmissions.readInitial(sessionKey, client)).not.toBeNull();
     });
 
     it.each([
@@ -544,37 +474,31 @@ describe("placement startup Retry", () => {
             }
             return { placement: createStartupPlacement("active", 2) };
           }
-          if (method === "sessions.send") {
+          if (method === "chat.send") {
             return { status: "started" };
           }
           throw new Error(`Unexpected ${method}`);
         });
-        const { startup, input } = await restorePausedStartup(request);
-        try {
-          startup.retry(input.recovery.sessionKey);
-          startup.retry(input.recovery.sessionKey);
-          await vi.waitFor(() => {
-            if (released) {
-              expect(startup.get(input.recovery.sessionKey)).toBeNull();
-            } else {
-              expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-                phase: "failed",
-                error:
-                  "cloud worker environment must be stopped before redispatch; use Stop cloud worker",
-              });
-            }
-          });
-          expect(request.mock.calls.map(([method]) => method)).toEqual([
-            "sessions.describe",
-            ...(state === "missing"
-              ? []
-              : ["sessions.dispatch", ...(released ? ["sessions.send"] : [])]),
-          ]);
-          if (state === "missing") {
-            expect(sessionStorage.length).toBe(0);
+        const { key, startup } = await restorePausedStartup(request);
+        startup.retry(key);
+        startup.retry(key);
+        await vi.waitFor(() => {
+          if (released) {
+            expect(startup.get(key)).toBeNull();
+          } else {
+            expect(startup.get(key)).toMatchObject({
+              phase: "failed",
+              error:
+                "cloud worker environment must be stopped before redispatch; use Stop cloud worker",
+            });
           }
-        } finally {
-          startup.dispose();
+        });
+        expect(startupMethods(request)).toEqual([
+          "sessions.describe",
+          ...(state === "missing" ? [] : ["sessions.dispatch", ...(released ? ["chat.send"] : [])]),
+        ]);
+        if (state === "missing") {
+          expect(sessionStorage.length).toBe(0);
         }
       },
     );
@@ -583,64 +507,49 @@ describe("placement startup Retry", () => {
       "does not allocate during passive recovery of %s placement",
       async (state) => {
         vi.useFakeTimers();
-        const request = vi.fn(async (method: string) => {
-          if (method === "sessions.describe") {
-            return { session: { placement: state ? createStartupPlacement(state, 1) : undefined } };
-          }
-          if (method === "sessions.reclaim") {
-            return { ok: true };
-          }
-          throw new Error(`Unexpected ${method}`);
+        const request = startupRequest({
+          "sessions.describe": async () => ({
+            session: { placement: state ? createStartupPlacement(state, 1) : undefined },
+          }),
+          "sessions.reclaim": async () => ({ ok: true }),
         });
-        const { startup, input } = createPlacementStartupHarness(request, {
+        const { key, startup } = createPlacementStartupHarness(request, {
           recoveryBeforeStartup: true,
         });
-        try {
-          startup.resumeRecovery();
-          await vi.runAllTimersAsync();
-          expect(startup.get(input.recovery.sessionKey)?.action).toBe("retry");
-          expect(
-            request.mock.calls.every(
-              ([method]) => method === "sessions.describe" || method === "sessions.reclaim",
-            ),
-          ).toBe(true);
-        } finally {
-          startup.dispose();
-        }
+        startup.resumeRecovery();
+        await vi.runAllTimersAsync();
+        expect(startup.get(key)?.action).toBe("retry");
+        expect(
+          request.mock.calls.every(
+            ([method]) => method === "sessions.describe" || method === "sessions.reclaim",
+          ),
+        ).toBe(true);
       },
     );
 
     it("Stop fences a late active read during Retry before any send or dispatch", async () => {
       const description = createDeferred<unknown>();
-      const request = vi.fn(async (method: string) => {
-        if (method === "sessions.describe") {
-          return description.promise;
-        }
-        if (method === "sessions.reclaim") {
-          return { ok: true };
-        }
-        throw new Error(`Unexpected ${method}`);
+      const request = startupRequest({
+        "sessions.describe": async () => description.promise,
+        "sessions.reclaim": async () => ({ ok: true }),
       });
-      const { startup, input, gateway } = await restorePausedStartup(request);
+      const { key, startup, input, gateway } = await restorePausedStartup(request);
       const client = gateway.snapshot.client;
       if (!client) {
         throw new Error("Expected the startup fixture client");
       }
       try {
-        startup.retry(input.recovery.sessionKey);
+        startup.retry(key);
         await flushStartupMicrotasks();
-        await requestCloudWorkerStop(client, { key: input.recovery.sessionKey }, startup);
+        await requestCloudWorkerStop(client, { key }, startup);
         description.resolve({ session: { placement: createStartupPlacement("active", 2) } });
         await flushStartupMicrotasks();
-        expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+        expect(startup.get(key)).toMatchObject({
           phase: "failed",
           action: "retry",
           initialTurn: { sendRunId: input.recovery.messageId },
         });
-        expect(request.mock.calls.map(([method]) => method)).toEqual([
-          "sessions.describe",
-          "sessions.reclaim",
-        ]);
+        expect(startupMethods(request)).toEqual(["sessions.describe", "sessions.reclaim"]);
       } finally {
         description.resolve({ session: null });
         startup.dispose();
@@ -655,10 +564,7 @@ describe("placement startup reload", () => {
     // Each case represents a fresh document, including in-memory reload ownership.
     vi.stubGlobal("sessionStorage", createStorageMock());
   });
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => restoreMocksAndGlobals());
 
   it("reloads a saved paused startup after a cached import failure", async () => {
     const reload = vi
@@ -667,27 +573,23 @@ describe("placement startup reload", () => {
     const loadRuntime = vi.fn(() =>
       Promise.reject(new Error("Failed to fetch dynamically imported module: /assets/startup.js")),
     );
-    const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime });
-    try {
-      startup.start(input);
-      await flushStartupMicrotasks();
-      startup.pause(input.recovery.sessionKey, "Stopped before startup", {
-        readSessionPlacementRecovery,
-        pauseSessionPlacementRecovery,
-      });
-      await flushStartupMicrotasks();
-      const importsBeforeRetry = loadRuntime.mock.calls.length;
-      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-        phase: "failed",
-        retryable: true,
-      });
-      startup.retry(input.recovery.sessionKey);
-      expect(reload).toHaveBeenCalledOnce();
-      expect(reload.mock.calls[0]?.[0]?.canReload?.()).toBe(true);
-      expect(loadRuntime).toHaveBeenCalledTimes(importsBeforeRetry);
-    } finally {
-      startup.dispose();
-    }
+    const { key, startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime });
+    startup.start(input);
+    await flushStartupMicrotasks();
+    startup.pause(key, "Stopped before startup", {
+      readSessionPlacementRecovery,
+      pauseSessionPlacementRecovery,
+    });
+    await flushStartupMicrotasks();
+    const importsBeforeRetry = loadRuntime.mock.calls.length;
+    expect(startup.get(key)).toMatchObject({
+      phase: "failed",
+      retryable: true,
+    });
+    startup.retry(key);
+    expect(reload).toHaveBeenCalledOnce();
+    expect(reload.mock.calls[0]?.[0]?.canReload?.()).toBe(true);
+    expect(loadRuntime).toHaveBeenCalledTimes(importsBeforeRetry);
   });
 
   it.each(["Incognito", "failed pause write"])(
@@ -701,79 +603,77 @@ describe("placement startup reload", () => {
           new Error("Failed to fetch dynamically imported module: /assets/startup.js"),
         ),
       );
-      const { startup, input, gateway } = createPlacementStartupHarness(vi.fn(), { loadRuntime });
+      const { key, startup, input, gateway } = createPlacementStartupHarness(vi.fn(), {
+        loadRuntime,
+      });
       const privateKey = "agent:cloud:incognito";
       const saved = Array.from({ length: sessionStorage.length }, (_, index) => {
-        const key = sessionStorage.key(index)!;
-        return [key, sessionStorage.getItem(key)];
+        const storageKey = sessionStorage.key(index)!;
+        return [storageKey, sessionStorage.getItem(storageKey)];
       });
-      try {
-        startup.resumeRecovery();
-        await flushStartupMicrotasks();
-        const memoryInput = {
-          ...input,
-          persistRecovery: cause !== "Incognito",
-          recovery: { ...input.recovery, sessionKey: privateKey, message: "private unsent text" },
-        };
-        if (memoryInput.persistRecovery) {
-          expect(writeSessionPlacementRecovery(memoryInput.recovery)).toBe(true);
-        }
-        startup.start(memoryInput);
-        await flushStartupMicrotasks();
-        if (cause === "failed pause write") {
-          const storage = blockStorageWrites();
-          startup.pause(privateKey, "Stopped before startup", {
-            readSessionPlacementRecovery,
-            pauseSessionPlacementRecovery,
-          });
-          await flushStartupMicrotasks();
-          vi.stubGlobal("sessionStorage", storage);
-        }
-        for (const key of [input.recovery.sessionKey, privateKey]) {
-          expect(startup.hasPendingTurn(key)).toBe(true);
-          expect(startup.get(key)).toMatchObject({
-            phase: "failed",
-            retryable: false,
-            error: "Recovery needs a reload. Unsaved starts will be lost.",
-          });
-        }
-        startup.retry(input.recovery.sessionKey);
-        expect(
-          await chunkRecovery.scheduleStaleChunkReload({
-            reload,
-            storage: sessionStorage,
-            buildId: `unsaved-${cause}`,
-          }),
-        ).toBe(false);
-        expect(fetch).not.toHaveBeenCalled();
-        expect(reload).not.toHaveBeenCalled();
-        expect(
-          Array.from({ length: sessionStorage.length }, (_, index) => {
-            const key = sessionStorage.key(index)!;
-            return [key, sessionStorage.getItem(key)];
-          }),
-        ).toEqual(saved);
-        expect(startup.hasPendingTurn(privateKey)).toBe(true);
-
-        // Credential replacement retires this input's authority; it cannot block the new owner.
-        Object.assign(gateway, { connectionRevision: gateway.connectionRevision + 1 });
-        vi.mocked(gateway.subscribe).mock.calls[0]?.[0](gateway.snapshot);
-        expect(startup.get(privateKey)).toBeNull();
-        expect(startup.get(input.recovery.sessionKey)).toMatchObject({
-          phase: "failed",
-          retryable: true,
-        });
-        expect(
-          await chunkRecovery.scheduleStaleChunkReload({
-            reload,
-            storage: sessionStorage,
-            buildId: `unsaved-${cause}`,
-          }),
-        ).toBe(true);
-        expect(reload).toHaveBeenCalledOnce();
-      } finally {
-        startup.dispose();
+      startup.resumeRecovery();
+      await flushStartupMicrotasks();
+      const memoryInput = {
+        ...input,
+        persistRecovery: cause !== "Incognito",
+        recovery: { ...input.recovery, sessionKey: privateKey, message: "private unsent text" },
+      };
+      if (memoryInput.persistRecovery) {
+        expect(writeSessionPlacementRecovery(memoryInput.recovery)).toBe(true);
       }
+      startup.start(memoryInput);
+      await flushStartupMicrotasks();
+      if (cause === "failed pause write") {
+        const storage = blockStorageWrites();
+        startup.pause(privateKey, "Stopped before startup", {
+          readSessionPlacementRecovery,
+          pauseSessionPlacementRecovery,
+        });
+        await flushStartupMicrotasks();
+        vi.stubGlobal("sessionStorage", storage);
+      }
+      for (const sessionKey of [key, privateKey]) {
+        expect(startup.hasPendingTurn(sessionKey)).toBe(true);
+        expect(startup.get(sessionKey)).toMatchObject({
+          phase: "failed",
+          retryable: false,
+          error: "Recovery needs a reload. Unsaved starts will be lost.",
+        });
+      }
+      startup.retry(key);
+      expect(
+        await chunkRecovery.scheduleStaleChunkReload({
+          reload,
+          storage: sessionStorage,
+          buildId: `unsaved-${cause}`,
+        }),
+      ).toBe(false);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(reload).not.toHaveBeenCalled();
+      expect(
+        Array.from({ length: sessionStorage.length }, (_, index) => {
+          const storageKey = sessionStorage.key(index)!;
+          return [storageKey, sessionStorage.getItem(storageKey)];
+        }),
+      ).toEqual(saved);
+      expect(startup.hasPendingTurn(privateKey)).toBe(true);
+
+      // Credential replacement retires this input's authority; it cannot block the new owner.
+      Object.assign(gateway, { connectionRevision: gateway.connectionRevision + 1 });
+      vi.mocked(gateway.subscribe).mock.calls[0]?.[0](gateway.snapshot);
+      expect(startup.get(privateKey)).toBeNull();
+      expect(startup.get(key)).toMatchObject({
+        phase: "failed",
+        retryable: true,
+      });
+      expect(
+        await chunkRecovery.scheduleStaleChunkReload({
+          reload,
+          storage: sessionStorage,
+          buildId: `unsaved-${cause}`,
+        }),
+      ).toBe(true);
+      expect(reload).toHaveBeenCalledOnce();
     },
   );
 
@@ -788,7 +688,7 @@ describe("placement startup reload", () => {
           new Error("Failed to fetch dynamically imported module: /assets/startup.js"),
         ),
       );
-      const { startup, input, gateway, client } = createPlacementStartupHarness(vi.fn(), {
+      const { key, startup, input, gateway, client } = createPlacementStartupHarness(vi.fn(), {
         loadRuntime,
       });
       const handoff = createChatAttachmentHandoff(gateway);
@@ -796,7 +696,7 @@ describe("placement startup reload", () => {
       try {
         startup.start({ ...input, persistRecovery: false });
         await flushStartupMicrotasks();
-        const discard = startup.get(input.recovery.sessionKey)?.discardAndReload;
+        const discard = startup.get(key)?.discardAndReload;
         expect(discard).toBeTypeOf("function");
         if (change === "private draft") {
           handoff.prepare({
@@ -827,7 +727,7 @@ describe("placement startup reload", () => {
         discard?.();
         expect(reload).toHaveBeenCalledTimes(change === "current" ? 1 : 0);
         if (change === "current" || change === "private draft") {
-          expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
+          expect(startup.hasPendingTurn(key)).toBe(false);
         }
         if (change === "private draft") {
           expect(show.mock.lastCall?.[0].actionLabel).toBe("Review private draft");
@@ -851,25 +751,21 @@ describe("placement startup reload", () => {
     const reload = vi.spyOn(chunkRecovery, "reloadControlUiDocument").mockImplementation(() => {});
     const loading = createDeferred<{ default: typeof createRuntime }>();
     const request = vi.fn();
-    const { startup, input } = createPlacementStartupHarness(request, {
+    const { key, startup, input } = createPlacementStartupHarness(request, {
       loadRuntime: () => loading.promise,
     });
     sessionStorage.clear();
-    try {
-      startup.start({ ...input, persistRecovery: false });
-      expect(canReloadControlUiDocument(true)).toBe(false);
-      const discard = show.mock.lastCall?.[0].onAction;
-      expect(discard).toBeTypeOf("function");
-      discard?.();
-      expect(reload).toHaveBeenCalledOnce();
-      expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
-      loading.resolve({ default: createRuntime });
-      await flushStartupMicrotasks();
-      expect(request).not.toHaveBeenCalled();
-      expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
-    } finally {
-      startup.dispose();
-    }
+    startup.start({ ...input, persistRecovery: false });
+    expect(canReloadControlUiDocument(true)).toBe(false);
+    const discard = show.mock.lastCall?.[0].onAction;
+    expect(discard).toBeTypeOf("function");
+    discard?.();
+    expect(reload).toHaveBeenCalledOnce();
+    expect(startup.hasPendingTurn(key)).toBe(false);
+    loading.resolve({ default: createRuntime });
+    await flushStartupMicrotasks();
+    expect(request).not.toHaveBeenCalled();
+    expect(startup.hasPendingTurn(key)).toBe(false);
   });
 
   it("rejects a retained toast action when another unsaved start joins the same pending import", async () => {
@@ -878,22 +774,18 @@ describe("placement startup reload", () => {
     const loading = createDeferred<{ default: () => ApplicationPlacementStartup }>();
     const loadRuntime = vi.fn(() => loading.promise);
     const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime });
-    try {
-      startup.start({ ...input, persistRecovery: false });
-      expect(await chunkRecovery.retryStaleChunkReloadWhenReachable()).toBe(false);
-      const discard = show.mock.calls[0]?.[0].onAction;
-      expect(discard).toBeTypeOf("function");
-      startup.start({
-        ...input,
-        persistRecovery: false,
-        recovery: { ...input.recovery, sessionKey: "agent:cloud:another-unsaved-start" },
-      });
-      expect(loadRuntime).toHaveBeenCalledOnce();
-      discard?.();
-      expect(reload).not.toHaveBeenCalled();
-    } finally {
-      startup.dispose();
-    }
+    startup.start({ ...input, persistRecovery: false });
+    expect(await chunkRecovery.retryStaleChunkReloadWhenReachable()).toBe(false);
+    const discard = show.mock.calls[0]?.[0].onAction;
+    expect(discard).toBeTypeOf("function");
+    startup.start({
+      ...input,
+      persistRecovery: false,
+      recovery: { ...input.recovery, sessionKey: "agent:cloud:another-unsaved-start" },
+    });
+    expect(loadRuntime).toHaveBeenCalledOnce();
+    discard?.();
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it.each(["snapshot", "reload"])("releases New Session Reset recovery before %s", async (next) => {
@@ -946,12 +838,12 @@ describe("placement startup reload", () => {
           new Error("Failed to fetch dynamically imported module: /assets/startup.js"),
         ),
       );
-      const { startup, input, gateway, client } = createPlacementStartupHarness(vi.fn(), {
+      const { key, startup, input, gateway, client } = createPlacementStartupHarness(vi.fn(), {
         loadRuntime: loader,
       });
       startup.resumeRecovery();
       await flushStartupMicrotasks();
-      startup.retry(input.recovery.sessionKey);
+      startup.retry(key);
       const canReload = reload.mock.calls[0]?.[0]?.canReload;
       expect(canReload?.()).toBe(true);
 
@@ -967,18 +859,18 @@ describe("placement startup reload", () => {
       }
       vi.mocked(gateway.subscribe).mock.calls[0]?.[0](gateway.snapshot);
       expect(canReload?.()).toBe(false);
-      expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(change === "credentials");
+      expect(startup.hasPendingTurn(key)).toBe(change === "credentials");
       if (change === "credentials") {
-        expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+        expect(startup.get(key)).toMatchObject({
           phase: "failed",
           startedAt: 2_000,
         });
       } else {
-        expect(startup.get(input.recovery.sessionKey)).toBeNull();
+        expect(startup.get(key)).toBeNull();
         client.recoveryScope = input.recovery.recoveryScope;
         gateway.connection.gatewayUrl = input.recovery.gatewayUrl;
         vi.mocked(gateway.subscribe).mock.calls[0]?.[0](gateway.snapshot);
-        expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(true);
+        expect(startup.hasPendingTurn(key)).toBe(true);
         expect(canReload?.()).toBe(false);
       }
       await flushStartupMicrotasks();
@@ -998,7 +890,7 @@ describe("placement startup reload", () => {
           new Error("Failed to fetch dynamically imported module: /assets/startup-runtime.js"),
         ),
       );
-      const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime });
+      const { key, startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime });
       startup.resumeRecovery();
       if (change === "memory-only") {
         startup.start({
@@ -1008,7 +900,7 @@ describe("placement startup reload", () => {
         });
       }
       await flushStartupMicrotasks();
-      startup.retry(input.recovery.sessionKey);
+      startup.retry(key);
       expect(reload).toHaveBeenCalledOnce();
       const canReload = reload.mock.calls[0]?.[0]?.canReload;
       expect(canReload?.()).toBe(change !== "memory-only");

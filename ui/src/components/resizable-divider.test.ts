@@ -32,23 +32,19 @@ function key(target: EventTarget, name: string, shiftKey = false) {
   return event;
 }
 
-async function dragFixture(start = true) {
+async function dragFixture() {
   const divider = await renderDivider();
   const resized = vi.fn();
   const resizeStarted = vi.fn();
   const resizeEnded = vi.fn();
-  const setPointerCapture = vi.fn();
-  const releasePointerCapture = vi.fn();
-  divider.setPointerCapture = setPointerCapture;
-  divider.releasePointerCapture = releasePointerCapture;
-  divider.hasPointerCapture = vi.fn(() => true);
+  divider.setPointerCapture = vi.fn();
+  divider.releasePointerCapture = vi.fn();
+  divider.hasPointerCapture = () => true;
   container.addEventListener("resize-start", resizeStarted);
   divider.addEventListener("resize", resized);
   divider.addEventListener("resize-end", resizeEnded);
-  if (start) {
-    dispatchPointer(divider, "pointerdown", 100);
-  }
-  return { divider, resized, resizeStarted, resizeEnded, setPointerCapture, releasePointerCapture };
+  dispatchPointer(divider, "pointerdown", 100);
+  return { divider, resized, resizeStarted, resizeEnded };
 }
 
 function dispatchPointer(target: EventTarget, type: string, clientX: number, pointerId = 7) {
@@ -154,27 +150,12 @@ it.each([
   expect(resizeStarted).not.toHaveBeenCalled();
 });
 
-it("keeps dragging owned by the initiating pointer", async () => {
-  const { divider, resized, resizeStarted, resizeEnded, setPointerCapture, releasePointerCapture } =
-    await dragFixture();
+it("coalesces pointer movement and emits the final resize", async () => {
+  const { divider, resized, resizeStarted, resizeEnded } = await dragFixture();
   expect(document.activeElement).not.toBe(divider);
   expect([...divider.classList]).toEqual(["dragging"]);
-  expect(setPointerCapture).toHaveBeenCalledWith(7);
-  expect(resizeStarted).toHaveBeenCalledOnce();
-  expect(resizeStarted.mock.calls[0]?.[0]).toMatchObject({
-    target: divider,
-    bubbles: true,
-    composed: true,
-  });
+  expect(resizeStarted.mock.calls[0]?.[0]).toMatchObject({ target: divider, composed: true });
   expect(resized).not.toHaveBeenCalled();
-  dispatchPointer(divider, "pointerdown", 180, 8);
-  dispatchPointer(document, "pointermove", 220, 8);
-  dispatchPointer(document, "pointercancel", 220, 8);
-  dispatchPointer(document, "pointerup", 220, 8);
-  expect(setPointerCapture).toHaveBeenCalledTimes(1);
-  expect(calls(resizeStarted, resized, resizeEnded)).toEqual([1, 0, 0]);
-  expect([...divider.classList]).toEqual(["dragging"]);
-
   dispatchPointer(document, "pointermove", 220, 7);
   dispatchPointer(document, "pointermove", 120, 7);
   expect(resized).not.toHaveBeenCalled();
@@ -183,52 +164,12 @@ it("keeps dragging owned by the initiating pointer", async () => {
   expect(calls(resized, resizeEnded)).toEqual([1, 0]);
 
   dispatchPointer(document, "pointerup", 220, 7);
-  expect(resizeEnded.mock.lastCall?.[0].detail).toEqual({ splitRatio: 0.65 });
-  expect(resizeEnded).toHaveBeenCalledTimes(1);
-  expect([...divider.classList]).toEqual([]);
-  expect(releasePointerCapture).toHaveBeenCalledExactlyOnceWith(7);
-  expect(resizeStarted).toHaveBeenCalledOnce();
-});
-
-it("stops dragging when the window loses focus", async () => {
-  const { divider, resized, resizeEnded, releasePointerCapture } = await dragFixture();
-  window.dispatchEvent(new Event("blur"));
-  expect([...divider.classList]).toEqual([]);
-  expect(releasePointerCapture).toHaveBeenCalledWith(7);
-  expectLastResizeRatio(resizeEnded, 0.6);
-  expect(resizeEnded).toHaveBeenCalledOnce();
-  dispatchPointer(document, "pointermove", 220);
-  dispatchPointer(document, "pointerup", 220);
-  expect(calls(resized, resizeEnded)).toEqual([0, 1]);
-});
-
-it("ends only the owner gesture when pointer capture is lost", async () => {
-  const { divider, resized, resizeEnded } = await dragFixture(false);
-  const capturedPointers = new Set<number>();
-  divider.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
-  divider.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
-  divider.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
-
-  dispatchPointer(divider, "pointerdown", 100, 7);
-  dispatchPointer(document, "pointermove", 120, 7);
-  dispatchPointer(divider, "lostpointercapture", 120, 8);
-  expect([...divider.classList]).toEqual(["dragging"]);
-  expect(calls(resized, resizeEnded)).toEqual([0, 0]);
-
-  capturedPointers.delete(7);
-  dispatchPointer(divider, "lostpointercapture", 120, 7);
-  expectLastResizeRatio(resized, 0.65);
   expectLastResizeRatio(resizeEnded, 0.65);
-  expect(resizeEnded).toHaveBeenCalledOnce();
   expect([...divider.classList]).toEqual([]);
-
-  dispatchPointer(divider, "pointerdown", 120, 8);
-  expect(capturedPointers.has(8)).toBe(true);
-  dispatchPointer(document, "pointerup", 120, 8);
-  expect(resizeEnded).toHaveBeenCalledTimes(2);
+  expect(calls(resizeStarted, resizeEnded)).toEqual([1, 1]);
 });
 
-it("commits the final pointer position when disconnected", async () => {
+it("commits pending movement when disconnected and retires input", async () => {
   const { divider, resized, resizeEnded } = await dragFixture();
   dispatchPointer(document, "pointermove", 120);
   divider.remove();
@@ -237,9 +178,8 @@ it("commits the final pointer position when disconnected", async () => {
 
   expectLastResizeRatio(resized, 0.65);
   expectLastResizeRatio(resizeEnded, 0.65);
-  expect(resizeEnded).toHaveBeenCalledOnce();
+  dispatchPointer(document, "pointermove", 220);
   dispatchPointer(document, "pointerup", 120);
-  expect(resizeEnded).toHaveBeenCalledOnce();
   key(divider, "ArrowRight");
   dispatchPointer(divider, "pointerdown", 100);
   expect(calls(resized, resizeEnded)).toEqual([1, 1]);

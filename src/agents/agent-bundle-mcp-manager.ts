@@ -292,6 +292,7 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       }
 
       const {
+        fullConfig,
         staticServers,
         requesterScopedServerNames,
         safeServerNamesByServer,
@@ -304,13 +305,16 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
         let staticLease: SessionMcpRuntimeLease;
         try {
           staticLease = leaseRuntime(
-            await install.getOrCreateRuntimeEntry({
-              ...params,
-              runtimeKey: params.sessionId,
-              configReloadAtAdmission,
-              excludeServerNames: new Set(requesterScopedServerNames),
-              safeServerNamesByServer,
-            }),
+            await install.getOrCreateRuntimeEntry(
+              {
+                ...params,
+                runtimeKey: params.sessionId,
+                configReloadAtAdmission,
+                excludeServerNames: new Set(requesterScopedServerNames),
+                safeServerNamesByServer,
+              },
+              fullConfig.loaded,
+            ),
             params.sessionId,
           );
         } catch (error) {

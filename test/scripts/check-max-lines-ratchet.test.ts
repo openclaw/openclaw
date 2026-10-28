@@ -1,19 +1,11 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  collectCurrentSuppressionState,
-  collectLintDisableDirectives,
-  isGovernedSourcePath,
-  main,
-} from "../../scripts/check-max-lines-ratchet.mts";
-import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { collectEnvVarNames } from "../../scripts/check-env-var-count.mts";
+import { collectCurrentSuppressionState, main } from "../../scripts/check-max-lines-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
-
-const parser = createNativeTypeScriptParser();
-afterAll(() => parser.close());
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
@@ -46,50 +38,18 @@ function write(root: string, file: string, source: string) {
   fs.writeFileSync(target, source);
 }
 
-function makeRepo(entries: string[], files: Record<string, string> = {}, message = "base") {
+function makeRepo(entries: string[], files: Record<string, string> = {}) {
   const root = tempDirs.make("openclaw-max-lines-");
   write(root, baselinePath, entries.map((file) => `${file}\n`).join(""));
   entries.forEach((file) => write(root, file, suppression));
   Object.entries(files).forEach(([file, source]) => write(root, file, source));
-  [["init"], ["add", "."], ["commit", "-m", message]].forEach((args) => git(root, args));
+  [["init"], ["add", "."], ["commit", "-m", "base"]].forEach((args) => git(root, args));
   return root;
 }
-
-const directives = (source: string) =>
-  collectLintDisableDirectives(source, "file.ts", parser.parseSourceFile("file.ts", source));
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-});
-
-it("preserves directive discovery with CRLF line endings", () => {
-  const source = [
-    'const text = "\u{1f680} /* oxlint-disable max-lines */"; const template = `// eslint-disable max-lines`;',
-    "function example() { /* oxlint-disable no-console */ } // eslint-disable no-debugger",
-    "consume(1 // oxlint-disable no-console",
-    ");",
-    "// eslint-disable max-lines, eqeqeq",
-  ].join("\r\n");
-
-  const noLog = ["no-console"];
-  expect(directives(source)).toEqual([noLog, ["no-debugger"], noLog, ["max-lines", "eqeqeq"]]);
-});
-
-it("does not match directive examples in prose", () => {
-  expect(directives("// Example: oxlint-disable max-lines\n")).toEqual([]);
-});
-
-it.each([
-  ["src/runtime.ts", true],
-  ["extensions/demo/index.mjs", true],
-  ["scripts/tool.mjs", false],
-  ["packages/api/protocol-gen/types.ts", false],
-  ["ui/src/i18n/locales/en.ts", false],
-  ["src/wizard/i18n/locales/en.ts", false],
-  ["src/schema.generated.ts", false],
-] as const)("governs %s: %s", (file, governed) => {
-  expect(isGovernedSourcePath(file)).toBe(governed);
 });
 
 it("reports baseline growth as an advisory in GitHub Actions even when listed", () => {
@@ -107,10 +67,28 @@ it("reports baseline growth as an advisory in GitHub Actions even when listed", 
   expect(fs.readFileSync(path.join(root, "summary.md"), "utf8")).toContain("src/b.ts");
 });
 
+it("blocks a moved suppression and its stale entry in GitHub Actions", () => {
+  const root = makeRepo(["src/page.ts"]);
+  git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+  fs.rmSync(path.join(root, "src/page.ts"));
+  write(root, "src/page-state.ts", "export const state = 1;\n" + suppression);
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.stubEnv("GITHUB_ACTIONS", "true");
+
+  expect(main(root)).toBe(1);
+  expect(error).toHaveBeenCalledWith(
+    expect.stringMatching(/New max-lines suppressions are forbidden.*\n {2}src\/page-state\.ts$/u),
+  );
+
+  write(root, "src/page-state.ts", "export const state = 1;\n");
+  expect(main(root)).toBe(1);
+  expect(error).toHaveBeenLastCalledWith(
+    "Remove stale max-lines baseline entries (or run with --prune):\n  src/page.ts",
+  );
+});
+
 it("transfers grandfathered debt across a verified rename", () => {
-  const root = makeRepo(["src/a.ts"], {
-    "src/a.ts": "export const a = 1;\n/* oxlint-disable max-lines -- TODO: split. */\n",
-  });
+  const root = makeRepo(["src/a.ts"]);
   git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
 
   git(root, ["mv", "src/a.ts", "src/b.ts"]);
@@ -119,36 +97,11 @@ it("transfers grandfathered debt across a verified rename", () => {
   expect(main(root)).toBe(0);
 });
 
-it("compares an explicit moving base at the branch fork", () => {
-  const root = makeRepo(["src/a.ts", "src/b.ts"]);
-  git(root, ["branch", "release"]);
-
-  write(root, baselinePath, "src/a.ts\n");
-  write(root, "src/b.ts", "export const b = 1;\n");
-  git(root, ["add", "."]);
-  git(root, ["commit", "-m", "shrink main debt"]);
-  git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
-  git(root, ["checkout", "release"]);
-
-  expect(main(root, ["--base", "origin/main"])).toBe(0);
-});
-
-it("rejects unavailable ancestry with an explicit prepared-base recovery", () => {
-  const root = makeRepo(["src/a.ts"], {}, "release");
-  git(root, ["branch", "-m", "release"]);
-  git(root, ["checkout", "--orphan", "main"]);
-  write(root, baselinePath, "");
-  write(root, "src/a.ts", "export const a = 1;\n");
-  git(root, ["add", "."]);
-  git(root, ["commit", "-m", "disconnected main"]);
-  git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
-  git(root, ["checkout", "release"]);
-
+it("reports base-resolution failures", () => {
+  const root = makeRepo([]);
   const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-  expect(main(root)).toBe(1);
-  expect(errors).toHaveBeenCalledWith(
-    "Could not resolve ratchet merge base for origin/main; provide reachable history or --base <prepared-ref> --no-merge-base.",
-  );
+  expect(main(root, ["--base", "missing"])).toBe(1);
+  expect(errors).toHaveBeenCalledWith("Could not resolve ratchet base ref: missing");
 });
 
 it("checks staged content instead of unstaged worktree edits", () => {
@@ -181,3 +134,82 @@ it("checks untracked sources and tolerates unstaged deletions", () => {
 
   expect(main(root)).toBe(1);
 });
+
+it("keeps candidate batches aligned and counts environment names outside them", () => {
+  const files = Object.fromEntries(
+    Array.from({ length: 5 }, (_, index) => [
+      `src/file-${String(index).padStart(2, "0")}.ts`,
+      'const example = "🚀 /* oxlint-disable max-lines */"; const template = `// eslint-disable max-lines`;\r\n' +
+        "// Example: oxlint-disable max-lines\r\nfunction f() { /* oxlint-disable no-console */ } // eslint-disable no-debugger\r\nconsume(1 // oxlint-disable no-console\r\n);\r\n" +
+        (index === 1 ? "/* eslint-disable */\r\n" : "") +
+        (index === 4
+          ? "// eslint-disable max-lines, eqeqeq\r\nprocess.env.OPENCLAW_SUPPRESSED;\r\n"
+          : ""),
+    ]),
+  );
+  const root = makeRepo([], {
+    ...files,
+    ...Object.fromEntries(
+      [
+        "scripts/tool.mjs",
+        "packages/api/protocol-gen/types.ts",
+        "ui/src/i18n/locales/en.ts",
+        "src/wizard/i18n/locales/en.ts",
+        "src/schema.generated.ts",
+      ].map((file) => [file, suppression]),
+    ),
+    "extensions/demo/index.mjs": suppression,
+    ".gitignore": "src/ignored.ts\n",
+    "src/plain.ts": "process.env.OPENCLAW_PLAIN;\n",
+  });
+  write(root, ".gitignore", "src/ignored.ts\nsrc/file-04.ts\n");
+  write(root, "src/ignored.ts", "/* eslint-disable */\n");
+  write(root, "src/untracked.ts", suppression + "process.env.OPENCLAW_UNTRACKED;\n");
+  const envVarNames = new Map<string, ReadonlySet<string>>();
+
+  expect(collectCurrentSuppressionState(root, { envVarNames })).toEqual({
+    allRules: ["src/file-01.ts"],
+    explicit: ["extensions/demo/index.mjs", "src/file-04.ts", "src/untracked.ts"],
+  });
+  expect(collectEnvVarNames(root, { preparedNames: envVarNames })).toEqual([
+    "OPENCLAW_PLAIN",
+    "OPENCLAW_SUPPRESSED",
+    "OPENCLAW_UNTRACKED",
+  ]);
+});
+
+it.skipIf(process.platform === "win32")(
+  "reads worktree contents despite indexed types and skip flags",
+  () => {
+    const root = makeRepo([], {
+      "fixture.txt": suppression,
+      "src/assumed.ts": "export const value = 1;\n",
+      "src/replaced.ts": "export const value = 1;\n",
+      "src/skipped.ts": "export const value = 1;\n",
+    });
+    fs.symlinkSync("../fixture.txt", path.join(root, "src/reverse.ts"));
+    fs.symlinkSync("../fixture.txt", path.join(root, "src/tracked.ts"));
+    git(root, ["add", "."]);
+    git(root, ["update-index", "--assume-unchanged", "src/assumed.ts"]);
+    git(root, ["update-index", "--skip-worktree", "src/skipped.ts"]);
+    write(root, "src/assumed.ts", suppression);
+    write(root, "src/skipped.ts", suppression);
+    fs.unlinkSync(path.join(root, "src/replaced.ts"));
+    fs.symlinkSync("../fixture.txt", path.join(root, "src/replaced.ts"));
+    fs.unlinkSync(path.join(root, "src/reverse.ts"));
+    write(root, "src/reverse.ts", suppression);
+    fs.symlinkSync("../fixture.txt", path.join(root, "src/untracked.ts"));
+
+    expect(collectCurrentSuppressionState(root)).toEqual({
+      allRules: [],
+      explicit: [
+        "src/assumed.ts",
+        "src/replaced.ts",
+        "src/reverse.ts",
+        "src/skipped.ts",
+        "src/tracked.ts",
+        "src/untracked.ts",
+      ],
+    });
+  },
+);

@@ -422,11 +422,13 @@ export class AgentsApiNativeToolProjection {
       : undefined;
     // The bounded digest detects changed projected facts without retaining a
     // second payload. Canonical enrichment replaces the same terminal item.
-    const projectionHash = nativeTerminalProjectionHash({
-      tool: toolSnapshot,
-      item: itemSnapshot,
-      command: commandSnapshot,
-    });
+    const projectionHash = hashText(
+      JSON.stringify({
+        tool: toolSnapshot,
+        item: itemSnapshot,
+        command: commandSnapshot,
+      }),
+    );
     if (state.terminalProjectionHash === projectionHash) {
       return;
     }
@@ -526,8 +528,4 @@ export class AgentsApiNativeToolProjection {
   private identity(turnId: string, itemId: string): string {
     return `agentsapi:${this.remoteSessionId}:${turnId}:${itemId}`;
   }
-}
-
-function nativeTerminalProjectionHash(snapshot: Record<string, unknown>): string {
-  return hashText(JSON.stringify(snapshot));
 }

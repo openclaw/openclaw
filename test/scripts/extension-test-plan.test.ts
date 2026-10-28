@@ -220,11 +220,7 @@ describe("extension executable test plans", () => {
       "extensions/logbook/src/postgres-store.test.ts",
       "extensions/matrix/src/matrix/account-state.postgres.test.ts",
     ];
-    for (const file of files) {
-      const absolute = path.join(cwd, file);
-      mkdirSync(path.dirname(absolute), { recursive: true });
-      writeFileSync(absolute, "export {};\n");
-    }
+    files.forEach((file) => writeFixture(cwd, file));
     for (const workboard of ["extensions/workboard", "extensions/workboard/**/*.test.ts"]) {
       const plans = buildVitestRunPlans([workboard, ...files.slice(2)], cwd);
       expect(plans.flatMap((plan) => plan.includePatterns ?? []).toSorted()).toEqual(
@@ -258,7 +254,7 @@ describe("extension executable test plans", () => {
 
   it.each([
     ["live", "extensions/telegram/src/api-fetch.live.test.ts"],
-    ["e2e", "extensions/telegram/src/bot.media.warning-topics.e2e.test.ts"],
+    ["e2e", "extensions/telegram/src/bot.media.stickers-and-fragments.e2e.test.ts"],
   ] as const)("preserves explicit %s config selection", async (kind, file) => {
     const config = `test/vitest/vitest.${kind}.config.ts`;
     expect(chunksFor(config, [file])).toEqual([[file]]);

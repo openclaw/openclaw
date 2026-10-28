@@ -4,6 +4,7 @@ import type {
   MemoryReference,
   MemorySearchPage,
 } from "../../plugins/memory-provider-types.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export function createMemoryOperatorClient(
@@ -11,13 +12,7 @@ export function createMemoryOperatorClient(
 ): NonNullable<GatewayRequestHandlerOptions["client"]> {
   return {
     connId: "cli-connection",
-    connect: {
-      role: "operator",
-      scopes,
-      client: { id: "cli", version: "test", platform: "node", mode: "cli" },
-      minProtocol: 1,
-      maxProtocol: 1,
-    },
+    connect: gatewayConnect(scopes, { id: "cli", platform: "node", mode: "cli" }),
   } as NonNullable<GatewayRequestHandlerOptions["client"]>;
 }
 

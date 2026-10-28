@@ -32,68 +32,51 @@ it("resolves current and ambiguous memory identities without creating missing ow
     path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
   };
   const owner = memorySessionActorOwners.get(location);
-  const key = "agent:main:dashboard:incognito-current";
-  const alias = "agent:main:dashboard:incognito-alias";
-  const unknown = "agent:main:dashboard:incognito-unknown";
-  const unique = "agent:main:dashboard:incognito-unique";
+  const keyFor = (name: string) => `agent:main:dashboard:incognito-${name}`;
+  const [key, alias, unknown, unique] = ["current", "alias", "unknown", "unique"].map(keyFor);
   const actors = await Promise.all(
-    [key, alias, unique].map((sessionKey) =>
+    [key!, alias!, unique!].map((sessionKey) =>
       owner.acquire({ database: owner.identity, sessionKey }, lifetime),
     ),
   );
   try {
     for (const actor of actors) {
-      expect(
-        (
-          await actor.storage!.mutate(
-            {
-              type: "session.entry.create",
-              input: {
-                entry: {
-                  sessionId: actor.target.sessionKey === unique ? "unique-id" : "shared-id",
-                  updatedAt: 1,
-                  incognito: true,
-                },
-              },
-            },
-            authority,
-          )
-        ).kind,
-      ).toBe("committed");
+      const entry = {
+        sessionId: actor.target.sessionKey === unique ? "unique-id" : "shared-id",
+        updatedAt: 1,
+        incognito: true as const,
+      };
+      const result = await actor.storage!.mutate(
+        { type: "session.entry.create", input: { entry } },
+        authority,
+      );
+      expect(result.kind).toBe("committed");
     }
-    const probes = [
-      { agentId: "main", sessionKey: key, sessionId: "shared-id" },
-      { agentId: "main", sessionKey: unknown, sessionId: "shared-id" },
-      { agentId: "main", sessionKey: unknown, sessionId: "unique-id" },
-      { agentId: "main", sessionKey: unknown, sessionId: "missing-id" },
-      {
-        agentId: "missing",
-        sessionKey: "agent:missing:dashboard:incognito-unknown",
-        sessionId: "shared-id",
-      },
-    ];
-    const expected = [
-      { status: "current", sessionKey: key },
-      { status: "unknown", reason: "ambiguous" },
-      { status: "current", sessionKey: unique },
-      { status: "absent" },
-      { status: "absent" },
-    ];
-    expect(await readPlacementSessionIdentityEvidence({}, probes)).toEqual(expected);
+    const probe = (sessionId: string, sessionKey = unknown!, agentId = "main") => ({
+      agentId,
+      sessionKey,
+      sessionId,
+    });
+    const absent = { status: "absent" };
+    const cases = [
+      [probe("shared-id", key), { status: "current", sessionKey: key }],
+      [probe("shared-id"), { status: "unknown", reason: "ambiguous" }],
+      [probe("unique-id"), { status: "current", sessionKey: unique }],
+      [probe("missing-id"), absent],
+      [probe("shared-id", "agent:missing:dashboard:incognito-unknown", "missing"), absent],
+    ] as const;
+    const probes = cases.map(([input]) => input);
+    const expected = cases.map(([, result]) => result);
+    const read = (input = probes) => readPlacementSessionIdentityEvidence({}, input);
+    expect(await read()).toEqual(expected);
     expect(
-      await runWithSessionActorStorage({ ...location, actor: actors[0]!, authority }, () =>
-        readPlacementSessionIdentityEvidence({}, probes),
-      ),
+      await runWithSessionActorStorage({ ...location, actor: actors[0]!, authority }, () => read()),
     ).toEqual(expected);
     expect(memorySessionActorOwners.list()).toEqual([owner]);
-    owner.closeSession(unique);
-    expect(await readPlacementSessionIdentityEvidence({}, [probes[2]!])).toEqual([
-      { status: "absent" },
-    ]);
+    owner.closeSession(unique!);
+    expect(await read([probes[2]!])).toEqual([absent]);
     vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/another-placement-root");
-    expect(await readPlacementSessionIdentityEvidence({}, [probes[0]!])).toEqual([
-      { status: "absent" },
-    ]);
+    expect(await read([probes[0]!])).toEqual([absent]);
     expect(memorySessionActorOwners.list()).toEqual([owner]);
   } finally {
     await Promise.all(actors.map((actor) => actor.release()));

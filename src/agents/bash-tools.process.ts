@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Static } from "typebox";
+import { attachInternalToolResultAcknowledgement } from "../../packages/agent-core/src/internal-hooks.js";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
@@ -11,6 +12,7 @@ import {
   runWithAgentToolSourceExecutionScope,
 } from "./agent-tool-source-execution-guard.js";
 import { cancelBackgroundExecSession, isConfirmedRequestedStop } from "./bash-process-control.js";
+import { missingProcessMessage } from "./bash-process-id.js";
 import {
   acknowledgeNotifyOnExit,
   type ProcessSession,
@@ -23,6 +25,7 @@ import {
   listRunningSessions,
   prepareSessionPoll,
 } from "./bash-process-registry.js";
+import { createProcessToolScope } from "./bash-process-scope.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
 import {
   EXEC_MANUAL_COLLECTION_FOLLOW_UP,
@@ -42,7 +45,6 @@ import {
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
 import { encodeKeySequence, encodePaste, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { attachInternalToolResultAcknowledgement } from "./runtime/internal-hooks.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { ToolInputError, type AgentToolWithMeta } from "./tools/common.js";
 import { failText, textResult } from "./tools/tool-results.js";
@@ -51,6 +53,9 @@ export type ProcessToolDefaults = {
   hasCronTool?: boolean;
   inputWaitIdleMs?: number;
   scopeKey?: string;
+  sessionKey?: string;
+  agentId?: string;
+  sessionStore?: string;
 };
 
 const DEFAULT_LOG_TAIL_LINES = 200;
@@ -178,8 +183,22 @@ function finishedSessionDetails(sessionId: string, finished: ProcessSession) {
     ...(finished.noOutputTimedOut !== undefined
       ? { noOutputTimedOut: finished.noOutputTimedOut }
       : {}),
+    ...(finished.finalizationFailed ? { finalizationFailed: true } : {}),
     name: deriveSessionName(finished.command),
   };
+}
+
+function finishedSessionText(finished: ProcessSession): string {
+  if (finished.exitReason === "memory-limit") {
+    return "Process killed for exceeding its host memory bound. Reduce concurrency or input size, or split the work.";
+  }
+  if (isConfirmedRequestedStop(finished)) {
+    return `Process stopped by request (${renderExecExitLabel(finished)}).`;
+  }
+  return (
+    `Process exited with ${renderExecExitLabel(finished)}.` +
+    (finished.finalizationFailed ? " Cleanup failed; use process log for details." : "")
+  );
 }
 
 function finishedPollResult(
@@ -202,9 +221,7 @@ function finishedPollResult(
     retentionCapNote(finished) +
       retainedOutputNote +
       (output || "(no new output)") +
-      (isConfirmedRequestedStop(finished)
-        ? `\n\nProcess stopped by request (${renderExecExitLabel(finished)}).`
-        : `\n\nProcess exited with ${renderExecExitLabel(finished)}.`),
+      `\n\n${finishedSessionText(finished)}`,
     finished.exitReason,
   );
   return attachInternalToolResultAcknowledgement(
@@ -244,15 +261,12 @@ export function createProcessTool(
   defaults?: ProcessToolDefaults,
 ): AgentToolWithMeta<typeof processSchema, unknown> {
   const assertSourceCurrent = captureAgentToolSourceExecutionGuard();
-  const scopeKey = defaults?.scopeKey;
   const inputWaitIdleMs = clampWithDefault(
     defaults?.inputWaitIdleMs ?? readEnvInt("OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS"),
     DEFAULT_INPUT_WAIT_IDLE_MS,
     MIN_INPUT_WAIT_IDLE_MS,
     MAX_INPUT_WAIT_IDLE_MS,
   );
-  const isInScope = (session?: { scopeKey?: string } | null) =>
-    !scopeKey || session?.scopeKey === scopeKey;
 
   const describeRunningSession = (session: ProcessSession) => {
     const lastOutputAt = session.processActivity?.lastOutputAtMs ?? session.startedAt;
@@ -274,7 +288,7 @@ export function createProcessTool(
     return "\n\nNo new output; this session may be waiting for input. Use process write, send-keys, submit, or paste to provide input.";
   };
 
-  return {
+  const tool: AgentToolWithMeta<typeof processSchema, unknown> = {
     name: "process",
     label: "process",
     displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
@@ -282,11 +296,11 @@ export function createProcessTool(
     parameters: processSchema,
     outputSchema: ProcessToolOutputSchema,
     execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
-      const assertCurrent = () => {
+      const assertCallerCurrent = () => {
         signal?.throwIfAborted();
         assertSourceCurrent();
       };
-      assertCurrent();
+      assertCallerCurrent();
       assertSupportedProcessParams(args);
       const action = (args as { action?: unknown }).action;
       if (!PROCESS_TOOL_ACTIONS.includes(action as ProcessToolAction)) {
@@ -298,7 +312,11 @@ export function createProcessTool(
         timeout?: unknown;
       };
 
+      await using scope = createProcessToolScope(defaults ?? {}, assertCallerCurrent);
+      const { isInScope, assertCurrent } = scope;
+
       if (params.action === "list") {
+        await scope.resolveAncestorScopes();
         return await runWithAgentToolSourceExecutionScope(assertSourceCurrent, async () => {
           assertCurrent();
           const sessions = [...listRunningSessions(), ...listFinishedSessions()]
@@ -308,7 +326,9 @@ export function createProcessTool(
               Object.assign(
                 {
                   sessionId: s.id,
-                  status: s.terminalStatus ?? "running",
+                  status: isConfirmedRequestedStop(s)
+                    ? "completed"
+                    : (s.terminalStatus ?? "running"),
                   startedAt: s.startedAt,
                   runtimeMs: (s.endedAt ?? Date.now()) - s.startedAt,
                   cwd: s.cwd,
@@ -320,7 +340,9 @@ export function createProcessTool(
                 s.endedAt !== undefined
                   ? {
                       ...finishedSessionDetails(s.id, s),
-                      status: s.terminalStatus ?? "running",
+                      status: isConfirmedRequestedStop(s)
+                        ? "completed"
+                        : (s.terminalStatus ?? "running"),
                       endedAt: s.endedAt,
                     }
                   : Object.assign({ pid: s.pid ?? undefined }, describeRunningSession(s)),
@@ -334,11 +356,15 @@ export function createProcessTool(
                 ? s.exitReason
                 : undefined;
             const timeoutMarker = timeoutReason ? ` [${timeoutReason}]` : "";
+            const stopMarker =
+              s.status === "completed" && "exitReason" in s && s.exitReason === "manual-cancel"
+                ? " [stopped by request]"
+                : "";
             const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
             const wakeMarker = "followUp" in s ? " [no exit wake]" : "";
             return `${s.sessionId} ${s.status.padEnd(9)} ${
               formatDurationCompact(s.runtimeMs) ?? "n/a"
-            }${timeoutMarker}${marker}${wakeMarker} :: ${label}`;
+            }${timeoutMarker}${stopMarker}${marker}${wakeMarker} :: ${label}`;
           });
           const followUp = sessions.some((s) => "followUp" in s)
             ? `\n\n${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`
@@ -357,6 +383,28 @@ export function createProcessTool(
       const sessionId = params.sessionId;
       const session = getSession(sessionId);
       const finished = getFinishedSession(sessionId);
+      const assertSelectedCurrent = (record: ProcessSession) => {
+        assertCurrent();
+        if (
+          (getSession(record.id) ?? getFinishedSession(record.id)) !== record ||
+          !isInScope(record)
+        ) {
+          throw new Error(
+            "The selected process changed. Check its current status before trying again.",
+          );
+        }
+      };
+      const selected = session ?? finished;
+      if (!selected) {
+        resetPollRetrySuggestion(sessionId);
+        return failText(missingProcessMessage(sessionId));
+      }
+      if (selected.scopeKey && selected.agentId === defaults?.agentId && !isInScope(selected)) {
+        await scope.resolveAncestorScopes();
+        if (isInScope(selected)) {
+          assertSelectedCurrent(selected);
+        }
+      }
       const scopedSession = isInScope(session) ? session : undefined;
       const scopedFinished = isInScope(finished) ? finished : undefined;
 
@@ -387,7 +435,7 @@ export function createProcessTool(
               });
             }
             resetPollRetrySuggestion(sessionId);
-            return failText(`No session found for ${sessionId}`);
+            return failText(missingProcessMessage(sessionId));
           }
           if (!scopedSession.backgrounded) {
             return failText(`Session ${sessionId} is not backgrounded.`);
@@ -404,7 +452,7 @@ export function createProcessTool(
             while (
               !scopedSession.exited &&
               !hasPendingPollDelivery(scopedSession) &&
-              scopedSession.pendingOutput.length === 0 &&
+              scopedSession.pendingStdoutChars + scopedSession.pendingStderrChars === 0 &&
               !scopedSession.pendingOutputDropped &&
               performance.now() < deadline
             ) {
@@ -423,7 +471,7 @@ export function createProcessTool(
                 return finishedPollResult(sessionId, scopedSession, pollScope);
               }
               resetPollRetrySuggestion(sessionId);
-              return failText(`No session found for ${sessionId}`);
+              return failText(missingProcessMessage(sessionId));
             }
             const delivery = prepareSessionPoll(scopedSession, pollScope);
             const { output: unreadOutput, outputDropped } = delivery;
@@ -460,7 +508,7 @@ export function createProcessTool(
             assertCurrent();
             const record = scopedSession ?? scopedFinished;
             if (!record) {
-              return failText(`No session found for ${sessionId}`);
+              return failText(missingProcessMessage(sessionId));
             }
             if (scopedSession && !scopedSession.backgrounded) {
               return failText(`Session ${sessionId} is not backgrounded.`);
@@ -472,19 +520,18 @@ export function createProcessTool(
               window.effectiveLimit,
             );
             const runtime = scopedSession ? describeRunningSession(scopedSession) : undefined;
+            const ended = record.exited && record.endedAt !== undefined;
             const text =
               retentionCapNote(record) +
               (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
               defaultTailNote(totalLines, window.usingDefaultTail) +
-              (isConfirmedRequestedStop(record)
-                ? `\n\nProcess stopped by request (${renderExecExitLabel(record)}).`
-                : "");
+              (ended ? `\n\n${finishedSessionText(record)}` : "");
             const output = runtime
               ? text +
                 buildInputWaitHint(runtime.waitingForInput) +
                 (runtime.followUp ? `\n\n${runtime.followUp}` : "")
               : appendExecTimeoutRetryGuidance(text, record.exitReason);
-            return textResult(output, {
+            const result = textResult(output, {
               ...(runtime
                 ? {
                     status: record.exited ? "completed" : "running",
@@ -500,6 +547,12 @@ export function createProcessTool(
               totalChars,
               truncated: record.truncated,
             });
+            // Reading an ended process delivers its result, so retire its completion like poll.
+            return ended
+              ? attachInternalToolResultAcknowledgement(result, () =>
+                  acknowledgeNotifyOnExit(record),
+                )
+              : result;
           });
         }
 
@@ -511,7 +564,11 @@ export function createProcessTool(
             assertCurrent();
             const inputAction = params.action;
             if (!scopedSession) {
-              return failText(`No active session found for ${sessionId}`);
+              return failText(
+                scopedFinished
+                  ? `Session ${sessionId} is already finished.`
+                  : missingProcessMessage(sessionId),
+              );
             }
             const controlError = sessionControlError(scopedSession);
             if (controlError) {
@@ -592,6 +649,7 @@ export function createProcessTool(
                 );
               }
               await scopedSession.clearExitNotification?.();
+              assertSelectedCurrent(scopedSession);
               if (removing) {
                 // Hide the record now; the supervisor still owns process settlement.
                 scopedSession.backgrounded = false;
@@ -600,26 +658,41 @@ export function createProcessTool(
               resetPollRetrySuggestion(sessionId);
               return textResult(
                 removing
-                  ? `Removed session ${sessionId} (termination requested).`
-                  : `Termination requested for session ${sessionId}.`,
-                { status: "completed", name: deriveSessionName(scopedSession.command) },
+                  ? `Removed session ${sessionId} from the process list. Termination was requested but is not yet confirmed.`
+                  : `Termination requested for session ${sessionId}. Use process poll to confirm exit and cleanup before reporting it stopped.`,
+                {
+                  status: "completed",
+                  sessionId,
+                  name: deriveSessionName(scopedSession.command),
+                  cancellationRequested: true,
+                  terminationConfirmed: false,
+                  ...(!removing ? { followUp: { action: "poll", sessionId } } : {}),
+                },
               );
             }
             if (params.action === "kill") {
-              return failText(`No active session found for ${sessionId}`);
+              if (scopedFinished) {
+                return textResult(
+                  appendExecTimeoutRetryGuidance(
+                    `Session ${sessionId} is already finished. ${finishedSessionText(scopedFinished)}`,
+                    scopedFinished.exitReason,
+                  ),
+                  finishedSessionDetails(sessionId, scopedFinished),
+                );
+              }
+              return failText(missingProcessMessage(sessionId));
             }
             if (scopedFinished) {
               resetPollRetrySuggestion(sessionId);
               await scopedFinished.clearExitNotification?.();
+              assertSelectedCurrent(scopedFinished);
               deleteSession(sessionId);
               return textResult(
                 `${params.action === "clear" ? "Cleared" : "Removed"} session ${sessionId}.`,
                 { status: "completed" },
               );
             }
-            return failText(
-              `No ${params.action === "clear" ? "finished session" : "session"} found for ${sessionId}`,
-            );
+            return failText(missingProcessMessage(sessionId));
           });
         }
       }
@@ -627,6 +700,7 @@ export function createProcessTool(
       return failText(`Unknown action ${params.action as string}`);
     },
   };
+  return tool;
 }
 
 export const processTool = createProcessTool();

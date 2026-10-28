@@ -1,3 +1,5 @@
+import { toUSVString } from "node:util";
+import { serialize } from "node:v8";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { assertSessionEntriesCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
 import type {
@@ -6,25 +8,34 @@ import type {
 } from "../config/sessions/session-entry-current.types.js";
 import { assertStateDatabaseReadAllowed } from "../infra/gateway-state-owner.js";
 import { hasSqliteDatabaseSchemaAdmissionForIdentity } from "../infra/sqlite-database-admission.js";
-import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import {
+  SQLITE_WORKER_MAX_MESSAGE_BYTES,
+  type SqliteWorkerCommand,
+  type SqliteWorkerStore,
+} from "../infra/sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { parseStoredJson } from "./plugin-state-error.js";
 import {
-  observationFromCachedPluginState,
-  preparePluginStateEntriesCacheRead,
-  preparePluginStateObservationCacheRead,
-  prepareRuntimeHealthClearCache,
-  readPluginStateEntriesCache,
-  readPluginStateObservationCache,
-} from "./plugin-state-observation-cache.js";
+  canRejectResidentPluginStateClaim,
+  ensurePluginStateNamespace,
+  listResidentPluginStateEntries,
+  livePluginStateRow,
+  PLUGIN_STATE_RESIDENT_NAMESPACES,
+  readCommittedPluginStateNamespace,
+  readPluginStateNamespace,
+} from "./plugin-state-namespace-owner.js";
+import {
+  createPluginStateObservation,
+  pluginStateComparisonScope,
+} from "./plugin-state-observation.js";
 import type {
   PluginStateOperationCommit,
   PluginStateOperationResult,
@@ -37,10 +48,16 @@ import {
   beginPluginStatePublication,
   recordPluginStateReadDependency,
   withPluginStatePublication,
+  type PluginStatePublicationEffect,
   type PluginStatePublicationScope,
 } from "./plugin-state-publication.js";
 import { wrapPluginStateError } from "./plugin-state-store.database.js";
-import { isRetainedPluginStateNamespace } from "./plugin-state-store.kernel.js";
+import {
+  assertPluginStateKey,
+  isRetainedPluginStateNamespace,
+  type PluginStateReadRow,
+} from "./plugin-state-store.kernel.js";
+import { decodePluginStateLookups } from "./plugin-state-store.reads.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
 import {
   pluginStateWorkerOperations,
@@ -54,6 +71,7 @@ import {
   restorePluginStateWorkerFailure,
   type PluginStateWorkerFailure,
 } from "./plugin-state-worker-errors.js";
+import { selectRuntimeHealthClearKeys } from "./runtime-health-records.js";
 
 type Scope = Pick<SqliteWorkerStore<PluginStateWriteOperations>, "execute">;
 type HostAdmission = {
@@ -72,12 +90,7 @@ type ObservationCheck<Key extends keyof PluginStateWorkerOperations> = (
 type ReadDependency = { pluginId: string; namespace: string; keys: readonly string[] };
 
 type PluginStateCommandOrder = { ready: Promise<void> | undefined; finish?: () => void };
-type PluginStateCommand = {
-  [Key in keyof PluginStateWorkerOperations]: {
-    type: Key;
-    input: PluginStateWorkerOperations[Key]["input"];
-  };
-}[keyof PluginStateWorkerOperations];
+type PluginStateCommand = SqliteWorkerCommand<PluginStateWorkerOperations>;
 
 function publicationScope(command: PluginStateCommand): PluginStatePublicationScope | undefined {
   switch (command.type) {
@@ -122,6 +135,7 @@ function prepareCommandOrder(
   switch (command.type) {
     case "pluginState.executeOperation":
       return undefined;
+    case "pluginState.loadNamespace":
     case "pluginState.lookup":
     case "pluginState.lookupMany":
     case "pluginState.entries":
@@ -144,6 +158,26 @@ function prepareCommandOrder(
   }
 }
 
+function publicationEffect(
+  command: PluginStateCommand,
+  scope: PluginStatePublicationScope | undefined,
+): PluginStatePublicationEffect | undefined {
+  if (command.type === "pluginState.observe") {
+    return Object.freeze({ kind: "unchanged" });
+  }
+  // Only exact-key CAS writes have a bounded set of possible values: the
+  // committed row on conflict/rollback, or this immutable serialized postimage.
+  if (command.type === "pluginState.compareUpdate" && scope?.key !== undefined) {
+    if (command.input.action === "keep") {
+      return Object.freeze({ kind: "unchanged" });
+    }
+    if (command.input.ttlMs === undefined) {
+      return Object.freeze({ kind: "postimage", valueJson: command.input.valueJson });
+    }
+  }
+  return undefined;
+}
+
 async function execute<Key extends keyof PluginStateWorkerOperations>(
   { env, assertActive, sessionEntryCurrent, context: capturedContext, signal }: HostAdmission,
   command: { type: Key; input: PluginStateWorkerOperations[Key]["input"] },
@@ -154,6 +188,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     existingOnly?: { missing: () => PluginStateWorkerRequests[Key]["output"] };
     readDependency?: ReadDependency;
     onCommitted?: (facts: unknown) => void;
+    preparedEmptyShortcut?: boolean;
   } = {},
 ): Promise<PluginStateWorkerRequests[Key]["output"]> {
   const { assertCurrent, isObservation, existingOnly, onCommitted } = checks;
@@ -177,9 +212,6 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
   let operationStarted = false;
   let order: PluginStateCommandOrder | undefined;
   let publication: ReturnType<typeof beginPluginStatePublication> | undefined;
-  let installObservation: ReturnType<typeof preparePluginStateObservationCacheRead> | undefined;
-  let installEntries: ReturnType<typeof preparePluginStateEntriesCacheRead> | undefined;
-  let healthClearCache: ReturnType<typeof prepareRuntimeHealthClearCache> | undefined;
   try {
     const context =
       capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
@@ -194,6 +226,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     // SAFETY: Key and input are correlated by every caller; this forms the dispatch union.
     const typedCommand = command as PluginStateCommand;
     const writeScope = publicationScope(typedCommand);
+    const effect = publicationEffect(typedCommand, writeScope);
     order = prepareCommandOrder(context.admission.coordinationKey, typedCommand);
     if (
       order?.finish ||
@@ -204,107 +237,242 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         () => context.admission.identity.key,
         context.assertPublicationCurrent ?? context.admission.assertCurrent,
         writeScope,
+        effect,
       );
     }
     if (order?.ready) {
       await order.ready;
       assertAdmission?.();
     }
+    const readOperation =
+      typedCommand.type === "pluginState.executeOperation" &&
+      typedCommand.input.writeStores.length === 0;
     if (
       !currentEntries &&
-      (typedCommand.type === "pluginState.observe" ||
+      !isArtifactPreservingStateRead("shared", databasePath) &&
+      (readOperation ||
+        typedCommand.type === "pluginState.observe" ||
         typedCommand.type === "pluginState.lookup" ||
         typedCommand.type === "pluginState.lookupMany" ||
         typedCommand.type === "pluginState.entries" ||
+        typedCommand.type === "pluginState.count" ||
+        (typedCommand.type === "pluginState.registerIfAbsent" &&
+          readCommittedPluginStateNamespace(context.admission.identity.key, typedCommand.input)) ||
+        (typedCommand.type === "pluginState.entriesInKeyRange" &&
+          !typedCommand.input.valueFilter) ||
         typedCommand.type === "pluginState.clearRuntimeHealth")
     ) {
-      const identity = context.admission.identity.key;
-      if (typedCommand.type === "pluginState.clearRuntimeHealth") {
-        healthClearCache = prepareRuntimeHealthClearCache(identity, typedCommand.input);
+      const terminalFailure =
+        openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(databasePath);
+      if (terminalFailure) {
+        throw terminalFailure;
       }
-      const keys =
-        typedCommand.type === "pluginState.entries" ||
-        typedCommand.type === "pluginState.clearRuntimeHealth"
-          ? []
-          : typedCommand.type === "pluginState.lookupMany"
-            ? typedCommand.input.keys
-            : [typedCommand.input.key];
-      const cachedEntries =
-        typedCommand.type === "pluginState.entries"
-          ? readPluginStateEntriesCache(identity, typedCommand.input)
-          : undefined;
-      const cached = keys.map((key) =>
-        readPluginStateObservationCache(identity, { ...typedCommand.input, key }),
-      );
-      if (
-        cached.every((entry) => entry !== undefined) &&
-        (typedCommand.type !== "pluginState.entries" || cachedEntries !== undefined) &&
-        (typedCommand.type !== "pluginState.clearRuntimeHealth" || healthClearCache?.cleared)
-      ) {
-        const terminalFailure =
-          openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(databasePath);
-        if (terminalFailure) {
-          throw terminalFailure;
-        }
-        operationStarted = true;
-        context.admission.assertCurrent();
-        assertStateDatabaseReadAllowed(databasePath);
-        assertAdmission?.();
-        // Quarantine revokes these admitted facts; the worker owns refusal and recovery.
-        if (hasSqliteDatabaseSchemaAdmissionForIdentity(context.admission.identity)) {
-          if (typedCommand.type === "pluginState.clearRuntimeHealth") {
-            // SAFETY: Only a successfully acknowledged clear has this void result.
-            return undefined as PluginStateWorkerRequests[Key]["output"];
-          }
-          if (typedCommand.type === "pluginState.entries") {
-            // SAFETY: Only the entries command reaches this namespace result branch.
-            return cachedEntries as PluginStateWorkerRequests[Key]["output"];
-          }
-          if (typedCommand.type === "pluginState.observe") {
-            const observation = observationFromCachedPluginState(
-              identity,
-              databasePath,
-              typedCommand.input,
-              cached[0]!,
-            );
-            const cachedObservation = {
-              ...observation,
-              row: cached[0]!.row,
-            };
-            // SAFETY: This branch handles only the observe command's observation output.
-            return cachedObservation as PluginStateWorkerRequests[Key]["output"];
-          }
-          const values = cached.map(({ row }): Result<unknown, PluginStateWorkerFailure> => {
+      operationStarted = true;
+      context.admission.assertCurrent();
+      assertStateDatabaseReadAllowed(databasePath);
+      operationStarted = false;
+      const identity = context.admission.identity.key;
+      const scopes =
+        typedCommand.type === "pluginState.executeOperation"
+          ? [
+              ...new Map(
+                typedCommand.input.stores.map((scope) => [
+                  JSON.stringify([scope.pluginId, scope.namespace]),
+                  scope,
+                ]),
+              ).values(),
+            ]
+          : [typedCommand.input];
+      if (scopes.length <= PLUGIN_STATE_RESIDENT_NAMESPACES) {
+        for (const scope of scopes) {
+          const loading = ensurePluginStateNamespace(identity, scope, async (maxBytes) => {
+            const loader = pluginStateWorkerOperations["pluginState.loadNamespace"];
+            const { runOpenClawStateWorkerOperation } =
+              await import("../state/openclaw-state-worker-store.js");
             try {
-              return ok<unknown, PluginStateWorkerFailure>(
-                row ? parseStoredJson(row.value_json, "lookup", databasePath) : undefined,
+              const result = await runOpenClawStateWorkerOperation(
+                context,
+                (worker) =>
+                  worker.execute({
+                    type: "pluginState.loadNamespace",
+                    input: { ...scope, maxBytes },
+                  }),
+                { signal, existingOnly: true },
               );
+              if (result && !result.ok) {
+                throw restorePluginStateWorkerFailure(result.error);
+              }
+              return result?.value;
             } catch (error) {
-              if (error instanceof PluginStateStoreError && error.code === "PLUGIN_STATE_CORRUPT") {
-                return err<unknown, PluginStateWorkerFailure>(
-                  capturePluginStateWorkerFailure(error),
+              throw wrapPluginStateError(
+                error,
+                loader.operation,
+                "PLUGIN_STATE_OPEN_FAILED",
+                "Failed to open the plugin state database.",
+                databasePath,
+              );
+            }
+          });
+          if (loading) {
+            try {
+              await loading;
+            } catch (error) {
+              // A shared load belongs to each caller's public operation, not its first reader.
+              if (
+                error instanceof PluginStateStoreError &&
+                (error.code === "PLUGIN_STATE_READ_FAILED" ||
+                  error.code === "PLUGIN_STATE_OPEN_FAILED")
+              ) {
+                throw new PluginStateStoreError(
+                  error.code === "PLUGIN_STATE_READ_FAILED" ? description.message : error.message,
+                  {
+                    code: error.code === "PLUGIN_STATE_READ_FAILED" ? description.code : error.code,
+                    operation: description.operation,
+                    path: error.path,
+                    cause: error.cause,
+                    owner: error.owner,
+                  },
                 );
               }
               throw error;
             }
-          });
-          if (typedCommand.type === "pluginState.lookupMany") {
-            // SAFETY: Each slot preserves lookupMany's independent decoding result.
-            return values as PluginStateWorkerRequests[Key]["output"];
+            operationStarted = true;
+            assertAdmission?.();
           }
-          const value = values[0]!;
-          if (!value.ok) {
-            throw restorePluginStateWorkerFailure(value.error);
-          }
-          // SAFETY: This branch handles only the lookup command's decoded value.
-          return value.value as PluginStateWorkerRequests[Key]["output"];
         }
-        operationStarted = false;
-      }
-      if (typedCommand.type === "pluginState.observe") {
-        installObservation = preparePluginStateObservationCacheRead(identity, typedCommand.input);
-      } else if (typedCommand.type === "pluginState.entries") {
-        installEntries = preparePluginStateEntriesCacheRead(identity, typedCommand.input);
+        // Capture all namespaces without yielding. A fallback never mixes resident and SQL views.
+        const rows = scopes.map((scope) =>
+          typedCommand.type === "pluginState.clearRuntimeHealth" ||
+          typedCommand.type === "pluginState.registerIfAbsent"
+            ? readCommittedPluginStateNamespace(identity, scope)
+            : readPluginStateNamespace(identity, scope),
+        );
+        if (
+          rows.every((view) => view !== undefined) &&
+          hasSqliteDatabaseSchemaAdmissionForIdentity(context.admission.identity)
+        ) {
+          operationStarted = true;
+          context.admission.assertCurrent();
+          assertStateDatabaseReadAllowed(databasePath);
+          assertAdmission?.();
+          const view = rows[0]!;
+          const postgres = context.databaseEngineSelection?.effectiveEngines.state === "postgres";
+          switch (typedCommand.type) {
+            case "pluginState.registerIfAbsent":
+              if (
+                canRejectResidentPluginStateClaim(view, typedCommand.input, databasePath, postgres)
+              ) {
+                // SAFETY: Earlier writes settled above; an occupied claim returns false unchanged.
+                return false as PluginStateWorkerRequests[Key]["output"];
+              }
+              break;
+            case "pluginState.executeOperation": {
+              const snapshots: Record<string, readonly PluginStateReadRow[]> = {};
+              for (const [index, scope] of scopes.entries()) {
+                snapshots[JSON.stringify([scope.pluginId, scope.namespace])] = [
+                  ...rows[index]!.values(),
+                ];
+              }
+              const input = { ...typedCommand.input, namespaceSnapshots: snapshots };
+              if (serialize(input).byteLength <= SQLITE_WORKER_MAX_MESSAGE_BYTES) {
+                typedCommand.input = input;
+                const shortcut = input.ifEmpty;
+                if (shortcut && checks.preparedEmptyShortcut) {
+                  const scope = input.stores[shortcut.store]!;
+                  const empty = snapshots[JSON.stringify([scope.pluginId, scope.namespace])]!.every(
+                    (row) => !livePluginStateRow(row),
+                  );
+                  if (empty) {
+                    const result = {
+                      value: structuredClone(shortcut.value),
+                      validUntil: undefined,
+                      emptyShortcut: true,
+                    };
+                    // SAFETY: A prepared read-only operation owns this shortcut result.
+                    return result as PluginStateWorkerRequests[Key]["output"];
+                  }
+                }
+              }
+              break;
+            }
+            case "pluginState.clearRuntimeHealth":
+              if (
+                selectRuntimeHealthClearKeys(
+                  listResidentPluginStateEntries(view, databasePath),
+                  typedCommand.input.processId,
+                  typedCommand.input.selection,
+                ).length === 0
+              ) {
+                // SAFETY: The resident view proves this selected clear has no effect.
+                return undefined as PluginStateWorkerRequests[Key]["output"];
+              }
+              break;
+            case "pluginState.entries":
+            case "pluginState.entriesInKeyRange": {
+              const range =
+                typedCommand.type === "pluginState.entriesInKeyRange"
+                  ? typedCommand.input
+                  : undefined;
+              if (range) {
+                assertPluginStateKey(postgres, range.keyStartInclusive, "entries");
+                assertPluginStateKey(postgres, range.keyEndExclusive, "entries");
+              }
+              const entries = listResidentPluginStateEntries(view, databasePath, range);
+              // SAFETY: Both enumeration commands return the same entry envelope.
+              return entries as PluginStateWorkerRequests[Key]["output"];
+            }
+            case "pluginState.count": {
+              const now = Date.now();
+              const count = [...view.values()].filter((row) => livePluginStateRow(row, now)).length;
+              // SAFETY: The count command returns the live row count without JSON decoding.
+              return count as PluginStateWorkerRequests[Key]["output"];
+            }
+            case "pluginState.observe": {
+              assertPluginStateKey(postgres, typedCommand.input.key, "lookup");
+              const row = livePluginStateRow(view.get(toUSVString(typedCommand.input.key)));
+              const observation = {
+                ...createPluginStateObservation(
+                  databasePath,
+                  pluginStateComparisonScope(identity, typedCommand.input),
+                  row,
+                  "lookup",
+                ),
+                row,
+              };
+              // SAFETY: The observe command returns this private raw-row envelope.
+              return observation as PluginStateWorkerRequests[Key]["output"];
+            }
+            case "pluginState.lookup":
+            case "pluginState.lookupMany": {
+              const keys =
+                typedCommand.type === "pluginState.lookupMany"
+                  ? typedCommand.input.keys
+                  : [typedCommand.input.key];
+              for (const key of keys) {
+                assertPluginStateKey(postgres, key, "lookup");
+              }
+              const now = Date.now();
+              const values = decodePluginStateLookups(
+                keys,
+                (key) => livePluginStateRow(view.get(key), now)?.value_json,
+                databasePath,
+              );
+              if (typedCommand.type === "pluginState.lookupMany") {
+                const results = values.map((value) =>
+                  value.ok ? value : err(capturePluginStateWorkerFailure(value.error)),
+                );
+                // SAFETY: Each slot preserves the lookupMany wire error/result contract.
+                return results as PluginStateWorkerRequests[Key]["output"];
+              }
+              const value = values[0]!;
+              if (!value.ok) {
+                throw value.error;
+              }
+              // SAFETY: The remaining command is a single decoded lookup.
+              return value.value as PluginStateWorkerRequests[Key]["output"];
+            }
+          }
+        }
       }
     }
     if (isPluginStateReadCommand(typedCommand)) {
@@ -330,12 +498,6 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       if (!reply.result.ok) {
         throw restorePluginStateWorkerFailure(reply.result.error);
       }
-      if (typedCommand.type === "pluginState.entries") {
-        installEntries?.(
-          // SAFETY: The matching command and reply identify the namespace entry list.
-          reply.result.value as PluginStateWorkerRequests["pluginState.entries"]["output"],
-        );
-      }
       // SAFETY: The reader preserves the command's typed result, as the writer transport does.
       return reply.result.value as PluginStateWorkerRequests[Key]["output"];
     }
@@ -360,13 +522,6 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       });
       if (!result.ok) {
         throw restorePluginStateWorkerFailure(result.error);
-      }
-      healthClearCache?.complete();
-      if (command.type === "pluginState.observe") {
-        const observation =
-          // SAFETY: The command discriminant fixes this worker result's private row envelope.
-          result.value as PluginStateWorkerRequests["pluginState.observe"]["output"];
-        installObservation?.(observation.row);
       }
       // SAFETY: Dispatch preserves the caller's command/result pairing across the writer transport.
       return result.value as PluginStateWorkerRequests[Key]["output"];
@@ -411,7 +566,13 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     const result = await runOpenClawStateWorkerOperation(context, operation, {
       signal,
       assertCurrent: assertAdmission,
-      createAdmission: withPluginStatePublication(baseAdmission, context, onCommitted, writeScope),
+      createAdmission: withPluginStatePublication(
+        baseAdmission,
+        context,
+        onCommitted,
+        writeScope,
+        effect,
+      ),
       existingOnly: existingOnly !== undefined,
     });
     if (result === undefined && existingOnly) {
@@ -442,6 +603,7 @@ export function executePluginStateOperationInWorker(
   params: Input<"pluginState.executeOperation">,
   options: {
     missing?: () => PluginStateOperationResult;
+    preparedEmptyShortcut?: boolean;
     onCommitted: (facts: PluginStateOperationCommit["pluginStateOperation"]) => void;
   },
 ): Promise<PluginStateOperationResult> {
@@ -458,6 +620,7 @@ export function executePluginStateOperationInWorker(
       : undefined,
     {
       assertCurrent,
+      preparedEmptyShortcut: options.preparedEmptyShortcut,
       onCommitted(facts) {
         // SAFETY: This admission belongs to the host-minted plugin state command and receipt shape.
         options.onCommitted((facts as PluginStateOperationCommit).pluginStateOperation);

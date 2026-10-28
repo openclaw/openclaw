@@ -41,6 +41,7 @@ let getManagerImpl:
   | ((params: MemoryManagerParams) => Promise<{
       manager?: unknown;
       error?: string;
+      code?: string;
       debug?: MemoryManagerDebug;
     }>)
   | undefined;

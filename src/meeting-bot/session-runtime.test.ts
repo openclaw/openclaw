@@ -13,9 +13,13 @@ import {
 } from "../state/openclaw-state-db.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { loadBrowserMeetingPlugins } from "./browser-plugin.test-support.js";
+import { TEST_MEETING_PLATFORM_METADATA } from "./observation-provenance.test-support.js";
 import { createMeetingSession } from "./session-factory.js";
 import {
   createTestRuntime,
+  captionSnapshot,
+  releaseTab,
+  testBrowser,
   type TestSession,
   type TestJoinContext,
 } from "./session-runtime.test-support.js";
@@ -55,14 +59,6 @@ const { zoomMeetingsPlugin, teamsMeetingsPlugin } = await loadBrowserMeetingPlug
 
 const room = { url: "https://meeting.example/room", agentId: "main" };
 const notes = { url: "https://meeting.example/notes", agentId: "notes-agent" };
-const testBrowser = (
-  targetId: string,
-  overrides: Partial<NonNullable<TestSession["browser"]>> = {},
-) => ({
-  launched: true,
-  tab: { targetId, openedByPlugin: true },
-  ...overrides,
-});
 
 function createNotesRuntime(overrides: Partial<Parameters<typeof createTestRuntime>[0]>) {
   return createTestRuntime({
@@ -87,13 +83,6 @@ function joinBrowser(
     }
     return {};
   });
-}
-
-function releaseTab(session: TestSession) {
-  if (session.browser) {
-    session.browser.tab = undefined;
-  }
-  return true;
 }
 
 function transcriptSource(
@@ -122,17 +111,7 @@ describe("createMeetingSession", () => {
   it("preserves bidi realtime session fields", () => {
     const session = createMeetingSession({
       platform: {
-        id: "test-meeting",
-        displayName: "Test Meeting",
-        logScope: "[test-meeting]",
-        agentConsult: {
-          surface: "a test meeting",
-          userLabel: "Participant",
-          assistantLabel: "Agent",
-          questionSourceLabel: "participant",
-          workingResponseLabel: "participant",
-          extraSystemPrompt: "Answer briefly.",
-        },
+        ...TEST_MEETING_PLATFORM_METADATA,
         session: {
           idPrefix: "test_meeting",
           participantIdentity: (transport) => `Test participant via ${transport}`,
@@ -260,10 +239,7 @@ describe("MeetingSessionRuntime durable transcripts", () => {
       speaker: "Blake",
       text: "Action: follow up with the docs.",
     };
-    const snapshots = [
-      { droppedLines: 0, epoch: "page-1", lines: [first] },
-      { droppedLines: 0, epoch: "page-1", lines: [first, second] },
-    ];
+    const snapshots = [captionSnapshot([first]), captionSnapshot([first, second])];
     const { runtime } = createNotesRuntime({
       captureTranscript: async () => snapshots.shift(),
       durableTranscripts: { stateDir },
@@ -334,13 +310,10 @@ describe("MeetingSessionRuntime durable transcripts", () => {
 
   it("does not let subscriber delivery failure block meeting leave", async () => {
     const stateDir = tempDirs.make("openclaw-meeting-notes-");
-    const empty = { droppedLines: 0, epoch: "page-1", lines: [] };
-    const final = {
-      droppedLines: 0,
-      epoch: "page-1",
-      lines: [{ speaker: "Avery", text: "Final decision" }],
-    };
-    const snapshots = [empty, final];
+    const snapshots = [
+      captionSnapshot([]),
+      captionSnapshot([{ speaker: "Avery", text: "Final decision" }]),
+    ];
     const releaseBrowserTab = vi.fn(async () => true);
     const { runtime } = createNotesRuntime({
       captureTranscript: async () => snapshots.shift(),

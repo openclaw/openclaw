@@ -1,10 +1,10 @@
 import type { ReasoningStreamPayload } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
+import type { SessionDeliveryState } from "../../../config/sessions/types.js";
 import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { ExplicitSkillSelection } from "../../../skills/types.js";
-import type { ModelFallbackAvailability } from "../../agent-scope.js";
 import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.types.js";
 import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
@@ -30,20 +30,17 @@ import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
+import type { ModelFallbackAvailability } from "../../model-fallback.types.js";
 import type { ReplyDeliveryObserver } from "../../reply-completion.js";
+import type { ResolvedToolPromptFinalizer } from "../../resolved-tool-prompt.types.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { PromptMode } from "../../system-prompt.types.js";
-import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
+import type { EmbeddedAgentExecutionPhaseInfo } from "../execution-phase.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 export type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
-
-export type ResolvedToolPromptFinalizer = (params: {
-  prompt: string;
-  messageToolAvailable: boolean;
-}) => string;
 
 export type RunEmbeddedAgentParams = Pick<
   QueuedAgentRunParams,
@@ -53,6 +50,7 @@ export type RunEmbeddedAgentParams = Pick<
   | "memberRoleIds"
   | "permissionMode"
   | "sessionRoot"
+  | "blindPrompt"
   | "modelSelectionLocked"
   | "authProfileIdSource"
   | "verboseLevel"
@@ -80,7 +78,7 @@ export type RunEmbeddedAgentParams = Pick<
   sandboxSessionKey?: string;
   /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */
   sandboxAgentId?: string;
-  /** What initiated this agent run: "user", "heartbeat", "cron", "memory", "overflow", or "manual". */
+  /** The user, event, automation, or maintenance owner that initiated this run. */
   trigger?: EmbeddedRunTrigger;
   /** Store-private runtime authority forwarded only by the cron execution owner. */
   scheduledRuntimeAuthority?: CronRuntimeAuthority;
@@ -131,12 +129,6 @@ export type RunEmbeddedAgentParams = Pick<
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
   forceMessageTool?: boolean;
-  /** Include the heartbeat response tool for structured heartbeat outcomes. */
-  enableHeartbeatTool?: boolean;
-  /** Keep the heartbeat response tool available even when a narrow profile would omit it. */
-  forceHeartbeatTool?: boolean;
-  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
-  continuesConversation?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   /** @deprecated Use sessionTarget plus sessionId/sessionKey/agentId for runtime identity. */
@@ -189,6 +181,8 @@ export type RunEmbeddedAgentParams = Pick<
   cronCreatorAuthorityUnavailableReason?: "queued-local-operator";
   /** Canonical persisted exec policy for this session. */
   execSession?: ExecSessionDefaults;
+  /** Session-owned presentation facts; never current-turn delivery or tool authority. */
+  sessionPromptDelivery?: SessionDeliveryState;
   execOverrides?: Pick<
     ExecToolDefaults,
     | "host"
@@ -208,17 +202,7 @@ export type RunEmbeddedAgentParams = Pick<
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string; backend?: string }) => unknown;
-  onExecutionPhase?: (info: {
-    phase: EmbeddedAgentExecutionPhase;
-    provider?: string;
-    model?: string;
-    backend?: string;
-    source?: string;
-    tool?: string;
-    toolCallId?: string;
-    itemId?: string;
-    firstModelCallStarted?: boolean;
-  }) => void;
+  onExecutionPhase?: (info: EmbeddedAgentExecutionPhaseInfo) => void;
   onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
   onRunProgress?: (info: {
     reason: string;
@@ -311,11 +295,10 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "contextWindow"
   | "promptMode"
   | "forceMessageTool"
-  | "enableHeartbeatTool"
-  | "forceHeartbeatTool"
-  | "continuesConversation"
   | "allowGatewaySubagentBinding"
   | "extraSystemPrompt"
+  | "extraSystemPromptTurnContext"
+  | "sessionPromptDelivery"
   | "gitCoauthorPrompt"
   | "silentReplyPromptMode"
   | "ownerNumbers"

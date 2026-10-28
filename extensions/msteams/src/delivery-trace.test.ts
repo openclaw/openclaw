@@ -130,9 +130,7 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
       });
       return { id };
     },
-    sendActivities: reject("sendActivities"),
     updateActivity: reject("updateActivity"),
-    deleteActivity: reject("deleteActivity"),
     stream,
   };
   const { replyOptions, dispatcherOptions, delivery } = createMSTeamsReplyDispatcher({

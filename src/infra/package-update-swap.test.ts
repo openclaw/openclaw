@@ -5,7 +5,13 @@ import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import {
+  captureSwap,
+  expectInstallation,
+  expectNoCalls,
+  expectVersion,
+  readText,
+} from "./package-update-swap.assertions.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import {
   createPackageSwapFixture,
@@ -18,33 +24,6 @@ beforeEach(() => {
   base = dirs.make("package-swap-");
 });
 afterEach(() => vi.restoreAllMocks());
-
-const readText = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
-
-async function expectVersion(root: string, version: string) {
-  expect(await readText(root, "package.json")).toContain(`"version":"${version}"`);
-}
-
-async function captureSwap(params: Parameters<typeof swapStagedPackageInstall>[0]) {
-  let transaction: PackageUpdateTransaction | undefined;
-  const result = await swapStagedPackageInstall({
-    ...params,
-    onTransaction: async (value) => {
-      transaction = value;
-      await params.onTransaction?.(value);
-    },
-  });
-  if (!transaction) {
-    throw new Error("Missing retained transaction");
-  }
-  return { result, transaction };
-}
-
-function expectNoCalls(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
 
 const inode = async (entry: string) => (await fs.lstat(entry)).ino;
 const inodes = (entries: string[]) => Promise.all(entries.map(inode));
@@ -278,8 +257,7 @@ describe("launcher backup capture", () => {
     expectNoCalls(beforeActivate, onLiveMutation, onTransaction);
     expect(result.step.stderrTail).not.toContain("Installation recovery is unverified");
     expect(await inodes([packageRoot, launcher, secondLauncher])).toEqual(originals);
-    await expectVersion(packageRoot, "1.0.0");
-    await expect(readText(launcher)).resolves.toBe("old launcher\n");
+    await expectInstallation(packageRoot, launcher);
     await expect(readText(secondLauncher)).resolves.toBe("old command launcher\n");
     const remaining = await fs.readdir(globalRoot);
     expect(remaining).toHaveLength(2);

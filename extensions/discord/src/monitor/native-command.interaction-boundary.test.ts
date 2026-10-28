@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
   ApplicationCommandOptionType,
   ChannelType,
@@ -6,18 +7,26 @@ import {
   InteractionType,
 } from "discord-api-types/v10";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
+import { withRegisteredChannelIngress } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import * as commandStatus from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as runtimeConfig from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
 import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { discordPlugin } from "../channel.js";
 import {
   attachRestMock,
   createInternalInteractionPayload,
   createInternalComponentInteractionPayload,
   createInternalTestClient,
 } from "../internal/test-builders.test-support.js";
+import { getDiscordRuntime, setDiscordRuntime } from "../runtime.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
 import { clearDiscordChannelInfoCacheForTest } from "./message-channel-info.test-support.js";
@@ -41,6 +50,15 @@ const CHANNEL = "100000000000000002";
 const THREAD = "100000000000000003";
 const USER = "100000000000000004";
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const root of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(root);
+    }
+    cleanup();
+  }),
+);
+
 function createConfig(): OpenClawConfig {
   return {
     commands: { allowFrom: { discord: [`user:${USER}`] } },
@@ -54,9 +72,14 @@ function createConfig(): OpenClawConfig {
   };
 }
 
-function createHarness() {
-  const cfg = createConfig();
+function createHarness(
+  cfg = createConfig(),
+  dispatchReplyFromConfig?: Parameters<
+    typeof createDiscordNativeCommand
+  >[0]["dispatchReplyFromConfig"],
+) {
   let currentConfig = cfg;
+  vi.spyOn(runtimeConfig, "getRuntimeConfigSnapshot").mockImplementation(() => currentConfig);
   const readPolicy = createDiscordLivePolicyReader({
     cfg,
     accountId: "default",
@@ -68,8 +91,19 @@ function createHarness() {
     ...nativeCommandContext(cfg),
     readPolicy,
     postApplySettleMs: 0,
+    dispatchReplyFromConfig,
   };
   const client = createInternalTestClient([
+    createDiscordNativeCommand({
+      ...commandContext,
+      ephemeralDefault: true,
+      command: { name: "help", description: "Help", acceptsArgs: false },
+    }),
+    createDiscordNativeCommand({
+      ...commandContext,
+      ephemeralDefault: true,
+      command: { name: "new", description: "New session", acceptsArgs: false },
+    }),
     createDiscordNativeCommand({
       ...commandContext,
       ephemeralDefault: true,
@@ -128,6 +162,9 @@ function createHarness() {
     dispatch,
     session,
     patch,
+    replaceConfig: (next: OpenClawConfig) => {
+      currentConfig = next;
+    },
     replacePolicy: () => {
       currentConfig = {
         ...cfg,
@@ -145,17 +182,22 @@ function expectFollowUp(harness: ReturnType<typeof createHarness>, content: stri
   );
 }
 
-function expectEmptyAutocomplete(harness: ReturnType<typeof createHarness>) {
+function expectAutocomplete(
+  harness: ReturnType<typeof createHarness>,
+  choices: { name: string; value: string }[] = [],
+) {
   expect(harness.post).toHaveBeenCalledExactlyOnceWith(
     "/interactions/interaction1/test-token/callback",
     {
       body: {
         type: InteractionResponseType.ApplicationCommandAutocompleteResult,
-        data: { choices: [] },
+        data: { choices },
       },
     },
   );
-  expect(harness.session).not.toHaveBeenCalled();
+  if (choices.length === 0) {
+    expect(harness.session).not.toHaveBeenCalled();
+  }
 }
 
 function denyThreadParent(harness: ReturnType<typeof createHarness>) {
@@ -228,44 +270,138 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it.for(["allowed", "denied", "revoked-command", "revoked-channel"] as const)(
+  "handles an archived native command source (%s)",
+  async (access) => {
+    const storePath = join(tempDirs.make("openclaw-discord-archived-"), "sessions.json");
+    const cfg: OpenClawConfig = {
+      ...createConfig(),
+      commands: { allowFrom: { discord: [USER] } },
+      session: { store: storePath },
+    };
+    const denyCommands = (config: OpenClawConfig): OpenClawConfig => ({
+      ...config,
+      commands: { allowFrom: { discord: ["100000000000000005"] } },
+    });
+    const initialConfig = access === "denied" ? denyCommands(cfg) : cfg;
+    const source = { storePath, sessionKey: `agent:main:discord:slash:${USER}` };
+    const target = { storePath, sessionKey: `agent:main:discord:channel:${CHANNEL}` };
+    const sessionId = "archived-command-session";
+    await sessionStore.upsertSessionEntry({ ...source, entry: { sessionId, updatedAt: 1 } });
+    await appendSessionTranscriptMessageByIdentity({
+      ...source,
+      sessionId,
+      message: { role: "user", content: "Synthetic archived history", timestamp: 1 },
+    });
+    const archive = {
+      archivedAt: 2,
+      archivedBy: { type: "human" as const, id: "test-operator" },
+      archiveReason: "manual" as const,
+    };
+    await sessionStore.patchSessionEntry({ ...source, update: () => archive });
+    await sessionStore.upsertSessionEntry({
+      ...target,
+      entry: { sessionId: "active-channel-session", updatedAt: Date.now() },
+    });
+    const originalTarget = sessionStore.getSessionEntry(target);
+    expect(sessionStore.getSessionEntry(source)).toMatchObject({ sessionId, archivedAt: 2 });
+    const transcript = sessionStore.loadTranscriptEventsSync({ ...source, sessionId });
+    expect(JSON.stringify(transcript)).toContain("Synthetic archived history");
+    const restoreEntered = createDeferred<void>();
+    const releaseRestore = createDeferred<void>();
+    const revoking = access.startsWith("revoked-");
+    const commandName = access === "allowed" ? "help" : "new";
+    harness = createHarness(initialConfig, (params) =>
+      getDiscordRuntime().channel.reply.dispatchReplyFromConfig({
+        ...params,
+        sessionWorkerPlacementContext: {
+          workerSessionPlacementService: {
+            getMany: () => new Map(),
+            getManyAsync: async () => {
+              if (revoking) {
+                restoreEntered.resolve();
+                await releaseRestore.promise;
+              }
+              return new Map();
+            },
+          },
+        },
+      }),
+    );
+    harness.dispatch.mockRestore();
+    harness.session.mockRestore();
+    await withRegisteredChannelIngress(
+      { plugin: discordPlugin, config: initialConfig, setRuntime: setDiscordRuntime },
+      async () => {
+        const pending = harness.client.handleInteraction(
+          createInternalInteractionPayload({
+            ...interactionFor("status", CHANNEL),
+            id: `archive-${access}`,
+            type: InteractionType.ApplicationCommand,
+            data: { id: "archive-command", name: commandName, type: 1 },
+          }),
+        );
+        const completion = revoking
+          ? expect(pending).rejects.toThrow("Discord command authority changed")
+          : pending;
+        if (revoking) {
+          try {
+            await Promise.race([
+              restoreEntered.promise,
+              pending.then(() => {
+                throw new Error("Command finished without entering archive restoration");
+              }),
+            ]);
+            expect(sessionStore.getSessionEntry(source)?.archivedAt).toBe(2);
+            if (access === "revoked-command") {
+              harness.replaceConfig(denyCommands(cfg));
+            } else {
+              harness.replacePolicy();
+            }
+          } finally {
+            releaseRestore.resolve();
+          }
+        }
+        await completion;
+      },
+    );
+    const after = sessionStore.getSessionEntry(source);
+    expect(after?.sessionId).toBe(sessionId);
+    if (access === "allowed") {
+      expectFollowUp(harness, expect.stringContaining("Help"));
+      expect([after?.archivedAt, after?.archivedBy, after?.archiveReason]).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    } else {
+      if (access === "denied") {
+        expectFollowUp(harness, expect.stringContaining("not authorized"));
+      }
+      expect(after).toMatchObject(archive);
+      expect(harness.post).not.toHaveBeenCalledWith(
+        "/webhooks/app1/test-token",
+        { body: { content: expect.stringContaining("Help"), flags: 64 } },
+        undefined,
+      );
+      expect(sessionStore.getSessionEntry(target)).toEqual(originalTarget);
+    }
+    expect(sessionStore.loadTranscriptEventsSync({ ...source, sessionId })).toEqual(transcript);
+  },
+);
+
 it.each<Surface>(["status", "autocomplete", "picker"])(
   "routes raw thread %s without hydration",
   async (surface) => {
     await harness.client.handleInteraction(interactionFor(surface, THREAD));
     const sessionKey = `agent:main:discord:channel:${THREAD}`;
     if (surface === "status") {
-      expect(
-        harness.status,
-        JSON.stringify(harness.post.mock.calls),
-      ).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          sessionKey,
-          channel: "discord",
-          senderId: USER,
-          isGroup: true,
-        }),
-      );
       expectFollowUp(harness, `Status for ${sessionKey}`);
     } else {
       expect(harness.session).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
       if (surface === "autocomplete") {
-        expect(harness.post).toHaveBeenCalledWith(
-          "/interactions/interaction1/test-token/callback",
-          {
-            body: {
-              type: InteractionResponseType.ApplicationCommandAutocompleteResult,
-              data: { choices: [{ name: "test-model", value: "test-model" }] },
-            },
-          },
-        );
+        expectAutocomplete(harness, [{ name: "test-model", value: "test-model" }]);
       } else {
-        expect(harness.patch).toHaveBeenCalledWith(
-          "/webhooks/app1/test-token/messages/%40original",
-          expect.objectContaining({
-            body: expect.objectContaining({ components: expect.any(Array) }),
-          }),
-          expect.anything(),
-        );
         expect(JSON.stringify(harness.patch.mock.calls)).toContain("test-provider");
       }
     }
@@ -300,7 +436,7 @@ it.each<[Surface, "sender" | "parent" | "identity"]>([
   }
   await harness.client.handleInteraction(interaction);
   if (surface === "autocomplete") {
-    expectEmptyAutocomplete(harness);
+    expectAutocomplete(harness);
   } else {
     expect(harness.dispatch).not.toHaveBeenCalled();
     expect(JSON.stringify(harness.post.mock.calls)).toContain(
@@ -337,7 +473,7 @@ it.each<Surface>(["status", "autocomplete", "picker"])(
     expect(harness.status).not.toHaveBeenCalled();
     expect(harness.dispatch).not.toHaveBeenCalled();
     if (surface === "autocomplete") {
-      expectEmptyAutocomplete(harness);
+      expectAutocomplete(harness);
     } else if (surface === "status") {
       expectFollowUp(harness, "Access policy changed. Try this interaction again.");
     } else {

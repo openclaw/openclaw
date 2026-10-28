@@ -525,6 +525,9 @@ extension OpenClawChatViewModel {
                // A retry without its sequence cannot be ordered against what is already shown.
                chat.retry == nil || chat.seq != nil
             {
+                if matchesCurrentSession, self.pendingRuns.isEmpty {
+                    self.adoptRun(runId: runID, bufferedText: "")
+                }
                 self.reconcileRunStartup(ChatRunStartup(runID: runID, state: state, seq: chat.seq))
             }
             return nil

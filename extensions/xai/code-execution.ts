@@ -5,16 +5,22 @@ import {
   buildMissingCodeExecutionApiKeyPayload,
   createCodeExecutionToolDefinition,
 } from "./code-execution-tool-shared.js";
+import { XAI_DEFAULT_MODEL_ID } from "./model-definitions.js";
 import {
   readPluginCodeExecutionConfig,
   resolveCodeExecutionEnabled,
 } from "./src/code-execution-config.js";
 import {
-  requestXaiCodeExecution,
-  resolveXaiCodeExecutionMaxTurns,
-  resolveXaiCodeExecutionModel,
-} from "./src/code-execution-shared.js";
+  requestXaiResponsesTool,
+  resolveXaiToolDefaultReasoningEffort,
+  requireXaiResponseTextAndCitations,
+  XAI_RESPONSES_ENDPOINT,
+} from "./src/responses-tool-shared.js";
 import { resolveXaiToolApiKeyWithAuth, type XaiToolAuthContext } from "./src/tool-auth-shared.js";
+import {
+  resolveNormalizedXaiToolModel,
+  resolvePositiveIntegerToolConfig,
+} from "./src/tool-config-shared.js";
 
 export function createCodeExecutionTool(options?: {
   config?: OpenClawConfig;
@@ -48,21 +54,51 @@ export function createCodeExecutionTool(options?: {
       }
 
       const task = readStringParam(args, "task", { required: true });
-      const model = resolveXaiCodeExecutionModel(codeExecutionConfig);
-      const maxTurns = resolveXaiCodeExecutionMaxTurns(codeExecutionConfig);
+      const model = resolveNormalizedXaiToolModel({
+        config: codeExecutionConfig,
+        defaultModel: XAI_DEFAULT_MODEL_ID,
+      });
+      const maxTurns = resolvePositiveIntegerToolConfig(codeExecutionConfig, "maxTurns");
       const timeoutSeconds =
         typeof codeExecutionConfig?.timeoutSeconds === "number" &&
         Number.isFinite(codeExecutionConfig.timeoutSeconds)
           ? codeExecutionConfig.timeoutSeconds
           : 30;
       const startedAt = Date.now();
-      const result = await requestXaiCodeExecution({
-        apiKey,
-        model,
-        timeoutSeconds,
-        maxTurns,
-        task,
-      });
+      const result = await requestXaiResponsesTool(
+        {
+          apiKey,
+          model,
+          timeoutSeconds,
+          maxTurns,
+          endpoint: XAI_RESPONSES_ENDPOINT,
+          inputText: task,
+          tools: [{ type: "code_interpreter" }],
+          reasoningEffort: resolveXaiToolDefaultReasoningEffort(model, "low"),
+          errorLabel: "xAI code execution failed",
+        },
+        (data) => {
+          const { content, citations } = requireXaiResponseTextAndCitations(
+            data,
+            "xAI code execution failed",
+          );
+          const outputTypes = Array.isArray(data.output)
+            ? [
+                ...new Set(
+                  data.output
+                    .map((entry) => entry?.type)
+                    .filter((value): value is string => Boolean(value)),
+                ),
+              ]
+            : [];
+          return {
+            content,
+            citations,
+            usedCodeExecution: outputTypes.includes("code_interpreter_call"),
+            outputTypes,
+          };
+        },
+      );
       return jsonResult({
         task,
         provider: "xai",

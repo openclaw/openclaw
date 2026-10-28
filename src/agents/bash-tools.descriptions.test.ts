@@ -76,7 +76,7 @@ describe("tool descriptions", () => {
     const processWithCron = createProcessTool({ hasCronTool: true });
 
     expect(execWithCron.description).toContain(
-      "automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion",
+      "automatic completion wake, when enabled, occurs only after exit; otherwise process confirms completion",
     );
     expect(processWithCron.description).toContain("completion without auto-wake");
     expect(processWithCron.description).toContain("write, send-keys, submit, paste, kill");

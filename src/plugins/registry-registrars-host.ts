@@ -1,5 +1,4 @@
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
-import { createPluginBoardWidgetContentKindRegistrar } from "./board-widget-content-kinds.js";
 import { publishPluginSessionSchedulerJobs } from "./host-hook-runtime.js";
 import {
   isPluginJsonValue,
@@ -435,7 +434,8 @@ export function createHostRegistrars(state: PluginRegistryState) {
         return;
       }
     }
-    if (!validateSessionActionSchema(record, id, action.schema)) {
+    const schema = action.schema;
+    if (!validateSessionActionSchema(record, id, schema)) {
       return;
     }
     const existing = registry.sessionActions.find(
@@ -449,6 +449,7 @@ export function createHostRegistrars(state: PluginRegistryState) {
       createRegistration(record, {
         action: {
           ...action,
+          schema,
           id,
           ...(description !== undefined ? { description } : {}),
           ...(requiredScopes !== undefined
@@ -476,7 +477,6 @@ export function createHostRegistrars(state: PluginRegistryState) {
     registerTrustedToolPolicy,
     registerToolMetadata,
     registerControlUiDescriptor,
-    registerBoardWidgetContentKind: createPluginBoardWidgetContentKindRegistrar(registry),
     registerRuntimeLifecycle,
     registerAgentEventSubscription,
     registerSessionSchedulerJob,

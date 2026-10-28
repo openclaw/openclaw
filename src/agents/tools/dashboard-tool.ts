@@ -95,6 +95,8 @@ const DashboardToolSchema = Type.Object(
 type DashboardToolOptions = {
   agentSessionKey?: string;
   agentId?: string;
+  /** Fails once the board's owner no longer authorizes this run, checked again inside each board write. */
+  assertTargetCurrent?: () => void;
   callGateway?: InProcessGatewayCaller;
   emitCommand?: typeof emitBoardCommand;
 };
@@ -204,9 +206,8 @@ function emitBoardCommand(
 const WIDGET_CONTENT_UPDATE_PATHS = {
   html: "Use its HTML authoring capability; discover it in the tool catalog and update the same name.",
   plugin: "Use widget_put with the same name and pluginKind.",
-  registered:
-    "Use its registered-source authoring capability; discover it in the tool catalog and update the same source kind and name.",
   "mcp-app": "Update through the originating MCP app.",
+  registered: "This widget format was retired; remove it and recreate it as HTML.",
 } as const;
 
 function snapshotResult(
@@ -248,10 +249,16 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
       if (!sessionKey) {
         throw new ToolInputError("agent session required");
       }
+      const assertTargetCurrent = opts.assertTargetCurrent;
+      assertTargetCurrent?.();
       const admittedResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
-      const gatewayOptions = admittedResolver
-        ? { resolveGatewayContext: admittedResolver }
-        : undefined;
+      const gatewayOptions =
+        admittedResolver || assertTargetCurrent
+          ? {
+              ...(admittedResolver ? { resolveGatewayContext: admittedResolver } : {}),
+              ...(assertTargetCurrent ? { sessionMutationCommitGuard: assertTargetCurrent } : {}),
+            }
+          : undefined;
       const callGateway = <T>(method: string, gatewayParams: Record<string, unknown>) =>
         gatewayCall<T>(method, gatewayParams, gatewayOptions);
       if (action === "read") {
@@ -293,6 +300,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
                 kind: "set_chat_dock",
                 dock: readPresentation(params) === "expanded" ? "hidden" : "right",
               };
+        assertTargetCurrent?.();
         const delivered = emitCommand(
           { sessionKey, agentId: opts.agentId, command },
           admittedResolver,

@@ -2,9 +2,27 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, expect } from "vitest";
-import type { CronStoreFile } from "./types.js";
+import type { CronJob, CronStoreFile } from "./types.js";
 
 type FixtureStore = { version: 1; jobs: [CronStoreFile["jobs"][number]] };
+
+export const STORE_TEST_NOW = Date.parse("2026-03-23T12:00:00.000Z");
+
+export function createReloadCronJob(params?: Partial<CronJob>): CronJob {
+  return {
+    id: "reload-cron-expr-job",
+    name: "reload cron expr job",
+    enabled: true,
+    createdAtMs: STORE_TEST_NOW - 60_000,
+    updatedAtMs: STORE_TEST_NOW - 60_000,
+    schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
+    sessionTarget: "main",
+    wakeMode: "now",
+    payload: { kind: "systemEvent", text: "tick" },
+    state: {},
+    ...params,
+  };
+}
 
 export function makeStore(jobId: string, enabled: boolean): FixtureStore {
   const now = Date.now();

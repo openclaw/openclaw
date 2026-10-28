@@ -1,11 +1,9 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import {
@@ -43,6 +41,9 @@ export async function requestChatSend(
     assertUploadsEnabled(state.uploadConfig);
   }
   const sessionKey = params.sessionKey ?? state.sessionKey;
+  if (sessionKey === state.sessionKey && state.isRouteSessionPending?.()) {
+    throw new Error(t("chat.thread.loading"));
+  }
   const selectedAgentId = params.agentId
     ? normalizeAgentId(params.agentId)
     : resolveUiSelectedSessionAgentId(state);
@@ -62,6 +63,10 @@ export async function requestChatSend(
   const sessionId = params.sessionId ?? (params.intent ? undefined : routingSessionId);
   const controlUiReconnectResume = Boolean(
     !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
+  );
+  const attachments = buildChatApiAttachments(params.attachments);
+  const hasAudio = attachments?.some((attachment) =>
+    attachment.mimeType.toLowerCase().startsWith("audio/"),
   );
   const request = chatOutboxOwner(state).admissions.beginRequest(
     state,
@@ -90,11 +95,12 @@ export async function requestChatSend(
           ? { expectedLeafEntryId: params.expectedLeafEntryId }
           : {}),
         idempotencyKey: params.runId,
-        attachments: buildChatApiAttachments(params.attachments),
+        attachments,
       },
-      // This bounds receipt of the admission ACK, not execution of the admitted turn.
+      // Audio transcription precedes admission; cancellation and connection lifetime
+      // still own that wait. Text retains the bounded startup admission deadline.
       {
-        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        timeoutMs: hasAudio ? null : GATEWAY_STARTUP_ADMISSION_WAIT_MS,
         signal: request.signal,
         retainSentResultOnAbort: true,
       },
@@ -117,13 +123,4 @@ export function resolveDisplayedLeafEntryId(state: ChatState): string | null | u
   }
   const leafEntryId = state.chatDisplayedLeafEntryId?.trim();
   return leafEntryId || undefined;
-}
-
-const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
-
-export function isActiveLeafChangedError(err: unknown): err is GatewayRequestError {
-  return (
-    err instanceof GatewayRequestError &&
-    asOptionalRecord(err.details)?.reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
-  );
 }

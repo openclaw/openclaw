@@ -16,6 +16,7 @@ import {
 import { withSecureTestNodeCommand } from "../../secrets/test-node-command.test-support.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
+import { listDirectoryTreeStrict } from "../directory-walk.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
@@ -172,7 +173,8 @@ describe.skipIf(!connection)("PostgreSQL one-shot CLI", () => {
                 decodeURIComponent(password),
               );
             }
-            const databases = (await fs.readdir(stateDir, { recursive: true }))
+            const databases = (await listDirectoryTreeStrict(stateDir))
+              .map((walkEntry) => walkEntry.relativePath)
               .filter((file) => file.endsWith(".sqlite"))
               .map((file) => path.join(stateDir, file));
             expect(databases).toContain(resolveOpenClawStateSqlitePath(env));
@@ -324,9 +326,9 @@ describe("CLI with unresolved PostgreSQL credentials", () => {
               expect(result.stdout).toContain("synthetic PostgreSQL diagnostic log");
             }
             expect(
-              (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
-                file.endsWith(".sqlite"),
-              ),
+              (await listDirectoryTreeStrict(stateDir))
+                .map((walkEntry) => walkEntry.relativePath)
+                .filter((file) => file.endsWith(".sqlite")),
             ).toEqual([]);
           }
           const repaired = JSON.parse(await fs.readFile(configPath, "utf8"));
@@ -340,9 +342,9 @@ describe("CLI with unresolved PostgreSQL credentials", () => {
           expect(result.code).toBe(1);
           expect(`${result.stdout}\n${result.stderr}`).toContain("SecretRef is unresolved");
           expect(
-            (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
-              file.endsWith(".sqlite"),
-            ),
+            (await listDirectoryTreeStrict(stateDir))
+              .map((walkEntry) => walkEntry.relativePath)
+              .filter((file) => file.endsWith(".sqlite")),
           ).toEqual([]);
           const secret = "postgresql://fixture:synthetic-exec-private-password@localhost/fixture";
           env.OPENCLAW_TEST_CLI_DSN = secret;
@@ -381,9 +383,9 @@ describe("CLI with unresolved PostgreSQL credentials", () => {
             expect(output).not.toContain(secret);
             expect(output).not.toContain("synthetic-exec-private-password");
             expect(
-              (await fs.readdir(stateDir, { recursive: true })).filter((file) =>
-                file.endsWith(".sqlite"),
-              ),
+              (await listDirectoryTreeStrict(stateDir))
+                .map((walkEntry) => walkEntry.relativePath)
+                .filter((file) => file.endsWith(".sqlite")),
             ).toEqual([]);
           }
         } finally {

@@ -1,11 +1,21 @@
-import { createSignal, onCleanup, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  isPending,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type {
   UsersPersonalFileGetResult,
   UsersPersonalFileSetResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
-import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerPersonalInstructionsEnglish } from "../../i18n/locales/en-personal-instructions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -15,12 +25,13 @@ import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 
 registerEnglishCatalog(registerPersonalInstructionsEnglish);
 
+type PersonalFileResult = UsersPersonalFileGetResult | null;
+
 class PersonalInstructionsState {
   agentId = "";
   file: UsersPersonalFileGetResult | null = null;
   draft = "";
-  busy: "load" | "save" | null = null;
-  error: string | null = null;
+  private busy = false;
   saved = false;
   client: GatewayBrowserClient | null = null;
   profileId: string | null = null;
@@ -33,6 +44,7 @@ class PersonalInstructionsState {
   constructor(
     readonly context: ApplicationContext,
     readonly publish: () => void,
+    readonly presentFile: (result: PersonalFileResult | Promise<PersonalFileResult>) => void,
   ) {}
 
   get agents() {
@@ -61,7 +73,7 @@ class PersonalInstructionsState {
       connected &&
       this.multipleProfiles &&
       Boolean(snapshot.selfUser?.id) &&
-      hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+      hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null);
     const identityChanged = profileId !== this.profileId || gatewayUrl !== this.gatewayUrl;
     const sourceChanged =
       identityChanged ||
@@ -99,29 +111,29 @@ class PersonalInstructionsState {
       this.draft = pending?.content ?? "";
     }
     if (sourceChanged || agentChanged) {
-      this.busy = null;
-      this.error = null;
+      this.busy = false;
       this.saved = false;
+      this.presentFile(this.file);
     }
     if (this.available && this.agentId && !this.dirty && (sourceChanged || agentChanged)) {
-      void this.load();
+      this.load();
     }
     this.publish();
   }
 
-  async load() {
+  load() {
     const client = this.client;
     const agentId = this.agentId;
     const profileId = this.profileId;
     if (!client || !this.available || !agentId || this.busy) {
       return;
     }
-    await this.requestFile("load", { agentId, profileId }, () =>
+    void this.requestFile("load", { agentId, profileId }, () =>
       client.request<UsersPersonalFileGetResult>("users.personalFile.get", { agentId }),
     );
   }
 
-  async save() {
+  save() {
     const client = this.client;
     const file = this.file;
     if (
@@ -134,10 +146,10 @@ class PersonalInstructionsState {
       this.draft.length > 4000 ||
       !this.agents.some((agent) => agent.id === file.agentId)
     ) {
-      return;
+      return undefined;
     }
     const content = this.draft;
-    await this.requestFile("save", file, () =>
+    return this.requestFile("save", file, () =>
       client.request<UsersPersonalFileSetResult>("users.personalFile.set", {
         agentId: file.agentId,
         content,
@@ -146,7 +158,7 @@ class PersonalInstructionsState {
     );
   }
 
-  async requestFile(
+  requestFile(
     operation: "load" | "save",
     target: { agentId: string; profileId: string | null },
     request: () => Promise<UsersPersonalFileGetResult>,
@@ -160,70 +172,174 @@ class PersonalInstructionsState {
       this.connectionId === connectionId &&
       this.agentId === target.agentId &&
       this.profileId === target.profileId;
-    this.busy = operation;
-    this.error = null;
+    this.busy = true;
     this.saved = false;
-    this.publish();
-    try {
-      const result = await request();
-      if (!isCurrent()) {
-        return;
-      }
-      if (result.agentId !== target.agentId || result.profileId !== target.profileId) {
-        throw new Error(t("profilePage.personalInstructions.contextChanged"));
-      }
-      this.file = result;
-      if (this.draft === draft) {
-        this.busy = null;
-        this.draft = result.content;
-      }
-      this.drafts.delete(result.agentId);
-      this.saved = operation === "save" && this.draft === result.content;
-    } catch (error) {
-      if (isCurrent()) {
-        this.error = formatUiError(error);
-      }
-    } finally {
-      if (isCurrent()) {
-        if (this.draft === draft) {
-          this.busy = null;
+    const completion = (async () => {
+      try {
+        const result = await request();
+        if (!isCurrent()) {
+          return null;
         }
-        this.publish();
+        if (result.agentId !== target.agentId || result.profileId !== target.profileId) {
+          throw new Error(t("profilePage.personalInstructions.contextChanged"));
+        }
+        this.file = result;
+        if (this.draft === draft) {
+          this.busy = false;
+          this.draft = result.content;
+        }
+        this.drafts.delete(result.agentId);
+        this.saved = operation === "save" && this.draft === result.content;
+        return result;
+      } catch (error) {
+        if (isCurrent()) {
+          throw error;
+        }
+        return null;
+      } finally {
+        if (isCurrent()) {
+          if (this.draft === draft) {
+            this.busy = false;
+          }
+          this.publish();
+        }
       }
-    }
+    })();
+    // Returning to an agent can accept its earlier save; report its failure too.
+    void completion.catch(() => {
+      if (isCurrent()) {
+        this.presentFile(completion);
+      }
+    });
+    this.presentFile(completion);
+    this.publish();
+    return completion;
   }
 
   reload() {
     if (this.dirty && !window.confirm(t("profilePage.personalInstructions.discard"))) {
       return;
     }
-    void this.load();
+    this.load();
   }
 }
 
 export function PersonalInstructions(props: { hidden?: boolean }) {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const state = new PersonalInstructionsState(context, () => setRevision((value) => value + 1));
+  const [fileRequest, setFileRequest] = createSignal<
+    PersonalFileResult | Promise<PersonalFileResult>
+  >(null, { ownedWrite: true });
+  const loadedFile = createMemo(() => Promise.resolve(fileRequest()));
+  const [saving, setSaving] = createOptimistic<Promise<PersonalFileResult>>();
+  const presentSave = action(function* (completion: Promise<PersonalFileResult>) {
+    void setSaving(completion);
+    yield completion;
+  });
+  const state = new PersonalInstructionsState(
+    context,
+    () => setRevision((value) => value + 1),
+    (result) => {
+      void setFileRequest(result);
+    },
+  );
+  const save = () => {
+    const completion = state.save();
+    if (!completion) {
+      return;
+    }
+    // Keep the presentation transition out of the admitted read's opening task.
+    setTimeout(() => {
+      if (state.available && fileRequest() === completion) {
+        void presentSave(completion).catch(() => {});
+      }
+    }, 0);
+  };
   const view = () => {
     revision();
     return state;
   };
-  const sync = () => state.syncContext();
-  const stops = [
-    // Connection changes retire personal-file requests and isolate drafts by person and Gateway.
-    context.gateway.subscribe(sync),
-    // Roster changes reconcile the personal-file target before another read or save.
-    context.agents.subscribe(sync),
-    // Selection receipts preserve the old agent's draft and retire its pending file work.
-    context.settingsAgentSelection.subscribe(sync),
-  ];
-  state.syncContext();
-  void context.agents.ensureList();
-  onCleanup(() => {
-    stops.forEach((stop) => stop());
-    state.dispose();
+  onSettled(() => {
+    const sync = () => state.syncContext();
+    const stops = [
+      // Connection changes retire personal-file requests and isolate drafts by person and Gateway.
+      context.gateway.subscribe(sync),
+      // Roster changes reconcile the personal-file target before another read or save.
+      context.agents.subscribe(sync),
+      // Selection receipts preserve the old agent's draft and retire its pending file work.
+      context.settingsAgentSelection.subscribe(sync),
+    ];
+    state.syncContext();
+    void context.agents.ensureList();
+    return () => {
+      stops.forEach((stop) => stop());
+      state.dispose();
+    };
   });
+
+  function Editor(editorProps: { file: PersonalFileResult; pending?: boolean; error?: string }) {
+    return (
+      <div class="personal-instructions" aria-busy={editorProps.pending ? "true" : "false"}>
+        <Show when={editorProps.file && view().file}>
+          <textarea
+            id="personal-instructions-content"
+            class="settings-input personal-instructions__editor"
+            rows={7}
+            value={view().draft}
+            disabled={editorProps.pending}
+            aria-label={t("profilePage.personalInstructions.title")}
+            aria-describedby="personal-instructions-guidance"
+            onInput={(event) => {
+              state.draft = event.currentTarget.value;
+              state.saved = false;
+              state.publish();
+            }}
+          />
+          <div id="personal-instructions-guidance" class="settings-row__desc">
+            {t("profilePage.personalInstructions.guidance", {
+              count: String(view().draft.length),
+            })}
+            {view().file?.missing ? ` ${t("profilePage.personalInstructions.missing")}` : null}
+          </div>
+          <Show when={view().draft.length > 4000}>
+            <div role="alert">{t("profilePage.personalInstructions.tooLong")}</div>
+          </Show>
+        </Show>
+        <Show when={editorProps.error}>
+          <div class="personal-instructions__error" role="alert">
+            {editorProps.error} {t("profilePage.personalInstructions.failureHint")}
+          </div>
+        </Show>
+        <div class="personal-instructions__actions">
+          <button
+            class="btn"
+            disabled={
+              !view().file ||
+              !view().dirty ||
+              editorProps.pending ||
+              view().draft.length > 4000 ||
+              !view().agents.some((agent) => agent.id === view().agentId)
+            }
+            onClick={save}
+          >
+            {saving() === fileRequest() ? t("common.saving") : t("common.save")}
+          </button>
+          <Show when={editorProps.error}>
+            <button class="btn" disabled={editorProps.pending} onClick={() => state.reload()}>
+              {t("profilePage.personalInstructions.reload")}
+            </button>
+          </Show>
+          <span class="settings-row__desc" role="status">
+            {view().dirty
+              ? t("profilePage.personalInstructions.dirty")
+              : view().saved
+                ? t("profilePage.personalInstructions.saved")
+                : null}
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <openclaw-personal-instructions hidden={props.hidden}>
@@ -243,74 +359,15 @@ export function PersonalInstructions(props: { hidden?: boolean }) {
                   <SettingsEmpty message={t("profilePage.personalInstructions.noAgents")} />
                 }
               >
-                <div
-                  class="personal-instructions"
-                  aria-busy={view().busy !== null ? "true" : "false"}
-                >
-                  <Show when={view().file}>
-                    <textarea
-                      id="personal-instructions-content"
-                      class="settings-input personal-instructions__editor"
-                      rows={7}
-                      value={view().draft}
-                      disabled={view().busy !== null}
-                      aria-label={t("profilePage.personalInstructions.title")}
-                      aria-describedby="personal-instructions-guidance"
-                      onInput={(event) => {
-                        state.draft = event.currentTarget.value;
-                        state.saved = false;
-                        state.publish();
-                      }}
-                    />
-                    <div id="personal-instructions-guidance" class="settings-row__desc">
-                      {t("profilePage.personalInstructions.guidance", {
-                        count: String(view().draft.length),
-                      })}
-                      {view().file?.missing
-                        ? ` ${t("profilePage.personalInstructions.missing")}`
-                        : null}
-                    </div>
-                    <Show when={view().draft.length > 4000}>
-                      <div role="alert">{t("profilePage.personalInstructions.tooLong")}</div>
-                    </Show>
-                  </Show>
-                  <Show when={view().error}>
-                    <div class="personal-instructions__error" role="alert">
-                      {view().error} {t("profilePage.personalInstructions.failureHint")}
-                    </div>
-                  </Show>
-                  <div class="personal-instructions__actions">
-                    <button
-                      class="btn"
-                      disabled={
-                        !view().file ||
-                        !view().dirty ||
-                        view().busy !== null ||
-                        view().draft.length > 4000 ||
-                        !view().agents.some((agent) => agent.id === view().agentId)
-                      }
-                      onClick={() => void state.save()}
-                    >
-                      {view().busy === "save" ? t("common.saving") : t("common.save")}
-                    </button>
-                    <Show when={view().error}>
-                      <button
-                        class="btn"
-                        disabled={view().busy !== null}
-                        onClick={() => state.reload()}
-                      >
-                        {t("profilePage.personalInstructions.reload")}
-                      </button>
-                    </Show>
-                    <span class="settings-row__desc" role="status">
-                      {view().dirty
-                        ? t("profilePage.personalInstructions.dirty")
-                        : view().saved
-                          ? t("profilePage.personalInstructions.saved")
-                          : null}
-                    </span>
-                  </div>
-                </div>
+                <Loading on={fileRequest()} fallback={<Editor file={view().file} pending />}>
+                  <Errored
+                    fallback={(error) => (
+                      <Editor file={view().file} error={formatUiError(error())} />
+                    )}
+                  >
+                    <Editor file={loadedFile()} pending={isPending(loadedFile)} />
+                  </Errored>
+                </Loading>
               </Show>
             </Show>
           </SettingsSection>

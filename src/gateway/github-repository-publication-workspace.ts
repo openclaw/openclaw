@@ -146,7 +146,6 @@ export async function captureCheckpoint<T>(
     {
       workspaceId: row.workspace_id,
       checkpointRef: checkpointRef ?? undefined,
-      includePublication: true,
     },
     async (payload) => {
       assertSelected();

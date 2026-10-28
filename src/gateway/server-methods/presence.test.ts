@@ -1,5 +1,5 @@
+import { Check } from "typebox/schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
 import {
   PresenceQueryResultSchema,
   type PresenceQueryParams,
@@ -15,7 +15,7 @@ import type { GatewayMethodDispatchResponse } from "../server-in-process-dispatc
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import { presenceHandlers } from "./presence.js";
-import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   presence: vi.fn<() => PresenceEntry[]>(() => []),
@@ -25,7 +25,6 @@ vi.mock("../server-plugin-in-process-dispatch.js", () => ({
   dispatchGatewayMethodInProcessRaw: mocks.lookup,
 }));
 
-const validateResult = lazyCompile(PresenceQueryResultSchema);
 const now = 10_000;
 const profile = (profileId: string, displayName: string) => ({
   profileId,
@@ -39,10 +38,7 @@ function row(conn: string, overrides: Partial<PresenceEntry> = {}): PresenceEntr
   return {
     connectionId: conn,
     deviceId: conn,
-    host: conn,
     ts: now,
-    reason: "connect",
-    onlineSince: 1_000,
     user: { id: "alex", identity: { type: "profile", id: "alex" }, name: "Alex" },
     ...overrides,
   };
@@ -53,7 +49,6 @@ function node(id: string, overrides: Partial<NodeSession> = {}): NodeSession {
     nodeId: id,
     connId: `conn-${id}`,
     client: makeClient(`conn-${id}`, id),
-    displayName: id,
     declaredCaps: [],
     caps: [],
     declaredCommands: [],
@@ -82,7 +77,7 @@ function request(
   vi.spyOn(nodeRegistry, "listCurrentConnectedSync").mockImplementation(() => options.nodes ?? []);
   const context = createGatewayRequestContext(makeContextParams({ nodeRegistry }));
   context.getPresenceSnapshot = mocks.presence;
-  const invocation: GatewayRequestHandlerOptions = {
+  const run = presenceHandlers["presence.query"]!({
     req: { type: "req", id: "presence-query", method: "presence.query", params },
     params,
     client: options.client === undefined ? caller() : options.client,
@@ -90,8 +85,7 @@ function request(
     isWebchatConnect: () => false,
     hasCurrentClientAuthority: options.current,
     context,
-  };
-  const run = presenceHandlers["presence.query"]!(invocation);
+  });
   return { respond, run };
 }
 
@@ -103,8 +97,8 @@ async function query(
   await result.run;
   const [ok, payload, error] = result.respond.mock.calls[0] ?? [];
   expect([ok, error]).toEqual([true, undefined]);
-  if (!validateResult(payload)) {
-    throw new Error(JSON.stringify(validateResult.errors));
+  if (!Check(PresenceQueryResultSchema, payload)) {
+    throw new Error("Invalid presence result");
   }
   return payload;
 }

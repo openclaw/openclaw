@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import * as fsSafe from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
@@ -347,31 +348,11 @@ it.each(["uid", "gid"] as const)("refuses changed inventoried ownership (%s)", a
   await expect(f.copy()).rejects.toThrow("changed after snapshot inventory");
 });
 
-it.skipIf(process.platform !== "linux")(
-  "verifies bytes when Linux reports ctime as birthtime without statx",
-  async () => {
-    const advanceCtime = createFileMutationClock();
-    // Compose with the clock implementations; the spies themselves are replaced below.
-    const lstat = vi.mocked(fs.lstat).getMockImplementation()!;
-    const lstatSync = vi.mocked(fsSync.lstatSync).getMockImplementation()!;
-    const fstatSync = vi.mocked(fsSync.fstatSync).getMockImplementation()!;
-    const fallbackBirthtime = <T extends fsSync.Stats | fsSync.BigIntStats | undefined>(
-      stat: T,
-    ): T => {
-      if (stat && "birthtimeNs" in stat) {
-        stat.birthtimeNs = stat.ctimeNs;
-      }
-      return stat;
-    };
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args) =>
-      fallbackBirthtime(await lstat(...args)),
-    );
-    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) =>
-      fallbackBirthtime(lstatSync(...args)),
-    );
-    vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) =>
-      fallbackBirthtime(fstatSync(...args)),
-    );
+it.each(["linux", "android"] as const)(
+  "verifies bytes when %s reports ctime as birthtime without statx",
+  async (platform) => {
+    mockProcessPlatform(platform);
+    const advanceCtime = createFileMutationClock({ birthtimeFromCtime: true });
     for (const change of ["link", "content", "birthtime"] as const) {
       const f = await fixture(false, async (source) => {
         await fs.utimes(path.join(source, "payload.txt"), 1_700_000_000, 1_700_000_000);

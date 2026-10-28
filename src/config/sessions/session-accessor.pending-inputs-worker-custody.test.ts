@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
 import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
 import { resolveSessionMutationAuthorizationAsync as authorizeMutation } from "../../gateway/session-sharing-authorization-async.js";
@@ -13,8 +13,15 @@ import {
   sharingPolicyClient,
 } from "../../gateway/session-sharing.test-utils.js";
 import { withSessionTranscriptWriteLock as withTranscriptLock } from "../../plugin-sdk/session-transcript-runtime.js";
+import { controllerSource } from "../../sessions/controller-core.test-support.js";
+import {
+  captureSessionControllerSettlement,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
+import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -33,6 +40,7 @@ import {
 } from "./session-accessor.js";
 import {
   bindSessionPendingInputSources as bindInputs,
+  prepareForeignLiveSessionPendingInputEntries,
   listSessionPendingInputs as listInputs,
   stageSessionPendingInput as stageInput,
   type SessionPendingInputReceipt,
@@ -64,8 +72,22 @@ function authorizedInput(
     message: message(runId, content),
     assertCurrent,
     assertAdmittedCurrent: assertCurrent,
+    assertFreshInputCurrent: authorization.assertCurrent,
+    prepareMessageAfterIdempotencyCheck: (prepared: PersistedUserTurnMessage) => prepared,
     authority: authorization.admittedInputAuthority,
   };
+}
+async function authorize(
+  requestParams: Parameters<typeof authorizeMutation>[0]["requestParams"],
+  client: Parameters<typeof authorizeMutation>[0]["client"],
+  cfg = rolePolicyConfig(),
+) {
+  const context = createGatewayRequestContext(makeContextParams());
+  context.getRuntimeConfig = () => cfg;
+  context.getCommittedRuntimeConfig = () => cfg;
+  const result = await authorizeMutation({ client, method: "chat.send", requestParams, context });
+  expect(result.error).toBeNull();
+  return result.authorization!;
 }
 
 describe("accepted input worker custody", () => {
@@ -105,12 +127,21 @@ describe("accepted input worker custody", () => {
     expect(custody.facts.databasePath).toBe(fs.realpathSync(database.path));
 
     const workerScope = { ...scope, storePath: custody.facts.databasePath };
+    const readAlias = await prepareForeignLiveSessionPendingInputEntries(scope);
+    const readCanonical = await prepareForeignLiveSessionPendingInputEntries(workerScope);
+    expect(readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
+    expect(readCanonical()).toEqual(readAlias());
+    expect(
+      await receipt.run(async () => (await prepareForeignLiveSessionPendingInputEntries(scope))()),
+    ).toEqual(new Map());
     const result = runWithCustody(custody.facts, custody.relocation, custody.assertCurrent, () =>
       appendSync(workerScope, { message: receipt!.message }),
     );
     expect(result.value).toMatchObject({ ok: true, value: { appended: true } });
     custody.publish(result.receipt);
+    expect(readAlias()).toEqual(new Map([[receipt.inputId, input.idempotencyKey]]));
     receipt.finish("cancelled");
+    expect(readAlias()).toEqual(new Map());
     await receipt.settled?.();
     receipt = undefined;
 
@@ -135,22 +166,16 @@ describe("accepted input worker custody", () => {
         const client = roleClient("view", "incognito-custody");
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog({ env })).release };
         client.connect.scopes = ["operator.admin"];
-        const context = createGatewayRequestContext(makeContextParams());
-        context.getRuntimeConfig = () => cfg;
-        context.getCommittedRuntimeConfig = () => cfg;
-        const resolved = await authorizeMutation({
-          client,
-          method: "chat.send",
-          requestParams: scope,
-          context,
-        });
-        expect(resolved.error).toBeNull();
-        const authorization = resolved.authorization!;
+        const authorization = await authorize(scope, client, cfg);
         const input = authorizedInput(authorization, "incognito-memory", "Continue in memory");
         try {
           receipt = await stageInput(scope, input);
           const admitted = receipt;
           assert(admitted?.runAsync, "Expected incognito pending input custody");
+          const readForeign = await prepareForeignLiveSessionPendingInputEntries(scope);
+          expect(readForeign()).toEqual(
+            new Map([[admitted.inputId, input.message.idempotencyKey]]),
+          );
           await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 2 });
           let effects = 0;
           await expect(
@@ -159,6 +184,9 @@ describe("accepted input worker custody", () => {
               return appendMessage(scope, { message: admitted.message });
             }),
           ).resolves.toMatchObject({ appended: true });
+          expect(readForeign()).toEqual(
+            new Map([[admitted.inputId, input.message.idempotencyKey]]),
+          );
           client.connect.scopes = ["operator.read", "operator.write"];
           await expect(
             admitted.runAsync(() => {
@@ -166,7 +194,12 @@ describe("accepted input worker custody", () => {
             }),
           ).rejects.toThrow("was not found");
           expect(effects).toBe(1);
+          // Revoked execution does not let another turn take still-held input.
+          expect(readForeign()).toEqual(
+            new Map([[admitted.inputId, input.message.idempotencyKey]]),
+          );
           admitted.finish("cancelled");
+          expect(readForeign()).toEqual(new Map());
           await admitted.settled?.();
           receipt = undefined;
 
@@ -207,14 +240,11 @@ it("refreshes every collected source after a non-revoking profile change", async
       for (const [index, profile] of [first, second].entries()) {
         setUserProfileRole(profile.id, "view");
         await addSessionMember(scope, { identityId: profile.id, addedBy: "another-profile" });
-        const result = await authorizeMutation({
-          client: sharingPolicyClient({ user: profile.id }),
-          method: "chat.send",
-          requestParams: scope,
-          context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-        });
-        expect(result.error).toBeNull();
-        const authorization = result.authorization!;
+        const authorization = await authorize(
+          scope,
+          sharingPolicyClient({ user: profile.id }),
+          cfg,
+        );
         const receipt = await stageInput(
           scope,
           authorizedInput(authorization, `collected-${index}`, `Source ${index}`),
@@ -226,9 +256,7 @@ it("refreshes every collected source after a non-revoking profile change", async
       const collected = bindInputs(receipts, message("collected", "Collected sources"));
       assert(collected?.runAsync, "Expected collected input authority");
       let executed = 0;
-      await collected.runAsync(() => {
-        executed++;
-      });
+      await collected.runAsync(() => executed++);
       expect(executed).toBe(1);
       setUserProfileRole(second.id, "view");
       await removeSessionMember(scope, second.id);
@@ -269,14 +297,7 @@ it.each(["turn", "locked"] as const)(
         createdActor: { type: "human", source: "profile", id: "another-profile" },
       });
       await addSessionMember(scope, { identityId: profileId, addedBy: "another-profile" });
-      const resolved = await authorizeMutation({
-        client,
-        method: "chat.send",
-        requestParams: scope,
-        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
-      });
-      expect(resolved.error).toBeNull();
-      const authorization = resolved.authorization!;
+      const authorization = await authorize(scope, client, cfg);
       const queries: string[] = [];
       const assertCurrent = () => {
         const host = observeHostDataSql();
@@ -290,16 +311,15 @@ it.each(["turn", "locked"] as const)(
       let admitted: SessionPendingInputReceipt | undefined;
       let unsettled: SessionPendingInputReceipt | undefined;
       try {
+        using authorityReads = vi.spyOn(authorization.admittedInputAuthority!, "withCurrent");
+        setUserProfileRole(profileId, "suggest");
         admitted = await stageInput(
           scope,
-          authorizedInput(
-            authorization,
-            "prepared-custody",
-            "Continue with captured custody",
-            assertCurrent,
-          ),
+          authorizedInput(authorization, "prepared-custody", "Continue", assertCurrent),
         );
         expect(admitted?.state).toBe("queued");
+        expect(authorityReads).toHaveBeenCalledTimes(1);
+        setUserProfileRole(profileId, "view");
         unsettled = await stageInput(scope, {
           runId: "pending-settlement",
           message: { ...admitted!.message, idempotencyKey: "pending-settlement:user" },
@@ -380,3 +400,78 @@ it.each(["turn", "locked"] as const)(
     });
   },
 );
+
+it("refuses a stale shared reader without orphaning its source settlement capture", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const cfg = rolePolicyConfig();
+    setRuntimeConfigSnapshot(cfg);
+    const client = roleClient("view", "stale-reader-member");
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:stale-reader",
+      sessionId: "stale-reader",
+    };
+    await upsertEntry(scope, { sessionId: scope.sessionId, updatedAt: 1, visibility: "shared" });
+    await addSessionMember(scope, {
+      identityId: client.authenticatedUserProfile!.profileId,
+      addedBy: "owner",
+    });
+    const authorization = await authorize(scope, client, cfg);
+    const receipt = await stageInput(
+      scope,
+      authorizedInput(authorization, "stale-reader", "Continue"),
+    );
+    assert(receipt?.runAsync, "Expected shared input authority");
+    const authority = authorization.admittedInputAuthority!;
+    const prepared = authority.withPreparedCurrent;
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope))).path;
+    using invalidation = vi
+      .spyOn(authority, "withPreparedCurrent")
+      .mockImplementation((facts, consume, assertCurrent) =>
+        prepared(
+          facts,
+          () => {
+            invalidateOpenClawAgentDatabaseValidation(database);
+            return consume();
+          },
+          assertCurrent,
+        ),
+      );
+    const consume = vi.fn();
+    const source = controllerSource(
+      captureSessionTarget({
+        storeScope: database,
+        sessionKey: scope.sessionKey,
+        incarnation: scope.sessionId,
+      }),
+      {
+        adapter: {
+          onSettled: async () => {
+            await receipt.runAsync!(consume);
+          },
+        },
+      },
+    );
+    // Startup recovery may capture a live source without retaining a waiter.
+    void captureSessionControllerSettlement({ target: source.target! });
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", listener);
+    try {
+      retireSessionControllerInput(source);
+      await expect(source.settlement.promise).rejects.toThrow(
+        "Session reader validation is no longer current",
+      );
+      await nextTurn();
+      expect(consume).not.toHaveBeenCalled();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", listener);
+      invalidation.mockRestore();
+      await expect(finish(receipt)).rejects.toThrow(
+        "Session reader validation is no longer current",
+      );
+      authorization.release?.();
+    }
+  });
+});

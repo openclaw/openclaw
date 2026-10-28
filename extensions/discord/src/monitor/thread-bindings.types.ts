@@ -26,7 +26,6 @@ export type ThreadBindingManager = {
   getIdleTimeoutMs: () => number;
   getMaxAgeMs: () => number;
   getByThreadId: (threadId: string) => ThreadBindingRecord | undefined;
-  getBySessionKey: (targetSessionKey: string) => ThreadBindingRecord | undefined;
   listBySessionKey: (targetSessionKey: string) => ThreadBindingRecord[];
   listBindings: () => ThreadBindingRecord[];
   touchThread: (params: {

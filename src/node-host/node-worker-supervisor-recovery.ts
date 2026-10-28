@@ -50,7 +50,9 @@ export function createNodeWorkerLaunchRecovery(
     if (
       !context.isRecoveryActive() ||
       receipt.state !== "running" ||
-      !["owned-anchor", "linux-subreaper"].includes(receipt.workerCleanupMode ?? "") ||
+      !["owned-anchor", "linux-subreaper", "windows-job"].includes(
+        receipt.workerCleanupMode ?? "",
+      ) ||
       !receipt.worker ||
       receipt.container
     ) {
@@ -165,10 +167,13 @@ async function recoverNodeWorkerLaunch(params: {
       );
     }
     await params.containerLifecycle.remove(receipt.container, receipt);
-  } else if (!rebooted && receipt.worker && receipt.workerCleanupMode === "linux-subreaper") {
-    // The surviving owner observes its original IPC parent loss and drains its
-    // scope. A replacement has neither child wait ownership nor a retained pidfd:
-    // never turn a procfs identity check into permission to signal a numeric PID.
+  } else if (
+    !rebooted &&
+    receipt.worker &&
+    (receipt.workerCleanupMode === "linux-subreaper" || receipt.workerCleanupMode === "windows-job")
+  ) {
+    // Linux's surviving owner drains its scope; Windows closes the dead supervisor's Job.
+    // A replacement observes exact process identity without signaling a numeric PID.
     let owner = inspectNodeWorkerProcessIdentity(receipt.worker);
     while (owner === "live" && (await stillOwned())) {
       await delay(25);
@@ -177,7 +182,11 @@ async function recoverNodeWorkerLaunch(params: {
     if (owner !== "dead" && owner !== "reused") {
       return latest();
     }
-    if ((await params.store.getMatching(receipt))?.workerDescendantsReaped !== true) {
+    if (receipt.workerCleanupMode === "windows-job") {
+      // Allow kill-on-close Job members the stop grace after the recorded worker exits.
+      // A breakaway or unusually slow descendant may briefly overlap the next turn.
+      await delay(NODE_WORKER_STOP_GRACE_MS);
+    } else if ((await params.store.getMatching(receipt))?.workerDescendantsReaped !== true) {
       log.warn(
         `Worker ${receipt.launchId} lost its native process owner without recorded descendant extinction; capacity remains reserved.`,
       );

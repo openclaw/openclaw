@@ -11,6 +11,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { assertionSucceeds } from "../shared/assertion.js";
 import {
   AgentDatabaseStartupSupersededError,
   type getAgentDatabaseStartupAdmission,
@@ -67,8 +68,9 @@ export function activateGatewayAgentDatabaseStartup(params: {
     preparationReady: params.preparationReady,
     openAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
-        const { prepareOpenClawAgentDatabaseExecution } =
+        const { captureOpenClawAgentDatabaseExecution, prepareOpenClawAgentDatabaseExecution } =
           await import("../state/openclaw-agent-execution.js");
+        await using prepared = new AsyncDisposableStack();
         const assertOpenCurrent = createPreparationGuard(
           agentId,
           paths,
@@ -78,12 +80,16 @@ export function activateGatewayAgentDatabaseStartup(params: {
         );
         assertOpenCurrent();
         for (const pathname of paths) {
+          // Keep the existing owner out of idle eviction until this agent's publication settles.
+          const execution = captureOpenClawAgentDatabaseExecution({ agentId, path: pathname, env });
+          prepared.defer(() => execution.release());
           await prepareOpenClawAgentDatabaseExecution(
             { agentId, path: pathname, env },
             assertOpenCurrent,
             signal,
           );
         }
+        return prepared.move();
       }),
     migrateAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
@@ -203,14 +209,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
             catalogMode: "static",
             allowGatewaySubagentBinding: true,
             ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-            isPublicationCurrent: () => {
-              try {
-                assertPreparationCurrent();
-                return true;
-              } catch {
-                return false;
-              }
-            },
+            isPublicationCurrent: () => assertionSucceeds(assertPreparationCurrent),
           }),
         ).catch(async (error: unknown) => {
           if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {

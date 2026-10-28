@@ -2,48 +2,27 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
 
+const makePlugin = () => createDiscordPluginBase({ setupContract: {} as never });
+const config = (discord: NonNullable<OpenClawConfig["channels"]>["discord"]): OpenClawConfig => ({
+  channels: { discord },
+});
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
 describe("createDiscordPluginBase", () => {
   it("owns Discord native command name overrides", () => {
-    const plugin = createDiscordPluginBase({ setupContract: {} as never });
-
-    expect(
-      plugin.commands?.resolveNativeCommandName?.({
-        commandKey: "tts",
-        defaultName: "tts",
-      }),
-    ).toBe("voice");
-    expect(
-      plugin.commands?.resolveNativeCommandName?.({
-        commandKey: "status",
-        defaultName: "status",
-      }),
-    ).toBe("status");
-    expect(
-      plugin.commands?.resolveNativeCommandName?.({
-        commandKey: "login",
-        defaultName: "login",
-      }),
-    ).toBe("login");
+    const resolve = makePlugin().commands?.resolveNativeCommandName;
+    expect(resolve?.({ commandKey: "tts", defaultName: "tts" })).toBe("voice");
+    expect(resolve?.({ commandKey: "status", defaultName: "status" })).toBe("status");
+    expect(resolve?.({ commandKey: "login", defaultName: "login" })).toBe("login");
   });
 
   it("reports duplicate-token accounts as disabled to gateway startup", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "same-token");
-    const plugin = createDiscordPluginBase({ setupContract: {} as never });
-    const cfg = {
-      channels: {
-        discord: {
-          accounts: {
-            work: {
-              token: "same-token",
-            },
-          },
-        },
-      },
-    };
+    const plugin = makePlugin();
+    const cfg = config({ accounts: { work: { token: "same-token" } } });
 
     const defaultAccount = plugin.config.resolveAccount(cfg, "default");
     const workAccount = plugin.config.resolveAccount(cfg, "work");
@@ -56,39 +35,26 @@ describe("createDiscordPluginBase", () => {
   });
 
   it("describes unresolved SecretRef tokens as startup-configured so startup reports the resolver error", () => {
-    const plugin = createDiscordPluginBase({ setupContract: {} as never });
-    const cfg = {
-      channels: {
-        discord: {
-          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const plugin = makePlugin();
+    const cfg = config({ token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" } });
 
     const account = plugin.config.resolveAccount(cfg, "default");
     const described = plugin.config.describeAccount?.(account, cfg);
 
-    expect(account.token).toBe("");
-    expect(account.tokenSource).toBe("config");
-    expect(account.tokenStatus).toBe("configured_unavailable");
+    expect(account).toMatchObject({
+      token: "",
+      tokenSource: "config",
+      tokenStatus: "configured_unavailable",
+    });
     expect(plugin.config.isConfigured?.(account, cfg)).toBe(true);
-    expect(described?.configured).toBe(true);
-    expect(described?.tokenStatus).toBe("configured_unavailable");
+    expect(described).toMatchObject({ configured: true, tokenStatus: "configured_unavailable" });
   });
 });
 
 describe("discordConfigAdapter", () => {
   it("ignores retired nested dm.allowFrom", () => {
     const cfg = {
-      channels: {
-        discord: {
-          accounts: {
-            default: {
-              dm: { allowFrom: ["456"] },
-            },
-          },
-        },
-      },
+      channels: { discord: { accounts: { default: { dm: { allowFrom: ["456"] } } } } },
     } as OpenClawConfig;
 
     expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([]);

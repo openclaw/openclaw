@@ -1,11 +1,10 @@
 import { EventEmitter } from "node:events";
-import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedClickClackAccount } from "./types.js";
+import { createGatewayContext, type GatewayContext } from "./gateway.test-support.js";
 
-type GatewayContext = ChannelGatewayContext<ResolvedClickClackAccount>;
 type CommandMenuEntry = { command: string; description: string; args_hint: string };
 
 class FakeSocket extends EventEmitter {
@@ -63,29 +62,7 @@ import { startClickClackGatewayAccount } from "./gateway.js";
 import { ClickClackHttpError } from "./http-client.js";
 
 const { client, inbound, resolveAccess } = mocks;
-
-function createGatewayContext(abortSignal: AbortSignal): GatewayContext {
-  return {
-    cfg: {
-      channels: {
-        clickclack: {
-          baseUrl: "https://clickclack.example",
-          apiBaseUrl: "http://127.0.0.1:8484",
-          token: "test-token",
-          workspace: "main",
-          reconnectMs: 1,
-        },
-      },
-    } as GatewayContext["cfg"],
-    accountId: "default",
-    account: {} as ResolvedClickClackAccount,
-    runtime: {} as GatewayContext["runtime"],
-    abortSignal,
-    log: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    getStatus: () => ({ accountId: "default" }) as ReturnType<GatewayContext["getStatus"]>,
-    setStatus: vi.fn(),
-  };
-}
+const transport = { apiBaseUrl: "http://127.0.0.1:8484", reconnectMs: 1 };
 
 let socket: FakeSocket;
 let abort: AbortController;
@@ -176,7 +153,7 @@ describe("ClickClack gateway", () => {
     socket = new FakeSocket();
     client.websocket.mockReturnValue(socket);
     abort = new AbortController();
-    ctx = createGatewayContext(abort.signal);
+    ctx = createGatewayContext(abort.signal, transport);
     run = undefined;
     mocks.createClickClackClient.mockReturnValue(client);
     client.me.mockResolvedValue({ id: "bot-user", handle: "bot" });
@@ -293,7 +270,7 @@ describe("ClickClack gateway", () => {
     ],
     [
       "older server",
-      { status: 404 },
+      new ClickClackHttpError(404, "not found", new Headers()),
       "debug",
       "[default] ClickClack command menu sync skipped: server does not support /api/bots/self/commands",
     ],
@@ -337,7 +314,9 @@ describe("ClickClack gateway", () => {
     expect(client.websocket).toHaveBeenLastCalledWith("workspace-1", "cursor-501");
   });
 
-  it("skips malformed websocket frames without stopping the monitor", async () => {
+  it("skips malformed frames and dispatches with the scoped context builder", async () => {
+    const { channel } = createPluginRuntimeMock();
+    ctx.channelRuntime = channel;
     let runError: unknown;
     run = startClickClackGatewayAccount(ctx).catch((error: unknown) => {
       runError = error;
@@ -355,6 +334,7 @@ describe("ClickClack gateway", () => {
     emitMessageEvent(socket, 1);
 
     await waitForState(() => expect(inbound).toHaveBeenCalledTimes(1));
+    expect(inbound.mock.calls[0]?.[0].buildContext).toBe(channel.inbound.buildContext);
     expect(inbound.mock.calls[0]?.[0].access).toEqual({
       shouldDispatch: true,
       commandAuthorized: true,
@@ -476,8 +456,12 @@ describe("ClickClack gateway", () => {
     const paused = pauseFirstDispatch();
     const slowAbort = new AbortController();
     const fastAbort = new AbortController();
-    const slowRun = startClickClackGatewayAccount(createGatewayContext(slowAbort.signal));
-    const fastRun = startClickClackGatewayAccount(createGatewayContext(fastAbort.signal));
+    const slowRun = startClickClackGatewayAccount(
+      createGatewayContext(slowAbort.signal, transport),
+    );
+    const fastRun = startClickClackGatewayAccount(
+      createGatewayContext(fastAbort.signal, transport),
+    );
 
     await waitForState(() => expect(client.websocket).toHaveBeenCalledTimes(2));
 
@@ -548,7 +532,7 @@ describe("ClickClack gateway", () => {
   it("carries validated event correlation through the authoritative fetch and inbound turn", async () => {
     await startGateway();
 
-    emitMessageEvent(socket, 1, { correlation_id: "fakeco.case_1" });
+    emitMessageEvent(socket, 1, { correlation_id: " fakeco.case_1 " });
 
     await vi.waitFor(() => expect(inbound).toHaveBeenCalledTimes(1));
     expect(mocks.createClickClackClient).toHaveBeenLastCalledWith({

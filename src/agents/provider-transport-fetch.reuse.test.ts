@@ -12,19 +12,17 @@ import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-const model: Model<"openai-responses"> = {
+const model: Model<"openai-responses"> = makeProviderModelFixture({
   id: "fixture-model",
   name: "Loopback fixture",
   provider: "openai",
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 8192,
   maxTokens: 256,
-};
+});
 
 describe("Responses trailing HTTP body", () => {
   it("delivers terminal before EOF and reuses sockets across five sequential turns", async () => {
@@ -64,13 +62,15 @@ describe("Responses trailing HTTP body", () => {
           });
           for (let turn = 0; turn < 5; turn += 1) {
             settled = createDeferredCore();
+            const request = {
+              model: model.id,
+              stream: true,
+              input: [{ role: "user", content: "fixture" }],
+            } satisfies Parameters<typeof createResponsesStreamWithRecovery>[0]["request"];
             const { stream } = await createResponsesStreamWithRecovery({
               client,
-              request: {
-                model: model.id,
-                stream: true,
-                input: [{ role: "user", content: "fixture" }],
-              },
+              request,
+              buildFullHistoryRequest: () => request,
               requestOptions: undefined,
               model: localModel,
             });

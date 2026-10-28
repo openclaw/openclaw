@@ -4,13 +4,13 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { waitForSessionEvent } from "./session-message-event.test-support.js";
 import { removeSessionTestDirectories } from "./session-test-directories.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
   installGatewayTestHooks,
-  onceMessage,
   rpcReq,
   writeSessionStore,
 } from "./test-helpers.server.js";
@@ -23,12 +23,11 @@ vi.mock("../plugin-sdk/browser-maintenance.js", async (importOriginal) => ({
 installGatewayTestHooks({ scope: "suite" });
 
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
-let clients: WebSocket[];
+const clients: WebSocket[] = [];
 const cleanupDirs: string[] = [];
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
-  clients = [];
   for (const subscription of ["messages", "list", "both"]) {
     const ws = await harness.openWs();
     clients.push(ws);
@@ -43,23 +42,16 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  for (const ws of clients ?? []) {
-    ws.close();
-  }
+  clients.forEach((ws) => ws.close());
   await harness?.close();
 });
 
-afterEach(async () => {
-  await removeSessionTestDirectories(cleanupDirs.splice(0));
-});
+afterEach(() => removeSessionTestDirectories(cleanupDirs.splice(0)));
 
-test.each([
-  { reason: "reset", method: "sessions.reset" },
-  { reason: "new", method: "sessions.reset" },
-  { reason: "delete", method: "sessions.delete" },
-])(
-  "delivers $reason notices to message-only, list-only, and overlapping subscribers",
-  async ({ reason, method }) => {
+test.each(["reset", "new", "delete"])(
+  "delivers %s notices to message-only, list-only, and overlapping subscribers",
+  async (reason) => {
+    const method = reason === "delete" ? "sessions.delete" : "sessions.reset";
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-drain-"));
     cleanupDirs.push(dir);
     const storePath = path.join(dir, "sessions.json");
@@ -73,24 +65,15 @@ test.each([
       const response = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
       expect(response.ok, JSON.stringify(response)).toBe(true);
     }
-    const notices = clients.map((ws) =>
-      onceMessage(
-        ws,
-        (message) =>
-          message.type === "event" &&
-          message.event === "socket.drain" &&
-          (message.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
-      ),
-    );
-    const [, ...events] = await Promise.all([
+    const notices = clients.map((ws) => waitForSessionEvent(ws, "socket.drain", { sessionKey }));
+    const [response, ...events] = await Promise.all([
       rpcReq(clients[0]!, method, {
         key: sessionKey,
         ...(method === "sessions.reset" ? { reason } : {}),
-      }).then((response) => {
-        expect(response.ok, JSON.stringify(response)).toBe(true);
       }),
       ...notices,
     ]);
+    expect(response.ok, JSON.stringify(response)).toBe(true);
     for (const event of events) {
       expect(event.payload).toMatchObject({
         sessionKey,

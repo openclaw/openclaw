@@ -358,33 +358,21 @@ function buildCodexCredentialExtra(identity: {
 }
 
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
-  try {
-    const { refreshOpenAICodexToken } = await import("./openai-chatgpt-provider.runtime.js");
-    const refreshed = await refreshOpenAICodexToken(cred.refresh);
-    const identity = resolveOpenAICodexAuthIdentity({
-      access: refreshed.access,
-      email: cred.email,
-    });
-    return {
-      ...cred,
-      ...refreshed,
-      type: "oauth" as const,
-      provider: PROVIDER_ID,
-      email: identity.email ?? cred.email,
-      displayName: cred.displayName,
-      ...buildCodexCredentialExtra(identity),
-    };
-  } catch (error) {
-    const message = formatErrorMessage(error);
-    if (
-      /extract\s+accountid\s+from\s+token/i.test(message) &&
-      typeof cred.access === "string" &&
-      cred.access.trim().length > 0
-    ) {
-      return cred;
-    }
-    throw error;
-  }
+  const { refreshOpenAICodexToken } = await import("./openai-chatgpt-provider.runtime.js");
+  const refreshed = await refreshOpenAICodexToken(cred.refresh);
+  const identity = resolveOpenAICodexAuthIdentity({
+    access: refreshed.access,
+    email: cred.email,
+  });
+  return {
+    ...cred,
+    ...refreshed,
+    type: "oauth" as const,
+    provider: PROVIDER_ID,
+    email: identity.email ?? cred.email,
+    displayName: cred.displayName,
+    ...buildCodexCredentialExtra(identity),
+  };
 }
 
 type OpenAICodexOAuthContext = ProviderAuthContext & {

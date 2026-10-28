@@ -1,7 +1,5 @@
-import { writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
@@ -15,14 +13,16 @@ import { setDisplayName } from "../../../src/state/user-profile-writes.worker.ts
 import { ensureProfileForEmail } from "../../../src/state/user-profiles.ts";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiInitialRoster,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
+import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 declare global {
   interface Window {
@@ -42,16 +42,9 @@ suite.define(() => {
       label: "sidebar-running-counts",
       layout: "home",
       env: {
+        ...deviceGatewayEnv,
         OPENCLAW_GATEWAY_PASSWORD: undefined,
         OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
       },
     });
     let gateway: GatewayServer | undefined;
@@ -112,27 +105,8 @@ suite.define(() => {
         controlUiEnabled: false,
         sidecarStartup: "defer",
       });
-      proxy = await createServer({
-        configFile: false,
-        envFile: false,
-        root: state.workspaceDir,
-        appType: "custom",
-        logLevel: "error",
-        server: {
-          host: "127.0.0.1",
-          port: 0,
-          proxy: {
-            "/": {
-              target: "http://127.0.0.1:" + port,
-              ws: true,
-              headers: {
-                "x-forwarded-for": "192.0.2.10",
-                "x-forwarded-proto": "http",
-                "x-forwarded-user": email,
-              },
-            },
-          },
-        },
+      proxy = await createGatewayProxy(state.workspaceDir, {
+        "/": gatewayProxyRoute(port, email),
       });
       await proxy.listen();
       const proxyUrl = proxy.resolvedUrls?.local[0];
@@ -155,7 +129,6 @@ suite.define(() => {
             .click();
           await waitForControlUiGatewayReady(page);
           await waitForControlUiInitialRoster(page);
-          await page.screenshot({ path: path.join(suite.artifactDir, "initial-shell.png") });
           await page.locator('[data-navigation-view="online"]').click();
           const person = page.locator('[data-online-user-id="' + profile.id + '"]');
           await expect
@@ -191,21 +164,19 @@ suite.define(() => {
           // Real runtime owners produce the liveness and sessions.changed events;
           // no mocked count response or paid inference is involved.
           for (const [index, key] of keys.entries()) {
+            const runId = runIds[index]!;
+            const context = {
+              sessionKey: key,
+              sessionId: "count-proof-session-" + index,
+              agentId: "work",
+              projectSessionActive: true,
+            };
             claims.set(
-              runIds[index]!,
-              claimAgentRunContext(
-                runIds[index]!,
-                {
-                  sessionKey: key,
-                  sessionId: "count-proof-session-" + index,
-                  agentId: "work",
-                  projectSessionActive: true,
-                },
-                { trackOwner: true, ownsContext: true },
-              ),
+              runId,
+              claimAgentRunContext(runId, context, { trackOwner: true, ownsContext: true }),
             );
             emitAgentEvent({
-              runId: runIds[index]!,
+              runId,
               sessionKey: key,
               stream: "lifecycle",
               data: { phase: "start", startedAt: Date.now() },
@@ -214,30 +185,14 @@ suite.define(() => {
           await expect.poll(() => activeEvents.size).toBe(12);
           await page.clock.runFor(5_000);
           await page.mouse.move(900, 600);
-          try {
-            await expect
-              .poll(async () => {
-                // Real count replies can arrive after the collection-window jump.
-                // Drain their presentation frame without resuming fallback timers.
-                await page.clock.runFor(20);
-                return person.getAttribute("aria-description");
-              })
-              .toContain("13 open sessions, 12 running");
-          } finally {
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              page.locator(".sidebar"),
-              [person],
-              {
-                animations: "disabled",
-                elements: [page.locator(".sidebar")],
-              },
-            );
-            writeFileSync(
-              path.join(suite.artifactDir, "running-count.png"),
-              frame.elements[0]!.png,
-            );
-          }
+          await expect
+            .poll(async () => {
+              // Real count replies can arrive after the collection-window jump.
+              // Drain their presentation frame without resuming fallback timers.
+              await page.clock.runFor(20);
+              return person.getAttribute("aria-description");
+            })
+            .toContain("13 open sessions, 12 running");
           expect(await person.locator('[data-session-count="running"]').textContent()).toBe("12");
           stoppedEvents.clear();
           for (const [index, runId] of runIds.entries()) {
@@ -267,15 +222,11 @@ suite.define(() => {
         releaseAgentRunContext(runId, claims.get(runId));
         clearAgentRunContext(runId);
       }
-      try {
-        await proxy?.close();
-      } finally {
-        try {
-          await gateway?.close({ reason: "sidebar running count proof cleanup" });
-        } finally {
-          await state.cleanup();
-        }
-      }
+      await runQaGatewayFixture(
+        async () => proxy?.close(),
+        () => gateway?.close({ reason: "sidebar running count proof cleanup" }),
+        () => state.cleanup(),
+      );
     }
   });
 });

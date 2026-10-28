@@ -44,6 +44,34 @@ export type TranscriptTurnAdmission = TranscriptEntryAnchor &
     role: "user";
   }>;
 
+/** Capture only the scalar identity; message payloads have separate deep-copy ownership. */
+export function snapshotTranscriptEntryAnchor(
+  anchor: TranscriptEntryAnchor,
+): TranscriptEntryAnchor {
+  return {
+    agentId: anchor.agentId,
+    sessionId: anchor.sessionId,
+    sessionKey: anchor.sessionKey,
+    storePath: anchor.storePath,
+    generation: anchor.generation,
+    entryId: anchor.entryId,
+    rawSeq: anchor.rawSeq,
+    effectiveParentId: anchor.effectiveParentId,
+    activeMessagePosition: anchor.activeMessagePosition,
+    ...(Object.hasOwn(anchor, "idempotencyKey") ? { idempotencyKey: anchor.idempotencyKey } : {}),
+  };
+}
+
+export function snapshotTranscriptTurnAdmission(
+  admission: TranscriptTurnAdmission,
+): TranscriptTurnAdmission {
+  return {
+    ...snapshotTranscriptEntryAnchor(admission),
+    logicalTurnId: admission.logicalTurnId,
+    role: admission.role,
+  };
+}
+
 /** Exact accepted transcript range, inclusive of admission and terminal. */
 export type TranscriptTurnBoundary = Readonly<{
   admission: TranscriptTurnAdmission;

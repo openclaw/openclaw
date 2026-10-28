@@ -3,20 +3,18 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
-type PluginEntriesConfig = NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]>;
-
 export function normalizePluginConfigId(id: unknown): string {
   return normalizeOptionalLowercaseString(id) ?? "";
 }
 
-function hasPluginConfigId(list: unknown, pluginId: string): boolean {
+export function hasPluginConfigId(list: unknown, pluginId: string): boolean {
   return Array.isArray(list) && list.some((entry) => normalizePluginConfigId(entry) === pluginId);
 }
 
-function findPluginConfigEntry(
-  entries: PluginEntriesConfig | undefined,
+export function findPluginConfigEntry(
+  entries: unknown,
   pluginId: string,
-): { enabled?: boolean } | undefined {
+): Record<string, unknown> | undefined {
   if (!isRecord(entries)) {
     return undefined;
   }

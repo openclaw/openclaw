@@ -1,5 +1,5 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { isAgentRunDirectAbortReason } from "../agents/run-termination.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createAbortError } from "./abort-signal.js";
 
@@ -30,7 +30,7 @@ type ExecRequestTurn = {
 };
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.execRequestContext"), () => ({
-  context: new AsyncLocalStorage<ExecRequestTurn>(),
+  context: new AsyncContext<ExecRequestTurn>(Symbol.for("openclaw.execRequestContext.turn")),
   turns: new Set<ExecRequestTurn>(),
 }));
 const EVENT_OWNERS = Symbol.for("openclaw.execRequestEventOwners");
@@ -53,10 +53,8 @@ function createExecRequestOwner(identity: ExecRequestIdentity): ExecRequestOwner
 
 export function cancelExecRequestOwners(owners: readonly ExecRequestOwner[]): void {
   for (const owner of owners) {
-    if (!owner.controller.signal.aborted) {
-      const reason = createAbortError("The request that owns this command was stopped");
-      owner.controller.abort(reason);
-    }
+    const reason = createAbortError("The request that owns this command was stopped");
+    owner.controller.abort(reason);
   }
 }
 

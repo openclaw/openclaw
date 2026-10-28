@@ -4,7 +4,7 @@ import {
   type APITextDisplayComponent,
 } from "discord-api-types/v10";
 import {
-  BaseComponent,
+  type BaseComponent,
   BaseMessageInteractiveComponent,
   clean,
   parseCustomId,
@@ -58,13 +58,9 @@ export abstract class RoleSelectMenu extends AnySelectMenu {
   readonly type = ComponentType.RoleSelect;
 }
 
-export class TextDisplay extends BaseComponent {
-  readonly type = ComponentType.TextDisplay;
-  override readonly isV2 = true;
-  constructor(public content?: string) {
-    super();
-  }
-  serialize(): APITextDisplayComponent {
-    return clean({ type: this.type, content: this.content }) as APITextDisplayComponent;
-  }
+export interface TextDisplay extends BaseComponent {
+  readonly type: ComponentType.TextDisplay;
+  readonly isV2: true;
+  content?: string;
+  serialize(): APITextDisplayComponent;
 }

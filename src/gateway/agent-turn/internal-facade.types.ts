@@ -9,6 +9,8 @@ import type { GatewayClient } from "../server-methods/client-types.js";
 
 export type InternalAgentTurnPrincipalOptions = {
   // Authorization can await; the lifecycle owner must still be current before dispatch.
+  // Agent dispatch carries this into accepted execution as its Gateway lifetime, so it must
+  // not carry caller authority; check that in `assertAdmissionCurrent`.
   assertContextCurrent?: () => void;
   client: GatewayClient;
   isWebchatConnect?: (params: ConnectParams | null | undefined) => boolean;
@@ -32,6 +34,14 @@ export type RequesterSettleWakeReplay = {
 };
 
 export type InternalAgentTurnDispatchOptions = {
+  /** Validated saved input; its owner rechecks live custody at admission. */
+  recoveryInput?: {
+    agentId: string;
+    sessionKey: string;
+    sessionId: string;
+    runId: string;
+    assertCurrent: () => void;
+  };
   /** Exact in-process mailbox source reserved by the input owner. */
   controllerInput?: SessionControllerInput;
   /** Internal completion delivery owns its hidden input and durable processing receipt. */

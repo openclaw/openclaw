@@ -17,6 +17,7 @@
         "baseUrl": "https://api.cohere.ai/compatibility/v1",
         "api": "openai-completions",
         "defaultModel": "command-a-plus-05-2026",
+        "family": "cohere",
         "models": [
           {
             "id": "command-a-plus-05-2026",

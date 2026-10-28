@@ -22,7 +22,6 @@ import {
   resolveMessageReceiptPrimaryId,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   normalizeStringifiedOptionalString,
   normalizeUniqueStringEntries,
@@ -59,7 +58,6 @@ type PendingMessage = {
 };
 type PreparedMatrixTarget = {
   to: string;
-  roomId: string;
   threadId?: string;
 };
 type PendingApprovalContent = {
@@ -91,27 +89,17 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext) 
   };
 }
 
-function normalizeReactionTargetRef(params: ReactionTargetRef): ReactionTargetRef | null {
-  const accountId = normalizeAccountId(params.accountId);
-  const roomId = params.roomId.trim();
-  const eventId = params.eventId.trim();
-  if (!accountId || !roomId || !eventId) {
-    return null;
-  }
-  return { accountId, roomId, eventId };
-}
-
 function resolveEntryReactionTarget(params: {
   accountId?: string | null;
   entry: PendingMessage;
 }): ReactionTargetRef | null {
   const accountId = params.accountId?.trim();
   return accountId
-    ? normalizeReactionTargetRef({
+    ? {
         accountId,
         roomId: params.entry.roomId,
         eventId: params.entry.reactionEventId,
-      })
+      }
     : null;
 }
 
@@ -361,7 +349,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       }
       return {
         dedupeKey: buildChannelApprovalNativeTargetKey({ to: roomId, threadId }),
-        target: { to: `room:${roomId}`, roomId, threadId },
+        target: { to: `room:${roomId}`, threadId },
       };
     },
     deliverPending: async ({ cfg, accountId, context, preparedTarget, pendingPayload, view }) => {
@@ -456,28 +444,9 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     },
   },
   interactions: {
-    bindPending: async (params) => {
-      const target = resolveEntryReactionTarget(params);
-      if (!target) {
-        return null;
-      }
-      await registerMatrixApprovalReactionTarget({
-        accountId: target.accountId,
-        roomId: target.roomId,
-        eventId: target.eventId,
-        approvalId: params.pendingPayload.approvalId,
-        approvalKind: params.view.approvalKind,
-        allowedDecisions: params.pendingPayload.allowedDecisions,
-        ttlMs: params.view.expiresAtMs - Date.now(),
-      });
-      return target;
-    },
+    bindPending: (params) => resolveEntryReactionTarget(params),
     unbindPending: async (params) => {
-      const target = normalizeReactionTargetRef(params.binding);
-      if (!target) {
-        return;
-      }
-      await unregisterMatrixApprovalReactionTarget(target);
+      await unregisterMatrixApprovalReactionTarget(params.binding);
     },
     cancelDelivered: async (params) => {
       const target = resolveEntryReactionTarget(params);

@@ -1,5 +1,7 @@
 import type { SessionLogEntry, UsageFilterState } from "./usage-state-types.ts";
 
+export const DEFAULT_USAGE_SESSION_SORT = { sort: "cost", sortDirection: "desc" } as const;
+
 export function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string {
   const year = timeZone === "utc" ? date.getUTCFullYear() : date.getFullYear();
   const month = (timeZone === "utc" ? date.getUTCMonth() : date.getMonth()) + 1;
@@ -65,10 +67,10 @@ export function toggleUsageRangeSelection<T>(
   return mode === "append" ? [...selected, value] : [value];
 }
 
-function parseToolSummary(content: string) {
+export function parseSessionLog(log: SessionLogEntry) {
   const toolCounts = new Map<string, number>();
   const nonToolLines: string[] = [];
-  for (const line of content.split("\n")) {
+  for (const line of log.content.split("\n")) {
     const match = /^\[Tool:\s*([^\]]+)\]/.exec(line.trim());
     const name = match?.[1];
     if (name) {
@@ -88,15 +90,11 @@ function parseToolSummary(content: string) {
           .map(([name, count]) => `${name}×${count}`)
           .join(", ")} (${totalCalls} calls)`
       : "";
-  return {
+  const toolInfo = {
     tools: sortedTools,
     summary,
     cleanContent: nonToolLines.join("\n").trim(),
   };
-}
-
-export function parseSessionLog(log: SessionLogEntry) {
-  const toolInfo = parseToolSummary(log.content);
   return { log, toolInfo, cleanContent: toolInfo.cleanContent || log.content };
 }
 

@@ -17,22 +17,20 @@ const {
 async function injectPartialPublicationFailure(dir: string, fileName: string) {
   const realOpen = fs.open.bind(fs);
   const resolvedDir = await fs.realpath(dir);
-  const targetPath = path.join(resolvedDir, fileName);
   let injected = true;
-  const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-    const handle = await realOpen(...args);
-    const rawPath = nodeFilePath(args[0]);
-    if (!rawPath) {
-      return handle;
-    }
-    const target = path.resolve(rawPath);
+  const openSpy = vi.spyOn(fs, "open").mockImplementation(async (file, flags, ...rest) => {
+    const handle = await realOpen(file, flags, ...rest);
+    const rawPath = nodeFilePath(file);
+    const target = rawPath && path.resolve(rawPath);
     const exclusiveCreate =
-      typeof args[1] === "number" &&
-      (args[1] & syncFs.constants.O_CREAT) !== 0 &&
-      (args[1] & syncFs.constants.O_EXCL) !== 0;
+      typeof flags === "number" &&
+      (flags & syncFs.constants.O_CREAT) !== 0 &&
+      (flags & syncFs.constants.O_EXCL) !== 0;
     if (
       injected &&
-      (target === targetPath || (path.dirname(target) === resolvedDir && exclusiveCreate))
+      target &&
+      (target === path.join(resolvedDir, fileName) ||
+        (path.dirname(target) === resolvedDir && exclusiveCreate))
     ) {
       injected = false;
       vi.spyOn(handle, "write").mockImplementationOnce(async () => {
@@ -54,6 +52,11 @@ describe("bootstrap publication atomicity", () => {
   let tempDir: string;
   let agentsPath: string;
   const ensure = () => ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+  const readAgents = () => fs.readFile(agentsPath, "utf8");
+  const loadAgents = async () =>
+    (await workspace.loadWorkspaceBootstrapFiles(tempDir)).find(
+      (file) => file.name === DEFAULT_AGENTS_FILENAME,
+    );
   beforeEach(async () => {
     // Inject actual write/publication failures through the supported JavaScript backend.
     vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
@@ -74,7 +77,7 @@ describe("bootstrap publication atomicity", () => {
     expect(await listTempSiblings(tempDir)).toEqual([]);
     restore();
     await ensure();
-    const content = await fs.readFile(agentsPath, "utf-8");
+    const content = await readAgents();
     expect(content).not.toBe("# PARTIAL\n");
     expect(content.trim().length).toBeGreaterThan(0);
   });
@@ -110,12 +113,12 @@ describe("bootstrap publication atomicity", () => {
     );
 
     expect(created.filter(Boolean)).toHaveLength(1);
-    expect(contents).toContain(await fs.readFile(agentsPath, "utf8"));
+    expect(contents).toContain(await readAgents());
     expect((await fs.lstat(agentsPath)).nlink).toBe(1);
     expect(await listTempSiblings(tempDir)).toEqual([]);
   });
 
-  it("keeps a safe reader on the complete single-link file", async () => {
+  it("rejects observable two-link reads and publishes complete single-link bytes", async () => {
     const realLink = syncFs.linkSync.bind(syncFs);
     let concurrentRead: ReturnType<typeof workspace.loadWorkspaceBootstrapFiles> | undefined;
     vi.spyOn(syncFs, "linkSync").mockImplementation((source, target) => {
@@ -124,12 +127,18 @@ describe("bootstrap publication atomicity", () => {
     });
 
     await publishBootstrapFile(agentsPath, "COMPLETE\n");
-    if (!concurrentRead) {
-      throw new Error("concurrent reader was not started");
-    }
-    const agents = (await concurrentRead).find((file) => file.name === DEFAULT_AGENTS_FILENAME);
-    expect(agents).toMatchObject({ content: "COMPLETE\n", missing: false });
+    expect(concurrentRead).toBeDefined();
+    const intervalAgents = (await concurrentRead!).find(
+      (file) => file.name === DEFAULT_AGENTS_FILENAME,
+    );
+    // Windows removes the staging link synchronously before this async read resumes.
+    expect(intervalAgents).toMatchObject({
+      content:
+        process.platform === "win32" ? "COMPLETE\n" : "[UNREADABLE: path must not be hardlinked]",
+      missing: false,
+    });
     expect((await fs.lstat(agentsPath)).nlink).toBe(1);
+    expect(await loadAgents()).toMatchObject({ content: "COMPLETE\n", missing: false });
   });
 
   it("publishes complete bootstrap bytes without hard-link support", async () => {
@@ -139,7 +148,7 @@ describe("bootstrap publication atomicity", () => {
 
     await expect(publishBootstrapFile(agentsPath, "complete\n")).resolves.toBe(true);
     await expect(publishBootstrapFile(agentsPath, "replacement\n")).resolves.toBe(false);
-    expect(await fs.readFile(agentsPath, "utf8")).toBe("complete\n");
+    expect(await readAgents()).toBe("complete\n");
     expect((await fs.lstat(agentsPath)).nlink).toBe(1);
     expect(await listTempSiblings(tempDir)).toEqual([]);
   });

@@ -17,6 +17,15 @@ While an update is active, the table shows its phase instead of advertising anot
 update, and the final line points to `openclaw update status`. JSON still includes
 registry/Git `availability` separately from `activeRun`.
 
+A failed or interrupted attempt becomes history only when its saved observation
+of a running Gateway differs in version or build ID from the live serving
+Gateway. Text status then shows a past-failure note without recovery advice.
+`openclaw status` and the Control UI use the same comparison; a manual tag
+checkout, build, and restart can leave the old failure behind. The installed
+package's starting identity alone is insufficient. Missing observations, unknown
+identities, and observations that still match the live Gateway keep the failure
+actionable. The saved record and JSON history retain the original outcome.
+
 Status inspection has a 30-second overall limit, extended when `--timeout <seconds>`
 requests a longer check. Shorter check timeouts do not shorten local history inspection.
 If an inspection stalls or fails, status returns the facts already available
@@ -26,6 +35,16 @@ does not mean that no update, history, or migration exists. Shared-state reads
 run asynchronously so a blocked snapshot does not freeze the command.
 A fresh profile without Gateway credentials can report a `channels` inspection
 error while still returning update availability and empty recovery history.
+
+Status does not acquire the managed handoff file lock. A live holder of
+`managed-update-handoffs.sqlite.lock` therefore does not prevent read-only status.
+When an updater times out acquiring that lock, its error includes
+`file_lock_timeout`, the lock path, elapsed wait, timeout budget, recorded holder
+PID and start identity, holder liveness, any recorded command or phase, and the
+waiting phase. Dead or unregistered self-held sidecars are reclaimed with a warning;
+active local holders and recorded sibling workers remain protected. For an admitted
+run, `lastRun` retains the failed step and lock reason code. A failure before run
+admission does not replace earlier history.
 
 When a package publication journal no longer matches its installation, status
 names the changed parent, control directory, or journal bindings with their
@@ -137,13 +156,16 @@ openclaw update status --json
 openclaw update status --timeout 10
 ```
 
-| Flag                  | Default | Description                         |
-| --------------------- | ------- | ----------------------------------- |
-| `--json`              | `false` | Print machine-readable status JSON. |
-| `--timeout <seconds>` | `300`   | Timeout for checks.                 |
+| Flag                  | Default | Description                                              |
+| --------------------- | ------- | -------------------------------------------------------- |
+| `--json`              | `false` | Print machine-readable status JSON.                      |
+| `--timeout <seconds>` | Unset   | Cap each update check within the shared 30-second limit. |
 
-Explicit timeouts replace the default. Local installation discovery keeps its
-own inspection budget.
+Longer timeouts extend the overall limit; shorter values only cap each update
+check and do not shorten local history inspection. The Gateway channel-warning
+read defaults to 5 seconds and uses the explicit timeout when supplied, within
+the remaining overall limit. Local installation discovery keeps its own
+inspection budget.
 
 For extended-stable package installs, status performs the same public selector
 and exact-package verification as foreground update. It can report
@@ -160,7 +182,10 @@ keep a skipped or failed record with their reason. A fresh-profile dry-run leave
 the database absent and records no run. CLI invocations rejected before admission
 leave state untouched. The same ID follows
 the detached updater and the restarted Gateway, so reconnecting does not lose
-the outcome. Post-core finalization children report back to their parent without
+the outcome. An external supervisor's native update keeps the run ID from its
+`update migrate` receipt. It is recorded as a succeeded CLI run, starting at
+migration, when the supervisor accepts the release and runs `update finish`.
+Retrying `update finish` keeps that one record. Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
 a run ID.
 
@@ -270,6 +295,10 @@ user text, and show config key families instead of operator-defined names. Only
 catalog-confirmed public check and plugin IDs are included; unknown IDs and codes
 remain complete locally and are redacted publicly. Older runs cannot recover facts that their updater did not record. Existing history
 and report size limits still apply.
+
+When shared-state migration finds invalid client socket material, the report
+preserves that classified cause while redacting the database path and private
+exception details. A private path containing spaces does not hide the cause.
 
 Failed updates always retain a reason code and a failure fact, including failures
 before the first command runs. Git failures use codes such as `fetch-failed`,

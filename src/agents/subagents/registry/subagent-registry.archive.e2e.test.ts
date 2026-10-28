@@ -11,7 +11,7 @@ import { ensureContextEnginesInitialized } from "../../../context-engine/init.js
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { callGateway } from "../../../gateway/call.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
-import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { getAgentRunContext, hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import {
   captureSubagentCompletionReply,
@@ -86,12 +86,16 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
   >(async () => {}),
 }));
 
+// mock-isolation: Archive tests supply registry handles without discovering installed plugins.
 vi.mock("../../runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
+  const loadRegistry = vi.fn<
+    typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
+  >(() => createEmptyPluginRegistry());
   return {
-    loadAgentRuntimePluginRegistryHandle: vi.fn<
-      typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
-    >(() => createEmptyPluginRegistry()),
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
   };
 });
 
@@ -167,6 +171,7 @@ describe("subagent registry archive behavior", () => {
     vi.mocked(captureSubagentCompletionReply).mockReset();
     vi.mocked(runSubagentAnnounceFlow).mockReset();
     vi.mocked(getAgentRunContext).mockReset().mockReturnValue(undefined);
+    vi.mocked(hasLiveAgentRunContext).mockReset().mockReturnValue(false);
     sessionAccessorMocks.readSessionEntryReadOnlyInWorker.mockReset();
     await mod.resetSubagentRegistryForTests({ persist: false });
     settleRootWork = observeRootWork();
@@ -188,6 +193,7 @@ describe("subagent registry archive behavior", () => {
     };
     setRuntimeConfigSnapshot(currentConfig);
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
+    vi.mocked(hasLiveAgentRunContext).mockReturnValue(true);
     vi.mocked(captureSubagentCompletionReply).mockResolvedValue("completed result");
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("retryable");
 
@@ -270,6 +276,7 @@ describe("subagent registry archive behavior", () => {
 
   it("does not archive an active run carrying an obsolete persisted deadline", async () => {
     vi.mocked(getAgentRunContext).mockReturnValue({} as never);
+    vi.mocked(hasLiveAgentRunContext).mockReturnValue(true);
     const now = Date.now();
     await addCanonicalSubagentRunForTests({
       runId: "run-delete-stale-deadline",

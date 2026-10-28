@@ -5,6 +5,7 @@ import {
   resolveInboundMentionDecision,
   resolveInboundSessionEnvelopeContextAsync,
   toInboundMediaFactsWithMetadata,
+  type ChannelBotLoopProtectionFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
@@ -13,6 +14,7 @@ import {
   resolveChannelGroupsConfigPath,
 } from "openclaw/plugin-sdk/channel-policy";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
+import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
@@ -26,7 +28,6 @@ import {
   resolveMattermostMonitorInboundAccess,
   shouldRetainMattermostSenderHistory,
 } from "./monitor-auth.js";
-import { resolveMattermostPendingHistoryKey } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import {
   matchesMattermostBotMention,
@@ -113,6 +114,19 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       return;
     }
     const { channelDisplay, kind, roomLabel, route, thread } = eventPlan;
+    // The server stamps from_bot on every post created by a bot account.
+    const isBotPost = post.props?.from_bot === "true";
+    const channelBotConfig = kind === "direct" ? undefined : account.config.groups?.[channelId];
+    const wildcardBotConfig = kind === "direct" ? undefined : account.config.groups?.["*"];
+    const allowBots =
+      channelBotConfig?.allowBots ??
+      wildcardBotConfig?.allowBots ??
+      account.config.allowBots ??
+      true;
+    if (isBotPost && allowBots === false) {
+      monitor.logVerboseMessage(`mattermost: drop bot post (allowBots=false sender=${senderId})`);
+      return;
+    }
     const senderName =
       normalizeOptionalString(payload.data?.sender_name) ??
       normalizeOptionalString((await resolveUserInfo(senderId))?.username) ??
@@ -128,11 +142,9 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       agentId: route.agentId,
       sessionKey,
     });
-    const historyKey = resolveMattermostPendingHistoryKey({
-      kind,
-      sessionKey,
-      threadRootId: effectiveReplyToId,
-    });
+    // Flat DMs dispatch immediately. Opted-in threads have an independent session
+    // and need a recoverable context window just like room threads.
+    const historyKey = kind === "direct" && !effectiveReplyToId ? null : sessionKey;
     const fileIds = uniqueStrings(normalizeTrimmedStringList(post.file_ids ?? []));
     const nativeMedia = fileIds.map(() => ({}));
     const pendingBody = formatMattermostPendingMediaText({ body: rawText, media: nativeMedia });
@@ -369,6 +381,21 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       recordPendingHistory();
       return;
     }
+    // Thread participation and implicit mentions do not count here: two bots that both
+    // replied in one thread would otherwise keep waking each other.
+    if (
+      isBotPost &&
+      allowBots === "mentions" &&
+      kind !== "direct" &&
+      !wasMentioned &&
+      !oncharTriggered
+    ) {
+      monitor.logVerboseMessage(
+        `mattermost: drop bot post (allowBots=mentions, missing mention channel=${channelId} sender=${senderId})`,
+      );
+      recordPendingHistory();
+      return;
+    }
 
     const mediaList = await resolveMattermostMedia(fileIds);
     const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
@@ -512,6 +539,23 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     monitor.logVerboseMessage(
       `mattermost inbound: from=${ctxPayload.From} id=${post.id} len=${bodyText.length}`,
     );
+    const botLoopProtection: ChannelBotLoopProtectionFacts | undefined = isBotPost
+      ? {
+          scopeId: account.accountId,
+          conversationId: channelId,
+          senderId,
+          receiverId: botUserId,
+          eventId: post.id,
+          config: mergePairLoopGuardConfig(
+            account.config.botLoopProtection,
+            wildcardBotConfig?.botLoopProtection,
+            channelBotConfig?.botLoopProtection,
+          ),
+          defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
+          defaultEnabled: true,
+          nowMs: post.create_at ?? undefined,
+        }
+      : undefined;
 
     await dispatchMattermostInboundTurn(monitor, {
       post,
@@ -522,6 +566,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       historyLimit,
       channelHistories,
       pinnedMainDmOwner,
+      botLoopProtection,
       turnAdoptionLifecycle,
     });
   };

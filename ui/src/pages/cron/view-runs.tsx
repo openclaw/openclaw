@@ -120,18 +120,16 @@ function FilterDropdown<T extends string>(props: {
   onToggle: (value: T, checked: boolean) => void;
   onClear: () => void;
 }) {
-  const selectedLabels = createMemo(() =>
+  const selectedLabels = () =>
     props.options
       .filter((option) => props.selected.includes(option.value))
-      .map((option) => option.label),
-  );
-  const summary = createMemo(() =>
+      .map((option) => option.label);
+  const summary = () =>
     selectedLabels().length === 0
       ? props.allLabel
       : selectedLabels().length <= 2
         ? selectedLabels().join(", ")
-        : `${selectedLabels()[0]} +${selectedLabels().length - 1}`,
-  );
+        : `${selectedLabels()[0]} +${selectedLabels().length - 1}`;
   const accessibleSummary = createMemo(() =>
     selectedLabels().length > 2
       ? `${summary()} (${new Intl.ListFormat(i18n.getLocale(), {

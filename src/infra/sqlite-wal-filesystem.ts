@@ -7,13 +7,13 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasErrnoCode } from "./errno.js";
 
-const ROLLBACK_FILESYSTEM_MAGIC = new Set([
+const NETWORK_FILESYSTEM_MAGIC = new Set([
   0x6969, // NFS
   0x517b, // SMB
   0xff534d42, // CIFS
   0xfe534d42, // SMB2
-  0x01021997, // 9p (V9FS)
 ]);
+const ROLLBACK_FILESYSTEM_MAGIC = new Set([...NETWORK_FILESYSTEM_MAGIC, 0x01021997]); // 9p (V9FS)
 const LINUX_BTRFS_SUPER_MAGIC = 0x9123683e;
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
 // Filesystem classification runs during database open, so never let the fallback probe stall it.
@@ -142,14 +142,11 @@ function isSshfsMountSource(source: string | undefined): boolean {
   );
 }
 
-function resolveMountTypeJournalPolicy(entry: MountEntry): SqliteFilesystemJournalPolicy {
+function resolveNetworkMountJournalPolicy(
+  entry: MountEntry,
+): "rollback" | "unsupported" | undefined {
   const normalized = entry.fsType.toLowerCase();
-  if (
-    normalized.startsWith("nfs") ||
-    NETWORK_FILESYSTEM_TYPES.has(normalized) ||
-    CROSS_VM_FILESYSTEM_TYPES.has(normalized) ||
-    normalized.startsWith("9p")
-  ) {
+  if (normalized.startsWith("nfs") || NETWORK_FILESYSTEM_TYPES.has(normalized)) {
     return "rollback";
   }
   if (normalized === "fuse.sshfs") {
@@ -158,7 +155,15 @@ function resolveMountTypeJournalPolicy(entry: MountEntry): SqliteFilesystemJourn
   if ((normalized === "macfuse" || normalized === "osxfuse") && isSshfsMountSource(entry.source)) {
     return "unsupported";
   }
-  return "wal";
+  return undefined;
+}
+
+function resolveMountTypeJournalPolicy(entry: MountEntry): SqliteFilesystemJournalPolicy {
+  const normalized = entry.fsType.toLowerCase();
+  return (
+    resolveNetworkMountJournalPolicy(entry) ??
+    (CROSS_VM_FILESYSTEM_TYPES.has(normalized) || normalized.startsWith("9p") ? "rollback" : "wal")
+  );
 }
 
 function findMountEntry(targetPath: string, mountEntries: MountEntry[]): MountEntry | undefined {
@@ -273,6 +278,45 @@ function isWindowsUncPath(targetPath: string): boolean {
 
 function isWindowsDrivePath(targetPath: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(targetPath) || /^\\\\\?\\[A-Za-z]:[\\/]/i.test(targetPath);
+}
+
+/** Advisory inspection: share mount metadata across stores and never infer network storage on failure. */
+export function findSqlitePathsOnNetworkFilesystems(targetPaths: readonly string[]): string[] {
+  let mounts: ReturnType<typeof readMountEntries> | undefined;
+  return targetPaths.filter((targetPath) => {
+    try {
+      if (process.platform === "win32") {
+        const normalized = path.win32.normalize(targetPath);
+        return (
+          isWindowsUncPath(normalized) ||
+          (isWindowsDrivePath(normalized) &&
+            isWindowsUncPath(path.win32.normalize(fs.realpathSync.native(targetPath))))
+        );
+      }
+      const checkedPaths = findExistingVolumePaths(targetPath);
+      if (!checkedPaths) {
+        return false;
+      }
+      try {
+        if (NETWORK_FILESYSTEM_MAGIC.has(fs.statfsSync(checkedPaths.canonicalPath).type)) {
+          return true;
+        }
+      } catch {
+        // A missing native type can still be classified by mount metadata.
+      }
+      const mountResult = (mounts ??= readMountEntries());
+      return (
+        mountResult.ok &&
+        [checkedPaths.originalPath, checkedPaths.canonicalPath].some((checkedPath) => {
+          const entry = findMountEntry(checkedPath, mountResult.value);
+          return entry !== undefined && resolveNetworkMountJournalPolicy(entry) !== undefined;
+        })
+      );
+    } catch {
+      // Unreadable paths and failed metadata probes are unknown, not evidence of a network mount.
+      return false;
+    }
+  });
 }
 
 export function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJournalPolicy {

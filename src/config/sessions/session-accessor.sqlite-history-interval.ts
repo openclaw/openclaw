@@ -21,6 +21,7 @@ import { positionTranscriptDisplayEvents } from "./session-accessor.sqlite-displ
 import { findUnindexedActiveTranscriptEntry } from "./session-accessor.sqlite-history-navigation.js";
 import {
   getActiveTranscriptKysely,
+  selectActiveTranscriptIdentityRows,
   type SessionTranscriptMessageAnchorPage,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
@@ -126,14 +127,7 @@ function selectDisplayableActiveEventById(
   projection: CurrentTranscriptProjection,
   eventId: string,
 ) {
-  const db = getActiveTranscriptKysely(projection.database);
-  return db
-    .selectFrom("transcript_event_identities as identity")
-    .innerJoin("session_transcript_active_events as active", (join) =>
-      join
-        .onRef("active.session_id", "=", "identity.session_id")
-        .onRef("active.event_seq", "=", "identity.seq"),
-    )
+  return selectActiveTranscriptIdentityRows(projection.database)
     .innerJoin("transcript_events as event", (join) =>
       join
         .onRef("event.session_id", "=", "active.session_id")

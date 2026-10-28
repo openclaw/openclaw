@@ -8,14 +8,12 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
-  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import {
   createServer,
   request as httpRequest,
-  type Server,
   type RequestListener,
   type IncomingMessage,
 } from "node:http";
@@ -28,6 +26,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -83,26 +82,6 @@ function pluginHome(prefix: string) {
       OPENCLAW_PLUGINS_TMP_DIR: scratch,
     },
   };
-}
-
-async function listen(server: Server) {
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected TCP server address");
-  }
-  return `http://127.0.0.1:${address.port}`;
-}
-
-async function closeServer(server: Server, force = false) {
-  if (force) {
-    server.closeAllConnections();
-  }
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
 }
 
 async function clawhubPreflight(
@@ -203,7 +182,6 @@ async function useRegistry(
     archive?: string;
     env?: NodeJS.ProcessEnv;
     upstream?: RequestListener;
-    force?: boolean;
     preload?: string;
   } = {},
 ) {
@@ -216,9 +194,7 @@ async function useRegistry(
   if (!options.tarballPath) {
     writeFileSync(tarballPath, options.archive ?? "fixture package archive", "utf8");
   }
-  const upstream = options.upstream
-    ? await useUpstream(options.upstream, options.force)
-    : undefined;
+  const upstream = options.upstream ? await useUpstream(options.upstream) : undefined;
   const preload = options.preload ? path.join(root, "preload.mjs") : undefined;
   if (options.preload && preload) {
     writeFileSync(preload, options.preload);
@@ -295,12 +271,12 @@ async function assertRegistryRecovers(
   return local;
 }
 
-async function useUpstream(listener: RequestListener, force = false) {
+async function useUpstream(listener: RequestListener) {
   return fixtures.acquire(async (rollback) => {
     const server = createServer(listener);
-    const cleanup = () => closeServer(server, force);
+    const cleanup = () => closeHttpServer(server);
     try {
-      return { origin: await listen(server), cleanup };
+      return { origin: await listenLoopback(server), cleanup };
     } catch (error) {
       return rollback(error, cleanup);
     }
@@ -329,9 +305,9 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
   });
 
   it.each([
-    { mode: "capture", status: 0, traceEnabled: false, traceValue: "0", changeAfterSource: false },
-    { mode: "logged", status: 23, traceEnabled: false, traceValue: "0", changeAfterSource: false },
-    { mode: "logged", status: 0, traceEnabled: true, traceValue: "1", changeAfterSource: true },
+    { mode: "capture", status: 0, traceValue: "0", changeAfterSource: false },
+    { mode: "logged", status: 23, traceValue: "0", changeAfterSource: false },
+    { mode: "logged", status: 0, traceValue: "1", changeAfterSource: true },
   ])(
     "bounds $mode diagnostics (exit $status, trace $traceValue, changed: $changeAfterSource)",
     (testCase) => {
@@ -343,17 +319,11 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
       const startOfLineApiKey = ["rk", "plugin", "start", "secret"].join("-");
       const boundarySecretSuffix = "PLUGIN_BOUNDARY_SECRET_SUFFIX_MUST_NOT_LEAK";
       const boundaryApiKey = ["sk", "proj", "z".repeat(256), boundarySecretSuffix].join("-");
-      const capturedError = `DO_NOT_DUMP_PLUGIN_STDERR_PREFIX\n${"y".repeat(32 * 1024)}\n${startOfLineApiKey}\nPLUGIN_STDERR_TAIL_MARKER task-runner risk-score disk-space Authorization: Bearer plugin-fixture-bearer OPENAI_API_KEY=${fixtureApiKey} [${punctuationApiKey}]\n${boundaryApiKey}`;
+      const capturedError = `DO_NOT_DUMP_PLUGIN_STDERR_PREFIX\n${"y".repeat(32 * 1024)}\n${startOfLineApiKey}\nPLUGIN_STDERR_TAIL_MARKER task-runner Authorization: Bearer plugin-fixture-bearer OPENAI_API_KEY=${fixtureApiKey} [${punctuationApiKey}]\n${boundaryApiKey}`;
       const command =
         testCase.mode === "capture"
           ? 'run_plugins_openclaw_capture "$OUTPUT_FILE" plugins inspect demo-plugin --runtime --json'
           : 'run_plugins_openclaw_logged install-git plugins install "git:file:///tmp/fixture@revision" --force';
-
-      const unredactedTail = Buffer.from(`${capturedError}\n`, "utf8")
-        .subarray(-192)
-        .toString("utf8");
-      expect(unredactedTail).toContain(boundarySecretSuffix);
-      expect(unredactedTail).not.toContain(["sk", "proj"].join("-"));
 
       const result = runPluginsSweepShell(
         `
@@ -397,11 +367,7 @@ ${command}
           CAPTURED_STDERR: capturedError,
           CAPTURE_STATUS: String(testCase.status),
           OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "192",
-          OPENCLAW_PLUGIN_LIFECYCLE_TRACE: testCase.changeAfterSource
-            ? testCase.traceEnabled
-              ? "0"
-              : "1"
-            : testCase.traceValue,
+          OPENCLAW_PLUGIN_LIFECYCLE_TRACE: testCase.changeAfterSource ? "0" : testCase.traceValue,
           OUTPUT_FILE: outputFile,
           SCRATCH_ROOT: root,
         },
@@ -435,12 +401,9 @@ ${command}
         "truncated: showing last 192",
         "PLUGIN_STDERR_TAIL_MARKER",
         "task-runner",
-        "risk-score",
-        "disk-space",
         "Authorization: Bearer [REDACTED]",
         "OPENAI_API_KEY=[REDACTED]",
         "[[REDACTED]]",
-        "[REDACTED]",
       ]) {
         expect(result.stderr).toContain(fragment);
       }
@@ -549,8 +512,7 @@ done
         writeFileSync(portFile, initial);
       }
       const tarballPath = path.join(root, "fixture.tgz");
-      const archive = "fixture package archive";
-      writeFileSync(tarballPath, archive);
+      writeFileSync(tarballPath, "fixture package archive");
       const preload = path.join(root, "publication-preload.mjs");
       writeFileSync(
         preload,
@@ -666,18 +628,6 @@ fs.renameSync = (source, destination) => {
             payload: published,
             observed: published,
           });
-          const metadata = await requestFixtureRegistry(Number(published), "/fixture-pkg");
-          expect(metadata.statusCode, stderr.text()).toBe(200);
-          const manifest = JSON.parse(metadata.body).versions["1.0.0"];
-          expect(manifest).toMatchObject({ name: "fixture-pkg", version: "1.0.0" });
-          const tarball = new URL(manifest.dist.tarball);
-          expect(tarball.origin).toBe(`http://127.0.0.1:${published}`);
-          const response = await requestFixtureRegistry(Number(published), tarball.pathname);
-          expect(response).toEqual({
-            statusCode: 200,
-            body: archive,
-            contentLength: String(Buffer.byteLength(archive)),
-          });
         }
         expect(readdirSync(portDir)).toEqual(initial !== null || !fault ? ["port"] : []);
       } finally {
@@ -686,8 +636,6 @@ fs.renameSync = (source, destination) => {
           child.kill("SIGKILL");
         }
         await closed;
-        rmSync(root, { recursive: true, force: true });
-        expect(existsSync(root)).toBe(false);
       }
     }),
   );
@@ -719,6 +667,7 @@ fs.renameSync = (source, destination) => {
         const response = await requestFixtureRegistry(port, pathname);
         expect(response.statusCode, `${pathname}: ${stderr.text()}`).toBe(200);
         expect(response.body).toBe(archive);
+        expect(response.contentLength).toBe(String(Buffer.byteLength(archive)));
       }
     }));
 
@@ -898,7 +847,6 @@ fs.renameSync = (source, destination) => {
               response.end("oversized");
             }
           },
-          force: true,
           preload: stalled ? preload : undefined,
         });
 
@@ -971,9 +919,17 @@ fs.renameSync = (source, destination) => {
     expect(legacy.status).toBe(0);
   });
 
-  it.each(["managed root", "peer host", "optional dependency"])(
-    "rejects ClawHub paths outside the expected %s",
-    (boundary) => {
+  it.each([
+    { boundary: "managed root", standaloneHost: false },
+    { boundary: "peer host", standaloneHost: false },
+    { boundary: "peer host", standaloneHost: true },
+    { boundary: "peer symlink", standaloneHost: true },
+    { boundary: "optional dependency", standaloneHost: true },
+    { boundary: "valid peer", standaloneHost: false },
+    { boundary: "valid peer", standaloneHost: true },
+  ])(
+    "checks ClawHub $boundary (standalone host=$standaloneHost)",
+    ({ boundary, standaloneHost }) => {
       const escaped = boundary === "managed root";
       const wrongPeerTarget = boundary === "peer host";
       const { root, state, scratch, env } = pluginHome("openclaw-plugins-clawhub-path-");
@@ -983,6 +939,10 @@ fs.renameSync = (source, destination) => {
         : path.join(extensionsRoot, CLAWHUB_ID);
       mkdirSync(extensionsRoot, { recursive: true });
       mkdirSync(installPath, { recursive: true });
+      const expectedHostRoot = standaloneHost
+        ? path.join(root, "standalone", "runtime")
+        : process.cwd();
+      mkdirSync(expectedHostRoot, { recursive: true });
       const record = {
         artifactFormat: "zip",
         artifactKind: "legacy-zip",
@@ -995,15 +955,16 @@ fs.renameSync = (source, destination) => {
       };
       if (record.artifactKind === "npm-pack") {
         mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
-        const peerTarget = wrongPeerTarget ? path.join(root, "other-host") : process.cwd();
+        const peerTarget = wrongPeerTarget ? path.join(root, "other-host") : expectedHostRoot;
         if (wrongPeerTarget) {
           mkdirSync(peerTarget);
         }
-        symlinkSync(
-          peerTarget,
-          path.join(installPath, "node_modules", "openclaw"),
-          process.platform === "win32" ? "junction" : "dir",
-        );
+        const peerPath = path.join(installPath, "node_modules", "openclaw");
+        if (boundary === "peer symlink") {
+          mkdirSync(peerPath);
+        } else {
+          symlinkSync(peerTarget, peerPath, process.platform === "win32" ? "junction" : "dir");
+        }
         if (boundary === "optional dependency") {
           const dependencyPath = path.join(installPath, "node_modules", "is-number");
           const dependencyTarget = path.join(root, "other-dependency");
@@ -1028,19 +989,71 @@ fs.renameSync = (source, destination) => {
         ...env,
         CLAWHUB_PLUGIN_ID: CLAWHUB_ID,
         CLAWHUB_PLUGIN_SPEC: CLAWHUB_SPEC,
+        OPENCLAW_E2E_HOST_ROOT: standaloneHost ? expectedHostRoot : "",
       });
 
+      if (boundary === "valid peer") {
+        expect(result.status, result.stderr).toBe(0);
+        return;
+      }
       expect(result.status).toBe(1);
       if (escaped) {
         expect(result.stderr).toContain("ClawHub install path resolved outside");
       } else {
-        const expectedError = wrongPeerTarget
-          ? `expected ClawHub openclaw peer ${realpathSync(path.join(root, "other-host"))} to target ${realpathSync(process.cwd())}`
-          : `ClawHub isolated dependency resolved outside ${installPath}: ${realpathSync(path.join(root, "other-dependency", "package.json"))}`;
+        const expectedError =
+          boundary === "peer symlink"
+            ? `ClawHub openclaw peer is not a symlink: ${path.join(installPath, "node_modules", "openclaw")}`
+            : wrongPeerTarget
+              ? `expected ClawHub openclaw peer ${realpathSync(path.join(root, "other-host"))} to target ${realpathSync(expectedHostRoot)}`
+              : `ClawHub isolated dependency resolved outside ${installPath}: ${realpathSync(path.join(root, "other-dependency", "package.json"))}`;
         expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(expectedError);
       }
     },
   );
+
+  it.for(["2147483648", String(Number.MAX_SAFE_INTEGER)])(
+    "rejects overflowing ClawHub preflight timeout %s before making a request",
+    (timeoutMs, { signal }) =>
+      fixtures.run(async () => {
+        let requests = 0;
+        const result = await clawhubPreflight(
+          signal,
+          (_request, response) => {
+            requests += 1;
+            response.end("{}");
+          },
+          { OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: timeoutMs },
+        );
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          `invalid OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: ${timeoutMs}`,
+        );
+        expect(result.stderr).not.toContain("TimeoutOverflowWarning");
+        expect(requests).toBe(0);
+      }),
+  );
+
+  it("accepts the maximum ClawHub preflight timeout for request and response body", ({ signal }) =>
+    fixtures.run(async () => {
+      const result = await clawhubPreflight(
+        signal,
+        (_request, response) => {
+          setImmediate(() => {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.write('{"package":');
+            setImmediate(() => {
+              response.end(JSON.stringify({ family: "code-plugin", runtimeId: CLAWHUB_ID }) + "}");
+            });
+          });
+        },
+        { OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "2147483647" },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        "Using ClawHub package @openclaw/kitchen-sink (code-plugin).",
+      );
+      expect(result.stderr).not.toContain("TimeoutOverflowWarning");
+    }));
 
   it.for(["request timeout", "body timeout", "body limit"])(
     "bounds ClawHub package preflight: %s",

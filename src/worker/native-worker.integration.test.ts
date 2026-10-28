@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { withinTest } from "../../test/helpers/promise.js";
@@ -45,10 +46,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 const workers = createWorkerProcessTestHarness((prefix) => tempDirs.make(prefix));
 
 function owner(): ComposedGatewayHarness {
-  if (!gateway) {
-    throw new Error("Gateway fixture was not initialized");
-  }
-  return gateway;
+  return expectDefined(gateway, "Gateway fixture");
 }
 
 function messages() {
@@ -179,16 +177,10 @@ describe.skipIf(process.platform === "win32")(
       addSiblingModel(registry);
       const worker = await launch(descriptor, registry);
       const outcome = result(await worker.finish());
-      expect(outcome).toMatchObject({
-        retainWorker: false,
-        result: { status: "completed" },
-      });
+      expect(outcome).toMatchObject({ retainWorker: false, result: { status: "completed" } });
       expect(worker.child.pid).not.toBe(process.pid);
       const proof = JSON.parse(await readFile(path.join(owner().root, "tool-proof.json"), "utf8"));
-      expect(proof).toMatchObject({
-        startupPresent: false,
-        credentialPresent: false,
-      });
+      expect(proof).toMatchObject({ startupPresent: false, credentialPresent: false });
       expect(proof.pid).not.toBe(process.pid);
       expect(proof.pid).not.toBe(worker.child.pid);
       if (process.platform === "linux") {

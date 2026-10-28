@@ -7,8 +7,8 @@ import {
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import * as chatDisplayProjection from "./chat-display-projection.core.js";
-import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
-import { prepareChatHistoryResponsePage } from "./server-methods/chat-history-response-page.js";
+import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
+import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js";
 import {
   expectMessageIds,
   historyTarget,

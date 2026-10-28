@@ -2,14 +2,26 @@ import { asDateTimestampMs } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { workboardLocale } from "../host.ts";
 import { t } from "../i18n/index.ts";
 type DurationUnit = "millisecond" | "second" | "minute" | "hour" | "day";
+let durationLocale: string | undefined;
+const durationFormats = new Map<DurationUnit, Intl.NumberFormat>();
 
 function formatUnit(value: number, unit: DurationUnit): string {
-  return new Intl.NumberFormat(workboardLocale(), {
-    style: "unit",
-    unit,
-    unitDisplay: "narrow",
-    maximumFractionDigits: 0,
-  }).format(value);
+  const locale = workboardLocale();
+  if (durationLocale !== locale) {
+    durationLocale = locale;
+    durationFormats.clear();
+  }
+  let formatter = durationFormats.get(unit);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(locale, {
+      style: "unit",
+      unit,
+      unitDisplay: "narrow",
+      maximumFractionDigits: 0,
+    });
+    durationFormats.set(unit, formatter);
+  }
+  return formatter.format(value);
 }
 
 function formatUnitPair(

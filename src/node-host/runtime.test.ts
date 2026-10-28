@@ -2,11 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
+import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
-import { withEnvAsync } from "../test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 import {
   createNodeHostClient,
@@ -17,23 +18,33 @@ import {
 } from "./runtime.test-support.js";
 
 type SkillBinsResponse = { bins: string[] };
-type SkillBinsFixture = {
-  requests: Array<ReturnType<typeof createDeferred<SkillBinsResponse>>>;
-  observed: Map<string, SkillBinTrustEntry[]>;
-  expected: SkillBinTrustEntry[];
-  response: SkillBinsResponse;
-  invoke: (id: string) => Promise<void>;
-  disconnect: () => Promise<void>;
-};
+describe("node-host skill-bin cache", () => {
+  const requests: Array<ReturnType<typeof createDeferred<SkillBinsResponse>>> = [];
+  const observed = new Map<string, SkillBinTrustEntry[]>();
+  const invokes: Promise<void>[] = [];
+  const name = path.basename(process.execPath);
+  const response = { bins: [name] };
+  const expected = [{ name, resolvedPath: fs.realpathSync(process.execPath) }];
+  let runtime: Awaited<ReturnType<typeof startRuntime>> | undefined;
+  let environment: ReturnType<typeof captureEnv>;
+  const invoke = (id: string) => {
+    const pending = expectDefined(runtime, "started runtime").invoke({
+      ...frame,
+      id,
+      command: "system.run",
+    });
+    invokes.push(pending);
+    return pending;
+  };
 
-async function withSkillBinsRuntime(run: (fixture: SkillBinsFixture) => Promise<void>) {
-  await withEnvAsync({ PATH: path.dirname(process.execPath) }, async () => {
-    const requests: SkillBinsFixture["requests"] = [];
-    const observed = new Map<string, SkillBinTrustEntry[]>();
-    const invokes: Promise<void>[] = [];
-    const name = path.basename(process.execPath);
-    const response = { bins: [name] };
-    const runtime = await startRuntime(
+  beforeEach(async () => {
+    requests.length = 0;
+    invokes.length = 0;
+    observed.clear();
+    runtime = undefined;
+    environment = captureEnv(["PATH"]);
+    setTestEnvValue("PATH", path.dirname(process.execPath));
+    runtime = await startRuntime(
       createNodeHostClient(() => {
         const request = createDeferred<SkillBinsResponse>();
         requests.push(request);
@@ -45,80 +56,59 @@ async function withSkillBinsRuntime(run: (fixture: SkillBinsFixture) => Promise<
       const provider = args[2] as SkillBinsProvider;
       observed.set(request.id, await provider.current());
     });
+  });
+  afterEach(async () => {
     try {
-      await run({
-        requests,
-        observed,
-        expected: [{ name, resolvedPath: fs.realpathSync(process.execPath) }],
-        response,
-        invoke: (id) => {
-          const pending = runtime.invoke({ ...frame, id, command: "system.run" });
-          invokes.push(pending);
-          return pending;
-        },
-        disconnect: () => runtime.cancelAll(),
-      });
-    } finally {
-      await runtime.cancelAll();
+      await runtime?.cancelAll();
       for (const request of requests) {
         request.resolve({ bins: [] });
       }
       await Promise.allSettled(invokes);
-      try {
-        await runtime.close();
-      } finally {
-        mocks.handleInvoke.mockReset();
-      }
+      await runtime?.close();
+    } finally {
+      mocks.handleInvoke.mockReset();
+      environment.restore();
     }
   });
-}
-
-describe("node-host skill-bin cache", () => {
   it("shares a failed cold refresh and permits retry", async () => {
-    await withSkillBinsRuntime(async (fixture) => {
-      const requestCount = fixture.requests.length + 1;
-      const first = fixture.invoke("first");
-      const second = fixture.invoke("second");
-      await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount));
-      expectDefined(fixture.requests[requestCount - 1], "failed skill refresh").reject(
-        new Error("Gateway unavailable"),
-      );
-      await Promise.all([first, second]);
-      for (const id of ["first", "second"]) {
-        expect(fixture.observed.get(id)).toEqual([]);
-      }
-      const retry = fixture.invoke("retry");
-      const joined = fixture.invoke("joined-retry");
-      await vi.waitFor(() => expect(fixture.requests).toHaveLength(requestCount + 1));
-      expectDefined(fixture.requests[requestCount], "retried skill refresh").resolve(
-        fixture.response,
-      );
-      await Promise.all([retry, joined]);
-      await fixture.invoke("warm");
-      for (const id of ["retry", "joined-retry", "warm"]) {
-        expect(fixture.observed.get(id)).toEqual(fixture.expected);
-      }
-      expect(fixture.requests).toHaveLength(requestCount + 1);
-    });
+    const requestCount = requests.length + 1;
+    const first = invoke("first");
+    const second = invoke("second");
+    await vi.waitFor(() => expect(requests).toHaveLength(requestCount));
+    expectDefined(requests[requestCount - 1], "failed skill refresh").reject(
+      new Error("Gateway unavailable"),
+    );
+    await Promise.all([first, second]);
+    for (const id of ["first", "second"]) {
+      expect(observed.get(id)).toEqual([]);
+    }
+    const retry = invoke("retry");
+    const joined = invoke("joined-retry");
+    await vi.waitFor(() => expect(requests).toHaveLength(requestCount + 1));
+    expectDefined(requests[requestCount], "retried skill refresh").resolve(response);
+    await Promise.all([retry, joined]);
+    await invoke("warm");
+    for (const id of ["retry", "joined-retry", "warm"]) {
+      expect(observed.get(id)).toEqual(expected);
+    }
+    expect(requests).toHaveLength(requestCount + 1);
   });
 
   it("keeps pending old-connection results out of the replacement cache", async () => {
-    await withSkillBinsRuntime(async (fixture) => {
-      const old = fixture.invoke("old");
-      await vi.waitFor(() => expect(fixture.requests).toHaveLength(1));
-      await fixture.disconnect();
-      const replacement = fixture.invoke("replacement");
-      await vi.waitFor(() => expect(fixture.requests).toHaveLength(2));
-      expectDefined(fixture.requests[0], "retired connection refresh").resolve(fixture.response);
-      await old;
-      expect(fixture.observed.has("replacement")).toBe(false);
-      expectDefined(fixture.requests[1], "replacement connection refresh").resolve({ bins: [] });
-      await replacement;
-      await fixture.invoke("replacement-warm");
-      expect(fixture.observed.get("replacement")).toEqual([]);
-      expect(fixture.observed.get("replacement-warm")).toEqual([]);
-      expect(fixture.requests).toHaveLength(2);
-    });
+    const old = invoke("old");
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    await expectDefined(runtime, "started runtime").cancelAll();
+    const replacement = invoke("replacement");
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    expectDefined(requests[0], "retired connection refresh").resolve(response);
+    await old;
+    expect(observed.has("replacement")).toBe(false);
+    expectDefined(requests[1], "replacement connection refresh").resolve({ bins: [] });
+    await replacement;
+    await invoke("replacement-warm");
+    expect(observed.get("replacement")).toEqual([]);
+    expect(observed.get("replacement-warm")).toEqual([]);
+    expect(requests).toHaveLength(2);
   });
 });
 
@@ -157,13 +147,17 @@ describe("node-host invocation cancellation", () => {
     await runtime.close();
   });
 
-  it.each(["supervisor", "MCP"] as const)(
+  it.each(["supervisor", "MCP", "plugin"] as const)(
     "retains %s retirement failure with its retry policy",
     async (owner) => {
       const failure = new Error(`${owner} close failed`);
       const retiring = createDeferred();
       const entered = createDeferred();
-      const close = owner === "supervisor" ? mocks.closeWorkerSupervisor : mocks.closeMcp;
+      const close = {
+        supervisor: mocks.closeWorkerSupervisor,
+        MCP: mocks.closeMcp,
+        plugin: mocks.disconnectPlugins,
+      }[owner];
       close.mockImplementationOnce(async () => {
         entered.resolve();
         await retiring.promise;
@@ -179,13 +173,13 @@ describe("node-host invocation cancellation", () => {
         await observed;
         expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
         expect(mocks.closeMcp).toHaveBeenCalledOnce();
-        if (owner === "supervisor") {
-          await expect(runtime.close()).resolves.toBeUndefined();
-          expect(mocks.closeWorkerSupervisor).toHaveBeenCalledTimes(2);
-        } else {
+        if (owner === "MCP") {
           await expect(runtime.close()).rejects.toBe(failure);
-          expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
+        } else {
+          await expect(runtime.close()).resolves.toBeUndefined();
         }
+        expect(mocks.closeWorkerSupervisor).toHaveBeenCalledTimes(owner === "supervisor" ? 2 : 1);
+        expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(owner === "plugin" ? 2 : 1);
         expect(mocks.closeMcp).toHaveBeenCalledOnce();
       } finally {
         retiring.resolve();
@@ -193,17 +187,6 @@ describe("node-host invocation cancellation", () => {
       }
     },
   );
-
-  it("retries failed plugin cleanup on explicit close", async () => {
-    const failure = new Error("disconnect cleanup failed");
-    mocks.disconnectPlugins.mockRejectedValueOnce(failure);
-    const runtime = await startRuntime();
-    await expect(runtime.close()).rejects.toBe(failure);
-    await expect(runtime.close()).resolves.toBeUndefined();
-    expect(mocks.disconnectPlugins).toHaveBeenCalledTimes(2);
-    expect(mocks.closeMcp).toHaveBeenCalledOnce();
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-  });
 
   it.each(["close", "cancelAll"] as const)(
     "joins cleanup when %s synchronously reenters close",
@@ -335,9 +318,7 @@ describe("node-host desktop manifest", () => {
     expect(mocks.progressStartHeartbeats).not.toHaveBeenCalled();
     const lastCall = mocks.handleInvoke.mock.calls.at(-1) as unknown[] | undefined;
     const invokeRuntime = lastCall?.[4] as
-      | {
-          emitProgress?: (text: string) => Promise<void>;
-        }
+      | { emitProgress?: (text: string) => Promise<void> }
       | undefined;
     await invokeRuntime?.emitProgress?.("attached\n");
     expect(mocks.progressWrite).toHaveBeenCalledWith("attached\n");
@@ -350,12 +331,17 @@ async function withFramedInvoke(
     runtime: Awaited<ReturnType<typeof startRuntime>>,
     held: ReturnType<typeof holdInvoke>,
   ) => Promise<void>,
+  request: Parameters<Awaited<ReturnType<typeof startRuntime>>["invoke"]>[0] = frame,
 ) {
   const held = holdInvoke();
   const runtime = await startRuntime();
-  const invoking = runtime.invoke(frame);
+  const invoking = runtime.invoke(request);
   try {
-    await vi.waitFor(() => expect(held.io).toBeDefined());
+    await vi.waitFor(() =>
+      expect(
+        request.command === NODE_AGENT_CLI_CLAUDE_RUN_COMMAND ? held.signal : held.io,
+      ).toBeDefined(),
+    );
     await run(runtime, held);
   } finally {
     held.release();
@@ -365,8 +351,37 @@ async function withFramedInvoke(
 }
 
 describe("node-host invoke input dispatch", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  it.each([
+    ["true", '{"skillRuntime":true}', true],
+    ["absent", "{}", false],
+    ["false", '{"skillRuntime":false}', false],
+    ["string", '{"skillRuntime":"true"}', false],
+    ["malformed", '{"skillRuntime":true', false],
+    ["nonobject", '[{"skillRuntime":true}]', false],
+    ["JSON whitespace", ' \t\r\n{"skillRuntime":true}', true],
+    ["escaped key", '{"skill\\u0052untime":true}', true],
+    ["oversize", `${" ".repeat(2 * 1024 * 1024)}{"skillRuntime":true}`, false],
+  ] as const)("selects Claude skill frames for %s", async (_name, paramsJSON, framed) => {
+    await withFramedInvoke(
+      async (runtime, held) => {
+        const received: Uint8Array[] = [];
+        held.io?.frames?.onMessage((message) => {
+          received.push(message);
+        });
+        if (framed) {
+          await vi.waitFor(() =>
+            expect(mocks.progressWrite).toHaveBeenCalledWith('{"v":1,"kind":"ready"}'),
+          );
+        }
+        runtime.handleInput(
+          frame.id,
+          0,
+          '{"v":1,"kind":"data","message":0,"index":0,"last":true,"data":"AP8R"}',
+        );
+        expect(received).toEqual(framed ? [Uint8Array.of(0, 255, 17)] : []);
+      },
+      { ...frame, command: NODE_AGENT_CLI_CLAUDE_RUN_COMMAND, paramsJSON },
+    );
   });
 
   it("registers framed readiness before exchanging binary messages", async () => {

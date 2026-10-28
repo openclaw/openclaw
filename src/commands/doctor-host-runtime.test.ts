@@ -7,6 +7,7 @@ import { maybeRepairGatewayDaemon } from "./doctor-gateway-daemon-flow.js";
 import { makeDoctorIo, makeDoctorPrompts } from "./doctor-gateway-runtime.test-utils.js";
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
 import { collectNodeRuntimeFindings } from "./node-runtime-diagnostics.js";
+import { MACOS_APP_INSTALL_OWNER_MARKER } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   root: vi.fn<() => Promise<string | null>>(),
@@ -17,9 +18,6 @@ const mocks = vi.hoisted(() => ({
   install: vi.fn(),
   restart: vi.fn(),
   writeConfig: vi.fn(),
-  buildGatewayInstallPlan: vi.fn(),
-  auditGatewayServiceConfig: vi.fn(),
-  resolveSystemNodeInfo: vi.fn(),
   repairLaunchAgentBootstrap: vi.fn(),
   note: vi.fn(),
 }));
@@ -40,7 +38,6 @@ vi.mock("../daemon/service.js", async (importOriginal) => ({
 vi.mock("../daemon/runtime-paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/runtime-paths.js")>()),
   resolveNodeRuntimeInfo: mocks.resolveNodeRuntimeInfo,
-  resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
 }));
 vi.mock("../infra/runtime-guard.js", () => ({ detectRuntime: mocks.detectRuntime }));
 vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
@@ -53,15 +50,6 @@ vi.mock("../config/paths.js", async (importOriginal) => ({
   resolveIsNixMode: () => false,
 }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
-vi.mock("./daemon-install-helpers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./daemon-install-helpers.js")>()),
-  buildGatewayInstallPlan: mocks.buildGatewayInstallPlan,
-}));
-vi.mock("../daemon/service-audit.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/service-audit.js")>()),
-  auditGatewayServiceConfig: mocks.auditGatewayServiceConfig,
-  needsNodeRuntimeMigration: () => true,
-}));
 vi.mock("../daemon/launchd.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/launchd.js")>()),
   repairLaunchAgentBootstrap: mocks.repairLaunchAgentBootstrap,
@@ -79,12 +67,7 @@ async function hostRoot() {
   await fs.writeFile(path.join(root, "openclaw.mjs"), "");
   await fs.writeFile(
     path.join(root, "openclaw-install-owner.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      owner: "macos-app",
-      displayName: "OpenClaw.app",
-      updateHint: "Update OpenClaw.app to update this Gateway.",
-    }),
+    MACOS_APP_INSTALL_OWNER_MARKER,
   );
   return root;
 }
@@ -152,9 +135,6 @@ it.each([
     });
   }
   expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
-  expect(mocks.buildGatewayInstallPlan).not.toHaveBeenCalled();
-  expect(mocks.auditGatewayServiceConfig).not.toHaveBeenCalled();
-  expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
   expect(mocks.install).not.toHaveBeenCalled();
   expect(mocks.restart).not.toHaveBeenCalled();
   expect(mocks.writeConfig).not.toHaveBeenCalled();

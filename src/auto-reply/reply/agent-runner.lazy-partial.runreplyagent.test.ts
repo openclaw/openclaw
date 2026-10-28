@@ -7,21 +7,22 @@ import {
 } from "./agent-runner.misc.runreplyagent.test-support.js";
 import { createBaseRun } from "./agent-runner.runreplyagent.test-support.js";
 
-const sanitizerState = vi.hoisted(() => ({
-  sanitizeUserFacingText: vi.fn(),
-}));
+const sanitizeUserFacingText = vi.hoisted(() => vi.fn());
 
-vi.mock("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js")
-  >("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js");
-  sanitizerState.sanitizeUserFacingText.mockImplementation(actual.sanitizeUserFacingText);
-  return {
-    ...actual,
-    sanitizeUserFacingText: (...args: Parameters<typeof actual.sanitizeUserFacingText>) =>
-      sanitizerState.sanitizeUserFacingText(...args),
-  };
-});
+vi.mock(
+  "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js")
+      >();
+    sanitizeUserFacingText.mockImplementation(actual.sanitizeUserFacingText);
+    return {
+      ...actual,
+      sanitizeUserFacingText,
+    };
+  },
+);
 
 await vi.hoisted(async () => {
   await import("./agent-runner.misc.runreplyagent.test-support.js");
@@ -35,7 +36,7 @@ describe("runReplyAgent lazy partial text", () => {
   it("bounds sanitization across many visible deltas after the first nonempty partial", async () => {
     let partialSanitizes: number | undefined;
     runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentParams) => {
-      const before = sanitizerState.sanitizeUserFacingText.mock.calls.length;
+      const before = sanitizeUserFacingText.mock.calls.length;
       await params.onPartialReply?.({ text: "not visible" });
       await params.onPartialReply?.({ text: "[tool calls omitted]" });
       let text = "first";
@@ -43,11 +44,8 @@ describe("runReplyAgent lazy partial text", () => {
         await params.onPartialReply?.({ text });
         text += "\n[docs](https://example.com)";
       }
-      partialSanitizes = sanitizerState.sanitizeUserFacingText.mock.calls.length - before;
-      return {
-        payloads: [{ text }],
-        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
-      };
+      partialSanitizes = sanitizeUserFacingText.mock.calls.length - before;
+      return { payloads: [{ text }], meta: { agentMeta: { usage: { input: 1, output: 1 } } } };
     });
     // Visibility alone does not prove that a sanitized partial has content.
     const onPartialReply = vi.fn(async () => true).mockResolvedValueOnce(false);
@@ -60,45 +58,21 @@ describe("runReplyAgent lazy partial text", () => {
   });
 
   it.each([
-    [
-      "<final>Hello &am",
-      "p; [docs](https://example.com)</final>",
-      "Hello &amp; [docs](https://example.com)",
-    ],
-    [
-      "<final>Hello [do",
-      "cs](https://example.com) &amp;</final>",
-      "Hello [docs](https://example.com) &amp;",
-    ],
-    [
-      "<fi",
-      "nal>Hello &amp; [docs](https://example.com)</final>",
-      "Hello &amp; [docs](https://example.com)",
-    ],
+    ["<final>&am", "p; [a](https://a.b)</final>", "&amp; [a](https://a.b)"],
+    ["<final>[a", "](https://a.b) &amp;</final>", "[a](https://a.b) &amp;"],
+    ["<fi", "nal>&amp; [a](https://a.b)</final>", "&amp; [a](https://a.b)"],
   ])("preserves full sanitization when markup spans deltas: %s", async (first, tail, expected) => {
-    let preview: PartialReplyPayload | undefined;
+    const onPartialReply = vi.fn((_payload: PartialReplyPayload) => true);
     const text = first + tail;
     runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentParams) => {
       await params.onPartialReply?.({ text: first });
       await params.onPartialReply?.({ text });
       return { payloads: [{ text }], meta: {} };
     });
-    const { run } = createBaseRun({
-      reply: {
-        opts: {
-          onPartialReply: (payload) => {
-            preview = payload;
-            return true;
-          },
-        },
-      },
-    });
+    const { run } = createBaseRun({ reply: { opts: { onPartialReply } } });
 
     const result = await run();
-    const { sanitizeUserFacingText } =
-      await import("../../agents/embedded-agent-helpers/sanitize-user-facing-text.js");
-    expect(preview?.text).toBe(sanitizeUserFacingText(text, { streaming: true }));
-    expect(preview?.text).toBe(expected);
+    expect(onPartialReply.mock.lastCall?.[0].text).toBe(expected);
     expect(result).toMatchObject({ text: expected });
   });
 });

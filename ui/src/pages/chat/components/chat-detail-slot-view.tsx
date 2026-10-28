@@ -1,31 +1,79 @@
-import { createMemo, lazy, Loading } from "solid-js";
+import { createMemo, lazy } from "solid-js";
 import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-links.ts";
-import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../../lib/reactive/projection.ts";
 import type { ChatDetailSlotProps } from "../chat-pane-embedded-types.ts";
-import { ensureLazySidebarElement, lazySidebarElements } from "../chat-pane-sidebar-layout.ts";
 import { selectedChatSessionRow } from "../chat-state-route.ts";
 import { openSlot } from "../sidebar-layout.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
-import { selectSessionWorkspacePreview } from "./chat-session-workspace-state.ts";
-import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
+import { getSessionWorkspace } from "./chat-session-workspace-state.ts";
+import {
+  openSessionWorkspaceFile,
+  openSessionWorkspaceFileView,
+  revealSessionWorkspaceFile,
+} from "./chat-session-workspace.ts";
 
 // The output formatter belongs to the selected detail, not ordinary chat boot.
 const ChatToolOutput = lazy(() => import("./chat-tool-output-view.tsx"), {
   export: "ChatToolOutput",
 });
+const ChatDetailPanel = lazy(() => import("./chat-detail-panel.tsx"), {
+  export: "ChatDetailPanel",
+});
 
 export function ChatDetailSlot(props: ChatDetailSlotProps) {
-  const elements = projectOwner(lazySidebarElements, (owner) => owner.snapshot);
-  const panelLoad = createMemo(() => {
-    elements.read();
-    return props.content.kind === "tool-output" ||
-      props.content.kind === "loading" ||
-      props.content.kind === "unavailable"
-      ? undefined
-      : ensureLazySidebarElement("detail-panel");
+  const attachmentRuntime = createMemo(() => ({
+    sessionKey: props.chat.sessionKey,
+    agentId: props.chat.currentAgentId ?? props.chat.fullMessageAgentId,
+    policyKey: assistantMediaPolicyKey(props.chat.selectedSession, props.chat.mediaPolicyEpoch),
+    authToken: props.chat.assistantAttachmentAuthToken,
+    connectionEpoch: props.chat.connectionEpoch,
+    resourceBasePath: props.chat.resourceBasePath,
+    resolveArtifactDownload: props.chat.resolveArtifactDownload,
+  }));
+  const sourceContent = createMemo(() => props.content);
+  const content = createMemo(() => {
+    const value = sourceContent();
+    if (value.kind === "tool-output" || value.kind === "loading" || value.kind === "unavailable") {
+      return null;
+    }
+    if (value.kind !== "session-diff") {
+      return value;
+    }
+    const openFile = value.openFile;
+    return {
+      ...value,
+      presentation: {
+        ...value.presentation,
+        openFileView:
+          value.presentation?.openFileView ??
+          (value.openFile
+            ? (path: string, view: import("./chat-sidebar-content-types.ts").FileReaderView) => {
+                if (value.owner !== getSessionWorkspace(props.host)) {
+                  return;
+                }
+                // The workspace owner resolves aliases and retains the actual file/editor identity.
+                void openSessionWorkspaceFileView(props.host, path, view);
+                if (props.host.connected && props.host.client) {
+                  props.onWorkspaceIntent?.();
+                }
+              }
+            : undefined),
+        get onOpenMobilePage() {
+          return props.onOpenMobilePage ?? value.presentation?.onOpenMobilePage;
+        },
+      },
+      openFile: openFile
+        ? (path: string) => {
+            const result = openFile(path);
+            if (props.host.connected && props.host.client) {
+              props.onWorkspaceIntent?.();
+            }
+            return result;
+          }
+        : undefined,
+    };
   });
   return (
     <>
@@ -37,67 +85,71 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
           <span>{props.content.message}</span>
         </div>
       ) : props.content.kind === "tool-output" ? (
-        <Loading fallback={<PanelLoadingSkeleton variant="review" label={t("common.loading")} />}>
+        <ChatLazyBoundary
+          fallback={<PanelLoadingSkeleton variant="review" label={t("common.loading")} />}
+        >
           <ChatToolOutput
             class="chat-sidebar"
             content={props.content}
             loadFullMessage={props.chat.loadFullAssistantMessage ?? null}
             connectionEpoch={props.chat.connectionEpoch}
           />
-        </Loading>
-      ) : panelLoad() !== undefined ? (
-        panelLoad() === null ? (
-          <PanelLoadingSkeleton variant="review" label={t("common.loading")} />
-        ) : (
-          <LazyViewError {...panelLoad()!} />
-        )
+        </ChatLazyBoundary>
       ) : (
-        <openclaw-chat-detail-panel
-          class="chat-sidebar"
-          prop:content={props.content}
-          prop:fileNavigation={
-            props.content.kind === "file" ? (props.content.navigation ?? null) : null
-          }
-          prop:execNode={selectedChatSessionRow(props.host)?.execNode ?? null}
-          prop:attachmentRuntime={{
-            sessionKey: props.chat.sessionKey,
-            agentId: props.chat.currentAgentId ?? props.chat.fullMessageAgentId,
-            policyKey: assistantMediaPolicyKey(
-              props.chat.selectedSession,
-              props.chat.mediaPolicyEpoch,
-            ),
-            authToken: props.chat.assistantAttachmentAuthToken,
-            connectionEpoch: props.chat.connectionEpoch,
-            resourceBasePath: props.chat.resourceBasePath,
-            resolveArtifactDownload: props.chat.resolveArtifactDownload,
-          }}
-          prop:basePath={props.chat.basePath ?? ""}
-          prop:canvasPluginSurfaceUrl={props.host.canvasPluginSurfaceUrl}
-          prop:embedSandboxMode={props.host.embedSandboxMode}
-          prop:allowExternalEmbedUrls={props.host.allowExternalEmbedUrls}
-          prop:githubContext={{
-            githubRepo: props.chat.githubRepo,
-            githubRepositories: props.chat.githubRepositories,
-          }}
-          prop:onOpenWorkspaceFile={(target: MarkdownFileLinkTarget) =>
-            openSessionWorkspaceFile(props.host, target)
-          }
-          prop:onOpenSessionLink={props.chat.onOpenSessionLink}
-          prop:onRevealInWorkspace={(path: string) => {
-            revealSessionWorkspaceFile(props.host, path);
-            selectSessionWorkspacePreview(props.host, null);
-            props.host.updateSidebarLayout(openSlot(props.host.sidebarLayout, "workspace"));
-          }}
-          prop:onOpenImage={(item: Parameters<typeof props.host.handleOpenImage>[0]) =>
-            props.host.handleOpenImage(item, props.host.beginImageOpen())
-          }
-          prop:embedded={true}
-          onChat-detail-panel-close={() =>
-            props.host.handleCloseSidebar(
-              props.content.kind === "attachment" ? "workspace" : "detail",
-            )
-          }
-        />
+        <ChatLazyBoundary
+          fallback={<PanelLoadingSkeleton variant="review" label={t("common.loading")} />}
+        >
+          <ChatDetailPanel
+            class="chat-sidebar"
+            content={content()}
+            attachmentChat={props.chat}
+            onScrollPortRef={props.chat.onScrollPortRef}
+            panelPresentation={props.presentation}
+            filePresentation={props.filePresentation ?? props.presentation}
+            panelActive={props.active ?? true}
+            filePresented={props.active ?? true}
+            fileBack={props.fileBack}
+            fileWorkspace={props.fileWorkspace}
+            onFileInteraction={props.onFileInteraction}
+            onFileDraftChange={props.onFileDraftChange}
+            fileNavigation={
+              props.content.kind === "file" ? (props.content.navigation ?? null) : null
+            }
+            execNode={selectedChatSessionRow(props.host)?.execNode ?? null}
+            attachmentRuntime={attachmentRuntime()}
+            basePath={props.chat.basePath ?? ""}
+            canvasPluginSurfaceUrl={props.host.canvasPluginSurfaceUrl}
+            embedSandboxMode={props.host.embedSandboxMode}
+            allowExternalEmbedUrls={props.host.allowExternalEmbedUrls}
+            onOpenWorkspaceFile={(target: MarkdownFileLinkTarget) => {
+              void openSessionWorkspaceFile(
+                props.host,
+                target,
+                (props.filePresentation ?? props.presentation) === "desktop"
+                  ? "preview"
+                  : undefined,
+              );
+              if (props.host.connected && props.host.client) {
+                props.onWorkspaceIntent?.();
+              }
+            }}
+            onOpenSessionLink={props.chat.onOpenSessionLink}
+            onRevealInWorkspace={(path: string) => {
+              revealSessionWorkspaceFile(props.host, path);
+              props.host.updateSidebarLayout(openSlot(props.host.sidebarLayout, "workspace"));
+              props.onWorkspaceIntent?.();
+            }}
+            onOpenImage={(item: Parameters<typeof props.host.handleOpenImage>[0]) =>
+              props.host.handleOpenImage(item, props.host.beginImageOpen())
+            }
+            embedded={true}
+            onChat-detail-panel-close={() =>
+              props.host.handleCloseSidebar(
+                props.content.kind === "attachment" ? "workspace" : "detail",
+              )
+            }
+          />
+        </ChatLazyBoundary>
       )}
     </>
   );

@@ -113,9 +113,9 @@ const runTuiCliActionMock = vi.hoisted(() =>
   vi.fn<(target: string | undefined, opts: unknown) => Promise<void>>(async () => {}),
 );
 const probeGatewayConfiguredModelMock = vi.hoisted(() =>
-  vi.fn<typeof import("../commands/onboard-helpers.js").probeGatewayConfiguredModel>(async () => ({
-    kind: "configured",
-  })),
+  vi.fn<typeof import("../commands/onboard-helpers.js").probeGatewayConfiguredModel>(
+    async () => "configured",
+  ),
 );
 const readActiveGatewayLockPortMock = vi.hoisted(() =>
   vi.fn(async (): Promise<number | undefined> => undefined),
@@ -562,7 +562,7 @@ export function installRunMainTestHooks(): void {
     );
     readConfigFileSnapshotMock.mockResolvedValue(validConfig({ gateway: { mode: "local" } }));
     readLocalOnboardingStateMock.mockReset().mockResolvedValue(undefined);
-    probeGatewayConfiguredModelMock.mockResolvedValue({ kind: "configured" });
+    probeGatewayConfiguredModelMock.mockResolvedValue("configured");
     readActiveGatewayLockPortMock.mockReset().mockResolvedValue(undefined);
     inspectGatewayTlsCertificateMock
       .mockReset()

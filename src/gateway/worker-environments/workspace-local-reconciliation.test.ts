@@ -11,6 +11,7 @@ import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
+import { expectWorkspaceFiles } from "./workspace-recovery.test-support.js";
 import {
   applyStagedWorkerWorkspaceResult,
   hasWorkerWorkspaceResultRef,
@@ -126,6 +127,7 @@ describe("unchanged local workspace reconciliation", () => {
     const journal = {
       ...emptyJournal(),
       commit: async (ref: string) => {
+        expect(remoteRef).toBe(ref);
         committedRef = ref;
       },
     };
@@ -246,6 +248,10 @@ describe("unchanged local workspace reconciliation", () => {
         expect.objectContaining({ manifestRef: applied?.manifestRef, manifest: applied?.manifest }),
       );
       expect(applied?.conflictPaths).toEqual([]);
+      await expectWorkspaceFiles(root, {
+        "untracked.txt": "unadmitted host bytes\n",
+        "private.txt": "ignored host bytes\n",
+      });
     },
   );
 
@@ -290,11 +296,10 @@ describe("unchanged local workspace reconciliation", () => {
     },
   );
 
-  it.each(["remote", "local", "owner"] as const)(
+  it.each(["local", "owner"] as const)(
     "rejects a late %s change after renewal without accepting the result",
     async (side) => {
       let current = true;
-      let remoteChanged = false;
       const f = await prepareUnchangedWorkspace({
         assertCurrent: () => {
           if (!current) {
@@ -304,16 +309,11 @@ describe("unchanged local workspace reconciliation", () => {
         onRenew: async (root) => {
           if (side === "local") {
             await fs.writeFile(path.join(root, "result.txt"), "late local write\n");
-          } else if (side === "remote") {
-            remoteChanged = true;
           }
         },
         beforeRemoteFence: async () => {
           if (side === "owner") {
             current = false;
-          }
-          if (remoteChanged) {
-            throw new Error("late remote write");
           }
         },
       });

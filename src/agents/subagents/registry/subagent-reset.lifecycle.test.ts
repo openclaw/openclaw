@@ -122,16 +122,29 @@ function registerChild(
   });
 }
 
-it.each([false, true])(
-  "reset preserves a replacement child and retires only suppressed terminal work (suppressed=%s)",
-  async (suppressed) => {
+it.each([
+  { suppressed: false, pendingWake: true, nested: false },
+  { suppressed: true, pendingWake: true, nested: false },
+  { suppressed: false, pendingWake: false, nested: false },
+  { suppressed: false, pendingWake: false, nested: true },
+])(
+  "reset preserves a replacement child (suppressed=$suppressed, pendingWake=$pendingWake, nested=$nested)",
+  async ({ suppressed, pendingWake, nested }) => {
     const storePath = await writeSession(parentKey, "reset-parent", "reset-parent-revision");
     const { read, patch } = sessions(storePath);
+    if (nested) {
+      await writeSession(childKey("active-parent"), "active-parent");
+      await registerChild("active-parent", read(childKey("active-parent")), {
+        controllerSessionKey: parentKey,
+      });
+      await pauseRun("active-parent");
+    }
     const key = childKey("replaced");
     await writeSession(key, "original-child", "original-revision");
     await registerChild("original-run", read(key), {
       childSessionKey: key,
       controllerSessionKey: undefined,
+      requesterSessionKey: nested ? childKey("active-parent") : parentKey,
       task: "old retained assignment",
       expectsCompletionMessage: false,
     });
@@ -143,7 +156,11 @@ it.each([false, true])(
         suppressSessionEffects: suppressed ? true : undefined,
       };
       entry.completion = { required: false, capturedAt: 1_000, resultText: "stopped" };
-      entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      if (pendingWake) {
+        entry.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      } else {
+        delete entry.requesterSettleWake;
+      }
     });
     await patch(key, { sessionId: "replacement-child", lifecycleRevision: "replacement-revision" });
     const replacement = read(key);
@@ -157,15 +174,15 @@ it.each([false, true])(
     const respond = vi.fn();
     try {
       await resetRpc(respond);
-      expectResetResponse(respond, suppressed);
+      expectResetResponse(respond, suppressed || !pendingWake);
       const parent = read(parentKey);
-      if (suppressed) {
+      if (suppressed || !pendingWake) {
         expect(parent?.lifecycleRevision).not.toBe("reset-parent-revision");
         expect(subagentRuns.get("original-run")).toMatchObject({
           execution: {
             outcome: { status: "error", error: "original session incarnation changed" },
           },
-          suppressCompletionDelivery: true,
+          ...(suppressed ? { suppressCompletionDelivery: true } : {}),
         });
         expect(subagentRuns.get("original-run")?.requesterSettleWake).toBeUndefined();
       } else {
@@ -208,6 +225,30 @@ const pauseRun = (id: string) =>
   updateRun(id, (entry) => {
     expect(markSubagentRunPausedAfterYield({ entry })).toBe(true);
   });
+
+it("RPC reset cancels live descendants beneath a completed child", async () => {
+  const storePath = await writeSession(parentKey, "parent", "before-reset");
+  const { read } = sessions(storePath);
+  for (const id of ["completed-parent", "live-descendant"]) {
+    await writeSession(childKey(id), id);
+    await registerChild(id, read(childKey(id)), {
+      controllerSessionKey: id === "completed-parent" ? parentKey : childKey("completed-parent"),
+      requesterSessionKey: id === "completed-parent" ? parentKey : childKey("completed-parent"),
+      expectsCompletionMessage: false,
+    });
+  }
+  await updateRun("completed-parent", (entry) => {
+    entry.execution = { status: "terminal", endedAt: 1_000, outcome: { status: "ok" } };
+    delete entry.requesterSettleWake;
+  });
+  await pauseRun("live-descendant");
+  const respond = vi.fn();
+  await resetRpc(respond);
+  expectResetResponse(respond, true);
+  expect(read(parentKey)?.lifecycleRevision).not.toBe("before-reset");
+  expect(displayStatus("live-descendant")).toBe("killed");
+  expect(subagentRuns.get("completed-parent")?.execution.outcome).toEqual({ status: "ok" });
+});
 
 it.each(
   (["chat", "rpc"] as const).flatMap((boundary) =>

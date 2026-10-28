@@ -15,9 +15,9 @@ import {
   createDiagnosticTrace,
   createFinalAssistant,
   createFinalizationParams,
+  createLifecycleHarness,
   flushDiagnosticEvents,
 } from "./lifecycle.test-support.js";
-import type { AgentHarness } from "./types.js";
 
 describe("AgentHarness lifecycle content capture", () => {
   afterEach(() => {
@@ -29,13 +29,7 @@ describe("AgentHarness lifecycle content capture", () => {
   it("captures the finalization assistant answer under captureContent", async () => {
     setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
     const params = createFinalizationParams();
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      pluginId: "codex-plugin",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => createAttemptResult(),
-    };
+    const harness = createLifecycleHarness({ pluginId: "codex-plugin" });
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleFinalization(harness, params, async () => ({
@@ -57,16 +51,13 @@ describe("AgentHarness lifecycle content capture", () => {
     "forwards captured content to the plugin harness child run span (%s)",
     async (operation) => {
       setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
-      const harness: AgentHarness = {
-        id: "codex",
-        label: "Codex",
-        supports: () => ({ supported: true }),
+      const harness = createLifecycleHarness({
         runAttempt: async () => ({
           ...createAttemptResult(),
           currentAttemptAssistant: createFinalAssistant(),
           currentAttemptCompletedAssistant: createFinalAssistant(),
         }),
-      };
+      });
       const diagnostics = captureDiagnosticEvents((event) => event.type === "run.completed");
       try {
         await runWithDiagnosticTraceContext(createDiagnosticTrace(), () =>
@@ -97,13 +88,7 @@ describe("AgentHarness lifecycle content capture", () => {
   it("excludes commentary-phase text from the captured finalization answer", async () => {
     setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
     const params = createFinalizationParams();
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      pluginId: "codex-plugin",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => createAttemptResult(),
-    };
+    const harness = createLifecycleHarness({ pluginId: "codex-plugin" });
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleFinalization(harness, params, async () => ({
@@ -149,12 +134,7 @@ describe("AgentHarness lifecycle content capture", () => {
       currentAttemptAssistant: finalAssistant,
       currentAttemptCompletedAssistant: finalAssistant,
     };
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => result,
-    };
+    const harness = createLifecycleHarness({ runAttempt: async () => result });
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
@@ -181,12 +161,7 @@ describe("AgentHarness lifecycle content capture", () => {
       currentAttemptAssistant: finalAssistant,
       currentAttemptCompletedAssistant: finalAssistant,
     };
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => result,
-    };
+    const harness = createLifecycleHarness({ runAttempt: async () => result });
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
@@ -208,12 +183,7 @@ describe("AgentHarness lifecycle content capture", () => {
       assistantTexts: ["I will use a tool first."],
       currentAttemptAssistant: undefined,
     };
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => result,
-    };
+    const harness = createLifecycleHarness({ runAttempt: async () => result });
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
@@ -241,12 +211,7 @@ describe("AgentHarness lifecycle content capture", () => {
         content: [{ type: "text" as const, text: oversizedContent }],
       },
     };
-    const harness: AgentHarness = {
-      id: "codex",
-      label: "Codex",
-      supports: () => ({ supported: true }),
-      runAttempt: async () => result,
-    };
+    const harness = createLifecycleHarness({ runAttempt: async () => result });
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, params);

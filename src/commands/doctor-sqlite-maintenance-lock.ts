@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync, resolveRootPathSync } from "../infra/boundary-path.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { formatGatewayLockFailure } from "../infra/gateway-lock-diagnostics.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -72,19 +73,31 @@ async function assertMaintenancePathsOwnedByStateDir(
   assertDoctorSqliteMaintenancePathsNotAliased(operation, protectedPaths, [stateDir]);
 }
 
-/** Reject file aliases that destructive SQLite maintenance would mutate in place. */
+/** Reject file aliases on mutation paths and symbolic aliases on observed paths. */
 export function assertDoctorSqliteMaintenancePathsNotAliased(
   operation: string,
   protectedPaths: readonly string[],
   ownershipRoots: readonly string[] = [],
+  observations?: { paths: readonly string[]; ownershipRoots: readonly string[] },
 ): void {
   const resolvedRoots = ownershipRoots.map((candidate) => path.resolve(candidate));
-  for (const protectedPath of new Set(protectedPaths.map((candidate) => path.resolve(candidate)))) {
+  const mutationPaths = new Set(protectedPaths.map((candidate) => path.resolve(candidate)));
+  for (const protectedPath of mutationPaths) {
     const stat = inspectMaintenancePath(operation, protectedPath, resolvedRoots);
     if (stat?.isFile() && stat.nlink > 1) {
       throw new Error(
         `Cannot run ${operation} for a hard-linked path: ${protectedPath}. Remove the additional hard link and retry.`,
       );
+    }
+  }
+  const observationRoots =
+    observations?.ownershipRoots.map((candidate) => path.resolve(candidate)) ?? [];
+  for (const observedPath of new Set(
+    observations?.paths.map((candidate) => path.resolve(candidate)),
+  )) {
+    // Observations must not replace the roots protecting selected mutation paths.
+    if (!mutationPaths.has(observedPath)) {
+      inspectMaintenancePath(operation, observedPath, observationRoots);
     }
   }
 }
@@ -93,10 +106,7 @@ function readMaintenancePathStat(filePath: string): fs.Stats | undefined {
   try {
     return fs.lstatSync(filePath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
+    return ignoreMissingPath(error);
   }
 }
 

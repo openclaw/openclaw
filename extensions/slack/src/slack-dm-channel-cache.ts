@@ -21,9 +21,7 @@ export function readCachedSlackDmChannelId(params: {
   token: string;
   recipientId: string;
 }): string | undefined {
-  return getOrCreateWeakOwnerMap(slackDmChannelCaches, params.cacheOwner).get(
-    createSlackDmCacheKey(params),
-  );
+  return slackDmChannelCaches.get(params.cacheOwner)?.get(createSlackDmCacheKey(params));
 }
 
 export function cacheSlackDmChannelId(

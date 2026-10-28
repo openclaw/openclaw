@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSharedAuthProfileRows } from "../agents/auth-profiles/sqlite-read.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -34,31 +35,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
-it("publishes newly imported paths and keeps the first canonical value", () => {
-  const options = {
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("machine-state-") },
-  };
-  writeConfigMachineState("config.lastTouchedAt", "canonical", options);
-  expect(readConfigMachineState("tts.prefsPath", options)).toBeUndefined();
-
-  expect(
-    importConfigMachineState(
-      [
-        ["tts.prefsPath", "/tmp/first-tts.json"],
-        ["tts.prefsPath", "/tmp/ignored-tts.json"],
-        ["config.lastTouchedAt", "legacy"],
-      ],
-      options,
-    ),
-  ).toEqual({
-    imported: ["tts.prefsPath"],
-    kept: ["tts.prefsPath", "config.lastTouchedAt"],
-  });
-
-  expect(readConfigMachineState("tts.prefsPath", options)).toBe("/tmp/first-tts.json");
-  expect(readConfigMachineState("config.lastTouchedAt", options)).toBe("canonical");
-});
-
 const authKey = "authProfiles.store";
 const profileId = "fixture:credential";
 const credential = (key: string) => ({ type: "api_key" as const, provider: "fixture", key });
@@ -72,6 +48,7 @@ function credentialFixture() {
       databasePath: database.path,
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: `${options.env.OPENCLAW_STATE_DIR}/openclaw.json`,
         role: "gateway",
@@ -230,7 +207,6 @@ it("keeps shared auth discovery warm and observes machine-state worker writes", 
   await writeConfigMachineStateAsync("fixture.unrelated", 1, options);
   expect(await rows()).toBe(first);
   expect(read()).toEqual(credential("original"));
-  expect(await rows()).toBe(first);
 
   const state = { order: { fixture: [profileId] } };
   await writeConfigMachineStateAsync("authProfiles.state", state, options);

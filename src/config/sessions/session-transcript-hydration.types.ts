@@ -12,7 +12,7 @@ import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type {
   PreparedSessionTranscriptHydration,
-  SessionCompactionPreparation,
+  SessionTranscriptContextSelection,
   SessionTranscriptReadSnapshot,
 } from "./session-history-read.types.js";
 import type { SessionTranscriptAnchorEntry } from "./session-transcript-anchor-read.types.js";
@@ -24,6 +24,7 @@ export type SessionTranscriptMaintenanceRead =
   | { operation: "previous"; beforeSeq: number }
   | { operation: "identity"; eventId: string }
   | { operation: "version" }
+  | { operation: "custom-branch"; leafEntryId: string | null; customType: string }
   | {
       operation: "nested-activity";
       scopeId: string;
@@ -53,7 +54,6 @@ export type SessionTranscriptHydrationWorkerResult =
       kind: "full";
       version: SessionTranscriptReadSnapshot["version"];
       eventCount: number;
-      compaction?: SessionCompactionPreparation;
     }
   | Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
 
@@ -85,7 +85,7 @@ export type SessionTranscriptHydrationWorkerInput = {
   afterSeq?: number;
   includeEventJson?: boolean;
   compaction?: true;
-  limits?: { maxBytes: number; maxEvents: number };
+  limits?: SessionTranscriptContextSelection;
   transcript?: SessionEntryCohortRequest["transcript"];
   preparedEntry?: SessionTranscriptAnchorEntry;
   admission?: UserTurnTranscriptAdmissionReceipt;

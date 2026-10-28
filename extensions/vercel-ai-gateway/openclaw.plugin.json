@@ -13,6 +13,16 @@
     }
   ],
   "modelCatalog": {
+    "modelsDev": {
+      "vercel-ai-gateway": "vercel"
+    },
+    "providers": {
+      "vercel-ai-gateway": {
+        "baseUrl": "https://ai-gateway.vercel.sh",
+        "api": "anthropic-messages",
+        "models": []
+      }
+    },
     "discovery": {
       "vercel-ai-gateway": "refreshable"
     }

@@ -206,7 +206,7 @@ describe("readSessionMethodAccess", () => {
     ).toMatchObject({ allowed: false, cause: "method-unavailable" });
   });
 
-  it("admits only opted-in display assignments to a retained offline identity", () => {
+  it("admits only opted-in desired-state assignments to a retained offline identity", () => {
     const offline = snapshot({ methods: ["sessions.patch"], scopes: ["operator.write"] });
     offline.phase = "offline";
     const request = {
@@ -224,7 +224,12 @@ describe("readSessionMethodAccess", () => {
       allowed: false,
       cause: "disconnected",
     });
-    for (const patch of [{ model: "test-model" }, { archived: true }, { sidebarRoot: true }, {}]) {
+    for (const patch of [
+      { model: "test-model" },
+      { archived: true, pinned: false },
+      { sidebarRoot: true },
+      {},
+    ]) {
       expect(
         readSessionMethodAccess(offline, {
           ...request,

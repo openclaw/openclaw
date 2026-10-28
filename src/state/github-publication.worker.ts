@@ -69,7 +69,6 @@ function mutate(
       assertMutationSource(database, receipt, source);
       assertGitHubPublicationWorkerSourceCurrent(database.db);
       deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(database.db), receipt);
-      return receipt;
     });
   }
   return runOpenClawStateWriteTransaction(
@@ -77,7 +76,6 @@ function mutate(
       // Accepted bookkeeping can settle after caller revocation; it grants no GitHub action.
       const receipt = capture();
       deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(db), receipt);
-      return receipt;
     },
     { database },
     { operationLabel: `github-publication.${input.operation}` },
@@ -144,11 +142,15 @@ function assertMutationSource(
     if (!lifecycle || lifecycle.lifecycle_revision !== selector.lifecycleRevision) {
       throw new Error("GitHub publication transition source lifecycle changed.");
     }
-    assertGitHubPublicationWorktreeSource(source, {
-      id: row.worktree_id,
-      repoFingerprint: row.repository_fingerprint,
-      branch: row.branch,
-    });
+    assertGitHubPublicationWorktreeSource(
+      source,
+      {
+        id: row.worktree_id,
+        repoFingerprint: row.repository_fingerprint,
+        branch: row.branch,
+      },
+      result.kind === "shared",
+    );
   }
   if (result.kind === "personal") {
     for (const row of result.rows) {
@@ -174,7 +176,7 @@ function personalMutation(database: OpenClawStateDatabase, input: PersonalPublic
     case "complete":
     case "recordEffect":
     case "interrupt": {
-      const { values } = githubPublicationEffectFacts(input, "needs_confirmation");
+      const values = githubPublicationEffectFacts(input, "needs_confirmation");
       return [
         personal.writePersonalGitHubPublicationInDatabase(
           database,
@@ -182,8 +184,6 @@ function personalMutation(database: OpenClawStateDatabase, input: PersonalPublic
           input.instanceId,
           input.executionId,
           values,
-          false,
-          admitted,
         ),
       ];
     }
@@ -221,7 +221,7 @@ function repositoryMutation(database: OpenClawStateDatabase, input: RepositoryPu
     case "complete":
     case "recordEffect":
     case "interrupt": {
-      const { values } = githubPublicationEffectFacts(
+      const values = githubPublicationEffectFacts(
         input,
         input.row.owner_profile_id === null ? "requested" : "needs_confirmation",
       );
@@ -232,8 +232,6 @@ function repositoryMutation(database: OpenClawStateDatabase, input: RepositoryPu
           input.instanceId,
           input.executionId,
           values,
-          false,
-          authority,
         ),
       ];
     }

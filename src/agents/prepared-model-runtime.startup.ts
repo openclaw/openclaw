@@ -73,7 +73,7 @@ export class PreparedModelRuntimeStartup {
       }
       this.#foreground.resolve();
     }, this.host.timeoutMs);
-    timer.unref?.();
+    timer.unref();
     void publication.catch((error: unknown) => {
       if (this.host.replacement.degraded) {
         this.host.warn(`background model runtime publication failed: ${String(error)}`);

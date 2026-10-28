@@ -142,7 +142,7 @@ export function createPreparedSessionTranscriptReads(params: {
     (input: Input, signal?: AbortSignal) =>
       read(
         (worker) => operation(worker, input, signal),
-        () => snapshot({ ...input, expectedIdentity }, signal),
+        () => snapshot.call(params.reader, { ...input, expectedIdentity }, signal),
         signal,
       );
   return {

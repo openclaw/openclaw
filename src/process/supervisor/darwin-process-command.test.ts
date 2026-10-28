@@ -49,6 +49,31 @@ it.each([
   });
 });
 
+it.each([
+  { executable: "/bin/zsh", argv: ["/bin/zsh", "-c", "sleep 30"], unknown: false },
+  { executable: "/opt/homebrew/bin/node", argv: ["node", "/app/dist/index.js"], unknown: true },
+  { executable: "/usr/local/bin/bun", argv: ["bun", "run", "start"], unknown: true },
+  { executable: "/bin/sleep", argv: ["/Users/me/.local/bin/tsx", "app.ts"], unknown: true },
+])("reads $executable argv when Darwin omits its environment", ({ executable, argv, unknown }) => {
+  // macOS 27 ends hardened executables' argument images right after argv.
+  const incomplete = new ProcSafeError("incomplete", "unterminated Darwin environment");
+  readCommand.mockImplementation((_pid: number, options?: { environmentKeys?: string[] }) => {
+    if (options?.environmentKeys?.length) {
+      throw incomplete;
+    }
+    return { executable, argv: Object.freeze(argv), environment: {} };
+  });
+  if (unknown) {
+    expect(() => readDarwinProcessCommand(12, "same")).toThrow(incomplete);
+  } else {
+    expect(readDarwinProcessCommand(12, "same")).toEqual({ argv, executable });
+  }
+  expect(readDarwinProcessCommand(12, "same", { serviceMarker: false })).toEqual({
+    argv,
+    executable,
+  });
+});
+
 it("returns no command for proven absence", () => {
   readCommand.mockReturnValue(null);
   expect(readDarwinProcessCommand(12, "same")).toBeUndefined();

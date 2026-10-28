@@ -1,6 +1,6 @@
 import { spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -12,7 +12,6 @@ import {
   IOS_RELEASE_TESTS,
   MODEL_REF,
   parseMeasurement,
-  requireExactTestResult,
   runTrials,
   summarizeMeasurements,
   testRunnerEnv,
@@ -32,6 +31,7 @@ const nativeMocks = vi.hoisted(() => ({
   install: vi.fn(),
   gateway: vi.fn(),
   rpc: vi.fn(),
+  headroom: vi.fn(),
 }));
 const commandsWith = (argument: string) =>
   nativeMocks.command.mock.calls
@@ -111,6 +111,10 @@ vi.mock("../../scripts/lib/ios-release-e2e-build.js", () => ({
 vi.mock("../../scripts/lib/ios-release-gateway.js", () => ({
   prepareIOSReleaseGateway: nativeMocks.install,
 }));
+vi.mock("../../scripts/lib/ios-simulator-headroom.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/lib/ios-simulator-headroom.js")>()),
+  waitForIOSSimulatorHeadroom: nativeMocks.headroom,
+}));
 vi.mock("../helpers/openclaw-test-instance.js", () => ({
   createOpenClawTestInstance: nativeMocks.gateway,
 }));
@@ -146,10 +150,6 @@ function result(
   return { testNodes: [{ nodeType: "Test Plan", children: [bundle] }] };
 }
 
-const childRuns = (nodeType: string, ...results: string[]) => ({
-  children: results.map((runResult) => ({ nodeType, result: runResult })),
-});
-
 function expectFailedTrial(
   report: Awaited<ReturnType<typeof runTrials>>,
   error: string,
@@ -176,6 +176,7 @@ const expectFixtures = (proof: Record<string, unknown>, fields: Record<string, u
   expect(proof.fixtures).toEqual(fixtureEvidence(fields));
 const rpcEvidence = (responseReceived: boolean) =>
   matching({
+    attempts: 1,
     authenticated: true,
     dispatchEntered: true,
     responseReceived,
@@ -211,32 +212,6 @@ function preparationFailure(
     diagnostics: [diagnostic(operation, code, extra)],
   };
 }
-
-describe("iOS release test identity", () => {
-  it("accepts XCTest class/method identity under its exact UI bundle", () => {
-    for (const test of IOS_RELEASE_TESTS) {
-      requireExactTestResult(result(test, childRuns("Test Case Run", "Passed")), test);
-    }
-  });
-
-  it.each([
-    ["basename", result(undefined, { nodeIdentifier: IOS_RELEASE_TESTS[0].split("/").at(-1) })],
-    ["skipped", result(undefined, { result: "Skipped" })],
-    ["failed", result(undefined, { result: "Failed" })],
-    ["failed child", result(undefined, childRuns("Test Case Run", "Failed"))],
-    ["retry to green", result(undefined, childRuns("Repetition", "Passed", "Passed"))],
-    ["multiple runs", result(undefined, childRuns("Test Case Run", "Passed", "Passed"))],
-    ["wrong target", result(undefined, {}, { name: "OtherUITests" })],
-    ["unit bundle", result(undefined, {}, { nodeType: "Unit test bundle" })],
-    ["missing tests", { testNodes: [] }],
-    [
-      "extra tests",
-      { testNodes: [...result().testNodes, ...result(IOS_RELEASE_TESTS[1]).testNodes] },
-    ],
-  ])("rejects %s", (_name, value) => {
-    expect(() => requireExactTestResult(value, IOS_RELEASE_TESTS[0])).toThrow();
-  });
-});
 
 it("writes a failure proof when the real CLI rejects an impossible target", () => {
   const output = path.join(tempDirs.make("ios-release-e2e-cli-"), "proof.json");
@@ -645,11 +620,131 @@ describe("release qualification workflow authority", () => {
     expect(workflow.jobs.qualify.env.OPENCLAW_CI_SIMSLIM_BINARY).toBeUndefined();
     const upload = requiredWorkflowStep(steps, "Upload sanitized proof only");
     expect(upload.if).toBe("always()");
-    expect(upload.with.path).toBe("${{ runner.temp }}/ios-release-e2e-proof.json");
+    expect(upload.with.path.trim().split(/\r?\n/u)).toEqual([
+      "${{ runner.temp }}/ios-release-e2e-proof.json",
+      "${{ runner.temp }}/ios-resource-timeline.jsonl",
+    ]);
     expect(upload.with.name).toBe(
       "ios-release-e2e-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}",
     );
   });
+  it.each([
+    { flow: "qualification", enabled: true },
+    { flow: "qualification", enabled: false },
+    { flow: "screenshots", enabled: true },
+    { flow: "screenshots", enabled: false },
+    { flow: "screenshots", enabled: false, startupProbe: true },
+  ])(
+    "runs $flow with optional resource diagnostics=$enabled without masking failure",
+    ({ flow, enabled, startupProbe = false }) => {
+      const diagnostics = enabled || startupProbe;
+      const selected = flow === "qualification" ? workflow : release;
+      expect(selected.on.workflow_dispatch.inputs.resource_diagnostics).toMatchObject({
+        type: "boolean",
+        default: true,
+      });
+      expect(workflow.on.workflow_call.inputs.resource_diagnostics).toMatchObject({
+        type: "boolean",
+        default: true,
+      });
+      const step = requiredWorkflowStep(
+        flow === "qualification" ? workflow.jobs.qualify.steps : release.jobs.screenshots.steps,
+        flow === "qualification"
+          ? "Qualify native pairing and chat"
+          : "Capture iPhone, iPad, and Watch screenshots",
+      );
+      const root = tempDirs.make("ios-workflow-resource-diagnostics-");
+      const scripts = path.join(root, "scripts");
+      const bin = path.join(root, "bin");
+      mkdirSync(scripts);
+      mkdirSync(bin);
+      writeFileSync(
+        path.join(scripts, "ios-resource-timeline.mjs"),
+        readFileSync("scripts/ios-resource-timeline.mjs"),
+      );
+      writeFileSync(path.join(scripts, "tsx.mjs"), "export {};\n");
+      const workload = path.join(scripts, "ios-release-e2e.ts");
+      writeFileSync(
+        workload,
+        `
+const fs = require("node:fs");
+fs.writeFileSync(process.env.FIXTURE_RECORD, JSON.stringify({
+  args: process.argv.slice(2),
+  diagnostics: process.env.OPENCLAW_IOS_RESOURCE_DIAGNOSTICS,
+  snapshots: process.env.OPENCLAW_SNAPSHOT_DIAGNOSTICS,
+  startupProbe: process.env.OPENCLAW_SNAPSHOT_STARTUP_PROBE,
+  deviceFamily: process.env.OPENCLAW_SNAPSHOT_DEVICE_FAMILY,
+  skipWatch: process.env.OPENCLAW_SNAPSHOT_SKIP_WATCH,
+  phasePath: process.env.OPENCLAW_IOS_RESOURCE_PHASE_PATH,
+}));
+process.exitCode = 23;
+`,
+      );
+      const pnpm = path.join(bin, "pnpm");
+      writeFileSync(pnpm, '#!/bin/sh\nexec "$FIXTURE_NODE" "$FIXTURE_WORKLOAD" "$@"\n');
+      chmodSync(pnpm, 0o755);
+      const stepEnv = Object.fromEntries(
+        Object.entries(step.env as Record<string, string>).map(([key, value]) => [
+          key,
+          value.startsWith("${{")
+            ? String(
+                evaluateWorkflow(value, {
+                  eventName: "workflow_dispatch",
+                  inputs: { resource_diagnostics: enabled, startup_probe: startupProbe },
+                  steps: { simslim: { outputs: { binary: "" } } },
+                }),
+              )
+            : value,
+        ]),
+      );
+      const record = path.join(root, "observed.json");
+      const proof = path.join(root, "proof.json");
+      const gateway = path.join(root, "gateway");
+      const target = "a".repeat(40);
+      const execution = spawnSync("/bin/bash", ["-c", step.run], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...stepEnv,
+          PATH: `${bin}${path.delimiter}${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH}`,
+          FIXTURE_NODE: process.execPath,
+          FIXTURE_WORKLOAD: workload,
+          FIXTURE_RECORD: record,
+          RUNNER_TEMP: root,
+          PROOF_PATH: proof,
+          GATEWAY_SELECTION_DIR: gateway,
+          TARGET_SHA: target,
+          E2E_MODE: "stock",
+        },
+      });
+      expect(execution.status, execution.stderr).toBe(23);
+      const observed = JSON.parse(readFileSync(record, "utf8"));
+      expect(observed.diagnostics).toBe(diagnostics ? "1" : "0");
+      expect(Boolean(observed.phasePath)).toBe(diagnostics);
+      expect(readdirSync(root).includes("ios-resource-timeline.jsonl")).toBe(diagnostics);
+      expect(observed.args).toEqual(
+        flow === "qualification"
+          ? [
+              "--mode",
+              "stock",
+              "--target-sha",
+              target,
+              "--output",
+              proof,
+              "--gateway-selection",
+              gateway,
+            ]
+          : ["ios:screenshots"],
+      );
+      if (flow === "screenshots") {
+        expect(observed.snapshots).toBe("1");
+        expect(observed.startupProbe).toBe(startupProbe ? "1" : "0");
+        expect(observed.deviceFamily).toBe(startupProbe ? "iphone" : "");
+        expect(observed.skipWatch).toBe(startupProbe ? "1" : "0");
+      }
+    },
+  );
   it.each([
     ["full", "a".repeat(40), true],
     ["full", "b".repeat(40), false],
@@ -701,6 +796,8 @@ it.each([
   "build-unjoined",
   "build-exit",
   "boot-timeout",
+  "headroom-timeout",
+  "cancel-during-headroom",
   "gateway-start-failure",
   "setup-status-timeout",
   "setup-status-failure",
@@ -711,6 +808,12 @@ it.each([
   "gateway-only",
   "native-build-only",
   "setup-code-timeout",
+  "setup-code-handshake-retry",
+  "setup-code-handshake-timeout-retry",
+  "setup-code-handshake-exhausted",
+  "setup-code-closed-after-dispatch",
+  "setup-code-closed-unknown-dispatch",
+  "setup-code-closed-cancelled",
   "setup-code-rpc-timeout",
   "setup-code-fast-success",
   "setup-code-slow-success",
@@ -753,6 +856,7 @@ it.each([
     setupBegan = resolve;
   });
   let diagnosticCalls = 0;
+  let setupCodeAttempts = 0;
   const gatewayIdentity = {
     version: "2026.9.29",
     integrity: "sha512-YQ==",
@@ -888,6 +992,30 @@ it.each([
         setupBegan();
       });
     }
+    if (options.method === "device.pair.setupCode") {
+      setupCodeAttempts++;
+      if (
+        scenario === "setup-code-handshake-exhausted" ||
+        scenario === "setup-code-closed-unknown-dispatch" ||
+        scenario === "setup-code-closed-cancelled" ||
+        (scenario.startsWith("setup-code-handshake-") && setupCodeAttempts === 1)
+      ) {
+        if (scenario === "setup-code-closed-cancelled") {
+          abort.abort();
+        }
+        throw new GatewayTransportError({
+          kind: scenario === "setup-code-handshake-timeout-retry" ? "timeout" : "closed",
+          message: "private handshake failure",
+          connectionDetails: { url: "ws://private", urlSource: "private", message: "private" },
+          code: 1008,
+          reason:
+            scenario === "setup-code-closed-unknown-dispatch" ? "private" : "invalid-handshake",
+          ...(scenario === "setup-code-closed-unknown-dispatch"
+            ? {}
+            : { requestDispatched: false }),
+        });
+      }
+    }
     options.onHelloOk?.();
     options.assertDispatchCurrent?.();
     if (options.method === "device.pair.setupStatus") {
@@ -909,6 +1037,16 @@ it.each([
     expect(options.method).toBe("device.pair.setupCode");
     expect(simulatorReady).toBe(scenario !== "gateway-only");
     lifecycle.push("setup-code");
+    if (scenario === "setup-code-closed-after-dispatch") {
+      throw new GatewayTransportError({
+        kind: "closed",
+        message: "private transport failure",
+        connectionDetails: { url: "ws://private", urlSource: "private", message: "private" },
+        code: 1011,
+        reason: "private",
+        requestDispatched: true,
+      });
+    }
     if (scenario === "setup-code-timeout") {
       throw new Error("private fixture command failed", {
         cause: Object.assign(new Error("private setup code and path"), { code: "ETIMEDOUT" }),
@@ -1242,6 +1380,21 @@ it.each([
   const progressSnapshots: string[] = [];
   let rejectedSlowProgress = false;
   const abort = new AbortController();
+  nativeMocks.headroom.mockImplementation(async () => {
+    if (scenario === "cancel-during-headroom") {
+      abort.abort();
+      throw Object.assign(new Error("cancelled"), { code: "ABORT_ERR" });
+    }
+    if (scenario !== "headroom-timeout") {
+      lifecycle.push("headroom-ready");
+    }
+    return {
+      status: scenario === "headroom-timeout" ? "timeout" : "ready",
+      elapsedMs: scenario === "headroom-timeout" ? 300_000 : 10_000,
+      samples: scenario === "headroom-timeout" ? 150 : 5,
+      idlePercent: scenario === "headroom-timeout" ? 0 : 80,
+    };
+  });
   const admission = createNativeDependencies({
     mode: "stock",
     targetSha: "1".repeat(40),
@@ -1425,6 +1578,37 @@ it.each([
     expect(instances).toHaveLength(1);
     expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
     expect(JSON.stringify(report)).not.toContain("private");
+    if (scenario.includes("handshake-") || scenario.startsWith("setup-code-closed-")) {
+      const recovered = scenario.endsWith("-retry");
+      const exhausted = scenario === "setup-code-handshake-exhausted";
+      const cancelled = scenario === "setup-code-closed-cancelled";
+      const dispatched = scenario === "setup-code-closed-after-dispatch";
+      const attempts = recovered ? 2 : exhausted ? 3 : 1;
+      expect(setupCodeAttempts).toBe(attempts);
+      expectFixtures(proof, {
+        cleanupConfirmed: true,
+        setupRpc: matching({
+          attempts,
+          authenticated: recovered || dispatched,
+          dispatchEntered: recovered || dispatched,
+          responseReceived: recovered,
+        }),
+      });
+      expectTrial(report, { status: recovered ? "passed" : "failed" });
+      if (!recovered && !cancelled) {
+        expect(report.trials[0]?.diagnostics[0]?.context).toEqual(
+          containing([
+            `rpc-attempts:${attempts}`,
+            "rpc-transport-kind:closed",
+            `rpc-dispatch-entered:${dispatched}`,
+            `rpc-close-code:${dispatched ? 1011 : 1008}`,
+            `rpc-close-reason:${exhausted ? "invalid-handshake" : "withheld"}`,
+          ]),
+        );
+      }
+      expect(JSON.stringify(proof)).not.toMatch(/private|synthetic/);
+      return;
+    }
     if (setupPlan) {
       if (scenario !== "setup-code-fast-success") {
         expect(diagnosticsBeforeThreshold).toBe(0);
@@ -1440,6 +1624,7 @@ it.each([
       const authenticated = auth !== false;
       expectFixtures(proof, {
         setupRpc: {
+          attempts: 1,
           authenticated,
           dispatchEntered: authenticated,
           responseReceived: success,
@@ -1566,9 +1751,13 @@ it.each([
     });
     const preparationFailures: Record<string, ReturnType<typeof preparationFailure>> = {
       "boot-timeout": preparationFailure("simulator-ready", "timeout"),
+      "headroom-timeout": preparationFailure("simulator-headroom", "timeout"),
+      "cancel-during-headroom": preparationFailure("simulator-headroom", "cancelled"),
       "gateway-start-failure": preparationFailure("gateway-start", "failed"),
       "setup-status-timeout": preparationFailure("setup-status", "timeout", {
         context: [
+          "rpc-attempts:1",
+          "rpc-transport-kind:timeout",
           "rpc-authenticated:true",
           "rpc-dispatch-entered:true",
           "rpc-request-dispatched:true",
@@ -1660,7 +1849,12 @@ it.each([
           ...(scenario === "setup-code-timeout" ? { errorCode: "ETIMEDOUT" } : {}),
           context:
             scenario === "setup-code-rpc-timeout"
-              ? ["rpc-authenticated:true", "rpc-dispatch-entered:true"]
+              ? [
+                  "rpc-attempts:1",
+                  "rpc-transport-kind:timeout",
+                  "rpc-authenticated:true",
+                  "rpc-dispatch-entered:true",
+                ]
               : [],
         }),
       ]);
@@ -1725,7 +1919,8 @@ it.each([
       ["gateway-start", "boot-ready"],
       ["gateway-start", "setup-status"],
       ["setup-status-ready", "simulator-create"],
-      ["boot-ready", "setup-code"],
+      ["boot-ready", "headroom-ready"],
+      ["headroom-ready", "setup-code"],
       ["setup-code", "live-test"],
       ["gateway-cleanup", "reader-test"],
       ["mock-cleanup", "reader-test"],

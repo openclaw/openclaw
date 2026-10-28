@@ -1,71 +1,30 @@
-// Tests CLI entrypoint argument handling and startup behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithPrecomputedHelpMocks } from "./cli/precomputed-help.test-helpers.js";
 import * as rootHelp from "./cli/program/root-help.js";
 import * as liveHelp from "./cli/root-help-live-config.js";
 import * as helpMetadata from "./cli/root-help-metadata.js";
 import { tryHandlePrecomputedCommandHelpFastPath, tryHandleRootHelpFastPath } from "./entry.js";
-import { withEnvAsync } from "./test-utils/env.js";
-
-async function runRootHelp(
-  argv: string[],
-  setup: {
-    env?: NodeJS.ProcessEnv;
-    outputPrecomputedRootHelpText?: typeof helpMetadata.outputPrecomputedRootHelpText;
-    outputRootHelp?: typeof rootHelp.outputRootHelp;
-    loadRootHelpRenderOptionsForConfigSensitivePlugins?: typeof liveHelp.loadRootHelpRenderOptionsForConfigSensitivePlugins;
-  },
-) {
-  const spies = [
-    vi
-      .spyOn(helpMetadata, "outputPrecomputedRootHelpText")
-      .mockImplementation(setup.outputPrecomputedRootHelpText ?? (() => false)),
-    vi
-      .spyOn(rootHelp, "outputRootHelp")
-      .mockImplementation(setup.outputRootHelp ?? (async () => {})),
-    vi
-      .spyOn(liveHelp, "loadRootHelpRenderOptionsForConfigSensitivePlugins")
-      .mockImplementation(
-        setup.loadRootHelpRenderOptionsForConfigSensitivePlugins ?? (async () => null),
-      ),
-  ];
-  try {
-    return await withEnvAsync(setup.env ?? {}, () => tryHandleRootHelpFastPath(argv));
-  } finally {
-    for (const spy of spies) {
-      spy.mockRestore();
-    }
-  }
-}
 
 describe("entry root help fast path", () => {
-  it("prefers precomputed root help text when available", async () => {
-    const outputPrecomputedRootHelpText = vi.fn(() => true);
-    const outputRootHelp = vi.fn();
-
-    const handled = await runRootHelp(["node", "openclaw", "--help"], {
-      env: {},
-      outputPrecomputedRootHelpText,
-      outputRootHelp,
-      loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
-    });
-
-    expect(handled).toBe(true);
-    expect(outputPrecomputedRootHelpText).toHaveBeenCalledOnce();
-    expect(outputRootHelp).not.toHaveBeenCalled();
+  beforeEach(() => {
+    vi.spyOn(helpMetadata, "outputPrecomputedRootHelpText").mockReturnValue(false);
+    vi.spyOn(rootHelp, "outputRootHelp").mockResolvedValue(undefined);
+    vi.spyOn(liveHelp, "loadRootHelpRenderOptionsForConfigSensitivePlugins").mockResolvedValue(
+      null,
+    );
   });
+  afterEach(() => vi.restoreAllMocks());
 
-  it("renders root help without importing the full program", async () => {
-    const outputRootHelp = vi.fn();
-
-    const handled = await runRootHelp(["node", "openclaw", "--help"], {
-      outputRootHelp,
-      loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
-      env: {},
-    });
-
-    expect(handled).toBe(true);
-    expect(outputRootHelp).toHaveBeenCalledOnce();
+  it.each([
+    ["precomputed", ["--help"], true, true, 1, 0],
+    ["rendered", ["--help"], false, true, 1, 1],
+    ["non-root", ["status", "--help"], false, false, 0, 0],
+    ["container", ["--container", "demo", "--help"], false, false, 0, 0],
+  ] as const)("handles %s help", async (_name, args, cached, handled, precomputed, rendered) => {
+    vi.mocked(helpMetadata.outputPrecomputedRootHelpText).mockReturnValue(cached);
+    expect(await tryHandleRootHelpFastPath(["node", "openclaw", ...args])).toBe(handled);
+    expect(helpMetadata.outputPrecomputedRootHelpText).toHaveBeenCalledTimes(precomputed);
+    expect(rootHelp.outputRootHelp).toHaveBeenCalledTimes(rendered);
   });
 
   it("structures root help rendering failures for JSON console style", async () => {
@@ -76,20 +35,16 @@ describe("entry root help fast path", () => {
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
       throw new Error(`exit ${String(code)}`);
     });
+    vi.mocked(liveHelp.loadRootHelpRenderOptionsForConfigSensitivePlugins).mockResolvedValue({
+      config: {},
+      env: {},
+    });
+    vi.mocked(rootHelp.outputRootHelp).mockImplementation(() => {
+      throw new Error("render failed");
+    });
 
     try {
-      await expect(
-        runRootHelp(["node", "openclaw", "--help"], {
-          env: {},
-          loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => ({
-            config: {},
-            env: {},
-          }),
-          outputRootHelp: () => {
-            throw new Error("render failed");
-          },
-        }),
-      ).resolves.toBe(true);
+      await expect(tryHandleRootHelpFastPath(["node", "openclaw", "--help"])).resolves.toBe(true);
       const line = stderrSpy.mock.calls.map(([value]) => String(value)).join("");
       expect(JSON.parse(line)).toMatchObject({
         level: "error",
@@ -100,34 +55,7 @@ describe("entry root help fast path", () => {
     } finally {
       process.exitCode = previousExitCode;
       logging.resetLogger();
-      vi.restoreAllMocks();
     }
-  });
-
-  it("ignores non-root help invocations", async () => {
-    const outputRootHelp = vi.fn();
-
-    const handled = await runRootHelp(["node", "openclaw", "status", "--help"], {
-      outputRootHelp,
-      loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
-      env: {},
-    });
-
-    expect(handled).toBe(false);
-    expect(outputRootHelp).not.toHaveBeenCalled();
-  });
-
-  it("skips the host help fast path when a container target is active", async () => {
-    const outputRootHelp = vi.fn();
-
-    const handled = await runRootHelp(["node", "openclaw", "--container", "demo", "--help"], {
-      outputRootHelp,
-      loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
-      env: {},
-    });
-
-    expect(handled).toBe(false);
-    expect(outputRootHelp).not.toHaveBeenCalled();
   });
 });
 

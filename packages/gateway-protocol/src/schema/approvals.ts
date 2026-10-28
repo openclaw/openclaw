@@ -118,6 +118,13 @@ const SystemAgentApprovalAllowedDecisionsSchema = Type.Tuple([
   Type.Literal("deny"),
 ]);
 
+/** Native automation proposal identity for display; never approval authority. */
+const StreamApprovalProposalSchema = closedObject({
+  jobId: NonEmptyString,
+  name: NonEmptyString,
+  operation: Type.Union([Type.Literal("add"), Type.Literal("update")]),
+});
+
 /** Redacted exec details safe to persist and render outside the requesting runtime. */
 export const ExecApprovalPresentationSchema = Type.Object(
   {
@@ -125,6 +132,7 @@ export const ExecApprovalPresentationSchema = Type.Object(
     commandText: NonEmptyString,
     commandPreview: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     warningText: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    streamProposal: Type.Optional(StreamApprovalProposalSchema),
     host: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     nodeId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -348,6 +356,7 @@ export type PluginApprovalExternalResolution = Static<
   typeof PluginApprovalExternalResolutionSchema
 >;
 export type ExecApprovalPresentation = Static<typeof ExecApprovalPresentationSchema>;
+export type StreamApprovalProposal = Static<typeof StreamApprovalProposalSchema>;
 export type PluginApprovalPresentation = Static<typeof PluginApprovalPresentationSchema>;
 export type SystemAgentApprovalPresentation = Static<typeof SystemAgentApprovalPresentationSchema>;
 export type ApprovalPresentation = Static<typeof ApprovalPresentationSchema>;

@@ -4,6 +4,7 @@ import { deserialize, serialize } from "node:v8";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import {
@@ -34,12 +35,10 @@ import {
 import { normalizeAgentId } from "../routing/session-key.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import { waitForAgentDatabasePreparation } from "./agent-database-preparation-context.js";
+import { retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
-import {
-  registerOpenClawAgentDatabaseAsyncResource,
-  retainAgentDatabase,
-} from "./openclaw-agent-db-lifecycle.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-lifecycle.js";
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
@@ -272,6 +271,7 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
       return;
     }
     const reason = error instanceof Error ? error : new Error(formatErrorMessage(error));
+    materializeErrorStack(reason);
     terminalReason = reason;
     revoked = true;
     // Publications include result delivery and executor release, beyond native settlement.

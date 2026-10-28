@@ -117,6 +117,10 @@ function fixtureEventBeforeSettlement(record: string, operation: PromiseLike<unk
   return Promise.race([receipts.waitFor(record, "ready"), settled]);
 }
 
+function waitForFixtureEvent(record: string, child: ChildProcess, signal: AbortSignal) {
+  return withinTest(fixtureEventBeforeSettlement(record, childCompletion(child)), signal);
+}
+
 // Foreign groups have no ChildProcess owner after the launcher exits. Keep this
 // one observation loop under the test signal, never a competing wall-clock budget.
 async function waitForProcessGroupExit(pgid: number, signal: AbortSignal) {
@@ -350,6 +354,7 @@ interface SupervisedFixtureOptions {
   accelerateTimeouts?: boolean;
   env?: NodeJS.ProcessEnv;
   materializedAnchor?: boolean;
+  terminateWhenReady?: string;
 }
 
 async function runSupervisedFixture(
@@ -414,6 +419,10 @@ async function runSupervisedFixture(
   controller.stdout!.on("data", (chunk) => (stdout += chunk));
   controller.stderr!.on("data", (chunk) => (stderr += chunk));
   try {
+    if (options.terminateWhenReady) {
+      await waitForFixtureEvent(options.terminateWhenReady, controller, options.signal);
+      controller.kill("SIGTERM");
+    }
     await withinTest(childCompletion(controller, "close"), options.signal);
   } catch (error) {
     const failures: unknown[] = [error];
@@ -1520,7 +1529,7 @@ exec ${shellQuote(mktemp)} "$@"
         "mark_pr_operation_side_effects_started",
         "exit 1",
       ],
-      { signal },
+      { signal, materializedAnchor: true },
     );
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
     expect(result.stderr).toContain(
@@ -1528,6 +1537,30 @@ exec ${shellQuote(mktemp)} "$@"
     );
     expect(result.stderr).not.toContain("lock-recover");
     expect(refExists(repoDir)).toBe(false);
+    expect(existsSync(result.anchorDir!)).toBe(false);
+  });
+  it("retires a materialized anchor after forwarded SIGTERM while retaining the lock", async ({
+    signal,
+  }) => {
+    const repoDir = createRepo();
+    const ready = join(repoDir, "anchor-interrupt-ready");
+    const result = await runSupervisedOperation(
+      repoDir,
+      "anchor-interrupt-operation.sh",
+      [
+        "trap 'exit 143' TERM",
+        "acquire_pr_operation_lock 42",
+        `: > '${ready}'`,
+        fixtureReceiptCommand(repoDir, ready),
+        "sleep 30",
+      ],
+      { signal, materializedAnchor: true, terminateWhenReady: ready },
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(143);
+    expect(existsSync(ready)).toBe(true);
+    expect(existsSync(result.anchorDir!)).toBe(false);
+    expect(refExists(repoDir)).toBe(true);
+    recoverOperationLock(repoDir, refOid(repoDir));
   });
   it("waits while a live supervisor finishes draining a dead operation group", async ({
     signal,
@@ -1569,10 +1602,7 @@ exec ${shellQuote(mktemp)} "$@"
     let waiter: ChildProcess | undefined;
     let holderPgid: number | undefined;
     try {
-      await withinTest(
-        fixtureEventBeforeSettlement(holderReady, childCompletion(controller)),
-        signal,
-      );
+      await waitForFixtureEvent(holderReady, controller, signal);
       const operationPgid = requireProcessId(operationPgidFile);
       await waitForProcessGroupExit(operationPgid, signal);
       holderPgid = requireProcessId(holderPidFile);
@@ -1709,10 +1739,7 @@ exec ${shellQuote(mktemp)} "$@"
       }),
     );
     try {
-      await withinTest(
-        fixtureEventBeforeSettlement(ghStarted, childCompletion(controller)),
-        signal,
-      );
+      await waitForFixtureEvent(ghStarted, controller, signal);
       expect(existsSync(ghStarted) && refExists(repoDir)).toBe(true);
       const probe = probeOperationLock(repoDir);
       expect(probe.status, `${probe.stdout}\n${probe.stderr}`).toBe(0);
@@ -1747,7 +1774,7 @@ exec ${shellQuote(mktemp)} "$@"
     );
     let pgid: number | undefined;
     try {
-      await withinTest(fixtureEventBeforeSettlement(held, childCompletion(controller)), signal);
+      await waitForFixtureEvent(held, controller, signal);
       expect(existsSync(pidFile) && existsSync(held)).toBe(true);
       pgid = requireProcessId(pidFile);
       const ownerOid = refOid(repoDir);
@@ -1825,10 +1852,7 @@ exec ${shellQuote(mktemp)} "$@"
     });
     let pgid: number | undefined;
     try {
-      await withinTest(
-        fixtureEventBeforeSettlement(childReady, childCompletion(controller)),
-        signal,
-      );
+      await waitForFixtureEvent(childReady, controller, signal);
       expect(existsSync(pidFile) && existsSync(childReady)).toBe(true);
       pgid = requireProcessId(pidFile);
       const ownerOid = refOid(repoDir);
@@ -1892,19 +1916,13 @@ exec ${shellQuote(mktemp)} "$@"
       );
       let nestedPgid: number | undefined;
       try {
-        await withinTest(
-          fixtureEventBeforeSettlement(nestedPidFile, childCompletion(controller)),
-          signal,
-        );
+        await waitForFixtureEvent(nestedPidFile, controller, signal);
         expect(existsSync(nestedPidFile) && refExists(repoDir)).toBe(true);
         nestedPgid = requireProcessId(nestedPidFile);
         const ownerOid = refOid(repoDir);
         expect(processGroupExists(nestedPgid!)).toBe(true);
         controller.kill("SIGTERM");
-        await withinTest(
-          fixtureEventBeforeSettlement(signalRelayedFile, childCompletion(controller)),
-          signal,
-        );
+        await waitForFixtureEvent(signalRelayedFile, controller, signal);
         expect(existsSync(signalRelayedFile)).toBe(true);
         controller.kill("SIGTERM");
         await withinTest(childCompletion(controller), signal);

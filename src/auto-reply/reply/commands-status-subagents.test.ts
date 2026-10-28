@@ -18,7 +18,22 @@ import {
 import { buildStatusReplyForTest } from "./commands-status.test-support.js";
 
 type AgentEvent = Parameters<typeof emitAgentEvent>[0];
-const started = (timestamp: number) => ({ createdAt: timestamp, startedAt: timestamp });
+function seed(
+  runId: string,
+  task: string,
+  childSessionKey: string,
+  startedAt: number,
+  fields: Partial<Parameters<typeof seedSubagentRunForReadTest>[0]> = {},
+) {
+  seedSubagentRunForReadTest({
+    runId,
+    task,
+    childSessionKey,
+    createdAt: startedAt,
+    startedAt,
+    ...fields,
+  });
+}
 function emit(runId: string, stream: AgentEvent["stream"], data: AgentEvent["data"]) {
   emitAgentEvent({ runId, stream, data });
 }
@@ -67,13 +82,9 @@ describe("buildStatusReply execution observations", () => {
   it("shows canonical successor tool activity resuming after approval without changing counts", async () => {
     const runId = "status-observed-successor";
     const childSessionKey = "agent:main:subagent:status-observed";
-    seedSubagentRunForReadTest({
-      runId,
+    seed(runId, "observed worker", childSessionKey, Date.now() - 60_000, {
       taskRunId: "status-observed-original",
       generation: 2,
-      childSessionKey,
-      task: "observed worker",
-      ...started(Date.now() - 60_000),
     });
     registerContext(runId, childSessionKey);
     emit(runId, "tool", { phase: "start", name: "read", toolCallId: "status-read" });
@@ -117,13 +128,7 @@ describe("buildStatusReply execution observations", () => {
       const childSessionKey = "agent:main:subagent:status-replaced";
       const previousRunId = replacement === "incarnation" ? "status-current" : "status-previous";
       const now = Date.now();
-      seedSubagentRunForReadTest({
-        runId: previousRunId,
-        generation: 1,
-        childSessionKey,
-        task: "previous worker",
-        ...started(now - 2_000),
-      });
+      seed(previousRunId, "previous worker", childSessionKey, now - 2_000, { generation: 1 });
       registerContext(previousRunId, childSessionKey);
       const previousContext = getAgentRunContext(previousRunId);
       assert(previousContext, "Expected previous execution context");
@@ -136,13 +141,9 @@ describe("buildStatusReply execution observations", () => {
         approval: { id: "previous-approval", state: "pending" },
       });
       expect((await buildStatusReplyForTest({}))?.text).toMatch(/wait.*approval/i);
-      seedSubagentRunForReadTest({
-        runId: "status-current",
+      seed("status-current", "replacement worker", childSessionKey, now - 1_000, {
         taskRunId: replacement === "generation" ? previousRunId : "status-current",
         generation: 2,
-        childSessionKey,
-        task: "replacement worker",
-        ...started(now - 1_000),
       });
       if (replacement === "incarnation") {
         clearAgentRunContext(previousRunId);
@@ -169,21 +170,13 @@ describe("buildStatusReply execution observations", () => {
   it("retains ended child delivery debt without calling the child active", async () => {
     const parentKey = "agent:main:subagent:status-delivery-parent";
     const now = Date.now();
-    seedSubagentRunForReadTest({
-      runId: "status-delivery-parent",
-      childSessionKey: parentKey,
-      task: "delivery orchestrator",
-      ...started(now - 120_000),
+    seed("status-delivery-parent", "delivery orchestrator", parentKey, now - 120_000, {
       endedAt: now - 60_000,
       outcome: { status: "ok" },
     });
-    seedSubagentRunForReadTest({
-      runId: "status-delivery-child",
-      childSessionKey: `${parentKey}:subagent:child`,
+    seed("status-delivery-child", "completed child", `${parentKey}:subagent:child`, now - 90_000, {
       requesterSessionKey: parentKey,
       requesterDisplayKey: parentKey,
-      task: "completed child",
-      ...started(now - 90_000),
       endedAt: now - 30_000,
       outcome: { status: "ok" },
       expectsCompletionMessage: true,

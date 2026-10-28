@@ -33,6 +33,7 @@ import { createUserTurnProcessingCompletion } from "./user-turn-transcript-proce
 import {
   capturePersistedModelPromptProjection,
   confirmPersistedSteerTargetRunId,
+  preparePersistedModelPromptProjection,
 } from "./user-turn-transcript-updates.js";
 import {
   buildLateResolvedMediaMessage,
@@ -297,9 +298,7 @@ export function createUserTurnTranscriptRecorder(
       "logicalTurnId" in receipt ? receipt : { ...receipt, logicalTurnId, role: "user" };
     admissionReceipt = admission;
     admittedMessage = persistedMessage;
-    const run = async () => {
-      await admissionHandler?.(admission);
-    };
+    const run = async () => admissionHandler?.(admission);
     // Runtime writes must queue behind the transcript writer instead of reentering it.
     admissionWrite = detached ? runInDetachedAsyncContext(run) : run();
     // The turn owner awaits this write; an early rejection must not be unobserved.
@@ -329,6 +328,31 @@ export function createUserTurnTranscriptRecorder(
     }
     // A failed durable admission reaches the turn owner before provider dispatch.
     await admissionWrite;
+  };
+
+  const prepareProjectionParams = async (text: string, assertCurrent: () => void) => {
+    await waitForRuntimePersistence();
+    if (!admissionReceipt && selfPersistencePromise) {
+      await selfPersistencePromise;
+    }
+    assertCurrent();
+    const admission = admissionReceipt;
+    if (blocked || !admission || !admittedMessage) {
+      throw new Error("Model prompt projection requires a live, persisted user turn");
+    }
+    return {
+      admission,
+      message: admittedMessage,
+      text,
+      assertCurrent,
+      assertWritable: () => {
+        assertCurrent();
+        if (blocked || sentToProvider) {
+          throw new Error("Model prompt projection must be captured before provider dispatch");
+        }
+      },
+      onCommitted: refreshAdmission,
+    };
   };
 
   let inputActorBinding: SessionInputActorBinding | undefined;
@@ -473,9 +497,7 @@ export function createUserTurnTranscriptRecorder(
           }
         }
         const appendedMedia = await persistMessage(lateMediaMessage, "none");
-        if (appendedMedia) {
-          persistedResult = appendedMedia;
-        }
+        persistedResult = appendedMedia ?? persistedResult;
         return appendedMedia;
       }
       if (runtimePersisted) {
@@ -548,6 +570,9 @@ export function createUserTurnTranscriptRecorder(
       withSessionInputActor(inputActorBinding, () => {
         staging ??= (async () => {
           const candidate = await resolveMessageForPersistence();
+          if (pendingInput) {
+            return pendingInput.state !== "consumed";
+          }
           const target = await resolveUserTurnTranscriptTarget(params.target);
           if (!candidate || !target || persistedResult || runtimePersisted) {
             return false;
@@ -626,34 +651,10 @@ export function createUserTurnTranscriptRecorder(
     },
     getPersistedMessage: () =>
       admittedMessage ?? runtimePersistedMessage ?? persistedResult?.message,
-    captureModelPromptProjection: async (text, assertCurrent) => {
-      assertCurrent();
-      await waitForRuntimePersistence();
-      assertCurrent();
-      if (!admissionReceipt && selfPersistencePromise) {
-        await selfPersistencePromise;
-        assertCurrent();
-      }
-      resolvedPersistenceTarget ??= await resolveUserTurnTranscriptTarget(params.target);
-      assertCurrent();
-      const admission = admissionReceipt;
-      if (blocked || !admission || !admittedMessage) {
-        throw new Error("Model prompt projection requires a live, persisted user turn");
-      }
-      return await capturePersistedModelPromptProjection({
-        admission,
-        message: admittedMessage,
-        text,
-        assertCurrent,
-        assertWritable: () => {
-          assertCurrent();
-          if (blocked || sentToProvider) {
-            throw new Error("Model prompt projection must be captured before provider dispatch");
-          }
-        },
-        onCommitted: refreshAdmission,
-      });
-    },
+    captureModelPromptProjection: async (text, assertCurrent) =>
+      capturePersistedModelPromptProjection(await prepareProjectionParams(text, assertCurrent)),
+    prepareModelPromptProjection: async (text, assertCurrent) =>
+      preparePersistedModelPromptProjection(await prepareProjectionParams(text, assertCurrent)),
     getAdmissionReceipt: () => admissionReceipt,
     setAdmissionHandler: (handler) => {
       admissionHandler = handler;

@@ -39,7 +39,8 @@ async function listFeishuDirectoryLive<TItem, TEntry extends DirectoryEntry>(
   try {
     const client = createFeishuClient(account);
     const entries: TEntry[] = [];
-    const limit = params.limit ?? 50;
+    const requestedLimit = params.limit ?? 50;
+    const limit = requestedLimit > 0 ? requestedLimit : Number.POSITIVE_INFINITY;
     const q = normalizeLowercaseStringOrEmpty(params.query);
     const peers = options.kind === "peer";
     const pageSize = peers && q ? 50 : Math.min(limit, peers ? 50 : 100);
@@ -71,7 +72,7 @@ async function listFeishuDirectoryLive<TItem, TEntry extends DirectoryEntry>(
         }
       }
       const nextPageToken = response.data?.has_more ? response.data.page_token : undefined;
-      if (peers && response.data?.has_more && !nextPageToken) {
+      if (response.data?.has_more && !nextPageToken) {
         throw new Error(`${label} directory returned an empty page token`);
       }
       if (nextPageToken && seenPageTokens.has(nextPageToken)) {

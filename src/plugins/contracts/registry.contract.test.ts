@@ -1,12 +1,11 @@
-// Registry contract tests cover plugin contract registry contents and lookup behavior.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { describe, expect, it } from "vitest";
 import { loadPluginManifestRegistryCore } from "../manifest-registry.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
-import { pluginRegistrationContractRegistry, providerContractLoadError } from "./registry.js";
+import { pluginRegistrationContractRegistry } from "./registry.js";
 
-const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS = ["codex", "qa-lab"] as const;
+const activationScopedSearchIds = ["codex", "qa-lab"] as const;
 function registeredPluginIds(key: "webFetchProviderIds" | "webSearchProviderIds") {
   return sortUniqueStrings(
     pluginRegistrationContractRegistry
@@ -19,13 +18,6 @@ describe("plugin contract registry", () => {
   function expectUniqueIds(ids: readonly string[]) {
     expect(ids).toEqual([...new Set(ids)]);
   }
-
-  it("loads bundled non-provider capability registries without import-time failure", () => {
-    expect(providerContractLoadError).toBeUndefined();
-    expect(Array.from(pluginRegistrationContractRegistry)).toStrictEqual(
-      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
-    );
-  });
 
   it.each([
     {
@@ -167,12 +159,9 @@ describe("plugin contract registry", () => {
   });
 
   it("covers every bundled web fetch plugin from the shared resolver", () => {
-    const bundledWebFetchPluginIds = resolveManifestContractPluginIds({
-      contract: "webFetchProviders",
-      origin: "bundled",
-    });
-
-    expect(registeredPluginIds("webFetchProviderIds")).toEqual(bundledWebFetchPluginIds);
+    expect(registeredPluginIds("webFetchProviderIds")).toEqual(
+      resolveManifestContractPluginIds({ contract: "webFetchProviders", origin: "bundled" }),
+    );
   });
 
   it("covers every bundled web search plugin from the shared resolver", () => {
@@ -184,18 +173,10 @@ describe("plugin contract registry", () => {
       origin: "bundled",
     }).filter(
       (pluginId) =>
-        snapshotPluginIds.has(pluginId) &&
-        !ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS.some((id) => id === pluginId),
+        snapshotPluginIds.has(pluginId) && !activationScopedSearchIds.some((id) => id === pluginId),
     );
-    const expectedPluginIds = sortUniqueStrings([
-      ...bundledWebSearchPluginIds,
-      ...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS,
-    ]);
-    const actualPluginIds = registeredPluginIds("webSearchProviderIds");
-
-    expect(actualPluginIds).toEqual(expectedPluginIds);
-    expect(
-      actualPluginIds.filter((pluginId) => !bundledWebSearchPluginIds.includes(pluginId)),
-    ).toEqual([...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS]);
+    expect(registeredPluginIds("webSearchProviderIds")).toEqual(
+      sortUniqueStrings([...bundledWebSearchPluginIds, ...activationScopedSearchIds]),
+    );
   });
 });

@@ -1,5 +1,5 @@
 import { resolveOpenAICompletionsCompat } from "@openclaw/ai/internal/openai-completions-compat";
-import "@openclaw/ai/internal/tool-schema";
+import { extractToolSchemaModelCompat } from "@openclaw/ai/internal/tool-schema";
 import { normalizeModelTransportBaseUrl } from "../agents/model-compat-catalog.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { getModelProviderRequestRouteFacts } from "../agents/provider-request-config.js";
@@ -13,14 +13,7 @@ export { resolveUnsupportedToolSchemaKeywords } from "@openclaw/ai/internal/tool
 export function extractModelCompat(
   modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
 ): ModelCompatConfig | undefined {
-  if (!modelOrCompat || typeof modelOrCompat !== "object") {
-    return undefined;
-  }
-  if ("compat" in modelOrCompat) {
-    const compat = (modelOrCompat as { compat?: unknown }).compat;
-    return compat && typeof compat === "object" ? (compat as ModelCompatConfig) : undefined;
-  }
-  return modelOrCompat as ModelCompatConfig;
+  return extractToolSchemaModelCompat(modelOrCompat);
 }
 
 /** @deprecated Provider-owned model compat helper; do not use from third-party plugins. */

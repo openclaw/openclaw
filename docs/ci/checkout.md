@@ -64,6 +64,37 @@ and policy runtime into the workspace root. Locks and late writes in the failed
 attempt's directory cannot alter the retry's files. Both attempts retain the
 event's trusted default-branch revision and sparse file selection.
 
+## Preflight materialization
+
+Preflight uses two Git checkout workers for the complete candidate tree. The planner
+reads source and test import graphs, file hashes, and native existence sentinels, so
+a scripts-only sparse checkout cannot preserve its selection. The depth-one source
+fetch, depth-two blobless parent fetch, exact revision checks, trusted harness export,
+and Node setup remain unchanged. The worker setting is command-local and applies
+only to preflight.
+
+The local five-pair comparison at `e8d8145cd62f` reduced median materialization from
+78.0s to 60.5s (22.5%); nearest-rank p95 was 94.1s versus 80.3s. This is 1.300 versus
+1.008 job-minutes for materialization, with no new jobs or runner changes. These are
+fresh full trees backed by shared local objects on a heavily loaded macOS host, not
+network checkout or remote CI timings. The first three pairs overlapped manifest
+proof; the last two had no other task-owned I/O. Two pairs regressed; natural CI runs
+must establish the remote saving. The single-pass fetch experiments did not establish a
+total checkout improvement and were not adopted.
+
+Reproduce the paired workload with at least five samples, without another owned
+I/O workload running alongside it:
+
+```sh
+node scripts/perf/ci-preflight-checkout-measure.mjs \
+  --revision <commit> --samples 5 --output /path/to/new-result.json
+```
+
+Each sample checks the exact revision and clean tree. Results include host load;
+complete saved pairs can resume at the same revision. Clone setup and cleanup are
+outside the measured interval. Compare complete preflight wall time and job-minutes
+in subsequent natural runs; do not infer network savings from this workload.
+
 ## Related
 
 - [Install overview](/install)

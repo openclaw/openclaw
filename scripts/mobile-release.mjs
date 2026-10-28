@@ -116,6 +116,11 @@ function collectArtifacts(source, recovery, platform) {
             destination: "screenshot-diagnostics",
             filename: /^capture-attempts\.json$/,
           },
+          {
+            source: "apps/ios/build",
+            destination: "screenshot-diagnostics",
+            filename: /^screenshot-diagnostics\.json$/,
+          },
         ]
       : []),
   ];

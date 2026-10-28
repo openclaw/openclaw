@@ -7,7 +7,6 @@ import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { resolveGatewayProbeSurfaceAuth } from "../../gateway/auth-surface-resolution.js";
 import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeCapability, GatewayProbeResult } from "../../gateway/probe.js";
-import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
 
 const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
@@ -99,14 +98,6 @@ export function resolveTargets(
   return targets;
 }
 
-function isLoopbackProbeTarget(target: Pick<GatewayStatusTarget, "kind" | "url">): boolean {
-  if (target.kind === "localLoopback") {
-    return true;
-  }
-  const url = URL.parse(target.url);
-  return url !== null && isLoopbackHost(url.hostname);
-}
-
 export function resolveProbeBudgetMs(
   overallMs: number,
   target: Pick<GatewayStatusTarget, "kind" | "active" | "url">,
@@ -120,7 +111,8 @@ export function resolveProbeBudgetMs(
   if (target.kind === "localLoopback") {
     return Math.min(800, overallMs);
   }
-  if (!isLoopbackProbeTarget(target)) {
+  const url = URL.parse(target.url);
+  if (url === null || !isLoopbackHost(url.hostname)) {
     return Math.min(1500, overallMs);
   }
   return overallMs;
@@ -217,31 +209,6 @@ export function extractConfigSummary(snapshotUnknown: unknown) {
   };
 }
 
-export function buildNetworkHints(cfg: OpenClawConfig, localPortOverride?: number) {
-  const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
-  const port = localPortOverride ?? resolveGatewayPort(cfg);
-  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
-  return {
-    localLoopbackUrl: `${localScheme}://127.0.0.1:${port}`,
-    localTailnetUrl: tailnetIPv4 ? `${localScheme}://${tailnetIPv4}:${port}` : null,
-    tailnetIPv4: tailnetIPv4 ?? null,
-  };
-}
-
-export function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
-  const kindLabel =
-    target.kind === "localLoopback"
-      ? "Local loopback"
-      : target.kind === "sshTunnel"
-        ? "Remote over SSH"
-        : target.kind === "configRemote"
-          ? target.active
-            ? "Remote (configured)"
-            : "Remote (configured, inactive)"
-          : "URL (explicit)";
-  return `${colorize(rich, theme.heading, kindLabel)} ${colorize(rich, theme.muted, target.url)}`;
-}
-
 /** Returns true when auth succeeded enough to connect but lacks the read scope. */
 export function isScopeLimitedProbeFailure(probe: GatewayProbeResult): boolean {
   if (probe.ok || !probe.gatewayReached) {
@@ -282,19 +249,15 @@ export function summarizeGatewayProbeCapability(
   );
 }
 
-function renderProbeCapabilityLine(probe: GatewayProbeResult, rich: boolean) {
+export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
   const display = gatewayProbeCapabilities.find(
     ({ capability }) => capability === probe.auth.capability,
   );
-  return colorize(
+  const capability = colorize(
     rich,
     theme[display?.color ?? "muted"],
     `Capability: ${display?.label ?? "unknown"}`,
   );
-}
-
-export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
-  const capability = renderProbeCapabilityLine(probe, rich);
   const detail = !probe.ok && probe.error ? ` - ${probe.error}` : "";
   if (probe.ok || (probe.gatewayReached && probe.connectLatencyMs != null)) {
     const latency =

@@ -1,11 +1,13 @@
-import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { it, expect } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { expectRequestCountStable } from "./chat-flow.test-support.ts";
+import { captureUiProof } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
 import * as support from "./session-management.test-support.ts";
+import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = support.createSessionManagementE2eSuite();
 const marker = 1_800_000_000_001;
@@ -18,6 +20,7 @@ async function installUnreadRows(
   otherKey: string,
   options: Parameters<typeof ui.installSessionRows>[2] = {},
 ) {
+  await page.clock.install();
   const other = sessionRow(otherKey, "Other thread", 10, { unread: false });
   const gateway = await ui.installSessionRows(page, [primary, other], {
     featureCapabilities: [GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT],
@@ -26,6 +29,21 @@ async function installUnreadRows(
     ...options,
   });
   return { gateway, other };
+}
+
+async function expectUnreadPatchCountStable(
+  page: Page,
+  gateway: Awaited<ReturnType<typeof installUnreadRows>>["gateway"],
+  count: number,
+  durationMs = 500,
+  match?: Record<string, unknown>,
+) {
+  // Unread acknowledgements and these mock responses run entirely in the page.
+  expect(await gateway.getRequests("sessions.patch", match)).toHaveLength(count);
+  for (let elapsed = 0; elapsed < durationMs; elapsed += 50) {
+    await page.clock.runFor(50);
+    expect(await gateway.getRequests("sessions.patch", match)).toHaveLength(count);
+  }
 }
 
 const darkOptions = createControlUiE2eContextOptions();
@@ -97,7 +115,7 @@ suite.define(() => {
           await acknowledge();
         }
 
-        await expectRequestCountStable(gateway, "sessions.patch", mayRead ? 1 : 0, 500, match);
+        await expectUnreadPatchCountStable(page, gateway, mayRead ? 1 : 0, 500, match);
         if (mayRead) {
           return;
         }
@@ -112,7 +130,7 @@ suite.define(() => {
         };
         await publish(refreshedSession);
         await row.getByText("Refreshed participation thread", { exact: true }).waitFor();
-        await expectRequestCountStable(gateway, "sessions.patch", 0, 500, match);
+        await expectUnreadPatchCountStable(page, gateway, 0, 500, match);
         await ui.visible(badge);
         expect(await page.getByText(denial, { exact: true }).count()).toBe(0);
 
@@ -121,7 +139,7 @@ suite.define(() => {
           const eligibleSession = { ...refreshedSession, sharingRole: "member", updatedAt: 40 };
           await publish(eligibleSession);
           await acknowledge();
-          await expectRequestCountStable(gateway, "sessions.patch", 1, 500, match);
+          await expectUnreadPatchCountStable(page, gateway, 1, 500, match);
         }
       }),
   );
@@ -182,6 +200,74 @@ suite.define(() => {
       }
     }));
 
+  it("acknowledges newer activity after a pending automatic read settles", () =>
+    suite.withPage(darkOptions, async ({ page }) => {
+      const unreadKey = "agent:main:deferred-read";
+      const otherKey = "agent:main:deferred-other";
+      const unread = sessionRow(unreadKey, "Unread activity during acknowledgement", 20, {
+        icon: "📬",
+        unread: true,
+      });
+      const { gateway } = await installUnreadRows(page, unread, otherKey);
+      const match = { key: unreadKey, unread: false };
+      let patchHeld = false;
+      try {
+        await page.goto(support.controlUiSessionUrl(suite.server.baseUrl, otherKey));
+        const row = page.locator(`[data-session-key="${unreadKey}"]`);
+        const badge = row.locator(badgeSelector);
+        await ui.visible(badge);
+        await gateway.deferNext("sessions.patch", match);
+        await row.getByRole("link").click();
+        await ui.sessionPatch(gateway, unreadKey, { unread: false });
+        patchHeld = true;
+        await badge.waitFor({ state: "hidden" });
+
+        await gateway.emitGatewayEvent("sessions.changed", {
+          agentId: "main",
+          reason: "send",
+          sessionKey: unreadKey,
+          session: { ...unread, updatedAt: 40 },
+        });
+        await expectUnreadPatchCountStable(page, gateway, 1, 100, match);
+        await gateway.resolveDeferred("sessions.patch", {
+          ok: true,
+          key: unreadKey,
+          path: "",
+          entry: {
+            sessionId: unread.sessionId,
+            updatedAt: 30,
+            lastActivityAt: 20,
+            lastReadAt: 30,
+          },
+        });
+        patchHeld = false;
+
+        const context = await getControlUiContextHandle(page);
+        try {
+          await waitForCommittedState(
+            page,
+            ({ context: app, key }) =>
+              (app.sessions.presentation.result?.sessions.find((entry) => entry.key === key)
+                ?.updatedAt ?? 0) >= 40,
+            { context, key: unreadKey },
+          );
+        } finally {
+          await context.dispose();
+        }
+        // Capture the settled sidebar even on the broken base, before requiring the follow-up.
+        await captureUiProof(suite, page, "deferred-unread-ack", "settled-sidebar.png");
+        await expect
+          .poll(async () => (await gateway.getRequests("sessions.patch", match)).length)
+          .toBe(2);
+        await badge.waitFor({ state: "hidden" });
+        await expectUnreadPatchCountStable(page, gateway, 2, 500, match);
+      } finally {
+        if (patchHeld) {
+          await gateway.resolveDeferred("sessions.patch").catch(() => undefined);
+        }
+      }
+    }));
+
   it("preserves manually unread state through active run updates until the session is reopened", () =>
     suite.withPage(darkOptions, async ({ page }) => {
       const activeKey = "agent:main:active";
@@ -206,7 +292,7 @@ suite.define(() => {
       expect(support.requireRecord(markUnread.params)).not.toHaveProperty("expectedMarkedUnreadAt");
 
       await activeRow.locator(".sidebar-session-indicator .session-unread-dot").waitFor();
-      await expectRequestCountStable(gateway, "sessions.patch", 1);
+      await expectUnreadPatchCountStable(page, gateway, 1);
 
       for (const [updatedAt, status, indicator] of [
         [30, "running", ".session-glyph__ring"],
@@ -223,7 +309,7 @@ suite.define(() => {
           }),
         });
         await activeRow.locator(`.sidebar-session-indicator ${indicator}`).waitFor();
-        await expectRequestCountStable(gateway, "sessions.patch", 1);
+        await expectUnreadPatchCountStable(page, gateway, 1);
       }
 
       await otherRow.getByRole("link").click();

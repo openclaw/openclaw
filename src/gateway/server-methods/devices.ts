@@ -39,6 +39,7 @@ import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../events.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
+import { broadcastRejectedDevicePairing } from "../pairing-events.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import {
   deniesCrossDeviceManagement,
@@ -479,15 +480,10 @@ export const deviceHandlers: GatewayRequestHandlers = {
       controlId: "device.pair.reject",
       severity: "low",
     });
-    context.broadcast(
-      "device.pair.resolved",
-      {
-        requestId,
-        deviceId: rejected.deviceId,
-        decision: "rejected",
-        ts: Date.now(),
-      },
-      { dropIfSlow: true },
+    broadcastRejectedDevicePairing(
+      context.broadcast,
+      { requestId, deviceId: rejected.deviceId },
+      Date.now(),
     );
     respond(true, rejected, undefined);
   },

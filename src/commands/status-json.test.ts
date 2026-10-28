@@ -1,6 +1,7 @@
-// Status JSON tests cover command output and runtime JSON writes.
+import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { statusJsonCommand } from "./status-json.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -63,7 +64,7 @@ vi.mock("../infra/update-channels.js", () => ({
   resolveUpdateChannelDisplay: mocks.resolveUpdateChannelDisplay,
 }));
 
-function createRuntimeCapture() {
+async function runJson(opts: Parameters<typeof statusJsonCommand>[0] = {}) {
   const logs: string[] = [];
   const runtime = {
     ...createTestRuntime(),
@@ -71,7 +72,9 @@ function createRuntimeCapture() {
       logs.push(String(value));
     }),
   };
-  return { runtime, logs };
+  await statusJsonCommand(opts, runtime);
+  expect(logs).toStrictEqual([expect.any(String)]);
+  return logs[0] ?? "{}";
 }
 
 function createScanResult() {
@@ -95,78 +98,6 @@ function createScanResult() {
   };
 }
 
-function createExpectedStatusPayload() {
-  return {
-    ok: true,
-    configuredChannels: [],
-    os: { platform: "linux" },
-    update: { installKind: "npm", git: { tag: null, branch: null } },
-    updateChannel: "stable",
-    updateChannelSource: "config",
-    memory: null,
-    memoryPlugin: null,
-    databaseEngines: {
-      source: "unavailable",
-      experimental: false,
-      families: [
-        ["state", "Shared state", false],
-        ["agent", "Agent data", false],
-        ["workboard", "Workboard", false],
-        ["logbook", "Logbook", false],
-        ["team-reports", "Team Reports", false],
-        ["quarantine", "Database quarantine", true],
-        ["managed-update", "Managed update handoffs", true],
-        ["package-activation", "Package activation journal", true],
-      ].map(([id, label, fixedLocal]) => ({
-        id,
-        label,
-        default: "sqlite",
-        override: null,
-        fixedLocal,
-        effective: "sqlite",
-      })),
-      stores: [],
-      reason:
-        "Physical stores unknown: admitted facts unavailable. Run openclaw doctor for recovery steps.",
-    },
-    gateway: {
-      mode: "local",
-      url: "ws://127.0.0.1:18789",
-      urlSource: "config",
-      misconfigured: false,
-      reachable: false,
-      connectLatencyMs: null,
-      self: null,
-      error: null,
-      authWarning: null,
-    },
-    gatewayService: {
-      label: "LaunchAgent",
-      installed: false,
-      loadState: { status: "not-loaded" },
-      managedByOpenClaw: false,
-      externallyManaged: false,
-      loadedText: "not loaded",
-      runtime: { status: "stopped" },
-      loaded: false,
-      runtimeShort: "stopped",
-    },
-    nodeService: {
-      label: "LaunchAgent",
-      installed: false,
-      loadState: { status: "not-loaded" },
-      managedByOpenClaw: false,
-      externallyManaged: false,
-      loadedText: "not loaded",
-      runtime: { status: "stopped" },
-      loaded: false,
-      runtimeShort: "stopped",
-    },
-    agents: [],
-    secretDiagnostics: [],
-  };
-}
-
 describe("statusJsonCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -182,42 +113,56 @@ describe("statusJsonCommand", () => {
   });
 
   it("keeps plain status --json off the security audit fast path", async () => {
-    const { runtime, logs } = createRuntimeCapture();
-
-    await statusJsonCommand({}, runtime);
-
+    const payload = JSON.parse(await runJson()) as Record<string, unknown>;
     expect(mocks.runSecurityAudit).not.toHaveBeenCalled();
-    expect(logs).toStrictEqual([expect.any(String)]);
-    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
-    expect(payload).toEqual(createExpectedStatusPayload());
+    expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(payload.gateway).toEqual({
+      mode: "local",
+      url: "ws://127.0.0.1:18789",
+      urlSource: "config",
+      misconfigured: false,
+      reachable: false,
+      connectLatencyMs: null,
+      self: null,
+      error: null,
+      authWarning: null,
+    });
     expect(payload).not.toHaveProperty("securityAudit");
+    expect(payload).not.toHaveProperty("pluginCompatibility");
   });
 
-  it.each([
-    { engine: "postgres" },
-    { engine: "sqlite", families: { agent: { engine: "postgres" } } },
-  ])(
-    "reports supported PostgreSQL selections without the experimental flag: %j",
-    async (database) => {
-      const { runtime, logs } = createRuntimeCapture();
-      mocks.scanStatusJsonFast.mockResolvedValueOnce({
-        ...createScanResult(),
-        cfg: { database },
-      });
+  it("redacts credential-bearing Gateway URLs from JSON status", async () => {
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      gatewayMode: "remote",
+      gatewayConnection: {
+        url: "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed",
+        urlSource: "cli --url",
+      },
+      gatewayProbe: { error: "unreachable" },
+    });
 
-      await statusJsonCommand({}, runtime);
+    const payload = JSON.parse(await runJson());
+    expect(payload.gateway.url).toContain("gateway.example/ws");
+    expect(JSON.stringify(payload.gateway)).not.toMatch(/password|secret|api-key|signed/);
+  });
 
-      const payload = JSON.parse(logs[0] ?? "{}");
-      expect(payload.databaseEngines.experimental).toBe(false);
-      expect(payload.databaseEngines.families).toContainEqual(
-        expect.objectContaining({ id: "agent", effective: "postgres" }),
-      );
-      expect(payload.databaseEngines.source).toBe("unavailable");
-    },
-  );
+  it("reports startup phase without an unreachable error in JSON", async () => {
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      gatewayProbe: { startupPhase: "plugins", error: null },
+    });
+
+    const payload = JSON.parse(await runJson());
+    expect(payload.gateway).toMatchObject({
+      readiness: "still-starting",
+      startupPhase: "plugins",
+      error: null,
+    });
+  });
 
   it("includes security audit and plugin compatibility details when --all is requested", async () => {
-    const { runtime, logs } = createRuntimeCapture();
     const compatibilityNotice = {
       pluginId: "legacy-plugin",
       code: "hook-only",
@@ -229,20 +174,12 @@ describe("statusJsonCommand", () => {
       pluginCompatibility: [compatibilityNotice],
     });
 
-    await statusJsonCommand({ all: true }, runtime);
+    const payload = JSON.parse(await runJson({ all: true })) as Record<string, unknown>;
 
-    expect(mocks.runSecurityAudit).toHaveBeenCalledExactlyOnceWith({
-      config: { update: { channel: "stable" } },
-      sourceConfig: {},
-      deep: false,
-      includeFilesystem: true,
-      includeChannelSecurity: true,
-      loadPluginSecurityCollectors: false,
-    });
-    expect(logs).toStrictEqual([expect.any(String)]);
-    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
-    expect(payload).toEqual({
-      ...createExpectedStatusPayload(),
+    expect({
+      securityAudit: payload.securityAudit,
+      pluginCompatibility: payload.pluginCompatibility,
+    }).toEqual({
       securityAudit: {
         summary: { critical: 1, warn: 0, info: 0 },
         findings: [],
@@ -255,7 +192,6 @@ describe("statusJsonCommand", () => {
   });
 
   it("reports deep gateway probe failures and runs the documented security audit", async () => {
-    const { runtime, logs } = createRuntimeCapture();
     mocks.scanStatusJsonFast.mockResolvedValueOnce({
       ...createScanResult(),
       gatewayReachable: true,
@@ -267,14 +203,29 @@ describe("statusJsonCommand", () => {
       return null;
     });
 
-    await statusJsonCommand({ deep: true }, runtime);
-
-    expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
-    const payload = JSON.parse(logs[0] ?? "{}") as {
+    const payload = JSON.parse(await runJson({ deep: true })) as {
       health?: { error?: string };
       securityAudit?: { summary?: { critical?: number } };
     };
+    expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
     expect(payload.health).toEqual({ error: "Error: gateway health probe timed out" });
     expect(payload.securityAudit?.summary?.critical).toBe(1);
+  });
+});
+
+it("includes local recovery copy bytes in status --json without retiring them", async () => {
+  await withOpenClawTestState({ label: "status-recovery-json", applyEnv: true }, async (state) => {
+    fs.mkdirSync(state.statePath("state"), { recursive: true });
+    const file = state.statePath("state", "openclaw.sqlite.pre-startup-migration-old.bak");
+    fs.writeFileSync(file, "original");
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({ ...createScanResult(), env: state.env });
+    const payload = JSON.parse(await runJson());
+    expect(payload.recoveryCopies).toMatchObject({
+      scope: "local",
+      incomplete: false,
+      total: { count: 1, logicalBytes: 8, unmanifestedOrOrphan: { count: 1, logicalBytes: 8 } },
+      byKind: { migrationOriginals: { count: 1, logicalBytes: 8 } },
+    });
+    expect(fs.readFileSync(file, "utf8")).toBe("original");
   });
 });

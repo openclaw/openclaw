@@ -21,7 +21,6 @@ import {
   repairCanonicalSessionDeliveryStates,
   repairCanonicalSessionResolvedSkills,
 } from "./doctor-session-delivery-state.js";
-import { repairReservedIncognitoSessionKeys } from "./doctor-session-incognito-key-repair.js";
 import { rewriteDoctorSessionEntries } from "./doctor/shared/session-entry-rewrite.js";
 
 const tempDirs = createTempDirTracker();
@@ -243,43 +242,6 @@ describe("doctor canonical session delivery state", () => {
       delivery: { context: { accountId: "current-bot" } },
     });
     expect(repaired).not.toHaveProperty("lastAccountId");
-  });
-
-  it("publishes cross-agent incognito parent rewrites to each existing SQLite connection", async () => {
-    const env = makeEnv("openclaw-incognito-warm-cache-");
-    const oldParentKey = "agent:main:dashboard:incognito-warm-cache";
-    const newParentKey = "agent:main:dashboard:legacy-incognito-warm-cache";
-    const childKey = "agent:work:dashboard:child";
-    insertSessionRow(env, oldParentKey, {
-      sessionId: "incognito-parent-session",
-      updatedAt: 10,
-    });
-    insertSessionRow(
-      env,
-      childKey,
-      {
-        sessionId: "incognito-child-session",
-        updatedAt: 20,
-        parentSessionKey: oldParentKey,
-        spawnedBy: oldParentKey,
-      },
-      "work",
-    );
-
-    expect(listEntries(env, "work")[0]?.entry).toMatchObject({
-      updatedAt: 20,
-      parentSessionKey: oldParentKey,
-    });
-    expect(await repairReservedIncognitoSessionKeys({ apply: true, cfg: {}, env })).toEqual({
-      found: 1,
-      repaired: 1,
-    });
-
-    expect(listEntries(env, "work")[0]?.entry).toMatchObject({
-      updatedAt: 20,
-      parentSessionKey: newParentKey,
-      spawnedBy: newParentKey,
-    });
   });
 
   it("migrates a copied realistic store without touching the source or canonical row bytes", () => {

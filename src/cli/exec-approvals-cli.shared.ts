@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
 import { rethrowExpectedCliError } from "./failure-output.js";
 
@@ -13,7 +14,7 @@ export async function readStdin(): Promise<string> {
     maxBytes: EXEC_APPROVALS_STDIN_MAX_BYTES,
     onOverflow: ({ maxBytes: limit }) => new Error(`Exec approvals stdin exceeds ${limit} bytes.`),
   });
-  return bytes.toString("utf8");
+  return decodeUtf8Input(bytes, "Exec approvals stdin");
 }
 
 export function formatCliError(err: unknown): string {

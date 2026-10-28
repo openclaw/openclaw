@@ -161,101 +161,6 @@ function isActiveVerificationSummary(summary: MatrixVerificationSummary): boolea
   return true;
 }
 
-async function resolveVerificationSummaryForSignal(
-  client: MatrixClient,
-  params: {
-    roomId: string;
-    event: MatrixRawEvent;
-    senderId: string;
-    flowId: string | null;
-  },
-): Promise<MatrixVerificationSummary | null> {
-  if (!client.crypto) {
-    return null;
-  }
-  await client.crypto
-    .ensureVerificationDmTracked({
-      roomId: params.roomId,
-      userId: params.senderId,
-    })
-    .catch(() => null);
-  const list = await client.crypto.listVerifications();
-  if (list.length === 0) {
-    return null;
-  }
-  const candidates = resolveVerificationFlowCandidates({
-    event: params.event,
-    flowId: params.flowId,
-  });
-  const byTransactionId = list.find((entry) =>
-    candidates.some((candidate) => entry.transactionId === candidate),
-  );
-  if (byTransactionId) {
-    return byTransactionId;
-  }
-
-  // Only fall back by user inside the active DM with that user. Otherwise a
-  // spoofed verification event in an unrelated room can leak the current SAS
-  // prompt into that room.
-  const { inspectMatrixDirectRooms, isStrictDirectRoom } = await loadMatrixDirectRoomDeps();
-  const inspection = await inspectMatrixDirectRooms({
-    client,
-    remoteUserId: params.senderId,
-  }).catch(() => null);
-  const activeRoomId = normalizeNullableString(inspection?.activeRoomId);
-  if (activeRoomId) {
-    if (activeRoomId !== params.roomId) {
-      return null;
-    }
-  } else if (
-    !(await isStrictDirectRoom({
-      client,
-      roomId: params.roomId,
-      remoteUserId: params.senderId,
-    }))
-  ) {
-    // If we cannot determine a canonical active DM, preserve the older
-    // strict-room fallback so transient m.direct or joined-room read failures
-    // do not suppress SAS notices for the current DM.
-    return null;
-  }
-
-  // Fallback for DM flows where transaction IDs do not match room event IDs consistently.
-  // The verification manager already orders summaries newest-first.
-  const activeByUser = list.filter(
-    (entry) => entry.otherUserId === params.senderId && isActiveVerificationSummary(entry),
-  );
-  return (
-    activeByUser.find((entry) => normalizeNullableString(entry.roomId) === params.roomId) ??
-    activeByUser[0] ??
-    null
-  );
-}
-
-async function resolveVerificationSasNoticeForSignal(
-  client: MatrixClient,
-  params: {
-    roomId: string;
-    event: MatrixRawEvent;
-    senderId: string;
-    flowId: string | null;
-    stage: MatrixVerificationStage;
-    sasNoticeRetryDelayMs?: number;
-  },
-): Promise<{ summary: MatrixVerificationSummary | null; sasNotice: string | null }> {
-  for (let attempt = 0; ; attempt += 1) {
-    const summary = await resolveVerificationSummaryForSignal(client, params);
-    const sasNotice =
-      summary && isActiveVerificationSummary(summary) ? formatVerificationSasNotice(summary) : null;
-    if (sasNotice || attempt > 0 || (params.stage !== "ready" && params.stage !== "start")) {
-      return { summary, sasNotice };
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, params.sasNoticeRetryDelayMs ?? SAS_NOTICE_RETRY_DELAY_MS);
-    });
-  }
-}
-
 function trackBounded(set: Set<string>, value: string): boolean {
   if (!value || set.has(value)) {
     return false;
@@ -478,14 +383,93 @@ export function createMatrixVerificationEventRouter(params: {
       }
 
       const stageNotice = formatVerificationStageNotice({ stage: signal.stage, senderId, event });
-      const { summary, sasNotice } = await resolveVerificationSasNoticeForSignal(params.client, {
-        roomId,
-        event,
-        senderId,
-        flowId,
-        stage: signal.stage,
-        sasNoticeRetryDelayMs: params.sasNoticeRetryDelayMs,
-      }).catch(() => ({ summary: null, sasNotice: null }));
+      const { client, sasNoticeRetryDelayMs } = params;
+      const resolveSummary = async (): Promise<MatrixVerificationSummary | null> => {
+        if (!client.crypto) {
+          return null;
+        }
+        await client.crypto
+          .ensureVerificationDmTracked({
+            roomId,
+            userId: senderId,
+          })
+          .catch(() => null);
+        const list = await client.crypto.listVerifications();
+        if (list.length === 0) {
+          return null;
+        }
+        const candidates = resolveVerificationFlowCandidates({
+          event,
+          flowId,
+        });
+        const byTransactionId = list.find((entry) =>
+          candidates.some((candidate) => entry.transactionId === candidate),
+        );
+        if (byTransactionId) {
+          return byTransactionId;
+        }
+
+        // Only fall back by user inside the active DM with that user. Otherwise a
+        // spoofed verification event in an unrelated room can leak the current SAS
+        // prompt into that room.
+        const { inspectMatrixDirectRooms, isStrictDirectRoom } = await loadMatrixDirectRoomDeps();
+        const inspection = await inspectMatrixDirectRooms({
+          client,
+          remoteUserId: senderId,
+        }).catch(() => null);
+        const activeRoomId = normalizeNullableString(inspection?.activeRoomId);
+        if (activeRoomId) {
+          if (activeRoomId !== roomId) {
+            return null;
+          }
+        } else if (
+          !(await isStrictDirectRoom({
+            client,
+            roomId,
+            remoteUserId: senderId,
+          }))
+        ) {
+          // If we cannot determine a canonical active DM, preserve the older
+          // strict-room fallback so transient m.direct or joined-room read failures
+          // do not suppress SAS notices for the current DM.
+          return null;
+        }
+
+        // Fallback for DM flows where transaction IDs do not match room event IDs consistently.
+        // The verification manager already orders summaries newest-first.
+        const activeByUser = list.filter(
+          (entry) => entry.otherUserId === senderId && isActiveVerificationSummary(entry),
+        );
+        return (
+          activeByUser.find((entry) => normalizeNullableString(entry.roomId) === roomId) ??
+          activeByUser[0] ??
+          null
+        );
+      };
+
+      const resolveSasNotice = async (): Promise<{
+        summary: MatrixVerificationSummary | null;
+        sasNotice: string | null;
+      }> => {
+        for (let attempt = 0; ; attempt += 1) {
+          const summary = await resolveSummary();
+          const sasNotice =
+            summary && isActiveVerificationSummary(summary)
+              ? formatVerificationSasNotice(summary)
+              : null;
+          if (sasNotice || attempt > 0 || (signal.stage !== "ready" && signal.stage !== "start")) {
+            return { summary, sasNotice };
+          }
+          await new Promise((resolve) => {
+            setTimeout(resolve, sasNoticeRetryDelayMs ?? SAS_NOTICE_RETRY_DELAY_MS);
+          });
+        }
+      };
+
+      const { summary, sasNotice } = await resolveSasNotice().catch(() => ({
+        summary: null,
+        sasNotice: null,
+      }));
 
       const notices: string[] = [];
       if (stageNotice) {

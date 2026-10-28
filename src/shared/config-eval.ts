@@ -86,7 +86,7 @@ function windowsPathExtensions(raw: string | undefined): string[] {
 }
 
 // Share pending I/O only so completed misses are checked again on the next preparation.
-const pendingBinaryAccess = new Map<string, Promise<void>>();
+const pendingBinaryAccess = new Map<string, Promise<boolean>>();
 
 // Installs can create binaries under unchanged PATH/PATHEXT, so cache only successful probes.
 let binaryCache: { path: string; pathExt: string; hits: Set<string> } | undefined;
@@ -105,7 +105,6 @@ function resolveBinarySearch(cache = resolveBinaryCache()) {
   const isWindows = process.platform === "win32";
   return {
     cache,
-    isWindows,
     parts: cache.path.split(path.delimiter).filter(Boolean),
     extensions: isWindows ? windowsPathExtensions(process.env.PATHEXT) : [""],
   };
@@ -127,8 +126,8 @@ export function hasBinary(bin: string): boolean {
   const search = resolveBinarySearch(cache);
   for (const candidate of binaryCandidates(search, bin)) {
     try {
-      // Avoid missing-file errors without changing Windows symlink checks.
-      if (!search.isWindows && !fs.existsSync(candidate)) {
+      // Follow executable symlinks, but do not treat searchable directories as binaries.
+      if (!fs.statSync(candidate, { throwIfNoEntry: false })?.isFile()) {
         continue;
       }
       fs.accessSync(candidate, fs.constants.X_OK);
@@ -160,12 +159,18 @@ export async function prepareBinaryAvailability(
       try {
         // access uses the filesystem's case, permission, and symlink semantics.
         const resolvedCandidate = path.resolve(cwd, candidate);
-        await getOrCreatePromise(
+        const isFile = await getOrCreatePromise(
           pendingBinaryAccess,
           resolvedCandidate,
-          () => fs.promises.access(resolvedCandidate, fs.constants.X_OK),
+          async () => {
+            await fs.promises.access(resolvedCandidate, fs.constants.X_OK);
+            return (await fs.promises.stat(resolvedCandidate)).isFile();
+          },
           { evictOnSettled: true },
         );
+        if (!isFile) {
+          continue;
+        }
       } catch {
         continue;
       }

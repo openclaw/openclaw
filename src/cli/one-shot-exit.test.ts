@@ -114,6 +114,7 @@ describe("one-shot CLI completion", () => {
   it.each([
     { requested: 0, signal: "SIGTERM" as const, expected: 143 },
     { requested: "0", signal: "SIGINT" as const, expected: 130 },
+    { requested: 0, signal: "SIGHUP" as const, expected: 129 },
     { requested: 7, signal: "SIGTERM" as const, expected: 7 },
   ])(
     "retains an accepted signal over pending success ($requested, $signal)",

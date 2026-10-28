@@ -6,6 +6,7 @@ import {
   type ConfigAuditRecord,
 } from "../../config/io.audit.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
+import * as auditReaders from "../../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../../infra/sqlite-audit-record-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as stateReader from "../../state/openclaw-state-db-readonly.js";
@@ -74,13 +75,11 @@ function createAuditStores(env: NodeJS.ProcessEnv) {
 }
 
 function withAuditStores(
-  run: (
-    fixture: ReturnType<typeof createAuditStores> & { env: NodeJS.ProcessEnv; stateDir: string },
-  ) => Promise<void>,
+  run: (fixture: ReturnType<typeof createAuditStores> & { stateDir: string }) => Promise<void>,
 ) {
   return withTestDir({ prefix: "openclaw-system-changes-" }, (stateDir) => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    return run({ ...createAuditStores(env), env, stateDir });
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    return run({ ...createAuditStores(process.env), stateDir });
   });
 }
 
@@ -269,7 +268,7 @@ describe("openclaw.changes.list", () => {
   });
 
   it("classifies legacy redacted argv when origin is absent", async () => {
-    await withAuditStores(async ({ env, configStore: store }) => {
+    await withAuditStores(async ({ configStore: store }) => {
       for (const [key, at, before, after, argv] of [
         ["doctor", 3_000, "a", "b", ["doctor", "--fix"]],
         ["config", 2_000, "b", "c", ["config", "set", "profile.name", "doctor"]],
@@ -286,7 +285,7 @@ describe("openclaw.changes.list", () => {
         );
       }
 
-      expect((await listSystemChanges({}, { env })).entries.map((entry) => entry.source)).toEqual([
+      expect((await listSystemChanges({})).entries.map((entry) => entry.source)).toEqual([
         "unknown",
         "cli",
         "doctor",
@@ -295,7 +294,7 @@ describe("openclaw.changes.list", () => {
   });
 
   it("keeps pages newest-first while suppressing an older collapse partner", async () => {
-    await withAuditStores(async ({ env, systemStore, configStore }) => {
+    await withAuditStores(async ({ systemStore, configStore }) => {
       writeConfigs(
         configStore,
         ["match", 1_000, "a", "b", "gateway.port", "system-agent"],
@@ -304,11 +303,11 @@ describe("openclaw.changes.list", () => {
       );
       seedOperation(systemStore, "Set config gateway.port");
 
-      const first = await listSystemChanges({ limit: 1 }, { env });
+      const first = await listSystemChanges({ limit: 1 });
       expectEntries(first.entries, [{ kind: "operation", summary: "Set config gateway.port" }]);
-      const second = await listSystemChanges({ limit: 1, beforeCursor: first.nextCursor }, { env });
+      const second = await listSystemChanges({ limit: 1, beforeCursor: first.nextCursor });
       expectEntries(second.entries, [{ changedPaths: ["gateway.mode"], source: "cli" }]);
-      const third = await listSystemChanges({ limit: 1, beforeCursor: second.nextCursor }, { env });
+      const third = await listSystemChanges({ limit: 1, beforeCursor: second.nextCursor });
       expectEntries(third.entries, [{ changedPaths: ["gateway.bind"], source: "cli" }]);
       expect(third.nextCursor).toBeUndefined();
       const entries = [...first.entries, ...second.entries, ...third.entries];
@@ -323,7 +322,7 @@ describe("openclaw.changes.list", () => {
   });
 
   it("keeps an outside-window repeated transition on a later page", async () => {
-    await withAuditStores(async ({ env, systemStore, configStore }) => {
+    await withAuditStores(async ({ systemStore, configStore }) => {
       writeConfigs(
         configStore,
         ["old", 1_000, "a", "b", "old.path", "system-agent", { ts: "2026-07-18T11:58:00.000Z" }],
@@ -335,10 +334,10 @@ describe("openclaw.changes.list", () => {
       const pages = [];
       let cursor: string | undefined;
       do {
-        const page = await listSystemChanges(
-          { limit: 1, ...(cursor ? { beforeCursor: cursor } : {}) },
-          { env },
-        );
+        const page = await listSystemChanges({
+          limit: 1,
+          ...(cursor ? { beforeCursor: cursor } : {}),
+        });
         pages.push(...page.entries);
         cursor = page.nextCursor;
       } while (cursor);
@@ -354,7 +353,7 @@ describe("openclaw.changes.list", () => {
   });
 
   it("prefers an in-window match over an older repeated transition", async () => {
-    await withAuditStores(async ({ env, systemStore, configStore }) => {
+    await withAuditStores(async ({ systemStore, configStore }) => {
       writeConfigs(
         configStore,
         ["old", 1_000, "a", "b", "old.path", "system-agent"],
@@ -363,18 +362,18 @@ describe("openclaw.changes.list", () => {
       );
       seedOperation(systemStore, "Set current path");
 
-      const first = await listSystemChanges({ limit: 1 }, { env });
+      const first = await listSystemChanges({ limit: 1 });
       expectEntries(first.entries, [{ kind: "operation", changedPaths: ["current.path"] }]);
-      const second = await listSystemChanges({ limit: 1, beforeCursor: first.nextCursor }, { env });
+      const second = await listSystemChanges({ limit: 1, beforeCursor: first.nextCursor });
       expectEntries(second.entries, [{ source: "cli", changedPaths: ["gateway.bind"] }]);
-      const third = await listSystemChanges({ limit: 1, beforeCursor: second.nextCursor }, { env });
+      const third = await listSystemChanges({ limit: 1, beforeCursor: second.nextCursor });
       expectEntries(third.entries, [{ kind: "config-write", changedPaths: ["old.path"] }]);
       expect(third.nextCursor).toBeUndefined();
     });
   });
 
   it("paginates equal timestamps by per-scope sequence and freezes the scope heads", async () => {
-    await withAuditStores(async ({ env, configStore: store }) => {
+    await withAuditStores(async ({ configStore: store }) => {
       for (const [key, before, after] of [
         ["one", "a", "b"],
         ["two", "b", "c"],
@@ -391,7 +390,7 @@ describe("openclaw.changes.list", () => {
         ]);
       }
 
-      const first = await listSystemChanges({ limit: 2 }, { env });
+      const first = await listSystemChanges({ limit: 2 });
       expect(first.entries.map((entry) => entry.changedPaths?.[0])).toEqual(["three", "two"]);
       expect(first.nextCursor).toEqual(expect.any(String));
 
@@ -404,14 +403,14 @@ describe("openclaw.changes.list", () => {
         "config-rpc",
         { ts: "2026-07-18T12:00:01.000Z" },
       ]);
-      const second = await listSystemChanges({ limit: 2, beforeCursor: first.nextCursor }, { env });
+      const second = await listSystemChanges({ limit: 2, beforeCursor: first.nextCursor });
       expect(second.entries.map((entry) => entry.changedPaths?.[0])).toEqual(["one"]);
       expect(second.nextCursor).toBeUndefined();
     });
   });
 
   it("freezes an untouched scope before the first page is emitted", async () => {
-    await withAuditStores(async ({ env, systemStore, configStore }) => {
+    await withAuditStores(async ({ systemStore, configStore }) => {
       for (const [key, at, summary] of [
         ["older-operation", 1_000, "Repaired configuration"],
         ["newer-operation", 2_000, "Updated configuration"],
@@ -427,25 +426,25 @@ describe("openclaw.changes.list", () => {
         );
       }
 
-      const first = await listSystemChanges({ limit: 1 }, { env });
+      const first = await listSystemChanges({ limit: 1 });
       expectEntries(first.entries, [{ summary: "Updated configuration" }]);
       expect(first.nextCursor).toEqual(expect.any(String));
 
       writeConfigs(configStore, ["inserted", 3_000, "a", "b", "gateway.port", "config-rpc"]);
 
-      const second = await listSystemChanges({ limit: 1, beforeCursor: first.nextCursor }, { env });
+      const second = await listSystemChanges({ limit: 1, beforeCursor: first.nextCursor });
       expectEntries(second.entries, [{ summary: "Repaired configuration" }]);
       expect(second.entries.some((entry) => entry.changedPaths?.includes("gateway.port"))).toBe(
         false,
       );
-      expect((await listSystemChanges({ limit: 50 }, { env })).entries).toContainEqual(
+      expect((await listSystemChanges({ limit: 50 })).entries).toContainEqual(
         expect.objectContaining({ changedPaths: ["gateway.port"] }),
       );
     });
   });
 
   it("bounds filtered journal scans and resumes from the scanned frontier", async () => {
-    await withAuditStores(async ({ env, configStore }) => {
+    await withAuditStores(async ({ configStore }) => {
       for (let index = 0; index < SYSTEM_CHANGE_MAX_RAW_SCAN_PER_SCOPE + 250; index += 1) {
         configStore.upsert(
           `ineligible-${index}`,
@@ -461,23 +460,26 @@ describe("openclaw.changes.list", () => {
         );
       }
 
+      const createReader = auditReaders.createSqliteAuditRecordReader;
       async function readPage(beforeCursor?: string) {
         const calls: Array<{ limit: number; beforeSequence?: number }> = [];
         let rawRows = 0;
-        const page = await listSystemChanges(
-          { limit: 50, beforeCursor },
-          {
-            env,
-            configStore: {
-              async latest(params) {
-                calls.push(params);
-                const entries = configStore.latest(params);
-                rawRows += entries.length;
-                return entries;
-              },
-            },
-          },
-        );
+        vi.spyOn(auditReaders, "createSqliteAuditRecordReader").mockImplementation(function <T>(
+          options: Parameters<typeof createReader>[0],
+        ) {
+          const reader = createReader<T>(options);
+          if (options.scope === CONFIG_AUDIT_SCOPE) {
+            const latest = reader.latest.bind(reader);
+            vi.spyOn(reader, "latest").mockImplementation(async (params) => {
+              calls.push(params);
+              const entries = await latest(params);
+              rawRows += entries.length;
+              return entries;
+            });
+          }
+          return reader;
+        });
+        const page = await listSystemChanges({ limit: 50, beforeCursor });
         return { page, calls, rawRows };
       }
       const { page: first, calls: firstCalls, rawRows: firstRawRows } = await readPage();

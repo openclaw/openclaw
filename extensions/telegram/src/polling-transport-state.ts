@@ -51,9 +51,6 @@ export class TelegramPollingTransportState {
   }
 
   async dispose(): Promise<void> {
-    if (this.#disposed) {
-      return;
-    }
     this.#disposed = true;
     const transport = this.#telegramTransport;
     this.#telegramTransport = undefined;

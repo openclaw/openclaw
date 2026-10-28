@@ -31,18 +31,39 @@ vi.mock("../../skills/library/selection.js", async (importOriginal) => {
 });
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+const writeGuide = (dir: string, name: string, description: string, body: string) =>
+  writeSkill({ dir, name, description, body });
 afterEach(() => {
   libraryFixture.entries = [];
   vi.unstubAllEnvs();
 });
 
-it("keeps Code Mode file ownership despite an unavailable same-name pin", async () => {
-  const root = temps.make("code-mode-workspace-");
+function prepare(
+  workspace: string,
+  attempt: Parameters<typeof prepareEmbeddedSkills>[0]["attempt"],
+  includeCodeModeSkills = true,
+) {
+  return prepareEmbeddedSkills({
+    attempt,
+    effectiveWorkspace: workspace,
+    sandbox: undefined,
+    sessionAgentId: "main",
+    includeCodeModeSkills,
+    applySkillEnvironment: false,
+  });
+}
+
+async function isolateSkills(root: string) {
   const bundled = path.join(root, "bundled");
   await fs.mkdir(bundled);
   vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", bundled);
   vi.stubEnv("HOME", root);
   vi.stubEnv("OPENCLAW_HOME", root);
+}
+
+it("keeps Code Mode file ownership despite an unavailable same-name pin", async () => {
+  const root = temps.make("code-mode-workspace-");
+  await isolateSkills(root);
   const gateway = path.join(root, "gateway");
   const host = path.join(root, "host");
   const library = path.join(root, "library");
@@ -72,12 +93,7 @@ it("keeps Code Mode file ownership despite an unavailable same-name pin", async 
     agents: { entries: { main: { agentDir: path.join(root, "agent") } } },
   };
   const workshopDir = path.join(resolveWorkshopSkillsDir(config, "main"), "workshop");
-  await writeSkill({
-    dir: workshopDir,
-    name: "workshop",
-    description: "Workshop guide",
-    body: "Workshop body",
-  });
+  await writeGuide(workshopDir, "workshop", "Workshop guide", "Workshop body");
   const readFile = vi.fn().mockRejectedValue(new Error("Document access cannot read skills"));
   const skillResources = {
     resolveExplicitSkill: vi.fn(),
@@ -120,14 +136,7 @@ it("keeps Code Mode file ownership despite an unavailable same-name pin", async 
     expect(snapshot.prompt).toContain(
       "<location>workspace-skill://workspace/guide/SKILL.md</location>",
     );
-    const prepared = await prepareEmbeddedSkills({
-      attempt: { config: {}, skillsSnapshot: snapshot },
-      effectiveWorkspace: gateway,
-      sandbox: undefined,
-      sessionAgentId: "main",
-      includeCodeModeSkills: true,
-      applySkillEnvironment: false,
-    });
+    const prepared = await prepare(gateway, { config: {}, skillsSnapshot: snapshot });
     expect(prepared.codeModeSkills).toHaveLength(3);
     expect(prepared.skillsSnapshotForRun?.resolvedSkills).toHaveLength(1);
     const tools = createInstalledSkillTools(prepared.installedSkills);
@@ -164,12 +173,12 @@ it("keeps Code Mode file ownership despite an unavailable same-name pin", async 
 
 it("preserves local Code Mode instruction reads after a document-only adapter stops", async () => {
   const workspace = temps.make("code-mode-document-only-");
-  await writeSkill({
-    dir: path.join(workspace, "skills", "guide"),
-    name: "guide",
-    description: "Local guide",
-    body: "Local instructions",
-  });
+  await writeGuide(
+    path.join(workspace, "skills", "guide"),
+    "guide",
+    "Local guide",
+    "Local instructions",
+  );
   const snapshot = await buildSkillSnapshot(workspace, {
     entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
   });
@@ -178,14 +187,7 @@ it("preserves local Code Mode instruction reads after a document-only adapter st
     bridge: { readFile, writeFile: vi.fn(), stat: vi.fn() },
   });
   release();
-  const prepared = await prepareEmbeddedSkills({
-    attempt: { config: {}, skillsSnapshot: snapshot },
-    effectiveWorkspace: workspace,
-    sandbox: undefined,
-    sessionAgentId: "main",
-    includeCodeModeSkills: true,
-    applySkillEnvironment: false,
-  });
+  const prepared = await prepare(workspace, { config: {}, skillsSnapshot: snapshot });
   const skill = expectDefined(
     prepared.codeModeSkills.find((entry) => entry.name === "guide"),
     "local guide",
@@ -196,42 +198,31 @@ it("preserves local Code Mode instruction reads after a document-only adapter st
 
 it("keeps learned Workshop skills readable under an allowlist and calls a missing skill unavailable", async () => {
   const root = temps.make("skills-read-allowlist-");
-  const bundled = path.join(root, "bundled");
-  await fs.mkdir(bundled);
-  vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", bundled);
-  vi.stubEnv("HOME", root);
-  vi.stubEnv("OPENCLAW_HOME", root);
+  await isolateSkills(root);
   const workspace = path.join(root, "workspace");
   const agentDir = path.join(root, "agent");
-  await writeSkill({
-    dir: path.join(workspace, "skills", "listed"),
-    name: "listed",
-    description: "Allowlisted guide",
-    body: "Listed instructions",
-  });
-  await writeSkill({
-    dir: path.join(
+  await writeGuide(
+    path.join(workspace, "skills", "listed"),
+    "listed",
+    "Allowlisted guide",
+    "Listed instructions",
+  );
+  await writeGuide(
+    path.join(
       resolveWorkshopSkillsDir({ agents: { entries: { main: { agentDir } } } }, "main"),
       "learned",
     ),
-    name: "learned",
-    description: "Workshop guide",
-    body: "Learned instructions",
-  });
+    "learned",
+    "Workshop guide",
+    "Learned instructions",
+  );
   const allowed = async (skills: string[]) => {
     const config = {
       plugins: { enabled: false },
       agents: { entries: { main: { agentDir, skills } } },
     };
     const snapshot = await buildSkillSnapshot(workspace, { config, agentId: "main" });
-    return await prepareEmbeddedSkills({
-      attempt: { config, skillsSnapshot: snapshot },
-      effectiveWorkspace: workspace,
-      sandbox: undefined,
-      sessionAgentId: "main",
-      includeCodeModeSkills: false,
-      applySkillEnvironment: false,
-    });
+    return await prepare(workspace, { config, skillsSnapshot: snapshot }, false);
   };
 
   const allowlisted = await allowed(["listed"]);
@@ -261,12 +252,7 @@ it.each([
     [host, "Host instructions"],
     [library, "Gateway Library instructions"],
   ] as const) {
-    await writeSkill({
-      dir: path.join(dir, "skills/guide"),
-      name: "guide",
-      description: "Guide",
-      body,
-    });
+    await writeGuide(path.join(dir, "skills/guide"), "guide", "Guide", body);
     await fs.mkdir(path.join(dir, "skills/guide/refs"));
     await fs.writeFile(path.join(dir, "skills/guide/refs/support.txt"), body + " support");
   }

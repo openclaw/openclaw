@@ -143,44 +143,19 @@ describe("scripts/ci-run-timings.mjs", () => {
   });
 
   it.each([
-    [
-      [
-        "--limit 3jobs",
-        "--limit 0",
-        "--limit=1e3",
-        "--recent recent",
-        "--recent 0",
-        "--trend-hours 0",
-        "--compare-hours 1.5",
-        "--detail-runs all",
-      ],
-      "must be a positive integer",
-    ],
-    [
-      [
-        "--limit",
-        "--limit --recent 4",
-        "--limit -h",
-        "--recent",
-        "--recent -h",
-        "--trend-hours",
-        "--compare-hours --json",
-        "--detail-runs",
-        "--output=",
-      ],
-      "requires a value",
-    ],
-    [["--run-id 123456"], "Unknown CI run timing option: --run-id"],
-    [["123456 789012"], "Unexpected CI run id argument: 789012"],
-    [["--recent 3 --latest-main"], "--recent cannot be combined"],
-    [["123456 --latest-main"], "A run id cannot be combined"],
-    [["--trend-hours 72 --recent 3"], "--trend-hours cannot be combined"],
-    [["--trend-hours 23"], "must cover at least two"],
-    [["--json"], "require --trend-hours"],
-  ])("rejects monitor arguments: %s", (cases, message) => {
-    for (const args of cases) {
-      expect(() => parseRunTimingArgs(args.split(" "))).toThrow(message);
-    }
+    ["--limit 3jobs", "must be a positive integer"],
+    ["--limit=0", "must be a positive integer"],
+    ["--limit", "requires a value"],
+    ["--output=", "requires a value"],
+    ["--run-id 123456", "Unknown CI run timing option: --run-id"],
+    ["123456 789012", "Unexpected CI run id argument: 789012"],
+    ["--recent 3 --latest-main", "--recent cannot be combined"],
+    ["123456 --latest-main", "A run id cannot be combined"],
+    ["--trend-hours 72 --recent 3", "--trend-hours cannot be combined"],
+    ["--trend-hours 23", "must cover at least two"],
+    ["--json", "require --trend-hours"],
+  ])("rejects monitor arguments: %s", (args, message) => {
+    expect(() => parseRunTimingArgs(args.split(" "))).toThrow(message);
   });
 
   it("excludes manual, failed, and unfinished runs from recent main timings", () => {

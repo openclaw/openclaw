@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { textContent } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
 import {
   expectTranscriptLayoutCommitted,
@@ -74,19 +75,19 @@ async function catalogHeaderAffordances(header: Locator) {
       actionFocusVisible: actions.matches(":focus-visible"),
       actionFocused: document.activeElement === actions,
       actionsColor: actionsStyle.color,
-      actionsOpacity: actionsStyle.opacity,
+      actionsVisible: Number(actionsStyle.opacity) > 0,
       actionsPointerEvents: actionsStyle.pointerEvents,
       chevronOpacity: getComputedStyle(find(".sidebar-session-group-toggle__icon")).opacity,
       finePointer: matchMedia("(pointer: fine)").matches,
       coarsePointer: matchMedia("(pointer: coarse)").matches,
       focusWithin: element.matches(":focus-within"),
-      gripOpacity: getComputedStyle(find(".sidebar-session-group-drag-handle")).opacity,
+      headerFilled: getComputedStyle(element).backgroundColor !== "rgba(0, 0, 0, 0)",
       hoverCapable: matchMedia("(hover: hover)").matches,
       noHover: matchMedia("(hover: none)").matches,
       hovered: element.matches(":hover"),
       providerOpacity: getComputedStyle(find(".sidebar-session-catalog-provider-icon")).opacity,
       toolbarButtonColor: toolbarButtonStyle.color,
-      toolbarButtonOpacity: toolbarButtonStyle.opacity,
+      toolbarButtonVisible: Number(toolbarButtonStyle.opacity) > 0,
       toggleFocusVisible: toggle.matches(":focus-visible"),
       toggleFocused: document.activeElement === toggle,
     };
@@ -172,15 +173,15 @@ suite.define(() => {
         await expect
           .poll(() => catalogHeaderAffordances(header))
           .toMatchObject({
-            actionsOpacity: "0.55",
+            actionsVisible: true,
             actionsPointerEvents: "auto",
             chevronOpacity: "0.75",
             finePointer: true,
-            gripOpacity: "0.55",
+            headerFilled: true,
             hoverCapable: true,
             hovered: true,
             providerOpacity: "0",
-            toolbarButtonOpacity: "0.55",
+            toolbarButtonVisible: true,
           });
         const hoverAffordances = await catalogHeaderAffordances(header);
         expect(hoverAffordances.actionsColor).toBe(hoverAffordances.toolbarButtonColor);
@@ -190,15 +191,16 @@ suite.define(() => {
         await expect
           .poll(() => catalogHeaderAffordances(header))
           .toMatchObject({
-            actionsOpacity: "0",
+            actionsVisible: false,
             actionsPointerEvents: "none",
             chevronOpacity: "0",
             focusWithin: true,
-            gripOpacity: "0",
+            headerFilled: false,
             hovered: false,
             providerOpacity: "1",
             toggleFocusVisible: false,
             toggleFocused: true,
+            toolbarButtonVisible: true,
           });
         await page.keyboard.press("Tab");
         await expect
@@ -206,11 +208,11 @@ suite.define(() => {
           .toMatchObject({
             actionFocusVisible: true,
             actionFocused: true,
-            actionsOpacity: "1",
+            actionsVisible: true,
             actionsPointerEvents: "auto",
             chevronOpacity: "0.75",
             focusWithin: true,
-            gripOpacity: "0.55",
+            headerFilled: false,
             hovered: false,
             providerOpacity: "0",
           });
@@ -251,12 +253,12 @@ suite.define(() => {
         page.locator('[data-session-section="catalog:claude"] .sidebar-recent-sessions__head'),
       );
       expect(touchAffordance).toMatchObject({
-        actionsOpacity: "0.55",
+        actionsVisible: true,
         coarsePointer: true,
         noHover: true,
         providerOpacity: "0",
         chevronOpacity: "0.75",
-        toolbarButtonOpacity: "0.55",
+        toolbarButtonVisible: true,
       });
       expect(touchAffordance.actionsColor).toBe(touchAffordance.toolbarButtonColor);
     } finally {
@@ -539,9 +541,7 @@ suite.define(() => {
     const page = await suite.browser.newPage({ viewport: { width: 1280, height: 800 } });
     const historyMessage = (seq: number, prefix: string) => ({
       __openclaw: { seq },
-      content: [
-        { type: "text", text: `${prefix} ${seq}\n${"transcript detail line\n".repeat(3)}` },
-      ],
+      content: textContent(`${prefix} ${seq}\n${"transcript detail line\n".repeat(3)}`),
       role: seq % 2 === 0 ? "assistant" : "user",
       timestamp: Date.now() + seq,
     });

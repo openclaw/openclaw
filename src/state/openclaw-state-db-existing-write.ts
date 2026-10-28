@@ -364,7 +364,10 @@ function createExistingPostgresStateWriter(
     assertSettled() {
       assertSameFile();
       assertTransactionUsable(db);
-      if (db.isOpen && db.isTransaction) {
+      if (!db.isOpen) {
+        throw new Error("Existing-state writer retained a closed PostgreSQL connection");
+      }
+      if (db.isTransaction) {
         throw new Error("Existing-state writer retained an unsettled transaction");
       }
     },

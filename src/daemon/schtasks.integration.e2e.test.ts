@@ -17,7 +17,11 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveGatewayWindowsTaskName } from "./constants.js";
 import { execSchtasks } from "./schtasks-exec.js";
-import { resolveStartupEntryPaths, resolveTaskLauncherScriptPath } from "./schtasks-layout.js";
+import {
+  resolveStartupEntryPaths,
+  resolveTaskLauncherScriptPath,
+  resolveTaskScriptPath,
+} from "./schtasks-layout.js";
 import { readWindowsProcessSnapshot } from "./schtasks-process-snapshot.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import {
@@ -38,7 +42,6 @@ import {
   type WindowsProcessDiagnostic,
 } from "./schtasks.integration-observation.test-support.js";
 import * as proof from "./schtasks.integration.test-helpers.js";
-import { resolveTaskScriptPath } from "./schtasks.js";
 import {
   buildGatewayTaskSupervisorProgramArguments,
   createGatewayTaskSupervisorProbe,

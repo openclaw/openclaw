@@ -392,8 +392,6 @@ export function verifyTelnyxWebhook(
   options?: {
     /** Skip verification entirely (only for development) */
     skipVerification?: boolean;
-    /** Maximum allowed clock skew (ms). Defaults to 5 minutes. */
-    maxSkewMs?: number;
   },
 ): WebhookVerificationResult {
   if (options?.skipVerification) {
@@ -428,10 +426,9 @@ export function verifyTelnyxWebhook(
       return { ok: false, reason: "Invalid signature" };
     }
 
-    const maxSkewMs = options?.maxSkewMs ?? 5 * 60 * 1000;
     const eventTimeMs = eventTimeSec * 1000;
     const now = Date.now();
-    if (Math.abs(now - eventTimeMs) > maxSkewMs) {
+    if (Math.abs(now - eventTimeMs) > 5 * 60 * 1000) {
       return { ok: false, reason: "Timestamp too old" };
     }
 

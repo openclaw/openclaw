@@ -24,9 +24,8 @@ it("continues headless after a checkpoint and actual tool reply exactly once", a
     return jsonResult({ value: 1 });
   });
   const result = await runCodeModeScriptHeadless({
-    ctx: createHeadlessCodeModeHarness([tool]),
+    ctx: createHeadlessCodeModeHarness([tool], { codeMode: { timeoutMs: 10_000 } }),
     code: 'text("before"); await yield_control(); const reply = await reply_once({}); text("after"); return reply.value;',
-    overrides: { timeoutMs: 10_000 },
   });
   expect(result, JSON.stringify(result)).toMatchObject({
     status: "completed",
@@ -180,9 +179,8 @@ it.each(["headless", "interactive"] as const)(
     try {
       if (mode === "headless") {
         const result = await runCodeModeScriptHeadless({
-          ctx: createHeadlessCodeModeHarness([tool]),
+          ctx: createHeadlessCodeModeHarness([tool], { codeMode: { timeoutMs: 10_000 } }),
           code,
-          overrides: { timeoutMs: 10_000 },
         });
         expect(result, JSON.stringify(result)).toMatchObject({
           status: "completed",

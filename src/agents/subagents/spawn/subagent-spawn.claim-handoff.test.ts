@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
+import { expectCallCount as expectCalls } from "../../../test-utils/mock-call-assertions.js";
 import type { SubagentRegistrationScope } from "../registry/subagent-registry.types.js";
 import {
   createSubagentRegistrationScopeForTest,
@@ -15,7 +16,8 @@ const startQueuedRun = vi.fn();
 let spawn: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 let collector: typeof import("./subagent-spawn-collector.js");
 let scheduler: typeof import("../swarm/swarm-scheduler.js");
-let schedulerTesting: (typeof import("../swarm/swarm-scheduler.test-support.js"))["testing"];
+let observeSwarmSchedulerWork: typeof import("../swarm/swarm-scheduler.lifecycle.test-support.js").observeSwarmSchedulerWork;
+let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
 let admission: typeof import("../../../process/gateway-work-admission.js");
 
 beforeAll(async () => {
@@ -30,13 +32,14 @@ beforeAll(async () => {
       }),
   }));
   collector = await import("./subagent-spawn-collector.js");
-  ({ testing: schedulerTesting } = await import("../swarm/swarm-scheduler.test-support.js"));
+  ({ observeSwarmSchedulerWork } =
+    await import("../swarm/swarm-scheduler.lifecycle.test-support.js"));
   scheduler = await import("../swarm/swarm-scheduler.js");
   admission = await import("../../../process/gateway-work-admission.js");
 });
 
 beforeEach(() => {
-  schedulerTesting.reset();
+  schedulerWork = observeSwarmSchedulerWork();
   registerRun.mockReset();
   startQueuedRun.mockReset().mockReturnValue(true);
   resolveEngine.mockReset();
@@ -50,13 +53,7 @@ beforeEach(() => {
     );
 });
 
-afterEach(() => schedulerTesting.reset());
-
-function expectCalls(count: number, ...mocks: { mock: { calls: readonly unknown[] } }[]) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
-}
+afterEach(() => schedulerWork.close());
 
 function observe(promise: Promise<unknown>) {
   const completed = vi.fn();

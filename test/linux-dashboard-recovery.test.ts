@@ -270,85 +270,80 @@ test.each([
   },
 );
 
-test.each(
-  [
-    { platform: "freebsd", externalService: true },
-    { platform: "linux", externalService: false },
-    { platform: "windows", externalService: false },
-  ].flatMap((entry) =>
-    [true, false].map((releaseBuild) => Object.assign({}, entry, { releaseBuild })),
-  ),
-)(
-  "$platform first-run describes its local service ownership (release: $releaseBuild)",
-  async ({ platform, externalService, releaseBuild }) => {
-    for (const phase of ["unconfigured", "missingCli"]) {
-      const installFailure = "Fixture: start the Gateway with openclaw gateway run, then retry.";
-      const h = await mountDashboard("", undefined, undefined, async (command) => {
-        if (command === "discover_gateways") {
-          return [];
-        }
-        if (command === "build_info") {
-          return { platform, releaseBuild };
-        }
-        if (command === "install_cli") {
-          throw new Error(installFailure);
-        }
-        return { phase };
-      });
-      h.actions.renderConnectionChoices();
-      const description = h.text("#description") ?? "";
-      const subtitle = h.text("#local-subtitle") ?? "";
-      if (externalService) {
-        assert.match(description, /openclaw package service/);
-        assert.match(description, /openclaw gateway run/);
-        assert.match(description, /same account you used for onboarding/);
-        assert.match(subtitle, /Gateway you start/);
-        assert.doesNotMatch(
-          `${description} ${subtitle}`,
-          /starts automatically|installs everything/,
-        );
-      } else {
-        assert.equal(
-          description,
-          "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background.",
-        );
-        assert.equal(subtitle, "Private to this computer. Installs and starts automatically.");
+test.each([
+  ["freebsd", "unconfigured", true],
+  ["linux", "unconfigured", true],
+  ["freebsd", "missingCli", true],
+  ["linux", "missingCli", true],
+  ["freebsd", "missingCli", false],
+  ["linux", "missingCli", false],
+] as const)(
+  "%s %s describes service ownership (release: %s)",
+  async (platform, phase, releaseBuild) => {
+    const externalService = platform === "freebsd";
+    const installFailure = "Fixture: start the Gateway with openclaw gateway run, then retry.";
+    const h = await mountDashboard("", undefined, undefined, async (command) => {
+      if (command === "discover_gateways") {
+        return [];
       }
-
-      await h.actions.continueLocalSetup();
+      if (command === "build_info") {
+        return { platform, releaseBuild };
+      }
+      if (command === "install_cli") {
+        throw new Error(installFailure);
+      }
+      return { phase };
+    });
+    h.actions.renderConnectionChoices();
+    const description = h.text("#description") ?? "";
+    const subtitle = h.text("#local-subtitle") ?? "";
+    if (externalService) {
+      assert.match(description, /openclaw package service/);
+      assert.match(description, /openclaw gateway run/);
+      assert.match(description, /same account you used for onboarding/);
+      assert.match(subtitle, /Gateway you start/);
+      assert.doesNotMatch(`${description} ${subtitle}`, /starts automatically|installs everything/);
+    } else {
       assert.equal(
-        h.text("#install-hint"),
-        externalService
-          ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
-          : "Installs OpenClaw and its managed runtime in ~/.openclaw.",
+        description,
+        "Most people choose this computer. OpenClaw installs everything and keeps your assistant running in the background.",
       );
-      if (phase === "unconfigured") {
-        assert.deepEqual(
-          h.callsFor("bootstrap").map(({ args }) => args && Object.assign({}, args)),
-          [undefined, { explicitLocal: true }],
-        );
-        assert.equal(
-          h.text("#activity-label"),
-          externalService ? "Connecting to your local Gateway…" : "Starting your local Gateway…",
-        );
-      } else if (!releaseBuild) {
-        assert.equal(h.text("#title"), "Choose a release channel");
-        if (externalService) {
-          assert.match(h.text("#description") ?? "", /system Node.js and npm/);
-        }
-        assert.equal(h.hidden("#install-controls"), false);
-        assert.equal(h.called("install_cli"), false);
-        await h.actions.install();
-      }
-      if (phase === "missingCli") {
-        assert.equal(h.text("#title"), "OpenClaw needs attention");
-        assert.equal(h.text("#description"), installFailure);
-        assert.equal(h.text("#log-status"), "FAILED");
-        assert.equal(h.hidden("#install-controls"), false);
-        assert.equal(h.element("#install-button").disabled, false);
-      }
-      assert.equal(h.callsFor("install_cli").length, phase === "missingCli" ? 1 : 0);
-      assert.equal(h.called("gateway_action"), false);
+      assert.equal(subtitle, "Private to this computer. Installs and starts automatically.");
     }
+
+    await h.actions.continueLocalSetup();
+    assert.equal(
+      h.text("#install-hint"),
+      externalService
+        ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
+        : "Installs OpenClaw and its managed runtime in ~/.openclaw.",
+    );
+    if (phase === "unconfigured") {
+      assert.deepEqual(
+        h.callsFor("bootstrap").map(({ args }) => args && Object.assign({}, args)),
+        [undefined, { explicitLocal: true }],
+      );
+      assert.equal(
+        h.text("#activity-label"),
+        externalService ? "Connecting to your local Gateway…" : "Starting your local Gateway…",
+      );
+    } else if (!releaseBuild) {
+      assert.equal(h.text("#title"), "Choose a release channel");
+      if (externalService) {
+        assert.match(h.text("#description") ?? "", /system Node.js and npm/);
+      }
+      assert.equal(h.hidden("#install-controls"), false);
+      assert.equal(h.called("install_cli"), false);
+      await h.actions.install();
+    }
+    if (phase === "missingCli") {
+      assert.equal(h.text("#title"), "OpenClaw needs attention");
+      assert.equal(h.text("#description"), installFailure);
+      assert.equal(h.text("#log-status"), "FAILED");
+      assert.equal(h.hidden("#install-controls"), false);
+      assert.equal(h.element("#install-button").disabled, false);
+    }
+    assert.equal(h.callsFor("install_cli").length, phase === "missingCli" ? 1 : 0);
+    assert.equal(h.called("gateway_action"), false);
   },
 );

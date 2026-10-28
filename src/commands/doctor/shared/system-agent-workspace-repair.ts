@@ -1,4 +1,6 @@
 // Doctor repair that records one workspace for a system agent whose turns resolve two.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { listAgentIds } from "../../../agents/agent-roster.js";
 import {
   resolveAgentEntry,
@@ -7,52 +9,93 @@ import {
   tryResolveLegacyCompatibilityAgentId,
 } from "../../../agents/agent-scope-config.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace-default-path.js";
+import {
+  DEFAULT_MEMORY_FILENAME,
+  GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
+  fileDiffersFromTemplate,
+} from "../../../agents/workspace.js";
 import { containsEnvVarReference, resolveConfigEnvVars } from "../../../config/env-substitution.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { hasErrnoCode, ignoreMissingPath } from "../../../infra/errno.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { lstatIfExists } from "../../../infra/path-existence.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorConfigMutationResult } from "./config-mutation-state.js";
-import {
-  applyWorkspaceRestore,
-  planWorkspaceRestore,
-  type WorkspaceRestorePlan,
-} from "./system-agent-workspace-restore.js";
 
-/**
- * Pin `<root>/<agentId>` with the root spelled as authored (`${VAR}`, `~/x`) so a later change
- * to the root moves defaults and pin together; fall back to the resolved path when the authored
- * spelling does not resolve to the same directory.
- */
-function authoredAgentWorkspacePin(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  agentDir: string;
-  authoredRoot: string | undefined;
-  env: NodeJS.ProcessEnv;
-}): string {
-  const authored = params.authoredRoot?.trim();
-  if (!authored) {
-    return params.agentDir;
+// Copies a system agent's files from the shared root into its own workspace before Doctor pins it.
+type WorkspaceRestorePlan = {
+  /** Relative paths copied from the root; seeded template files in the target are replaced. */
+  copies: string[];
+  /** Relative paths of symbolic links recreated in the target, pointing where the root's do. */
+  links: string[];
+  /** Relative paths customized differently in both directories; the target keeps its own. */
+  conflicts: string[];
+};
+
+const TEMPLATED_FILES: ReadonlySet<string> = new Set(GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES);
+const RESTORED_DIRS = ["memory", "skills"] as const;
+
+async function planFile(from: string, to: string, rel: string, plan: WorkspaceRestorePlan) {
+  const templated = TEMPLATED_FILES.has(rel);
+  const source = await fs.readFile(path.join(from, rel)).catch(ignoreMissingPath);
+  if (!source || (templated && !(await fileDiffersFromTemplate(from, rel)))) {
+    return;
   }
-  const pin = `${authored.replace(/[\\/]+$/, "")}/${params.agentId}`;
+  const targetPath = path.join(to, rel);
+  // A linked file in the target is kept: copying over it would write to the link's destination.
+  if ((await lstatIfExists(targetPath, "ENOENT"))?.isSymbolicLink()) {
+    plan.conflicts.push(rel);
+    return;
+  }
+  const target = await fs.readFile(targetPath).catch(ignoreMissingPath);
+  if (!target || (templated && !(await fileDiffersFromTemplate(to, rel)))) {
+    plan.copies.push(rel);
+  } else if (!target.equals(source)) {
+    plan.conflicts.push(rel);
+  }
+}
+
+async function linkTarget(dir: string, rel: string): Promise<string | undefined> {
+  const link = path.join(dir, rel);
   try {
-    const resolved = containsEnvVarReference(pin)
-      ? resolveConfigEnvVars(pin, params.env, { onMissing: () => {} })
-      : pin;
-    const resolvedPin = typeof resolved === "string" ? resolved : pin;
-    const probe: OpenClawConfig = {
-      ...params.cfg,
-      agents: {
-        ...params.cfg.agents,
-        entries: { ...params.cfg.agents?.entries, [params.agentId]: { workspace: resolvedPin } },
-      },
-    };
-    return resolveAgentWorkspaceDir(probe, params.agentId, params.env) === params.agentDir
-      ? pin
-      : params.agentDir;
-  } catch {
-    return params.agentDir;
+    return path.resolve(path.dirname(link), await fs.readlink(link));
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "EINVAL")) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function planTree(from: string, to: string, rel: string, plan: WorkspaceRestorePlan) {
+  let entries;
+  try {
+    entries = await fs.readdir(path.join(from, rel), { withFileTypes: true });
+  } catch (error) {
+    ignoreMissingPath(error);
+    return;
+  }
+  // A linked or non-directory target is kept whole: descending would write through it.
+  const target = await lstatIfExists(path.join(to, rel), "ENOENT");
+  if (target && !target.isDirectory()) {
+    plan.conflicts.push(rel);
+    return;
+  }
+  for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
+    const child = path.join(rel, entry.name);
+    if (entry.isDirectory()) {
+      await planTree(from, to, child, plan);
+    } else if (entry.isFile()) {
+      await planFile(from, to, child, plan);
+    } else if (entry.isSymbolicLink()) {
+      const source = await linkTarget(from, child);
+      if ((await lstatIfExists(path.join(to, child), "ENOENT")) === undefined) {
+        plan.links.push(child);
+      } else if (source !== (await linkTarget(to, child))) {
+        plan.conflicts.push(child);
+      }
+    }
   }
 }
 
@@ -135,10 +178,19 @@ export async function repairSystemAgentWorkspacePin(
     };
   }
   const [from, to] = keepLaunch ? [agentDir, launchDir] : [launchDir, agentDir];
-  let restore: WorkspaceRestorePlan = { copies: [], links: [], conflicts: [] };
+  const restore: WorkspaceRestorePlan = { copies: [], links: [], conflicts: [] };
   try {
     if (!launchOwned) {
-      restore = await planWorkspaceRestore(from, to);
+      /**
+       * Lists the persona, memory, and skill files (and links under memory/ and skills/) `from` holds
+       * that `to` lacks or still has as a seed.
+       */
+      for (const name of [...GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES, DEFAULT_MEMORY_FILENAME]) {
+        await planFile(from, to, name, restore);
+      }
+      for (const dir of RESTORED_DIRS) {
+        await planTree(from, to, dir, restore);
+      }
     }
   } catch (error) {
     return {
@@ -148,15 +200,37 @@ export async function repairSystemAgentWorkspacePin(
       ],
     };
   }
-  const workspace = keepLaunch
-    ? to
-    : authoredAgentWorkspacePin({
-        cfg,
-        agentId,
-        agentDir,
-        authoredRoot: options.authoredDefaultWorkspace ?? cfg.agents?.defaults?.workspace,
-        env,
-      });
+  /**
+   * Pin `<root>/<agentId>` with the root spelled as authored (`${VAR}`, `~/x`) so a later change
+   * to the root moves defaults and pin together; fall back to the resolved path when the authored
+   * spelling does not resolve to the same directory.
+   */
+  let workspace = to;
+  if (!keepLaunch) {
+    const authoredRoot = options.authoredDefaultWorkspace ?? cfg.agents?.defaults?.workspace;
+    const authored = authoredRoot?.trim();
+    if (authored) {
+      const pin = `${authored.replace(/[\\/]+$/, "")}/${agentId}`;
+      try {
+        const resolved = containsEnvVarReference(pin)
+          ? resolveConfigEnvVars(pin, env, { onMissing: () => {} })
+          : pin;
+        const resolvedPin = typeof resolved === "string" ? resolved : pin;
+        const probe: OpenClawConfig = {
+          ...cfg,
+          agents: {
+            ...cfg.agents,
+            entries: { ...cfg.agents?.entries, [agentId]: { workspace: resolvedPin } },
+          },
+        };
+        if (resolveAgentWorkspaceDir(probe, agentId, env) === agentDir) {
+          workspace = pin;
+        }
+      } catch {
+        // Keep the resolved agent directory when the authored root cannot be resolved.
+      }
+    }
+  }
   const copied = [...restore.copies, ...restore.links];
   const pinLine = `Set ${configPath} to ${workspace} so its working directory, persona, and memory use one workspace.`;
   if (options.includeOwnsRoster) {
@@ -187,7 +261,24 @@ export async function repairSystemAgentWorkspacePin(
     }
   } else {
     try {
-      await applyWorkspaceRestore(from, to, restore);
+      /** Copies the planned files; the root keeps every original and no customized target is replaced. */
+      for (const rel of restore.copies) {
+        const target = path.join(to, rel);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        // A seeded template is replaced; any other target must still be absent.
+        await fs.copyFile(
+          path.join(from, rel),
+          target,
+          TEMPLATED_FILES.has(rel) ? 0 : fs.constants.COPYFILE_EXCL,
+        );
+      }
+      for (const rel of restore.links) {
+        const source = path.join(from, rel);
+        const target = path.join(to, rel);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        // An absolute target keeps a relative link pointing where it did from the root.
+        await fs.symlink(path.resolve(path.dirname(source), await fs.readlink(source)), target);
+      }
     } catch (error) {
       return {
         ...unchanged,

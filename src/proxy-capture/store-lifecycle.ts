@@ -1,3 +1,4 @@
+import { collectSynchronousErrors } from "../infra/error-graph-internal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerListener } from "../shared/listeners.js";
 import type { AsyncDebugProxyCaptureWriter } from "./store.types.js";
@@ -26,14 +27,7 @@ export function finalizeCaptureStore(store: object): void {
   closed.add(store);
   const callbacks = finalizers.get(store);
   finalizers.delete(store);
-  const errors: unknown[] = [];
-  for (const finalize of callbacks ?? []) {
-    try {
-      finalize();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
+  const errors = collectSynchronousErrors(callbacks ?? [], (finalize) => finalize());
   if (errors.length) {
     throw new AggregateError(errors, "Capture store finalization failed.");
   }
@@ -77,14 +71,9 @@ export function finalizeCaptureStoreAsync(
   finalizers.delete(store);
   asyncFinalizers.delete(store);
   const pending: Promise<void>[] = [];
-  const errors: unknown[] = [];
-  for (const finalize of callbacks) {
-    try {
-      pending.push(Promise.resolve(finalize(finalizingStore)));
-    } catch (error) {
-      errors.push(error);
-    }
-  }
+  const errors = collectSynchronousErrors(callbacks, (finalize) => {
+    pending.push(Promise.resolve(finalize(finalizingStore)));
+  });
   void Promise.allSettled(pending).then((results) => {
     for (const result of results) {
       if (result.status === "rejected") {

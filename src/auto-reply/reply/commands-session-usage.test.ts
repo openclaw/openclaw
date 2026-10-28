@@ -238,29 +238,35 @@ describe("handleFastCommand", () => {
     });
   });
 
-  it("keeps the /fast ultrafast reply without a target entry", async () => {
-    const params = fastParams("/fast ultrafast", { sessionEntry: undefined });
+  it.each(["/fast ultrafast", "/fast ultra", "/fast ULTRA"])(
+    "keeps the %s reply without a target entry",
+    async (command) => {
+      const params = fastParams(command, { sessionEntry: undefined });
 
-    expect(await handleFastCommand(params, true)).toEqual({
-      shouldContinue: false,
-      reply: { text: "⚙️ Ultrafast mode enabled." },
-    });
-    expect(params.sessionStore).toBeUndefined();
-    expect(resolveFastModeStateMock).not.toHaveBeenCalled();
-  });
+      expect(await handleFastCommand(params, true)).toEqual({
+        shouldContinue: false,
+        reply: { text: "⚙️ Ultrafast mode enabled." },
+      });
+      expect(params.sessionStore).toBeUndefined();
+      expect(resolveFastModeStateMock).not.toHaveBeenCalled();
+    },
+  );
 
-  it("rejects an invalid /fast mode without mutating the target", async () => {
-    const target = entry({ updatedAt: 1, fastMode: true });
-    const params = fastParams("/fast invalid", { sessionEntry: target });
-    setTarget(params, target);
+  it.each(["/fast invalid", "/fast ultr", "/fast ultra-fast"])(
+    "rejects invalid %s without mutating the target",
+    async (command) => {
+      const target = entry({ updatedAt: 1, fastMode: true });
+      const params = fastParams(command, { sessionEntry: target });
+      setTarget(params, target);
 
-    expect(await handleFastCommand(params, true)).toEqual({
-      shouldContinue: false,
-      reply: { text: "⚙️ Usage: /fast status|auto|on|off|ultrafast|default" },
-    });
-    expect(target).toEqual({ sessionId: "target-session", updatedAt: 1, fastMode: true });
-    expect(resolveFastModeStateMock).not.toHaveBeenCalled();
-  });
+      expect(await handleFastCommand(params, true)).toEqual({
+        shouldContinue: false,
+        reply: { text: "⚙️ Usage: /fast status|auto|on|off|ultrafast|default" },
+      });
+      expect(target).toEqual({ sessionId: "target-session", updatedAt: 1, fastMode: true });
+      expect(resolveFastModeStateMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports a /fast default persistence conflict", async () => {
     await withTempDir("openclaw-fast-conflict-", async (dir) => {

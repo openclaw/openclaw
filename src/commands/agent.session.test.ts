@@ -14,6 +14,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { writeSessionStoreSeed } from "./agent-session.test-support.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-session-" });
@@ -38,17 +39,6 @@ function mockConfig(
     },
     session: { store: storePath, mainKey: "main" },
   };
-}
-
-async function writeSessionStoreSeed(
-  storePath: string,
-  sessions: Record<string, SessionEntry>,
-): Promise<void> {
-  await Promise.all(
-    Object.entries(sessions).map(([sessionKey, entry]) =>
-      replaceSessionEntry({ sessionKey, storePath }, entry),
-    ),
-  );
 }
 
 async function seedTerminalSession(home: string, mainKey: string, status?: SessionEntry["status"]) {
@@ -81,26 +71,6 @@ async function seedTerminalSession(home: string, mainKey: string, status?: Sessi
   const cfg = mockConfig(home, storePath);
   cfg.session = { ...cfg.session, mainKey };
   return { cfg, sessionId, updatedAt };
-}
-
-async function withCrossAgentResumeFixture(
-  run: (params: { sessionId: string; sessionKey: string; cfg: OpenClawConfig }) => Promise<void>,
-): Promise<void> {
-  await withTempHome(async (home) => {
-    const storePattern = path.join(home, "agents", "{agentId}", "sessions", "sessions.json");
-    const execStore = path.join(home, "agents", "exec", "sessions", "sessions.json");
-    const sessionId = "session-exec-hook";
-    const sessionKey = "agent:exec:hook:gmail:thread-1";
-    await writeSessionStoreSeed(execStore, {
-      [sessionKey]: {
-        sessionId,
-        updatedAt: Date.now(),
-        systemSent: true,
-      },
-    });
-    const cfg = mockConfig(home, storePattern, { dev: {}, exec: {} }, "exec");
-    await run({ sessionId, sessionKey, cfg });
-  });
 }
 
 beforeEach(() => {
@@ -151,12 +121,12 @@ describe("agent session resolution", () => {
 
         const resolution = await resolveSession({ cfg, sessionId: "research-session" });
 
-        expect(resolution.sessionId).toBe("research-session");
-        expect(resolution.sessionAgentId).toBe("research");
-        expect(resolution.sessionKey).toBe(
-          sessionKey === "main" ? "agent:research:main" : sessionKey,
-        );
-        expect(resolution.storePath).toBe(researchStore);
+        expect(resolution).toMatchObject({
+          sessionId: "research-session",
+          sessionAgentId: "research",
+          sessionKey: sessionKey === "main" ? "agent:research:main" : sessionKey,
+          storePath: researchStore,
+        });
       });
     },
   );
@@ -292,7 +262,15 @@ describe("agent session resolution", () => {
   });
 
   it("forwards resolved outbound session context when resuming by sessionId", async () => {
-    await withCrossAgentResumeFixture(async ({ sessionId, sessionKey, cfg }) => {
+    await withTempHome(async (home) => {
+      const storePattern = path.join(home, "agents", "{agentId}", "sessions", "sessions.json");
+      const execStore = path.join(home, "agents", "exec", "sessions", "sessions.json");
+      const sessionId = "session-exec-hook";
+      const sessionKey = "agent:exec:hook:gmail:thread-1";
+      await writeSessionStoreSeed(execStore, {
+        [sessionKey]: { sessionId, updatedAt: Date.now(), systemSent: true },
+      });
+      const cfg = mockConfig(home, storePattern, { dev: {}, exec: {} }, "exec");
       const resolution = await resolveSession({ cfg, sessionId });
       expect(resolution.sessionKey).toBe(sessionKey);
       const agentId = resolveSessionAgentId({ sessionKey: resolution.sessionKey, config: cfg });
@@ -304,8 +282,7 @@ describe("agent session resolution", () => {
       if (!outboundContext) {
         throw new Error("expected outbound session context");
       }
-      expect(outboundContext.key).toBe(sessionKey);
-      expect(outboundContext.agentId).toBe("exec");
+      expect(outboundContext).toMatchObject({ key: sessionKey, agentId: "exec" });
     });
   });
 });

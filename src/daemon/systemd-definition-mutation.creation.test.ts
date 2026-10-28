@@ -6,17 +6,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileUtf8 } from "./exec-file.js";
 import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { systemdManagerVersionProbe } from "./systemd-user-bus.test-support.js";
 
 vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
 vi.mock("./systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-exec.js")>()),
-  execBusctlUser: async (env: Record<string, string | undefined>) => ({
-    code: 1,
-    termination: "exit",
-    stdout: "",
-    stderr: `Call failed: Unit ${env.OPENCLAW_SYSTEMD_UNIT}.service not found.`,
-  }),
+  execBusctlUser: async (env: Record<string, string | undefined>) =>
+    nativeExit("", `Call failed: Unit ${env.OPENCLAW_SYSTEMD_UNIT}.service not found.`, 1),
 }));
 
 describe.skipIf(process.platform === "win32")("systemd publication directory creation", () => {

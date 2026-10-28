@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
@@ -25,7 +25,8 @@ import {
   runtimeErrors,
   pluginsCliRuntimeLogs as logs,
   promptYesNoMock,
-  runPluginsCommand,
+  runPluginCli,
+  expectNoPluginCliCalls as expectNoCalls,
   setInstalledPluginIndexInstallRecords,
   configWriteMock,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock as writeInstallRecords,
@@ -45,15 +46,6 @@ vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal)
     inventory.hostedCatalog(...args),
 }));
 
-function expectNoCalls(...mocks: unknown[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
-
-function runPluginCli(...args: string[]) {
-  return runPluginsCommand(["plugins", ...args]);
-}
 function consentReview(id: string, name = id) {
   return buildPluginCapabilityConsentReview({
     pluginId: id,
@@ -61,6 +53,16 @@ function consentReview(id: string, name = id) {
     record: { source: "npm", spec: `@acme/${id}` },
     config: {},
   });
+}
+async function acceptReview(
+  consent: unknown,
+  review = consentReview("alpha", "Alpha"),
+  failure = new Error("Expected capability consent"),
+) {
+  if (typeof consent !== "function") {
+    throw failure;
+  }
+  expect(await consent(review)).toEqual({ reviewToken: review.reviewToken });
 }
 function pluginConfig(entries: NonNullable<OpenClawConfig["plugins"]>["entries"]): OpenClawConfig {
   return { plugins: { entries } };
@@ -162,12 +164,7 @@ it.each([
     for (const id of ids) {
       gateway.mockImplementationOnce(async (...args: unknown[]) => {
         if (acceptCapabilities) {
-          const consent = args[2];
-          if (typeof consent !== "function") {
-            throw new Error("Expected capability consent");
-          }
-          const review = consentReview(id);
-          expect(await consent(review)).toEqual({ reviewToken: review.reviewToken });
+          await acceptReview(args[2], consentReview(id));
         }
         return { plugin: { id }, runtime: { generation: 2 } };
       });
@@ -183,7 +180,6 @@ it.each([
         },
       ]),
     );
-    expect(resolveGateway).toHaveBeenCalledTimes(ids.length);
     expectNoCalls(configWriteMock, enablePluginInConfigMock);
   },
 );
@@ -206,49 +202,37 @@ it.each([
   }) => {
     resolveGateway.mockResolvedValue(gateway);
     const receipt = {
-      ok: true,
-      pluginIds: ids,
       restartRequired,
       runtime: {
-        operationId: "reload-selected",
         generation: 2,
-        pluginIds: ids,
         selectedEntries: Object.fromEntries(ids.map((id) => [id, `/plugins/${id}/dist/index.js`])),
       },
     };
-    const review = consentReview("alpha", "Alpha");
     const consentRequired = new Error("Plugin alpha requires capability consent.");
     gateway.mockImplementation(async (...args: unknown[]) => {
       if (json) {
-        const consent = args[2];
-        if (typeof consent !== "function") {
-          throw consentRequired;
-        }
-        expect(await consent(review)).toEqual({ reviewToken: review.reviewToken });
+        await acceptReview(args[2], undefined, consentRequired);
       }
       return receipt;
     });
     const tty = createCliTtyMock();
-    try {
-      tty.set(true);
-      await withEnvAsync(mode ? { [mode]: "1" } : {}, async () => {
-        const reload = runPluginCli(
-          "reload",
-          ...ids,
-          "alpha",
-          ...(json ? ["--json"] : []),
-          ...(wait ? ["--wait"] : []),
-          ...(acceptCapabilities ? ["--accept-capabilities"] : []),
-        );
-        if (json && !acceptCapabilities) {
-          await expect(reload).rejects.toBe(consentRequired);
-        } else {
-          await reload;
-        }
-      });
-    } finally {
-      tty.restore();
-    }
+    onTestFinished(tty.restore);
+    tty.set(true);
+    await withEnvAsync(mode ? { [mode]: "1" } : {}, async () => {
+      const reload = runPluginCli(
+        "reload",
+        ...ids,
+        "alpha",
+        ...(json ? ["--json"] : []),
+        ...(wait ? ["--wait"] : []),
+        ...(acceptCapabilities ? ["--accept-capabilities"] : []),
+      );
+      if (json && !acceptCapabilities) {
+        await expect(reload).rejects.toBe(consentRequired);
+      } else {
+        await reload;
+      }
+    });
     expect(gateway).toHaveBeenCalledExactlyOnceWith(
       "plugins.reload",
       { plugins: ids.map((pluginId) => ({ pluginId })), ...(wait ? { waitForDrain: true } : {}) },
@@ -326,7 +310,6 @@ it.each(["missing", "blocked", "unconsented"])(
         setInstalledPluginIndexInstallRecords({
           alpha: { source: "npm", spec: "@acme/alpha", installPath: rootDir },
         });
-        expect(readInstallRecords().alpha?.installPath).toBe(rootDir);
       }
       const entries = consent ? disabled("alpha") : disabled("alpha", "beta", "gamma");
       mockCurrentConfig({

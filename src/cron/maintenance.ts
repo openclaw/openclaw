@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -27,26 +28,6 @@ let lastRegistrySuccessAtMs: number | null = null;
 let unsubscribeSessionChanges: (() => void) | undefined;
 let unsubscribeHistoryChanges: (() => void) | undefined;
 let unsubscribeDatabaseLifecycle: (() => void) | undefined;
-
-function scheduleSweep(getCronStorePath: () => string) {
-  if (!scope || scope.signal.aborted || scheduledSweep) {
-    return;
-  }
-  const atMs = Math.min(nextHistorySweepAtMs, nextRegistrySweepAtMs);
-  if (!Number.isFinite(atMs)) {
-    return;
-  }
-  const { signal } = scope;
-  scope.schedule({
-    id: "cron-maintenance",
-    atMs,
-    run: () =>
-      (scheduledSweep ??= sweep(signal, getCronStorePath).finally(() => {
-        scheduledSweep = undefined;
-        scheduleSweep(getCronStorePath);
-      })),
-  });
-}
 
 async function sweep(signal: AbortSignal, getCronStorePath: () => string) {
   let admitted = false;
@@ -139,12 +120,32 @@ export function startCronMaintenance(scheduler: GatewayScheduler, getCronStorePa
     return;
   }
   scope = scheduler.scope();
+  // Notifications can borrow startup admission; retention keeps the Gateway owner context.
+  const scheduleSweep = AsyncLocalStorage.bind(() => {
+    if (!scope || scope.signal.aborted || scheduledSweep) {
+      return;
+    }
+    const atMs = Math.min(nextHistorySweepAtMs, nextRegistrySweepAtMs);
+    if (!Number.isFinite(atMs)) {
+      return;
+    }
+    const { signal } = scope;
+    scope.schedule({
+      id: "cron-maintenance",
+      atMs,
+      run: () =>
+        (scheduledSweep ??= sweep(signal, getCronStorePath).finally(() => {
+          scheduledSweep = undefined;
+          scheduleSweep();
+        })),
+    });
+  });
   lastRegistrySuccessAtMs = null;
   nextHistorySweepAtMs = nextRegistrySweepAtMs = scope.now() + 5_000;
   const invalidateHistory = () => {
     if (scope) {
       nextHistorySweepAtMs = Math.min(nextHistorySweepAtMs, scope.now() + 60_000);
-      scheduleSweep(getCronStorePath);
+      scheduleSweep();
     }
   };
   unsubscribeHistoryChanges = subscribeCronRunHistoryChanges((databasePath) => {
@@ -173,9 +174,9 @@ export function startCronMaintenance(scheduler: GatewayScheduler, getCronStorePa
         scope.now() + (agentReady ? 0 : 60_000),
       );
     }
-    scheduleSweep(getCronStorePath);
+    scheduleSweep();
   });
-  scheduleSweep(getCronStorePath);
+  scheduleSweep();
 }
 
 export async function stopCronMaintenance(): Promise<void> {

@@ -2,6 +2,7 @@ import type { ImageGenerationRequest } from "openclaw/plugin-sdk/image-generatio
 import { generateImage } from "openclaw/plugin-sdk/image-generation-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -744,16 +745,12 @@ describe("fal image-generation provider", () => {
 
     await provider.generateImage({
       ...defaultRequest,
-      cfg: {
-        models: {
-          providers: {
-            fal: {
-              baseUrl: "http://relay.internal:8080",
-              models: [],
-            },
-          },
+      cfg: createModelProviderConfig({
+        fal: {
+          baseUrl: "http://relay.internal:8080",
+          models: [],
         },
-      },
+      }),
     });
 
     expectFalJsonPost({

@@ -16,6 +16,8 @@ const clients: GatewayClient[] = [];
 let server: WebSocketServer | undefined;
 
 const sendFrame = (socket: WebSocket, frame: unknown) => socket.send(JSON.stringify(frame));
+const sendEvent = (socket: WebSocket, event: string, seq: number, payload: unknown) =>
+  sendFrame(socket, { type: "event", event, seq, payload });
 
 function waitForClose(socket: WebSocket) {
   return new Promise<{ code: number; reason: string }>((resolve) => {
@@ -99,12 +101,7 @@ async function connectWithFakeTime(
   const socket = await socketReady.promise;
   await flushSocketIo();
   if (params.tickIntervalMs !== undefined) {
-    sendFrame(socket, {
-      type: "event",
-      event: "connect.challenge",
-      seq: 1,
-      payload: { nonce: "defaults-1", ts: 1_777_777_777_000 },
-    });
+    sendEvent(socket, "connect.challenge", 1, { nonce: "defaults-1", ts: 1_777_777_777_000 });
     await helloReady.promise;
   }
   return { client, socket, requestReady: requestReady.promise, closeEvents };
@@ -239,12 +236,7 @@ describe("GatewayClient transport defaults", () => {
 
     for (let sequence = 1; sequence <= 8; sequence += 1) {
       await vi.advanceTimersByTimeAsync(4_000);
-      sendFrame(socket, {
-        type: "event",
-        event: "tick",
-        seq: sequence,
-        payload: { ts: Date.now() },
-      });
+      sendEvent(socket, "tick", sequence, { ts: Date.now() });
       await flushSocketIo();
     }
 

@@ -127,7 +127,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 - media: `mediaMaxMb` (caps outbound Discord uploads, default `100`)
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`, `autoPresence.*`
-- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents.enabled`, `agentComponents.ttlMs`, `activities`, `heartbeatVisibility`, `responsePrefix`
+- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents.enabled`, `agentComponents.ttlMs`, `activities`, `responsePrefix`
 
 </Accordion>
 

@@ -1,7 +1,10 @@
 import { createMemo, createSignal, createUniqueId, mapArray } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 export type WidgetAction = "copy" | "download" | "raw-details";
 export type WidgetRawDetailsLabel =

@@ -210,22 +210,18 @@ suite.define(() => {
           updatedAt: "2026-09-18T16:00:12Z",
           lastUtteranceAt: "2026-09-18T16:00:12Z",
         },
-        utterances: [
-          {
-            sequence: 0,
-            speakerLabel: "Ada",
-            startedAt: "2026-09-18T16:00:05Z",
-            text: "Let's make the setup easier to follow.",
-            final: true,
-          },
-          {
-            sequence: 1,
-            speakerLabel: "Sam",
-            startedAt: "2026-09-18T16:00:12Z",
-            text: "I can test keyboard navigation this afternoon.",
-            final: true,
-          },
-        ],
+        utterances: (
+          [
+            ["Ada", "2026-09-18T16:00:05Z", "Let's make the setup easier to follow."],
+            ["Sam", "2026-09-18T16:00:12Z", "I can test keyboard navigation this afternoon."],
+          ] satisfies [string, string, string][]
+        ).map(([speakerLabel, startedAt, text], sequence) => ({
+          sequence,
+          speakerLabel,
+          startedAt,
+          text,
+          final: true,
+        })),
       };
       await publishMeeting(gateway, speech);
       await reader.getByText(speech.utterances![1]!.text, { exact: true }).waitFor();

@@ -10,6 +10,7 @@ import {
   createMigrationParams,
   migrationById,
   syncCachePayload,
+  writeSource,
 } from "./doctor-contract-api.test-support.js";
 import {
   type MatrixSyncCacheRecord,
@@ -73,8 +74,7 @@ it("refuses retired JSON state without changing it or inspecting token-root arch
     path.join(accountRoot("sync-cache-backup"), filename),
   );
   for (const file of [...sources, ...archives]) {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, '{"retained":true}\n');
+    writeSource(file, '{"retained":true}\n');
   }
   const migration = await migrationById("matrix-account-sqlite-schema");
   for (const run of [migration.detectLegacyState, migration.migrateLegacyState]) {

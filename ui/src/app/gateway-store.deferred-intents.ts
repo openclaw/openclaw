@@ -152,8 +152,18 @@ export function createGatewayDeferredIntents(host: {
       };
       const previous = intents.get(intent.key);
       if (previous) {
-        intents.delete(intent.key);
+        if (!intent.preservePosition) {
+          intents.delete(intent.key);
+        }
         discardIntent(previous);
+      }
+      if (intent.discardGroup && intent.group) {
+        for (const queued of intents.values()) {
+          if (queued.key !== intent.key && queued.group === intent.group) {
+            intents.delete(queued.key);
+            discardIntent(queued);
+          }
+        }
       }
       intents.set(intent.key, intent);
       publish();

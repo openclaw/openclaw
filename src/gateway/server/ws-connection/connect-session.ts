@@ -200,6 +200,7 @@ export async function attachAuthenticatedGatewayConnect(
     config: context.configSnapshot,
     requestHeaders: context.handler.upgradeReq.headers,
     assertCurrent: profileLifecycle.assertCurrent,
+    recordTiming: context.recordAttachTiming,
   });
   const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
   // Only an owner-bound ingress grant receives the shared owner role bypass.
@@ -559,7 +560,6 @@ export async function attachAuthenticatedGatewayConnect(
       async () => {
         const { prewarmGatewaySessionHistory } = await import("../../server-history-prewarm.js");
         await prewarmGatewaySessionHistory(getRuntimeConfig(), {
-          onlyIfCold: true,
           isCancelled: () => context.handler.connectionWork.signal.aborted,
         });
       },

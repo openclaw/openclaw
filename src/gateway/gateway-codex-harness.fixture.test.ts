@@ -21,6 +21,8 @@ describe("native Codex fixture boundaries", () => {
       const root = await fs.realpath(
         await fs.mkdtemp(path.join(os.tmpdir(), "codex-fixture-env-")),
       );
+      await using rootCleanup = new AsyncDisposableStack();
+      rootCleanup.defer(() => fs.rm(root, { recursive: true, force: true }));
       const nativeHome = path.join(root, customHome ? "custom-codex" : ".codex");
       await fs.mkdir(nativeHome, { recursive: true });
       const sentinels = {
@@ -30,72 +32,59 @@ describe("native Codex fixture boundaries", () => {
       for (const [name, contents] of Object.entries(sentinels)) {
         await fs.writeFile(path.join(nativeHome, name), contents);
       }
-      try {
-        await withEnvAsync(
-          {
-            HOME: root,
-            USERPROFILE: root,
-            OPENCLAW_HOME: root,
-            OPENCLAW_STATE_DIR: path.join(root, "source-state"),
-            OPENCLAW_CONFIG_PATH: path.join(root, "source-config.json"),
-            OPENCLAW_LIVE_TEST: "1",
-            OPENCLAW_LIVE_USE_REAL_HOME: undefined,
-            CODEX_HOME: customHome ? nativeHome : undefined,
-            OPENAI_API_KEY: "synthetic-fixture-key",
-            CODEX_API_KEY: "synthetic-codex-key",
-            CEREBRAS_API_KEY: "synthetic-cerebras-key",
-            GROQ_API_KEY: "synthetic-groq-key",
-            OPENAI_BASE_URL: baseUrl,
-          },
-          async () => {
-            const staged = withIsolatedTestHome({ loadProfileEnv: false });
-            try {
-              const callerHome = process.env.HOME;
-              const instance = await createCodexHarnessLiveInstance(
-                "fixture-gateway-token",
-                authMode,
-              );
-              try {
-                expect(process.env.HOME).toBe(callerHome);
-                expect(instance.env.HOME).toBe(callerHome);
-                expect(instance.env.USERPROFILE).toBe(process.env.USERPROFILE);
-                expect(instance.env.OPENCLAW_HOME).toBe(process.env.OPENCLAW_HOME);
-                expect(instance.env.CODEX_HOME).toBe(customHome ? nativeHome : undefined);
-                const resolvedHome =
-                  instance.env.CODEX_HOME ?? path.join(instance.env.HOME!, ".codex");
-                for (const [name, contents] of Object.entries(sentinels)) {
-                  expect(await fs.readFile(path.join(resolvedHome, name), "utf8")).toBe(contents);
-                }
-                expect(instance.env.OPENAI_API_KEY).toBe(
-                  authMode === "api-key" ? "synthetic-fixture-key" : undefined,
-                );
-                expect(instance.env.CODEX_API_KEY).toBeUndefined();
-                expect(instance.env.CEREBRAS_API_KEY).toBeUndefined();
-                expect(instance.env.GROQ_API_KEY).toBeUndefined();
-                expect(instance.env.OPENAI_BASE_URL).toBe(
-                  authMode === "api-key" && baseUrl.trim() ? baseUrl : undefined,
-                );
-                expect(instance.stateDir.startsWith(instance.state.root + path.sep)).toBe(true);
-                expect(instance.configPath.startsWith(instance.state.root + path.sep)).toBe(true);
-                expect(instance.state.workspaceDir.startsWith(instance.state.root + path.sep)).toBe(
-                  true,
-                );
-                expect(instance.stateDir.startsWith(staged.tempHome + path.sep)).toBe(false);
-                instance.state.applyEnv();
-                expect(process.env.HOME).toBe(callerHome);
-                expect(process.env.OPENCLAW_STATE_DIR).toBe(instance.stateDir);
-              } finally {
-                await instance.cleanup();
-              }
-              expect(process.env.HOME).toBe(callerHome);
-            } finally {
-              staged.cleanup();
-            }
-          },
-        );
-      } finally {
-        await fs.rm(root, { recursive: true, force: true });
-      }
+      await withEnvAsync(
+        {
+          HOME: root,
+          USERPROFILE: root,
+          OPENCLAW_HOME: root,
+          OPENCLAW_STATE_DIR: path.join(root, "source-state"),
+          OPENCLAW_CONFIG_PATH: path.join(root, "source-config.json"),
+          OPENCLAW_LIVE_TEST: "1",
+          OPENCLAW_LIVE_USE_REAL_HOME: undefined,
+          CODEX_HOME: customHome ? nativeHome : undefined,
+          OPENAI_API_KEY: "synthetic-fixture-key",
+          CODEX_API_KEY: "synthetic-codex-key",
+          CEREBRAS_API_KEY: "synthetic-cerebras-key",
+          GROQ_API_KEY: "synthetic-groq-key",
+          OPENAI_BASE_URL: baseUrl,
+        },
+        async () => {
+          using stagedCleanup = new DisposableStack();
+          const staged = withIsolatedTestHome({ loadProfileEnv: false });
+          stagedCleanup.defer(() => staged.cleanup());
+          const callerHome = process.env.HOME;
+          await using instanceCleanup = new AsyncDisposableStack();
+          const instance = await createCodexHarnessLiveInstance("fixture-gateway-token", authMode);
+          instanceCleanup.defer(() => instance.cleanup());
+          expect(process.env.HOME).toBe(callerHome);
+          expect(instance.env.HOME).toBe(callerHome);
+          expect(instance.env.USERPROFILE).toBe(process.env.USERPROFILE);
+          expect(instance.env.OPENCLAW_HOME).toBe(process.env.OPENCLAW_HOME);
+          expect(instance.env.CODEX_HOME).toBe(customHome ? nativeHome : undefined);
+          const resolvedHome = instance.env.CODEX_HOME ?? path.join(instance.env.HOME!, ".codex");
+          for (const [name, contents] of Object.entries(sentinels)) {
+            expect(await fs.readFile(path.join(resolvedHome, name), "utf8")).toBe(contents);
+          }
+          expect(instance.env.OPENAI_API_KEY).toBe(
+            authMode === "api-key" ? "synthetic-fixture-key" : undefined,
+          );
+          expect(instance.env.CODEX_API_KEY).toBeUndefined();
+          expect(instance.env.CEREBRAS_API_KEY).toBeUndefined();
+          expect(instance.env.GROQ_API_KEY).toBeUndefined();
+          expect(instance.env.OPENAI_BASE_URL).toBe(
+            authMode === "api-key" && baseUrl.trim() ? baseUrl : undefined,
+          );
+          expect(instance.stateDir.startsWith(instance.state.root + path.sep)).toBe(true);
+          expect(instance.configPath.startsWith(instance.state.root + path.sep)).toBe(true);
+          expect(instance.state.workspaceDir.startsWith(instance.state.root + path.sep)).toBe(true);
+          expect(instance.stateDir.startsWith(staged.tempHome + path.sep)).toBe(false);
+          instance.state.applyEnv();
+          expect(process.env.HOME).toBe(callerHome);
+          expect(process.env.OPENCLAW_STATE_DIR).toBe(instance.stateDir);
+          await instanceCleanup.disposeAsync();
+          expect(process.env.HOME).toBe(callerHome);
+        },
+      );
     },
   );
 

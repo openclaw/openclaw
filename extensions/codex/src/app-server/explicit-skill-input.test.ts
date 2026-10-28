@@ -6,36 +6,25 @@ import type { CodexSkillsListResponse } from "./protocol-control-plane.js";
 describe("resolveCodexExplicitSkillInputs", () => {
   const cwd = path.resolve("repo");
   const skillPath = path.join(cwd, ".agents", "skills", "release", "SKILL.md");
+  const selections = [{ name: "release", path: skillPath }];
+  const resolve = (request: ReturnType<typeof vi.fn>, selected = selections) =>
+    resolveCodexExplicitSkillInputs({ client: { request } as never, cwd, selections: selected });
+  const skill = {
+    name: "release",
+    description: "Release workflow",
+    path: skillPath,
+    scope: "repo" as const,
+  };
+  const catalog = (enabled: boolean): CodexSkillsListResponse => ({
+    data: [{ cwd, skills: [{ ...skill, enabled }], errors: [] }],
+  });
 
   it("uses the enabled catalog identity for a path-matched selection", async () => {
-    const request = vi.fn(
-      async () =>
-        ({
-          data: [
-            {
-              cwd,
-              skills: [
-                {
-                  name: "release",
-                  description: "Release workflow",
-                  path: skillPath,
-                  scope: "repo",
-                  enabled: true,
-                },
-              ],
-              errors: [],
-            },
-          ],
-        }) satisfies CodexSkillsListResponse,
-    );
+    const request = vi.fn(async () => catalog(true));
 
-    await expect(
-      resolveCodexExplicitSkillInputs({
-        client: { request } as never,
-        cwd,
-        selections: [{ name: "release-command", path: skillPath }],
-      }),
-    ).resolves.toEqual([{ type: "skill", name: "release", path: skillPath }]);
+    await expect(resolve(request, [{ name: "release-command", path: skillPath }])).resolves.toEqual(
+      [{ type: "skill", name: "release", path: skillPath }],
+    );
     expect(request).toHaveBeenCalledWith(
       "skills/list",
       { cwds: [cwd], forceReload: false },
@@ -44,36 +33,13 @@ describe("resolveCodexExplicitSkillInputs", () => {
   });
 
   it("skips disabled and unmatched selections", async () => {
-    const request = vi.fn(
-      async () =>
-        ({
-          data: [
-            {
-              cwd,
-              skills: [
-                {
-                  name: "release",
-                  description: "Release workflow",
-                  path: skillPath,
-                  scope: "repo",
-                  enabled: false,
-                },
-              ],
-              errors: [],
-            },
-          ],
-        }) satisfies CodexSkillsListResponse,
-    );
+    const request = vi.fn(async () => catalog(false));
 
     await expect(
-      resolveCodexExplicitSkillInputs({
-        client: { request } as never,
-        cwd,
-        selections: [
-          { name: "release", path: skillPath },
-          { name: "missing", path: path.join(cwd, "missing", "SKILL.md") },
-        ],
-      }),
+      resolve(request, [
+        ...selections,
+        { name: "missing", path: path.join(cwd, "missing", "SKILL.md") },
+      ]),
     ).resolves.toEqual([]);
   });
 
@@ -82,21 +48,13 @@ describe("resolveCodexExplicitSkillInputs", () => {
       throw new Error("skills/list unavailable");
     });
 
-    await expect(
-      resolveCodexExplicitSkillInputs({
-        client: { request } as never,
-        cwd,
-        selections: [{ name: "release", path: skillPath }],
-      }),
-    ).resolves.toEqual([]);
+    await expect(resolve(request)).resolves.toEqual([]);
   });
 
   it("does not request the catalog without selections", async () => {
     const request = vi.fn();
 
-    await expect(
-      resolveCodexExplicitSkillInputs({ client: { request } as never, cwd, selections: [] }),
-    ).resolves.toEqual([]);
+    await expect(resolve(request, [])).resolves.toEqual([]);
     expect(request).not.toHaveBeenCalled();
   });
 });

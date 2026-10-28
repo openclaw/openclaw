@@ -4,16 +4,14 @@ import type {
   SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { resolveSessionSubmittedModelRef } from "../../agents/session-model-ref.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-equality.js";
 import type { SessionEntryCanonicalReplacement } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { SessionLabelOwnerIndex } from "../../config/sessions/session-entry-selection.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
-import {
-  captureSessionTarget,
-  runSessionMutation,
-} from "../../sessions/session-controller.lifecycle.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -47,7 +45,7 @@ import {
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
 import * as sessionPatchExpectations from "./sessions-patch-expectations.js";
-import { runSessionPatchGroups } from "./sessions-patch-groups.js";
+import * as patchGroups from "./sessions-patch-groups.js";
 import * as modelSelection from "./sessions-patch-model-selection.js";
 import {
   prepareSessionPatchReplacement,
@@ -56,7 +54,6 @@ import {
 import type { PreparedSessionPatchExecutionPermission } from "./sessions-patch-sandbox.runtime.js";
 import type {
   GroupMutationOperation,
-  MutationCoreResult,
   MutationOutcome,
   MutationTarget,
   PreparedPatchTarget,
@@ -83,14 +80,14 @@ export async function executeSessionPatchMutations(params: {
   onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
   patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
   targets: readonly MutationTarget[];
-}): Promise<MutationCoreResult> {
+}) {
   const { client } = params;
   const timing = params.diagnostics?.scope("preflight");
   let personalModelSelection: UserModelAccountSelection | undefined;
   try {
     personalModelSelection = await preparePersonalModelSelection(params, params.patch.model);
   } catch (error) {
-    return { ok: false, error: unexpectedPatchError(params.targets[0]?.key ?? "", error) };
+    return { ok: false as const, error: unexpectedPatchError(params.targets[0]?.key ?? "", error) };
   }
   const getCurrentConfig = params.context.getRuntimeConfig;
   const cfg = getCurrentConfig();
@@ -98,7 +95,7 @@ export async function executeSessionPatchMutations(params: {
   const sandbox = resolveCreatorSandbox(cfg, operatorCreation);
   const creation = { ...operatorCreation, ...(sandbox ? { sandbox } : {}) };
   const archiveActor = gatewayClientSessionCreator(client);
-  const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  const callerScopes = client?.connect.scopes ?? [];
   const callerIsAdmin = client === null || callerScopes.includes(ADMIN_SCOPE);
   const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
   const discovery = await discoverSessionPatchTargets(cfg, params.targets);
@@ -127,7 +124,11 @@ export async function executeSessionPatchMutations(params: {
     length: params.targets.length,
   });
   for (const [index, { input, key, requestedAgent, resolved }] of discovery.value.entries()) {
-    const unreadAckError = validateSessionUnreadAck(params.patch, input);
+    // Commit guards are core control state; construct the protocol patch from
+    // its public identity fields so closures can never reach hooks or entries.
+    const { commitGuard: _commitGuard, ...identity } = input;
+    const fullPatch: SessionsPatchParams = { ...params.patch, ...identity };
+    const unreadAckError = validateSessionUnreadAck(fullPatch, input);
     if (unreadAckError) {
       outcomes[index] = invalidSessionRequest(unreadAckError);
       continue;
@@ -163,10 +164,6 @@ export async function executeSessionPatchMutations(params: {
       outcomes[index] = invalidSessionRequest(missingHarnessSessionError);
       continue;
     }
-    // Commit guards are core control state; construct the protocol patch from
-    // its public identity fields so closures can never reach hooks or entries.
-    const { commitGuard: _commitGuard, ...identity } = input;
-    const fullPatch: SessionsPatchParams = { ...params.patch, ...identity };
     const expectationError =
       sessionPatchExpectations.resolveSessionPatchExpectationError(fullPatch);
     if (expectationError) {
@@ -279,15 +276,7 @@ export async function executeSessionPatchMutations(params: {
       );
       timing?.mark("lifecycleAdmission");
       await runSessionMutation({
-        targets: activePrepared.map((target) =>
-          captureSessionTarget({
-            storeScope: target.storePath,
-            sessionKey: target.canonicalKey,
-            aliases: target.lifecycleIdentities,
-            incarnation: target.initialEntry?.sessionId,
-            agentId: target.targetAgentId,
-          }),
-        ),
+        ...patchGroups.resolveSessionPatchLifecycleTargets(activePrepared),
         prepare: async () => {
           for (const target of activePrepared) {
             target.archivePreparation?.drain.handoffToMutation();
@@ -297,7 +286,7 @@ export async function executeSessionPatchMutations(params: {
         run: async () => {
           timing?.mark();
           try {
-            await runSessionPatchGroups(activePrepared, async (group) => {
+            await patchGroups.runSessionPatchGroups(activePrepared, async (group) => {
               const first = group[0]!;
               const storage = preparation.storage.get(first.index);
               const groupTiming = params.diagnostics?.scope("snapshot");
@@ -375,6 +364,10 @@ export async function executeSessionPatchMutations(params: {
                         store: workingStore,
                         ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
                       });
+                      const submittedModel =
+                        target.fullPatch.model !== undefined
+                          ? resolveSessionSubmittedModelRef(existingEntry)
+                          : undefined;
                       const accessError = targetAccessError(
                         existingEntry,
                         target.targetAgentId,
@@ -562,6 +555,14 @@ export async function executeSessionPatchMutations(params: {
                       if (runtimeSelection.validate) {
                         commitGuards.add(runtimeSelection.validate);
                       }
+                      if (
+                        submittedModel &&
+                        !projected.entry.lastSubmittedModel &&
+                        (submittedModel.provider !== projected.entry.modelProvider ||
+                          submittedModel.model !== projected.entry.model)
+                      ) {
+                        projected.entry.lastSubmittedModel = submittedModel;
+                      }
                       const replacement = prepareSessionPatchReplacement({
                         existingEntry,
                         projectedEntry: projected.entry,
@@ -714,7 +715,7 @@ export async function executeSessionPatchMutations(params: {
     outcomes[index] = { ok: false, error };
   }
   return {
-    ok: true,
+    ok: true as const,
     archivedSessionsCommitted,
     cfg,
     outcomes: outcomes as MutationOutcome[],

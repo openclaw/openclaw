@@ -11,6 +11,13 @@ import {
   type OpenClawPluginToolContext,
 } from "./plugin-entry.js";
 
+export { ToolArgumentValidationError } from "../../packages/agent-core/src/errors.js";
+
+/** An explicitly open dictionary whose unknown-valued keys survive OpenAI compatibility normalization. */
+export function openRecord(description: string) {
+  return Type.Record(Type.String(), Type.Unknown(), { description, additionalProperties: true });
+}
+
 const EMPTY_TOOL_PLUGIN_CONFIG_SCHEMA = Type.Object({}, { additionalProperties: false });
 
 /** Non-enumerable metadata symbol attached to entries created by `defineToolPlugin`. */

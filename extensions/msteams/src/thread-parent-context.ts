@@ -39,9 +39,6 @@ export async function fetchParentMessageCached(
     parentCache.set(key, cached);
     return cached.message;
   }
-  if (cached) {
-    parentCache.delete(key);
-  }
   const message = await fetchChannelMessage(token, groupId, channelId, parentId, deadline);
   touchLru(
     parentCache,

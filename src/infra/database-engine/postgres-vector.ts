@@ -3,6 +3,7 @@ import { sql } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import type { PostgresSqlConnection } from "../sql-connection.js";
 import type { SearchSchema } from "./contract.js";
+import { getAdmittedPostgresSchema } from "./postgres-schema.js";
 import { pgSearchName } from "./postgres-search-schema.js";
 import { matchesVectorRow, type VectorCapability, type VectorIndex } from "./vector-contract.js";
 
@@ -13,6 +14,7 @@ export function bindPostgresVector(
 ): VectorCapability {
   const kysely = getNodeSqliteKysely(db);
   const extension = pgSearchName(schema.extensionSchema ?? "public");
+  const binaryPrefilter = getAdmittedPostgresSchema(db)?.postgresVectorSearchVersion === 2;
   const own = (index: VectorIndex) => {
     if (!db.isOpen || index.store !== store) {
       throw new Error("Vector index is not admitted to this open store");
@@ -59,14 +61,33 @@ export function bindPostgresVector(
           `${request.index.alias}.embedding`,
         );
       const distance = /* kysely-allow-raw: Native cosine uses admitted identifiers and a bound vector. */ sql<number>`${sql.ref(`${request.index.alias}.embedding`)} ${sql.raw(`OPERATOR(${extension}.<=>)`)} ${vector}::${sql.raw(extension)}.vector`;
-      // Eligibility and LIMIT remain in one caller-owned SQL query; there is no unfiltered candidate window.
+      const bits =
+        /* kysely-allow-raw: The binary column belongs to the admitted projection. */ sql.ref(
+          `${request.index.alias}.embedding_bits`,
+        );
+      const eligible = binaryPrefilter
+        ? /* kysely-allow-raw: The stored sketch is null exactly when cosine is ineligible. */ sql<boolean>`${bits} IS NOT NULL`
+        : /* kysely-allow-raw: Historical projections compute eligibility from the vector. */ sql<boolean>`${sql.raw(extension)}.vector_norm(${stored}) > 0`;
+      const candidates = binaryPrefilter
+        ? request.candidates?.({
+            match: eligible,
+            distance: /* kysely-allow-raw: Hamming preselection uses the admitted sketch and extension. */ sql<number>`${bits} ${sql.raw(`OPERATOR(${extension}.<~>)`)} ${sql.raw(extension)}.binary_quantize(${vector}::${sql.raw(extension)}.vector)`,
+            limit: request.limit * 8,
+          })
+        : undefined;
       const query = request.query({
-        match: /* kysely-allow-raw: Zero vectors have no cosine direction and are ineligible. */ sql<boolean>`${sql.raw(extension)}.vector_norm(${stored}) > 0`,
+        match: candidates
+          ? /* kysely-allow-raw: Only scoped, eligible prefilter IDs reach exact cosine reranking. */ sql<boolean>`${sql.ref(`${request.index.alias}.id`)} IN (SELECT id FROM openclaw_vector_candidates)`
+          : eligible,
         distance,
       });
+      // Materialize IDs only: the cheap scan must not fetch every float32 payload.
+      const candidateCte = candidates
+        ? sql`WITH openclaw_vector_candidates AS MATERIALIZED (${candidates})`
+        : sql``;
       const rows = executeSqliteQuerySync(db, {
         compile: () =>
-          sql`SELECT * FROM (${query}) AS openclaw_candidates LIMIT ${request.limit}`.compile(
+          sql`${candidateCte} SELECT * FROM (${query}) AS openclaw_candidates LIMIT ${request.limit}`.compile(
             kysely,
           ),
       }).rows;

@@ -4,7 +4,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-lifecycle.js";
+import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-owner-read.js";
 import { readRegisteredAgentDatabaseRows } from "../state/openclaw-agent-db-registry.read.js";
 import { assertAgentSessionStoreDeletionTargetsCurrent } from "./agent-delete-session-store-safety.targets.js";
 import type {

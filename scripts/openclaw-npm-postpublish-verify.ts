@@ -103,8 +103,10 @@ const SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS = new Set([
   packageActivationRuntimeEntrypoint.distWorkerPath,
 ]);
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
-  // Optional A2UI markdown renderer. The Canvas host bundle catches the missing
-  // package and falls back when the optional renderer is unavailable.
+  // Optional A2UI markdown renderer. Main no longer builds Canvas A2UI, but main's
+  // release tooling verifies already-qualified stable/extended-stable packages
+  // whose dist/canvas-host/a2ui/a2ui.bundle.js catches this missing package and
+  // falls back. Remove once no supported release line ships canvas-host/a2ui.
   "@a2ui/markdown-it",
   "@discordjs/opus",
   "@lancedb/lancedb",

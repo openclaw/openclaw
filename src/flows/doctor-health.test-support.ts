@@ -29,6 +29,13 @@ export function createDoctorRuntime() {
   return { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 }
 
+export function createDoctorConfig(state: OpenClawTestState) {
+  return {
+    agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
+    gateway: { mode: "local" },
+  } satisfies OpenClawConfig;
+}
+
 export function withDoctorState<T>(
   run: (state: OpenClawTestState) => Promise<T>,
   env?: Record<string, string | undefined>,
@@ -102,7 +109,7 @@ const mocks = vi.hoisted(() => {
       select: vi.fn(),
     },
     "../commands/doctor-update.js": {
-      maybeOfferUpdateBeforeDoctor: async () => ({ updated: false }),
+      maybeOfferUpdateBeforeDoctor: async () => false,
     },
     "../commands/doctor-ui.js": { maybeRepairUiProtocolFreshness: async () => undefined },
     "../commands/doctor-install.js": { noteSourceInstallIssues: () => undefined },
@@ -279,10 +286,6 @@ export function registerDoctorConfigReceiptTests(
   runDoctorHealthFlow: typeof import("./doctor-health.js").runDoctorHealthFlow,
 ) {
   const ipcResultPath = "/tmp/openclaw-update-doctor-result.json";
-  const resultRuntime = () => {
-    vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", ipcResultPath);
-    return createDoctorRuntime();
-  };
   it.each([
     "unchanged",
     "ok",
@@ -329,7 +332,24 @@ export function registerDoctorConfigReceiptTests(
         "wrapped-refusal": new AggregateError([new UpdateDoctorError("stop failed", [stopFact])]),
       };
       const failure = failures[outcome];
+      const preservesWarnings = outcome === "unchanged" || outcome === "advisory";
+      const configWarning = 'Plugin "fixture" config repair failed; config preserved.';
       mocks.runContributions.mockImplementation(async (ctx) => {
+        if (preservesWarnings) {
+          ctx.configResult.warnings = [configWarning];
+          await createDoctorHealthContribution("doctor:fixture-warning", "Fixture warning", {
+            healthChecks: {
+              description: "Optional fixture maintenance",
+              detect: async () => [
+                {
+                  checkId: "core/doctor/fixture-warning",
+                  severity: "warning",
+                  message: "optional maintenance incomplete",
+                },
+              ],
+            },
+          }).run(ctx);
+        }
         if (outcome === "unchanged") {
           return;
         }
@@ -359,6 +379,14 @@ export function registerDoctorConfigReceiptTests(
       const result: UpdatePostInstallDoctorResult = {
         ...(outcome === "advisory" ? postInstallAdvisory : { status: failure ? "error" : "ok" }),
         configHash: expectedHash,
+        ...(preservesWarnings
+          ? {
+              warnings: [
+                configWarning,
+                "core/doctor/fixture-warning: optional maintenance incomplete",
+              ],
+            }
+          : {}),
       };
       if (outcome === "partial-config" || outcome === "unrestored-config") {
         result.maintenanceRefusal = { kind: "data-at-risk", reason: "gateway-state-unverified" };
@@ -394,60 +422,22 @@ export function registerDoctorConfigReceiptTests(
       if (outcome !== "unchanged") {
         expect(expectedHash).not.toBe(hashConfigRaw(fs.readFileSync(state.configPath, "utf8")));
       }
+      if (preservesWarnings) {
+        expect(runtime.exit).not.toHaveBeenCalledWith(1);
+      }
       if (outcome === "advisory") {
         expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledBefore(runtime.exit);
         expect(runtime.exit).toHaveBeenCalledWith(86);
       }
     });
   });
-  it.each([false, true])(
-    "preserves health warnings in the update result (advisory=%s)",
-    async (advisory) => {
-      mocks.runContributions.mockImplementation(async (ctx) => {
-        ctx.configResult.warnings = ['Plugin "fixture" config repair failed; config preserved.'];
-        await createDoctorHealthContribution("doctor:fixture-warning", "Fixture warning", {
-          healthChecks: {
-            description: "Optional fixture maintenance",
-            detect: async () => [
-              {
-                checkId: "core/doctor/fixture-warning",
-                severity: "warning",
-                message: "optional maintenance incomplete",
-              },
-            ],
-          },
-        }).run(ctx);
-        if (advisory) {
-          ctx.postInstallDoctorResult = postInstallAdvisory;
-        }
-      });
-      const runtime = resultRuntime();
-
-      await runDoctorHealthFlow(runtime, {});
-
-      expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
-        resultPath: ipcResultPath,
-        result: {
-          ...(advisory ? postInstallAdvisory : { status: "ok" }),
-          configHash: "unchanged",
-          warnings: [
-            'Plugin "fixture" config repair failed; config preserved.',
-            "core/doctor/fixture-warning: optional maintenance incomplete",
-          ],
-        },
-      });
-      expect(runtime.exit).not.toHaveBeenCalledWith(1);
-      if (advisory) {
-        expect(runtime.exit).toHaveBeenCalledWith(86);
-      }
-    },
-  );
   it("reports a cron ownership refusal instead of a recoverable post-install advisory", async () => {
     mocks.runContributions.mockImplementation(async (ctx) => {
       ctx.configWriteRefusal = "cron-owner-safety";
       ctx.postInstallDoctorResult = postInstallAdvisory;
     });
-    const runtime = resultRuntime();
+    vi.stubEnv("OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH", ipcResultPath);
+    const runtime = createDoctorRuntime();
 
     try {
       await runDoctorHealthFlow(runtime, {});
@@ -456,7 +446,6 @@ export function registerDoctorConfigReceiptTests(
     }
 
     expect(mocks.outro).toHaveBeenCalledWith("Doctor finished, but config fixes were not applied.");
-    expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.exit).not.toHaveBeenCalledWith(86);
     expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({

@@ -150,7 +150,6 @@ async function prepareOptionsSession(
     assertCurrent();
     return {
       readCurrent: () => {
-        assertCurrent();
         if (!active) {
           throw new GitHubPublicationSessionChangedError();
         }
@@ -216,17 +215,16 @@ export async function prepareGitHubPublicationOptionsRead(
         ? { kind: "absent" }
         : {
             kind: "eligible",
-            action: preparePersonalGitHubAction(options, "operator.read", signal),
+            action: preparePersonalGitHubAction(options, signal),
           };
-  const preparedSession = await prepareOptionsSession(sessionKey, requestedAgentId, () => {
-    currentClient();
-  });
+  const preparedSession = await prepareOptionsSession(sessionKey, requestedAgentId, currentClient);
   try {
     const readSession = () => {
+      const current = currentClient();
       const loaded = preparedSession.readCurrent();
       const filter = createSessionListEntryFilter({
         cfg: options.context.getRuntimeConfig(),
-        client: currentClient(),
+        client: current,
       });
       return loaded.entry && filter?.(loaded.canonicalKey, loaded.entry) !== false
         ? {
@@ -257,11 +255,14 @@ export async function prepareGitHubPublicationOptionsRead(
     return {
       personal,
       session,
-      release: () => preparedSession.release(),
-      [Symbol.dispose]: () => preparedSession.release(),
+      release: preparedSession.release,
+      [Symbol.dispose]: preparedSession.release,
       sessionScoped: authority.sessionScope === "operator.sessions.read",
       currentSession: readCurrent,
-      currentSessionRead: preparedSession.readCurrent,
+      currentSessionRead: () => {
+        currentClient();
+        return preparedSession.readCurrent();
+      },
       // Callbacks may refresh live facts, but must not replace the response's archive snapshot.
       assertSessionUnchanged: (snapshot: ReturnType<typeof readCurrent>): void => {
         const current = readCurrent();
@@ -323,11 +324,7 @@ export async function preparePersonalGitHubActionV2(
 }
 
 /** Authority stays in this direct connection closure; a profile or request id alone grants nothing. */
-function preparePersonalGitHubAction(
-  options: Request,
-  scope: "operator.read" | "operator.write" = "operator.read",
-  signal?: AbortSignal,
-): PersonalGitHubAction {
+function preparePersonalGitHubAction(options: Request, signal?: AbortSignal): PersonalGitHubAction {
   const { client, context } = options;
   const resolveOwner = () => {
     signal?.throwIfAborted();
@@ -342,7 +339,7 @@ function preparePersonalGitHubAction(
     if (current.merged_into) {
       throw new Error("My GitHub requires a verified durable user profile; sign in and try again.");
     }
-    currentGitHubClient(options, scope, {
+    currentGitHubClient(options, "operator.read", {
       profileId: current.id,
       role: current.role ?? null,
       githubLogin: current.githubLogin,

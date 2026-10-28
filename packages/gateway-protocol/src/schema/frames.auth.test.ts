@@ -2,7 +2,7 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { HelloOkSchema } from "./frames.js";
 
-describe("hello authentication method", () => {
+describe("hello authentication", () => {
   const auth = { role: "operator", scopes: ["operator.read"] };
 
   it.each([
@@ -21,6 +21,19 @@ describe("hello authentication method", () => {
     expect(Value.Check(HelloOkSchema.properties.auth, auth)).toBe(true);
     for (const method of ["unknown", "", null, 1]) {
       expect(Value.Check(HelloOkSchema.properties.auth, { ...auth, method })).toBe(false);
+    }
+  });
+
+  it.each(["write", "suggest", "view", "invited", "none"])(
+    "accepts the %s session capability",
+    (sessionCap) => {
+      expect(Value.Check(HelloOkSchema.properties.auth, { ...auth, sessionCap })).toBe(true);
+    },
+  );
+
+  it("rejects unknown or malformed session capabilities", () => {
+    for (const sessionCap of ["unknown", "", null, 1]) {
+      expect(Value.Check(HelloOkSchema.properties.auth, { ...auth, sessionCap })).toBe(false);
     }
   });
 });

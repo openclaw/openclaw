@@ -218,20 +218,17 @@ async function catalogFixtureEventBeforeSettlement(
 }
 
 export function observeSyntheticAuth(root: string) {
-  const entered = createDeferredCore();
-  const aborted = createDeferredCore();
+  const pending = { entered: createDeferredCore(), aborted: createDeferredCore() };
   const events = channel(`openclaw.fixture.synthetic-auth:${root}`);
   const observe = (event: unknown) => {
-    if (event === "entered") {
-      entered.resolve();
-    } else if (event === "aborted") {
-      aborted.resolve();
+    if (event === "entered" || event === "aborted") {
+      pending[event].resolve();
     }
   };
   events.subscribe(observe);
   return {
-    entered: entered.promise,
-    aborted: aborted.promise,
+    entered: pending.entered.promise,
+    aborted: pending.aborted.promise,
     close: () => events.unsubscribe(observe),
   };
 }

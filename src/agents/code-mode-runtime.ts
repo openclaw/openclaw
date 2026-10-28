@@ -11,7 +11,7 @@ import type { CodeModeFailureCode } from "./code-mode-executor-types.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { CODE_MODE_RESULTS_API_FILE } from "./code-mode-results-api.js";
 import { MAX_CODE_MODE_PENDING_TOOL_CALLS } from "./code-mode-worker-types.js";
-import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
+import type { ToolSearchConfig } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
 export { CODE_MODE_WORKER_WATCHDOG_GRACE_MS } from "./code-mode-worker-types.js";
@@ -146,28 +146,6 @@ export function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
     searchDefaultLimit: config.searchDefaultLimit,
     maxSearchLimit: config.maxSearchLimit,
   };
-}
-
-export function resolveCodeModeHeadlessConfig(
-  ctx: ToolSearchToolContext,
-  overrides?: Partial<
-    Pick<
-      CodeModeConfig,
-      | "timeoutMs"
-      | "memoryLimitBytes"
-      | "maxOutputBytes"
-      | "maxSnapshotBytes"
-      | "maxPendingToolCalls"
-    >
-  >,
-): CodeModeConfig {
-  const base = resolveCodeModeConfig(ctx.runtimeConfig ?? ctx.config, ctx.agentId);
-  const definedOverrides = Object.fromEntries(
-    Object.entries(overrides ?? {}).filter(([, value]) => value !== undefined),
-  );
-  return resolveCodeModeConfig({
-    tools: { codeMode: { ...base, ...definedOverrides } },
-  } as OpenClawConfig);
 }
 
 export function readCode(args: unknown): {

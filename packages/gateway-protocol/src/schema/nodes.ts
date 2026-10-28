@@ -4,6 +4,7 @@ import { NODE_PRESENCE_ALIVE_REASONS } from "../node-presence.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
+import { hasValidNodeHostResources } from "./validation-invariants.js";
 
 export { NODE_PRESENCE_ALIVE_REASONS } from "../node-presence.js";
 
@@ -69,11 +70,7 @@ export const NodeHostStatsPayloadSchema = Type.Refine(
     diskTotalBytes: Type.Optional(Type.Integer({ minimum: 0 })),
     diskAvailableBytes: Type.Optional(Type.Integer({ minimum: 0 })),
   }),
-  (stats) =>
-    stats.memoryFreeBytes <= stats.memoryTotalBytes &&
-    (stats.diskTotalBytes === undefined
-      ? stats.diskAvailableBytes === undefined
-      : stats.diskAvailableBytes !== undefined && stats.diskAvailableBytes <= stats.diskTotalBytes),
+  hasValidNodeHostResources,
   () => "free resources must not exceed totals and disk values must be paired",
 );
 

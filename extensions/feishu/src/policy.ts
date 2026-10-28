@@ -154,8 +154,6 @@ export async function resolveFeishuGroupConversationIngressAccess(params: {
   groupPolicy: FeishuGroupPolicy;
   groupAllowFrom?: Array<string | number> | null;
   groupExplicitlyConfigured?: boolean;
-  contextBinding?: ChannelIngressContextBinding;
-  threadId?: string;
 }) {
   const groupPolicy = normalizeFeishuGroupPolicy(params.groupPolicy);
   const groupAllowFrom =
@@ -169,9 +167,7 @@ export async function resolveFeishuGroupConversationIngressAccess(params: {
     conversation: {
       kind: "group",
       id: params.chatId,
-      threadId: params.threadId,
     },
-    ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
     dmPolicy: "disabled",
     groupPolicy,
     groupAllowFrom,
@@ -264,7 +260,6 @@ export function resolveFeishuGroupToolPolicy(params: ChannelGroupContext) {
 }
 
 export function resolveFeishuReplyPolicy(params: {
-  isDirectMessage: boolean;
   cfg: OpenClawConfig;
   accountId?: string | null;
   groupId?: string | null;
@@ -275,10 +270,6 @@ export function resolveFeishuReplyPolicy(params: {
    */
   groupPolicy?: "open" | "allowlist" | "disabled" | "allowall";
 }): { requireMention: boolean } {
-  if (params.isDirectMessage) {
-    return { requireMention: false };
-  }
-
   const feishuCfg = params.cfg.channels?.feishu;
   const resolvedCfg = resolveMergedAccountConfig<FeishuConfig>({
     channelConfig: feishuCfg,

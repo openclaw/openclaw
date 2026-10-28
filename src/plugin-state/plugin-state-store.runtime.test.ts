@@ -26,6 +26,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { createVisitorAccessPluginConfig } from "../test-utils/visitor-access-config.test-support.js";
 import { resetPluginBlobStoreForTests } from "./plugin-blob-store.js";
 import { stateTest } from "./plugin-state-fixtures.test-support.js";
 import {
@@ -101,20 +102,7 @@ describe("plugin-state-store.authority", () => {
             },
           },
         },
-        plugins: {
-          allow: [pluginId],
-          slots: { memory: "none" },
-          entries: {
-            [pluginId]: {
-              enabled: true,
-              config: {
-                accountId: "test",
-                appId: "test",
-                apiToken: "synthetic-visitor-token",
-              },
-            },
-          },
-        },
+        plugins: createVisitorAccessPluginConfig("test", "test", "synthetic-visitor-token"),
       };
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
@@ -145,6 +133,7 @@ describe("plugin-state-store.authority", () => {
         openPluginPanel: unexpectedRuntimeCall,
         readSessionFacts: unexpectedRuntimeCall,
         withSessionFacts: unexpectedRuntimeCall,
+        appendAgentMessage: unexpectedRuntimeCall,
         subscribeSessionChanges: unexpectedRuntimeCall,
         request: unexpectedRuntimeCall,
       };

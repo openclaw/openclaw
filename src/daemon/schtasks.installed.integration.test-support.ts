@@ -76,7 +76,7 @@ export async function runInstalledLifecycle(
   const { resolveGatewayWindowsTaskName } = await import("./constants.js");
   const { execSchtasks } = await import("./schtasks-exec.js");
   const { setScheduledTaskXmlEnabled } = await import("./schtasks-control.js");
-  const { resolveTaskScriptPath } = await import("./schtasks.js");
+  const { resolveTaskScriptPath } = await import("./schtasks-layout.js");
   const { probeScheduledTaskExists, probeScheduledTaskState, ScheduledTaskInspectionError } =
     await import("./schtasks-state-probe.js");
   const { readTaskPrincipal, readTaskXml, readRelatedProcessDiagnostics } =

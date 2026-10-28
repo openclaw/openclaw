@@ -29,6 +29,7 @@ import {
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { disconnectStaleSharedGatewayAuthClients } from "../server-shared-auth-generation.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { agentHandlers } from "./agent.js";
 import {
   describe1AfterEach1,
@@ -149,12 +150,7 @@ describe("gateway agent caller authority custody", () => {
                           isWebchatConnect: () => false,
                           client: {
                             ...operatorWriteCliClient(["operator.admin"]),
-                            authenticatedUserProfile: {
-                              profileId: "later-maintainer",
-                              displayName: null,
-                              hasAvatar: false,
-                              updatedAt: 1,
-                            },
+                            authenticatedUserProfile: gatewayProfile("later-maintainer"),
                           },
                           hasCurrentClientAuthority: () => false,
                         },

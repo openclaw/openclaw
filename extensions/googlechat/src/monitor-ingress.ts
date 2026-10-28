@@ -139,14 +139,7 @@ export function createGoogleChatIngressMonitor(options: {
     const durableEvent = { ...rawEvent };
     // Authentication is complete before admission; no Add-on authorization token is replay data.
     delete durableEvent.authorizationEventObject;
-    const serialized = JSON.stringify(durableEvent);
-    if (typeof serialized !== "string") {
-      throw new GoogleChatIngressPermanentError(
-        "invalid-event",
-        "Google Chat webhook envelope cannot be serialized.",
-      );
-    }
-    return serialized;
+    return JSON.stringify(durableEvent);
   };
 
   return createStandardRawEventIngressMonitor({

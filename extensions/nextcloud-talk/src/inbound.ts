@@ -1,6 +1,8 @@
 import {
   createChannelInboundEnvelopeBuilderAsync,
+  filterChannelInboundQuoteContext,
   formatInboundMediaUnavailableText,
+  resolveInboundSupplementalSenderAllowed,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -11,7 +13,9 @@ import {
   bindIngressLifecycleToReplyOptions,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { expandAllowFromWithAccessGroups } from "openclaw/plugin-sdk/security-runtime";
 import {
   isRecord,
   normalizeOptionalString,
@@ -94,10 +98,7 @@ export async function handleNextcloudTalkInbound(params: {
     runtime,
   });
   const isGroup = roomKind === "direct" ? false : roomKind === "group" ? true : message.isGroupChat;
-  const senderId = message.senderId;
-  const senderName = message.senderName;
-  const roomToken = message.roomToken;
-  const roomName = message.roomName;
+  const { senderId, senderName, roomToken, roomName } = message;
 
   statusSink?.({ lastInboundAt: message.timestamp });
 
@@ -225,6 +226,13 @@ export async function handleNextcloudTalkInbound(params: {
       },
     });
   let access = await resolveAccess();
+  const logAuthorizationChanged = () => {
+    runtime.log?.(
+      isGroup && access.activationAccess.shouldSkip
+        ? `nextcloud-talk: drop room ${roomToken} (no mention)`
+        : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
+    );
+  };
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "nextcloud-talk",
@@ -236,6 +244,21 @@ export async function handleNextcloudTalkInbound(params: {
     access.ingress.reasonCode === "route_blocked"
       ? "route blocked"
       : access.senderAccess.reasonCode;
+  const ignoreOwnOutboundFileShare = async () => {
+    if (!message.attachment) {
+      return false;
+    }
+    const { isNextcloudTalkOutboundFileEcho } = await import("./outbound-media.js");
+    const echo = await isNextcloudTalkOutboundFileEcho({
+      account,
+      message,
+      signal: ingressAbortSignal,
+    });
+    if (echo) {
+      runtime.log?.("nextcloud-talk: ignored own outbound file share");
+    }
+    return echo;
+  };
 
   if (isGroup) {
     if (access.routeAccess.reason === "room_not_allowlisted") {
@@ -256,6 +279,11 @@ export async function handleNextcloudTalkInbound(params: {
     }
   } else if (access.senderAccess.decision !== "allow") {
     if (access.senderAccess.decision === "pairing") {
+      // An unpaired API user's own file share is an echo, not a pairing request.
+      if (await ignoreOwnOutboundFileShare()) {
+        return;
+      }
+      ingressAbortSignal?.throwIfAborted();
       await pairing.issueChallenge({
         senderId,
         senderIdLine: `Your Nextcloud user id: ${senderId}`,
@@ -312,20 +340,12 @@ export async function handleNextcloudTalkInbound(params: {
   access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
 
   if (access.ingress.admission !== "dispatch") {
-    runtime.log?.(
-      isGroup && access.activationAccess.shouldSkip
-        ? `nextcloud-talk: drop room ${roomToken} (no mention)`
-        : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
-    );
+    logAuthorizationChanged();
     return;
   }
 
-  if (message.attachment) {
-    const { isNextcloudTalkOutboundFileEcho } = await import("./outbound-media.js");
-    if (await isNextcloudTalkOutboundFileEcho({ account, message, signal: ingressAbortSignal })) {
-      runtime.log?.("nextcloud-talk: ignored own outbound file share");
-      return;
-    }
+  if (await ignoreOwnOutboundFileShare()) {
+    return;
   }
 
   let stagedMedia: { path: string; contentType?: string } | undefined;
@@ -447,20 +467,14 @@ export async function handleNextcloudTalkInbound(params: {
               accountId: account.accountId,
               messageId: message.messageId,
               senderId,
-              ...(authenticatedSource.status === undefined
-                ? {}
-                : { status: authenticatedSource.status }),
+              status: authenticatedSource.status,
             });
           } else {
             sourceModality = authenticatedSource.sourceModality;
             access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
             throwIfIngressAborted();
             if (access.ingress.admission !== "dispatch") {
-              runtime.log?.(
-                isGroup && access.activationAccess.shouldSkip
-                  ? `nextcloud-talk: drop room ${roomToken} (no mention)`
-                  : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
-              );
+              logAuthorizationChanged();
               return;
             }
             try {
@@ -496,9 +510,7 @@ export async function handleNextcloudTalkInbound(params: {
                 stagedMediaId = canonicalized.media.id;
                 stagedMedia = {
                   path: canonicalized.media.path,
-                  ...(canonicalized.media.contentType
-                    ? { contentType: canonicalized.media.contentType }
-                    : {}),
+                  contentType: canonicalized.media.contentType,
                 };
                 if (!sourceModality && stagedMedia.contentType?.startsWith("audio/")) {
                   sourceModality = "audio";
@@ -527,17 +539,32 @@ export async function handleNextcloudTalkInbound(params: {
       }
     }
 
-    if (performedAsyncMediaWork) {
+    const quote = message.quote;
+    let quoteAllowFrom = hasAllowEntries(outerGroupAllowFrom) ? outerGroupAllowFrom : roomAllowFrom;
+    let quoteRoomAllowFrom = roomAllowFrom;
+    const hasQuotePolicyWork = quote !== undefined && isGroup && groupPolicy === "allowlist";
+    if (hasQuotePolicyWork) {
+      const expandQuoteAllowFrom = (entries: string[]) =>
+        expandAllowFromWithAccessGroups({
+          cfg: config,
+          allowFrom: entries,
+          channel: CHANNEL_ID,
+          accountId: account.accountId,
+          senderId: quote.senderId,
+          isSenderAllowed: (id, allow) =>
+            resolveNextcloudTalkAllowlistMatch({ senderId: id, allowFrom: allow }).allowed,
+        });
+      quoteAllowFrom = await expandQuoteAllowFrom(quoteAllowFrom);
+      quoteRoomAllowFrom = await expandQuoteAllowFrom(roomAllowFrom);
+    }
+
+    if (performedAsyncMediaWork || hasQuotePolicyWork) {
       throwIfIngressAborted();
       access = await resolveAccess(isGroup ? wasMentioned : undefined, contextBinding);
       throwIfIngressAborted();
       if (access.ingress.admission !== "dispatch") {
         await deleteStagedMedia();
-        runtime.log?.(
-          isGroup && access.activationAccess.shouldSkip
-            ? `nextcloud-talk: drop room ${roomToken} (no mention)`
-            : `nextcloud-talk: drop ${isGroup ? "room" : "DM"} ${roomToken} (authorization changed)`,
-        );
+        logAuthorizationChanged();
         return;
       }
     }
@@ -557,8 +584,36 @@ export async function handleNextcloudTalkInbound(params: {
       body: agentBody,
     });
 
-    const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
     const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
+    const visibleQuote = quote
+      ? filterChannelInboundQuoteContext(
+          resolveChannelContextVisibilityMode({
+            cfg: config,
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+          }),
+          {
+            id: quote.id,
+            body: quote.body,
+            sender: quote.senderName || quote.senderId,
+            senderAllowed: resolveInboundSupplementalSenderAllowed({
+              isGroup,
+              groupPolicy,
+              allowFrom: quoteAllowFrom,
+              isSenderAllowed: (candidateAllowFrom) =>
+                resolveNextcloudTalkAllowlistMatch({
+                  allowFrom: [...candidateAllowFrom],
+                  senderId: quote.senderId,
+                }).allowed &&
+                (!hasAllowEntries(quoteRoomAllowFrom) ||
+                  resolveNextcloudTalkAllowlistMatch({
+                    allowFrom: quoteRoomAllowFrom,
+                    senderId: quote.senderId,
+                  }).allowed),
+            }),
+          },
+        )
+      : undefined;
 
     const ctxPayload = core.channel.inbound.buildContext({
       channelIngress: access,
@@ -594,7 +649,20 @@ export async function handleNextcloudTalkInbound(params: {
       ...(stagedMedia ? { media: [stagedMedia] } : {}),
       extra: {
         GroupSubject: isGroup ? roomName || roomToken : undefined,
-        GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
+        GroupSystemPrompt: isGroup ? normalizeOptionalString(roomConfig?.systemPrompt) : undefined,
+        // ReplyChain carries quoted identity without changing the outgoing ReplyToId fallback.
+        ReplyChain:
+          quote && visibleQuote
+            ? [
+                {
+                  messageId: visibleQuote.id,
+                  senderId: quote.senderId,
+                  sender: visibleQuote.sender,
+                  body: visibleQuote.body,
+                  isQuote: true,
+                },
+              ]
+            : undefined,
       },
     });
 

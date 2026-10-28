@@ -58,6 +58,11 @@ after the handler returns. Already accepted operations still finish their
 settlement and cleanup. Ordinary authorized read commands and explicit Gateway
 scope checks retain their existing behavior.
 
+For native Discord commands, OpenClaw lowercases the selected command name and
+skips names longer than 32 characters with a diagnostic. Use
+`nativeNames: { discord: "short-name" }` when the primary name is longer. Slack
+retains its selected alias spelling.
+
 Commands may also declare a bounded client presentation action for parsed no-argument
 invocations:
 

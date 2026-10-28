@@ -1,107 +1,48 @@
-// Subagent registry cleanup tests cover deferred cleanup decisions while
-// completion delivery, descendants, and retry windows are still unresolved.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { resolveDeferredCleanupDecision } from "./subagent-registry-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type EntryOverrides = Omit<Partial<SubagentRunRecord>, "execution"> & { endedAt?: number };
-
-function makeEntry(overrides: EntryOverrides = {}): SubagentRunRecord {
-  const { endedAt = 1_000, ...recordOverrides } = overrides;
-  return {
-    runId: "run-1",
-    childSessionKey: "agent:main:subagent:child",
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
-    task: "test",
-    cleanup: "keep",
-    createdAt: 0,
-    execution: { status: "terminal", endedAt },
-    ...recordOverrides,
-  };
+const now = 2_000;
+function decide({ endedAt = 1_000, ...overrides }: EntryOverrides = {}, activeDescendantRuns = 0) {
+  return resolveDeferredCleanupDecision({
+    entry: createSubagentRunRecord({
+      runId: "run-1",
+      endedAt,
+      expectsCompletionMessage: true,
+      ...overrides,
+    }),
+    now,
+    activeDescendantRuns,
+    announceExpiryMs: 5 * 60_000,
+    announceCompletionHardExpiryMs: 30 * 60_000,
+    deferDescendantDelayMs: 1_000,
+    resolveAnnounceRetryDelayMs: (retryCount) => retryCount * 1_000,
+  });
 }
 
-describe("resolveDeferredCleanupDecision", () => {
-  const now = 2_000;
+it("defers completion-message cleanup while descendants are pending", () => {
+  expect(decide({}, 2)).toEqual({ kind: "defer-descendants", delayMs: 1_000 });
+});
 
-  function resolveDecision(
-    overrides: Pick<
-      Parameters<typeof resolveDeferredCleanupDecision>[0],
-      "activeDescendantRuns" | "entry"
-    > &
-      Partial<
-        Pick<Parameters<typeof resolveDeferredCleanupDecision>[0], "resolveAnnounceRetryDelayMs">
-      >,
-  ) {
-    // Fixed timing keeps expiry and backoff decisions independent from wall
-    // clock drift while still exercising production thresholds.
-    return resolveDeferredCleanupDecision({
-      now,
-      announceExpiryMs: 5 * 60_000,
-      announceCompletionHardExpiryMs: 30 * 60_000,
-      deferDescendantDelayMs: 1_000,
-      resolveAnnounceRetryDelayMs: () => 2_000,
-      ...overrides,
-    });
-  }
+it("hard-expires completion cleanup when descendants never settle", () => {
+  expect(decide({ endedAt: now - 30 * 60_000 }, 1)).toEqual({ kind: "give-up", reason: "expiry" });
+});
 
-  it("defers completion-message cleanup while descendants are still pending", () => {
-    const decision = resolveDecision({
-      entry: makeEntry({ expectsCompletionMessage: true }),
-      activeDescendantRuns: 2,
-    });
-
-    expect(decision).toEqual({ kind: "defer-descendants", delayMs: 1_000 });
+it("honors a redriven completion at its delivery deadline", () => {
+  const decision = decide({
+    endedAt: now - 60 * 60_000,
+    delivery: { status: "pending", windowStartedAt: now - 1_000, deadlineAt: now },
   });
+  expect(decision.kind).toBe("give-up");
+});
 
-  it("hard-expires completion-message cleanup when descendants never settle", () => {
-    const decision = resolveDecision({
-      entry: makeEntry({ expectsCompletionMessage: true, endedAt: now - 30 * 60_000 }),
-      activeDescendantRuns: 1,
-    });
-
-    expect(decision).toEqual({ kind: "give-up", reason: "expiry" });
-  });
-
-  it.each([{ name: "at", deadlineAt: now, kind: "give-up" }])(
-    "honors a redriven completion $name its delivery deadline",
-    ({ deadlineAt, kind }) => {
-      const decision = resolveDecision({
-        entry: makeEntry({
-          expectsCompletionMessage: true,
-          endedAt: now - 60 * 60_000,
-          delivery: { status: "pending", windowStartedAt: now - 1_000, deadlineAt },
-        }),
-        activeDescendantRuns: 0,
-      });
-
-      expect(decision.kind).toBe(kind);
-    },
-  );
-
-  it("uses retry backoff for completion-message flows once descendants are settled", () => {
-    const decision = resolveDecision({
-      entry: makeEntry({
-        expectsCompletionMessage: true,
-        delivery: { status: "pending", attemptCount: 1 },
-      }),
-      activeDescendantRuns: 0,
-      resolveAnnounceRetryDelayMs: (retryCount) => retryCount * 1_000,
-    });
-
-    expect(decision).toEqual({ kind: "retry", retryCount: 2, resumeDelayMs: 2_000 });
-  });
-
-  it("uses retry backoff for non-completion flows so cleanup can settle after announce failures", () => {
-    const decision = resolveDecision({
-      entry: makeEntry({
-        expectsCompletionMessage: false,
-        delivery: { status: "not_required", attemptCount: 1 },
-      }),
-      activeDescendantRuns: 0,
-      resolveAnnounceRetryDelayMs: (retryCount) => retryCount * 1_000,
-    });
-
-    expect(decision).toEqual({ kind: "retry", retryCount: 2, resumeDelayMs: 2_000 });
-  });
+it.each([true, false])("backs off settled cleanup (completion required=%s)", (required) => {
+  expect(
+    decide({
+      expectsCompletionMessage: required,
+      delivery: { status: required ? "pending" : "not_required", attemptCount: 1 },
+    }),
+  ).toEqual({ kind: "retry", retryCount: 2, resumeDelayMs: 2_000 });
 });

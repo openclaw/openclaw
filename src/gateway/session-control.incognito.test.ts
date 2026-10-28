@@ -13,7 +13,7 @@ import {
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import * as sessionMetadataWrites from "../config/sessions/session-metadata-write.async.js";
 import { prepareSessionSourceAuthority } from "../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -26,6 +26,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { chatRpc } from "./server-methods/chat-rpc-fixture.test-support.js";
 import * as chatSend from "./server-methods/chat-send-handler.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { withSessionMutationCommitGuard } from "./server-methods/session-mutation-guards.js";
@@ -454,6 +455,31 @@ it("restores a refused unbound memory task suggestion and retains accepted chat 
     }
     memorySessionActorOwners.closeSession(location, sessionKey);
     expect(() => acceptedAuthority!.assertCurrent()).toThrow();
+    expect(host.queries).toEqual([]);
+  } finally {
+    host.restore();
+  }
+});
+
+it("refuses retained-input dismissal for an unbound memory session at the registered RPC", async () => {
+  const sessionKey = "agent:main:dashboard:incognito-dismiss";
+  await seed(sessionKey, { sessionId: "dismiss" });
+  await initializeSessionReadContext(context);
+  const host = observeHostDataSql();
+  try {
+    expect(
+      await chatRpc(context, client, "chat.pendingInputs.dismiss", {
+        sessionKey,
+        agentId: "main",
+        sessionId: "dismiss",
+        inputIds: ["retained-input"],
+      }),
+    ).toEqual(
+      refused({
+        code: "FORBIDDEN",
+        message: expect.stringContaining("non-incognito sessionKey"),
+      }),
+    );
     expect(host.queries).toEqual([]);
   } finally {
     host.restore();

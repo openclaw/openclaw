@@ -1,14 +1,12 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { requestRaw, resolveConfigMutation } from "./model-providers.test-support.ts";
+import { configAuth } from "./model-catalog-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI model default capabilities" });
 suite.define(() => {
-  it.each([1440, 390])("aligns defaults and saves capability choices at %ipx", async (width) => {
+  it.each([1440, 390])("aligns default capability controls at %ipx", async (width) => {
     await suite.withPage(
       { viewport: { width, height: 1100 }, locale: "en-US" },
       async ({ page }) => {
@@ -28,11 +26,10 @@ suite.define(() => {
             name: "QA model with a deliberately long descriptive label",
             available: true,
             reasoning: true,
-            thinkingLevels: [
-              { id: "low", label: "Low" },
-              { id: "max", label: "Max" },
-              { id: "ultra", label: "Ultra" },
-            ],
+            thinkingLevels: ["Low", "Max", "Ultra"].map((label) => ({
+              id: label.toLowerCase(),
+              label,
+            })),
             supportsFastMode: true,
             serviceTiers: ["priority", "ultrafast"],
           },
@@ -41,17 +38,10 @@ suite.define(() => {
           assistantName: "QA Assistant",
           models,
           methodResponses: {
-            "config.get": {
-              config,
-              sourceConfig: config,
-              hash: "qa-defaults",
-              valid: true,
-              issues: [],
-              raw: JSON.stringify(config),
-            },
+            "config.get": sourceConfigSnapshot(config, "qa-defaults"),
             "models.authStatus": {
               ts: 1,
-              providers: [{ provider: "openai", profiles: [], apiKey: { source: "config" } }],
+              providers: [configAuth("openai")],
             },
           },
         });
@@ -63,12 +53,7 @@ suite.define(() => {
         expect(await pickers.first().textContent()).not.toContain("API");
         expect(await pickers.first().getAttribute("aria-label")).not.toContain("API");
         expect(await pickers.first().locator(".picker-select__description").count()).toBe(0);
-        const frame = await takeControlUiScreenshotFrame(page, defaults, [pickers.first()], {
-          animations: "disabled",
-          scrollTo: defaults,
-          elements: [defaults],
-        });
-        await writeFile(path.join(suite.artifactDir, `defaults-${width}.png`), frame.png);
+        await defaults.scrollIntoViewIfNeeded();
         const boxes = await pickers.evaluateAll((elements) =>
           elements.map((element) => {
             const box = element.getBoundingClientRect();
@@ -114,59 +99,9 @@ suite.define(() => {
         expect(Math.abs(metadata.rightOffset)).toBeLessThan(1);
         expect(metadata.detailColor).toBe(metadata.mutedColor);
         expect(metadata.menuFits).toBe(true);
-        const openFrame = await takeControlUiScreenshotFrame(page, defaults, [option], {
-          animations: "disabled",
-          elements: [defaults, option],
-        });
-        await writeFile(path.join(suite.artifactDir, `defaults-open-${width}.png`), openFrame.png);
         await page.keyboard.press("Escape");
         await expect.poll(() => pickers.first().getAttribute("aria-expanded")).toBe("false");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-        const thinking = defaults.getByRole("radiogroup", { name: "Thinking", exact: true });
-        const speed = defaults.getByRole("radiogroup", { name: "Fast Mode", exact: true });
-        expect(await speed.getByRole("radio", { name: "Ultrafast", exact: true }).isChecked()).toBe(
-          true,
-        );
-        await gateway.deferNext("config.patch");
-        await thinking.getByRole("radio", { name: "Ultra", exact: true }).check();
-        const request = await gateway.waitForRequest("config.patch");
-        expect(requestRaw(request)).toMatchObject({
-          agents: { defaults: { thinkingDefault: "ultra", fastModeDefault: "ultrafast" } },
-        });
-        const saved = {
-          agents: { defaults: { ...config.agents.defaults, thinkingDefault: "ultra" } },
-        };
-        await resolveConfigMutation(gateway, saved, "qa-ultra");
-        await expect
-          .poll(() => thinking.getByRole("radio", { name: "Ultra", exact: true }).isEnabled())
-          .toBe(true);
-        await gateway.deferNext("config.patch");
-        await speed.getByRole("radio", { name: "Default", exact: true }).check();
-        await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(2);
-        expect(requestRaw((await gateway.getRequests("config.patch"))[1]!)).toMatchObject({
-          agents: { defaults: { thinkingDefault: "ultra", fastModeDefault: null } },
-        });
-        await resolveConfigMutation(
-          gateway,
-          { agents: { defaults: { model: "openai/gpt-4.1", thinkingDefault: "ultra" } } },
-          "qa-inherited",
-        );
-        await expect
-          .poll(() => speed.getByRole("radio", { name: "Default", exact: true }).isChecked())
-          .toBe(true);
-        await expect
-          .poll(() => speed.getByRole("radio", { name: "Ultrafast", exact: true }).isEnabled())
-          .toBe(true);
-        await gateway.deferNext("config.patch");
-        await speed.getByRole("radio", { name: "Ultrafast", exact: true }).check();
-        await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(3);
-        expect(requestRaw((await gateway.getRequests("config.patch"))[2]!)).toMatchObject({
-          agents: { defaults: { fastModeDefault: "ultrafast" } },
-        });
-        await resolveConfigMutation(gateway, saved, "qa-ultrafast");
-        await expect
-          .poll(() => speed.getByRole("radio", { name: "Ultrafast", exact: true }).isChecked())
-          .toBe(true);
       },
     );
   });

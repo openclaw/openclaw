@@ -11,11 +11,6 @@ import {
 } from "./sidebar-attention-dismissals.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 
-type SidebarAttentionItemKind = Exclude<
-  SidebarAttentionKind,
-  "scopeUpgrade" | "updateAvailable" | "outbox"
->;
-
 type SidebarInboxEntryBase<
   Category extends Exclude<IssueTab, "all">,
   Severity extends "error" | "warning" | "neutral" = "error" | "warning",
@@ -28,7 +23,7 @@ type SidebarInboxEntryBase<
 
 export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system"> & {
   type: "attention";
-  kind: SidebarAttentionItemKind;
+  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "updateAvailable" | "outbox">;
   icon: IconName;
   label: string;
   detail: string;
@@ -56,7 +51,7 @@ export type SidebarInboxEntry =
       id: string;
       sessionKey: string;
       agentId?: string;
-      unconfirmed: boolean;
+      held: boolean;
       command: boolean;
     })
   | (SidebarInboxEntryBase<"system"> & { type: "update" });

@@ -1,8 +1,75 @@
 const REQUEST_BODY = Symbol("modelRequestBody");
 
 export type EncodedModelRequestBody = { body: Uint8Array<ArrayBuffer>; stream: boolean };
+
+/** A slice of JSON.stringify output; only keys need decoding to inspect its shape. */
+class ModelRequestJson {
+  readonly json: string;
+
+  constructor(json: string) {
+    this.json = json;
+  }
+
+  *members(): Generator<[string, ModelRequestJson]> {
+    const object = this.json[0] === "{";
+    if (!object && this.json[0] !== "[") {
+      return;
+    }
+    let index = 1;
+    let item = 0;
+    while (index < this.json.length - 1) {
+      let key = String(item++);
+      if (object) {
+        const end = this.valueEnd(index);
+        const encodedKey = this.json.slice(index + 1, end - 1);
+        key = encodedKey.includes("\\")
+          ? (JSON.parse(this.json.slice(index, end)) as string) // SAFETY: This is a JSON.stringify object key.
+          : encodedKey;
+        index = end + 1;
+      }
+      const end = this.valueEnd(index);
+      yield [key, new ModelRequestJson(this.json.slice(index, end))];
+      index = end + 1;
+    }
+  }
+
+  private valueEnd(start: number): number {
+    let depth = 0;
+    for (let index = start; index < this.json.length; index++) {
+      const char = this.json[index];
+      if (char === '"') {
+        let escaped: boolean;
+        do {
+          index = this.json.indexOf('"', index + 1);
+          let slash = index - 1;
+          while (this.json[slash] === "\\") {
+            slash--;
+          }
+          escaped = (index - slash) % 2 === 0;
+        } while (escaped);
+        if (depth === 0) {
+          return index + 1;
+        }
+      } else if (char === "{" || char === "[") {
+        depth++;
+      } else if (char === "}" || char === "]") {
+        if (depth === 0) {
+          return index;
+        }
+        depth--;
+        if (depth === 0) {
+          return index + 1;
+        }
+      } else if (depth === 0 && (char === "," || char === ":")) {
+        return index;
+      }
+    }
+    return this.json.length;
+  }
+}
 type ModelRequestBodyState = {
   enabled?: boolean;
+  reportsBytes?: boolean;
   encode?: (payload: unknown) => Promise<EncodedModelRequestBody>;
   onEncoded?: (body: Blob, payload: unknown) => void;
   onBytes?: (bytes: number) => void;
@@ -21,22 +88,44 @@ export function modelRequestBodyState(
   return state;
 }
 
+/** Observe JSON fetch bodies without opting into host-owned request encoding. */
+export function withModelRequestBodyBytes(
+  options: object | undefined,
+  fetch: typeof globalThis.fetch,
+): typeof globalThis.fetch {
+  const state = modelRequestBodyState(options ?? {});
+  state.reportsBytes = true;
+  return (input, init) => {
+    if (typeof init?.body === "string") {
+      state.onBytes?.(Buffer.byteLength(init.body, "utf8"));
+    }
+    return fetch(input, init);
+  };
+}
+
 export function serializeModelRequestBody(
   payload: unknown,
   onSerializedPayload?: (payload: unknown) => void,
-): EncodedModelRequestBody {
+): EncodedModelRequestBody & { json: ModelRequestJson | undefined } {
   const json = JSON.stringify(payload);
-  const serialized: unknown = json === undefined ? undefined : JSON.parse(json);
-  // Preserve the wire fact even when the observer changes its detached parsed value.
-  const stream =
-    typeof serialized === "object" &&
-    serialized !== null &&
-    "stream" in serialized &&
-    serialized.stream === true;
-  onSerializedPayload?.(serialized);
+  const request = json === undefined ? undefined : new ModelRequestJson(json);
+  let stream = false;
+  if (request?.json[0] === "{") {
+    for (const [key, value] of request.members()) {
+      if (key === "stream") {
+        stream = value.json === "true";
+        break;
+      }
+    }
+  }
+  // Only detached observers need a second graph. The immutable JSON owns wire facts.
+  if (onSerializedPayload) {
+    onSerializedPayload(json === undefined ? undefined : JSON.parse(json));
+  }
   return {
     body: new TextEncoder().encode(json),
     stream,
+    json: request,
   };
 }
 

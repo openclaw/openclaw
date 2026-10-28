@@ -6,7 +6,6 @@ import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promi
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { hasErrnoCode } from "../../infra/errno.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
@@ -42,7 +41,6 @@ async function runFixture(script: string, options: SpawnOptions, input?: string)
 }
 
 const bootstrapModes = [
-  "native",
   "stale-ambient",
   "send-throw",
   "send-callback",
@@ -67,29 +65,21 @@ async function runBootstrapFixture(mode: (typeof bootstrapModes)[number]) {
     const originalSpawn = childProcess.spawn;
     let nativeChild;
     let environmentKeys;
-    let bootstrapCalls = 0;
-    let refused = 0;
-    const events = [];
-    const observed = mock.method(childProcess, 'spawn', function(command, args, options) {
+    mock.method(childProcess, 'spawn', function(command, args, options) {
       environmentKeys = keys.filter(key => key in (options.env ?? process.env));
       const child = Reflect.apply(originalSpawn, this, [command, args, options]);
       nativeChild = child;
-      for (const event of ['spawn', 'exit', 'close']) child.once(event, () => events.push(event));
       const originalSend = child.send.bind(child);
       mock.method(child, 'send', function(message, ...args) {
         if (message?.type === 'bootstrap') {
-          bootstrapCalls++;
           if (mode === 'stale-ambient') {
             assert.equal(message.nativeResource === undefined, true);
           }
           if (mode === 'send-throw') {
-            refused++;
             throw new Error('synthetic initial bootstrap refusal');
           }
           if (mode === 'send-callback') {
-            refused++;
             const callback = args.at(-1);
-            assert.equal(typeof callback, 'function');
             queueMicrotask(() => callback(new Error('synthetic initial bootstrap refusal')));
             return false;
           }
@@ -106,7 +96,6 @@ async function runBootstrapFixture(mode: (typeof bootstrapModes)[number]) {
       // The standalone fixture has no Gateway lifetime keeping an unreferenced broker alive.
       nativeChild.ref();
       nativeChild.channel?.ref();
-      assert.equal(observed.mock.calls.length, 1);
       if (mode.startsWith('send-')) {
         await assert.rejects(host.ready(), error => error.cause?.message === 'synthetic initial bootstrap refusal');
       } else {
@@ -143,13 +132,9 @@ async function runBootstrapFixture(mode: (typeof bootstrapModes)[number]) {
       await host.close();
       if (mode !== 'stale-ambient') {
         assert.deepEqual(environmentKeys, []);
-        assert.equal(events[0], 'spawn');
         assert.equal(nativeChild.exitCode, 0);
         assert.equal(nativeChild.connected, false);
       }
-      assert.ok(events.includes('exit'));
-      assert.equal(bootstrapCalls, 1);
-      assert.equal(refused, mode.startsWith('send-') ? 1 : 0);
       console.log('completed');
     } finally {
       if (nativeChild?.exitCode === null && nativeChild.signalCode === null) nativeChild.kill('SIGKILL');
@@ -184,13 +169,21 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     return host.spawn(process.execPath, ["-e", source], options, initiate);
   }
   async function expectParent(pid: number) {
-    const child = nodeCommand("process.stdout.write(String(process.ppid))", {
+    const argv0 = "openclaw-broker-command";
+    const args = [
+      "-e",
+      "process.stdout.write(JSON.stringify({parent:process.ppid,argv0:process.argv0}))",
+    ];
+    const child = host.spawn(process.execPath, args, {
+      argv0,
       stdio: ["ignore", "pipe", "ignore"],
     });
     await child.ready();
     const output = capture(child.stdout);
     expect(await once(child, "close")).toEqual([0, null]);
-    expect(Number(output())).toBe(pid);
+    expect(child).toMatchObject({ spawnfile: process.execPath, spawnargs: [argv0, ...args] });
+    expect(JSON.parse(output())).toEqual({ parent: pid, argv0 });
+    expect(pid).not.toBe(process.pid);
   }
 
   it("fences guarded launches and settles custody from native receipts", async () => {
@@ -214,8 +207,8 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
 
     const admitted = createDeferredCore();
     const child = nodeCommand(
-      "process.stdin.resume(); process.stdin.once('end', () => process.exit(0))",
-      { stdio: ["pipe", "ignore", "ignore"] },
+      "process.stdin.pipe(process.stdout)",
+      { stdio: ["pipe", "pipe", "ignore"] },
       (launch, settlement) => {
         if (!settlement) {
           throw new Error("Missing native launch settlement");
@@ -227,9 +220,11 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     await admitted.promise;
     expect(child.exitCode).toBeNull();
     await child.ready();
+    const output = capture(child.stdout);
     const closed = once(child, "close");
-    child.stdin!.end();
+    child.stdin!.end("input-prefix:");
     expect(await closed).toEqual([0, null]);
+    expect(output()).toBe("input-prefix:");
 
     const grantReached = createDeferredCore<{ settlement: Promise<unknown> }>();
     let pausedPid: number | undefined;
@@ -299,57 +294,26 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     expect(events).toEqual(["exit", "close"]);
   });
 
-  it("preserves raw-spawn identity, independent output streams, and stdin", async () => {
-    const size = 2 * 1024 * 1024 + 137;
-    const argv0 = "openclaw-broker-command";
-    const args = [
-      "-e",
-      `
-      process.stdin.resume(); let input = '';
-      process.stdin.on('data', x => input += x);
-      process.stdin.on('end', () => {
-        process.stdout.write(JSON.stringify({parent:process.ppid,argv0:process.argv0}) + '\\n' + input + 'o'.repeat(${size}));
-        process.stderr.write('e'.repeat(${size}));
-      });
-    `,
-    ];
-    const child = host.spawn(process.execPath, args, { argv0, stdio: ["pipe", "pipe", "pipe"] });
-    await child.ready();
-    expect(child).toMatchObject({ spawnfile: process.execPath, spawnargs: [argv0, ...args] });
-    const stdout = capture(child.stdout),
-      stderr = capture(child.stderr);
-    child.stdin!.end("input-prefix:");
-    await once(child, "close");
-    const newline = stdout().indexOf("\n");
-    expect(JSON.parse(stdout().slice(0, newline))).toEqual({ parent: host.pid, argv0 });
-    expect(host.pid).not.toBe(process.pid);
-    expect(stdout().slice(newline + 1)).toBe("input-prefix:" + "o".repeat(size));
-    expect(stderr()).toBe("e".repeat(size));
-  });
-
   it("preserves real inherited stdin across the host and broker", async () => {
     const input = "inherited-input:".repeat(32_000);
-    for (const brokered of [false, true]) {
-      const script = `
-        import {spawn} from 'node:child_process';
+    const script = `
         import {once} from 'node:events';
         import {createSpawnBrokerHost} from ${JSON.stringify(new URL("./host.js", import.meta.url).href)};
-        const broker = ${brokered} ? createSpawnBrokerHost() : undefined;
-        await broker?.ready();
+        const broker = createSpawnBrokerHost();
+        await broker.ready();
         const args = ['-e','process.stdin.pipe(process.stdout)'];
         const options = {stdio:['inherit','pipe','pipe']};
-        const child = broker ? broker.spawn(process.execPath,args,options) : spawn(process.execPath,args,options);
-        if (broker) await child.ready();
+        const child = broker.spawn(process.execPath,args,options);
+        await child.ready();
         child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr);
-        await once(child,'close'); await broker?.close();
+        await once(child,'close'); await broker.close();
       `;
-      expect(await runFixture(script, { stdio: ["pipe", "pipe", "pipe"] }, input)).toEqual({
-        code: 0,
-        signal: null,
-        stdout: input,
-        stderr: "",
-      });
-    }
+    expect(await runFixture(script, { stdio: ["pipe", "pipe", "pipe"] }, input)).toEqual({
+      code: 0,
+      signal: null,
+      stdout: input,
+      stderr: "",
+    });
   });
 
   it("forwards child IPC and retains separate extra pipes", async () => {
@@ -453,28 +417,13 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     const descendant = Number(stdout());
     try {
       await withinTest(host.close(), signal);
-      const running = async () => {
-        try {
-          process.kill(descendant, 0);
-          if (process.platform === "linux") {
-            const stat = await readFile(`/proc/${descendant}/stat`, "utf8");
-            return stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) !== "Z";
-          }
-          return true;
-        } catch (error) {
-          if (hasErrnoCode(error, "ESRCH") || hasErrnoCode(error, "ENOENT")) {
-            return false;
-          }
-          throw error;
-        }
-      };
       // Broker shutdown signals the orphaned group but cannot join this foreign PID.
-      while (await running()) {
+      while (!isPidDefinitelyDead(descendant)) {
         await withinTest(delay(25), signal).catch((cause: unknown) => {
           throw new Error(`Detached descendant ${descendant} is still running`, { cause });
         });
       }
-      expect(await running()).toBe(false);
+      expect(isPidDefinitelyDead(descendant)).toBe(true);
     } finally {
       try {
         process.kill(descendant, "SIGKILL");

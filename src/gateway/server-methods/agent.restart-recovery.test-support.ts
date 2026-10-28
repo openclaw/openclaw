@@ -15,7 +15,6 @@ import {
   invokeAgent,
   makeContext,
   requireValue,
-  waitForAssertion,
 } from "./agent.test-harness.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
@@ -34,8 +33,6 @@ export function registerAgentQueuedRestartRecoveryTests() {
         .spyOn(agentHandlerHelpers, "yieldAfterAgentAcceptedAck")
         .mockReturnValue(dispatchGate.promise);
       const context = makeContext();
-      const respond = vi.fn();
-      const stopRespond = vi.fn();
       let cancellation: Promise<unknown> | undefined;
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
@@ -54,31 +51,26 @@ export function registerAgentQueuedRestartRecoveryTests() {
               sourceTool: "main_session_restart_recovery",
             },
           },
-          { context, client: backendGatewayClient(), reqId: runId, respond, flushDispatch: false },
+          { context, client: backendGatewayClient(), reqId: runId, flushDispatch: false },
         );
         const active = requireValue(rpcSourceTesting.get(runId), "queued recovery source missing");
-        expectRecordFields(respond.mock.calls[0]?.[1], { runId, status: "accepted" });
-        expect(store[sessionKey]?.abortedLastRun).toBe(false);
-        expect(store[sessionKey]?.mainRestartRecovery?.reservation).toBeUndefined();
-        expect(mocks.agentCommand).not.toHaveBeenCalled();
 
+        const aborted = createDeferred();
+        active.input.abortSignal.addEventListener("abort", () => aborted.resolve(), { once: true });
+        const cancelOptions = { context, client: null, isWebchatConnect: () => false };
         if (cause === "rpc") {
           cancellation = handleChatAbortRequest({
+            ...cancelOptions,
             params: { sessionKey, runId },
             respond: vi.fn(),
-            context,
             req: { type: "req", id: `${runId}-abort`, method: "chat.abort" },
-            client: null,
-            isWebchatConnect: () => false,
           });
         } else if (cause === "stop") {
           cancellation = handleDirectExternalChatSend({
+            ...cancelOptions,
             params: { sessionKey, message: "/stop", idempotencyKey: `${runId}-stop` },
-            respond: stopRespond,
-            context,
+            respond: vi.fn(),
             req: { type: "req", id: `${runId}-stop`, method: "chat.send" },
-            client: null,
-            isWebchatConnect: () => false,
           });
         } else if (cause === "timeout") {
           cancellation = vi.advanceTimersByTimeAsync(1_000);
@@ -93,13 +85,9 @@ export function registerAgentQueuedRestartRecoveryTests() {
           });
         }
         void cancellation.catch(() => {});
-        await waitForAssertion(() => {
-          expect(
-            stopRespond.mock.lastCall?.[0],
-            JSON.stringify(stopRespond.mock.lastCall),
-          ).not.toBe(false);
-          expect(active.input.abortSignal.aborted).toBe(true);
-        });
+        // Stop can await real worker I/O; fake clock progress is not cancellation completion.
+        await Promise.race([aborted.promise, cancellation]);
+        expect(active.input.abortSignal.aborted).toBe(true);
         dispatchGate.resolve();
         await cancellation;
         await active.input.settlement.promise;
@@ -107,21 +95,21 @@ export function registerAgentQueuedRestartRecoveryTests() {
         expect(mocks.agentCommand).not.toHaveBeenCalled();
         expect(rpcSourceTesting.has(runId)).toBe(false);
         const retryable = cause === "restart" || cause === "timeout";
-        expect(store[sessionKey]).toMatchObject({
+        const entry = store[sessionKey];
+        expectRecordFields(entry, {
           sessionId,
           status: retryable ? "interrupted" : "killed",
           abortedLastRun: retryable,
+          restartRecoveryDeliveryRunId: undefined,
+          mainRestartRecovery: retryable
+            ? expect.objectContaining({ chargedAttempts: 1 })
+            : undefined,
+          ...(retryable
+            ? { restartRecoveryDeliverySourceRunId: "interrupted-source-run" }
+            : { restartRecoveryRuns: undefined }),
         });
-        expect(store[sessionKey]?.restartRecoveryDeliveryRunId).toBeUndefined();
         if (retryable) {
-          expect(store[sessionKey]?.mainRestartRecovery).toMatchObject({ chargedAttempts: 1 });
-          expect(store[sessionKey]?.mainRestartRecovery?.reservation).toBeUndefined();
-          expect(store[sessionKey]?.restartRecoveryDeliverySourceRunId).toBe(
-            "interrupted-source-run",
-          );
-        } else {
-          expect(store[sessionKey]?.mainRestartRecovery).toBeUndefined();
-          expect(store[sessionKey]?.restartRecoveryRuns).toBeUndefined();
+          expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
         }
       } finally {
         dispatchGate.resolve();

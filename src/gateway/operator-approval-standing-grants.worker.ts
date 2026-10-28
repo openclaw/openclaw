@@ -6,10 +6,11 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-policy.js";
+import { resolveCronJobGrantDefinitionRevision } from "../cron/store/job-config-codec.js";
 import {
   loadedCronStoreFromRows,
   resolveCronJobGrantDefinitionGenerationFloor,
-  resolveCronJobGrantDefinitionRevision,
 } from "../cron/store/row-codec.js";
 import { readCronRunReceiptCurrentFactsInDatabase } from "../cron/store/run-receipt-read.js";
 import type { CronStoredJob } from "../cron/types.js";
@@ -18,11 +19,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -76,6 +78,10 @@ const installStandingGrantSchema = createSqliteSchemaEnsurer(() => STANDING_GRAN
 });
 
 function ensureStandingGrantSchema(db: EngineConnection): void {
+  if (isPostgresSqlConnection(db)) {
+    ensureStatePostgresFragment(db, STANDING_GRANT_TABLE);
+    return;
+  }
   const ddl = getAdmittedSqliteSchemaFacts(db)?.tableSql.get(STANDING_GRANT_TABLE);
   // This retired, unshipped shape is recognized from admission's existing DDL facts.
   if (ddl && /\bexpires_at_ms\s+INTEGER\s+NOT\s+NULL\b/iu.test(ddl)) {
@@ -103,6 +109,17 @@ export function migrateCronInferenceStandingGrantReferences(
   }
   maintenance.assertAdmission();
   const { inferenceBinding, ...unchanged } = next;
+  const source = previous.operatorSource;
+  if (
+    source?.executionRevision === resolveCronOperatorExecutionRevision(previous) &&
+    isDeepStrictEqual(next.operatorSource, {
+      ...source,
+      executionRevision: resolveCronOperatorExecutionRevision(next),
+    })
+  ) {
+    // Doctor may update only the derivative revision, never the captured authority.
+    unchanged.operatorSource = source;
+  }
   if (
     previous.inferenceBinding !== undefined ||
     !inferenceBinding ||

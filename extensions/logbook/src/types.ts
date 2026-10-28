@@ -32,17 +32,11 @@ export type LogbookObservation = {
   text: string;
 };
 
-export type LogbookDistraction = {
-  startMs: number;
-  endMs: number;
+export type LogbookDistraction = Pick<LogbookObservation, "startMs" | "endMs"> & {
   title: string;
 };
 
-export type LogbookCard = {
-  id: number;
-  day: string;
-  startMs: number;
-  endMs: number;
+export type LogbookCard = Pick<LogbookObservation, "id" | "day" | "startMs" | "endMs"> & {
   title: string;
   summary: string;
   detail: string;
@@ -53,7 +47,7 @@ export type LogbookCard = {
   keyframeId?: number;
 };
 
-export type LogbookCardDraft = Omit<LogbookCard, "id">;
+export type LogbookCardDraft = Omit<LogbookCard, "id" | "keyframeId">;
 
 export type LogbookDayStats = {
   trackedMs: number;

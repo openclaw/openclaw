@@ -194,6 +194,14 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
       expect(firstContent(toolResult).text).toBe(
         typeof rawResult === "string" ? rawResult : JSON.stringify(rawResult, null, 2),
       );
+      const result = events.result();
+      expect(result.toolMetas).toEqual([
+        expect.objectContaining({ toolName: "apply_patch", isError: !native }),
+      ]);
+      expect(result.replayMetadata).toEqual({
+        hadPotentialSideEffects: native,
+        replaySafe: !native,
+      });
     },
   );
 
@@ -237,6 +245,14 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
       const call = firstContent(messages[0]);
       expect(call).toMatchObject({ type: "toolCall", id: callId, name: "bash" });
       expect(call.arguments).toEqual({ command: args.cmd, cwd: args.workdir });
+      const result = events.result();
+      expect(result.toolMetas).toEqual([
+        expect.objectContaining({ toolName: "bash", isError: true }),
+      ]);
+      expect(result.replayMetadata).toEqual({
+        hadPotentialSideEffects: mode !== "direct rejection",
+        replaySafe: mode === "direct rejection",
+      });
       const toolResult = requireRecord(messages[1], "native exec result");
       expect(toolResult).toMatchObject({
         role: "toolResult",

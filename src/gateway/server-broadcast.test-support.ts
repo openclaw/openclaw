@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { vi } from "vitest";
 import { WebSocket } from "ws";
+import type { SerializedGatewayFrame } from "./serialized-json.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -20,7 +21,7 @@ export const eventFrame = (
   extra: { recipientProfileId?: string; stateVersion?: GatewayBroadcastOpts["stateVersion"] } = {},
 ) => ({ type: "event", event, payload, seq, ...extra });
 type Send = (
-  wire: string | Buffer,
+  wire: string | Buffer | SerializedGatewayFrame,
   options?: { binary: false } | ((error?: Error) => void),
   callback?: (error?: Error) => void,
 ) => void;
@@ -32,9 +33,11 @@ export function createBroadcastPeer<Payload = unknown>(
 ) {
   const callbacks: Array<(error?: Error) => void> = [];
   const frames: BroadcastFrame<Payload>[] = [];
-  const socket = Object.assign(new EventEmitter(), {
+  const socketState: { readyState: WebSocket["readyState"]; bufferedAmount: number } = {
     readyState: WebSocket.OPEN,
     bufferedAmount: 0,
+  };
+  const socket = Object.assign(new EventEmitter(), socketState, {
     close: vi.fn(),
     terminate: vi.fn(),
     send: vi.fn<Send>((wire, options, callback) => {

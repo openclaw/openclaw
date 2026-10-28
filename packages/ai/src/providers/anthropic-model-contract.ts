@@ -23,6 +23,7 @@ import type { AnthropicEffort } from "../provider-options.js";
 import type {
   Context,
   Model,
+  ModelRequestHeaders,
   ModelThinkingLevel,
   SimpleStreamOptions,
   StopReason,
@@ -54,7 +55,7 @@ export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.280";
 /** Build OAuth headers and the matching billing identity from one request snapshot. */
 export function buildAnthropicClaudeCodeIdentity(
   betaHeader: string | undefined,
-  ...headerSources: (Record<string, string> | undefined)[]
+  ...headerSources: (ModelRequestHeaders | undefined)[]
 ): { headers: Record<string, string>; version: string } {
   const headers = new Headers({
     accept: "application/json",
@@ -64,7 +65,11 @@ export function buildAnthropicClaudeCodeIdentity(
   });
   for (const source of headerSources) {
     for (const [name, value] of Object.entries(source ?? {})) {
-      headers.set(name, value);
+      if (value === null) {
+        headers.delete(name);
+      } else {
+        headers.set(name, value);
+      }
     }
   }
   let version = ANTHROPIC_CLAUDE_CODE_VERSION;
@@ -261,15 +266,13 @@ export function prepareClaudeNoPrefillRequestContext(model: Model, context: Cont
     : { ...context, messages: context.messages.slice(0, end) };
 }
 
-type ClaudeSamplingRequestParams = {
-  temperature?: unknown;
-  top_p?: unknown;
-  top_k?: unknown;
-  service_tier?: unknown;
-};
-
 export function applyClaudeRequestContract(
-  params: ClaudeSamplingRequestParams,
+  params: {
+    temperature?: unknown;
+    top_p?: unknown;
+    top_k?: unknown;
+    service_tier?: unknown;
+  },
   model: {
     id?: string;
     params?: Record<string, unknown>;

@@ -105,9 +105,9 @@ export const authProfileOperations = {
     { open, stateOptions },
   ) => {
     const database = open();
+    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const result = enrollAuthProfileAuthorizationInDatabase(db, "shared-state", input);
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         return result;
@@ -166,17 +166,21 @@ export const authProfileOperations = {
       stateOptions(),
       { operationLabel: "auth-profiles.update" },
     ),
-  "authProfiles.usage": (input: AuthProfileUsageInput, { stateOptions }): AuthProfileUsageResult =>
-    runOpenClawStateWriteTransaction(
+  "authProfiles.usage": (
+    input: AuthProfileUsageInput,
+    { stateOptions },
+  ): AuthProfileUsageResult => {
+    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+    return runOpenClawStateWriteTransaction(
       ({ db, path }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const receipt = recordAuthProfileUsageInDatabase(db, path, "shared-state", input);
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         return { ok: true, receipt };
       },
       stateOptions(),
       { operationLabel: "auth-profiles.usage" },
-    ),
+    );
+  },
   "authProfiles.personalUsage": (
     input: { profileId: string; reduction: PersonalAuthProfileUsageReduction },
     { stateOptions },

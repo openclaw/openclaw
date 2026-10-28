@@ -76,13 +76,11 @@ export function isStreamErrorFallbackContent(content: unknown): boolean {
 export const FAILED_ASSISTANT_REPLAY_TEXT =
   "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
 
-type FailedAssistantReplay = "keep" | "drop" | "marker";
-
 /** Classify failed source content before model-specific thinking or tool projection. */
 export function resolveFailedAssistantReplay(
   message: AssistantTurnLike,
   options: { pairingAware: boolean },
-): FailedAssistantReplay {
+): "keep" | "drop" | "marker" {
   if (
     message.role !== "assistant" ||
     (message.stopReason !== "error" && message.stopReason !== "aborted")

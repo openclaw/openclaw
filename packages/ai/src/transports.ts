@@ -46,7 +46,3 @@ export {
   projectGoogleMessages,
   requiresGoogleToolCallId,
 } from "./providers/google-messages.js";
-export {
-  buildGoogleGenerationConfig,
-  buildGoogleSimpleThinking,
-} from "./providers/google-shared.js";

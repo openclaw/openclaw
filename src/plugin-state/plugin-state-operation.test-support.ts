@@ -6,6 +6,7 @@ import type {
 
 export type FixtureOperations = {
   read: { input: { store: number; key: string }; output: { value: unknown; threadId: number } };
+  entries: { input: undefined; output: unknown[] };
   move: {
     input: { value: string };
     output: { before: unknown[]; after: unknown[]; threadId: number };
@@ -18,6 +19,8 @@ export const execute: PluginStateOperationHandler<FixtureOperations> = (command,
   switch (command.type) {
     case "read":
       return { value: tx.lookup(command.input.store, command.input.key), threadId };
+    case "entries":
+      return [tx.entries(1), tx.entries(0)];
     case "move": {
       const before = tx.lookupMany([
         { store: 0, key: "key" },

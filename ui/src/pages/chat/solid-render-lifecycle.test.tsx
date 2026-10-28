@@ -5,10 +5,10 @@ import { ValueSignal } from "../../lib/board/provider-signals.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { createSolidRenderLifecycle, type SolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 
-afterEach(() => {
-  cleanup();
-  vi.unstubAllGlobals();
-});
+afterEach(cleanup);
+
+const calls = (...spies: { mock: { calls: unknown[][] } }[]) =>
+  spies.map((spy) => spy.mock.calls.length);
 
 function mountPane(
   initiallyPresented = true,
@@ -16,8 +16,8 @@ function mountPane(
 ) {
   const source = new ValueSignal({ text: "initial" });
   const subscribe = vi.spyOn(source, "subscribe");
-  const release = vi.fn();
-  const read = vi.fn();
+  const release = vi.fn((stop: () => void) => stop());
+  const read = vi.fn((value: { text: string }) => ({ text: value.text }));
   let lifecycle!: SolidRenderLifecycle<{ text: string }>;
   let present!: (value: boolean) => void;
   const view = render(() => {
@@ -27,21 +27,14 @@ function mountPane(
       read: (owner) => owner.value,
       subscribe: (owner, notify) => {
         const stop = owner.subscribe(notify);
-        return () => {
-          release();
-          stop();
-        };
+        return () => release(stop);
       },
       equality: "revision",
     });
     lifecycle = createSolidRenderLifecycle({
       host: source,
       presented,
-      read: () => {
-        read();
-        // Presentation owns this immutable view; the domain object stays mutable.
-        return { text: projection.read().text };
-      },
+      read: () => read(projection.read()),
     });
     onCreate?.(lifecycle);
     return <output>{lifecycle.snapshot().text}</output>;
@@ -53,9 +46,7 @@ function mountPane(
 it("accepts after-commit registration during component setup", () => {
   const observed: Array<string | null | undefined> = [];
   mountPane(true, (lifecycle) => {
-    lifecycle.afterCommit(() => {
-      observed.push(document.querySelector("output")?.textContent);
-    });
+    lifecycle.afterCommit(() => void observed.push(document.querySelector("output")?.textContent));
   });
   expect(observed).toEqual(["initial"]);
 });
@@ -84,13 +75,9 @@ it("runs batched callbacks after their DOM commit and fences reentrant requests"
   lifecycle.afterCommit(() => {
     observed.push(view.container.textContent);
     source.set({ text: "next commit" });
-    lifecycle.afterCommit(() => {
-      observed.push(view.container.textContent);
-    });
+    lifecycle.afterCommit(() => void observed.push(view.container.textContent));
   });
-  lifecycle.afterCommit(() => {
-    observed.push(view.container.textContent);
-  });
+  lifecycle.afterCommit(() => void observed.push(view.container.textContent));
   expect(observed).toEqual([]);
   flush();
   expect(observed).toEqual(["committed", "committed", "next commit"]);
@@ -117,15 +104,13 @@ it.each([true, false])(
       lifecycle.invalidate();
       flush();
     }
-    expect(read).toHaveBeenCalledTimes(reads);
-    expect(committed).not.toHaveBeenCalled();
+    expect(calls(read, committed)).toEqual([reads, 0]);
     expect(view.container.textContent).toBe("initial");
     present(true);
     flush();
-    expect(read).toHaveBeenCalledTimes(reads + 1);
+    expect(calls(read, committed)).toEqual([reads + 1, 1]);
     expect(view.container.textContent).toBe("hidden 4");
     expect(view.container.querySelector("output")).toBe(output);
-    expect(committed).toHaveBeenCalledOnce();
     view.unmount();
     const retiredReads = read.mock.calls.length;
     source.set({ text: "retired" });
@@ -142,8 +127,7 @@ it("owns deferred cleanup until completion, cancellation, parking, or disposal",
   cancel();
   cancel();
   flush();
-  expect(cancelled).toHaveBeenCalledOnce();
-  expect(neverRun).not.toHaveBeenCalled();
+  expect(calls(cancelled, neverRun)).toEqual([1, 0]);
 
   const finished = vi.fn();
   lifecycle.afterCommit((complete) => {
@@ -153,8 +137,7 @@ it("owns deferred cleanup until completion, cancellation, parking, or disposal",
   const parked = vi.fn();
   lifecycle.afterCommit(() => parked);
   flush();
-  expect(finished).toHaveBeenCalledOnce();
-  expect(parked).not.toHaveBeenCalled();
+  expect(calls(finished, parked)).toEqual([1, 0]);
   present(false);
   flush();
   expect(parked).toHaveBeenCalledOnce();
@@ -164,8 +147,5 @@ it("owns deferred cleanup until completion, cancellation, parking, or disposal",
   lifecycle.invalidate();
   lifecycle.afterCommit(neverRun, cancelled);
   flush();
-  expect(cancelled).toHaveBeenCalledTimes(3);
-  expect(neverRun).not.toHaveBeenCalled();
-  expect(finished).toHaveBeenCalledOnce();
-  expect(parked).toHaveBeenCalledOnce();
+  expect(calls(cancelled, neverRun, finished, parked)).toEqual([3, 0, 1, 1]);
 });

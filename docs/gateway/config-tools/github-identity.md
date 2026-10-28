@@ -102,6 +102,138 @@ The default sandbox tool policy also allows `github_publish` in managed Gateway 
 
 Publication may wait until the requesting turn finishes and its workspace is accepted. Its result is appended to the session transcript; this does not start another agent turn. When the authorized task also includes review, CI repair, or landing, the agent must arrange a separate continuation before ending the requesting turn. A draft PR or publication receipt does not complete a landing request.
 
+Use `github_publish` with `action: "inspect_pr"` and `pullRequestUrl` to inspect
+an existing PR authored by a currently verified GitHub account linked to the
+requesting person. The URL must name a PR on the configured GitHub host. Copied
+Files, Commits and Checks links, query strings and comment or review anchors
+resolve to the same canonical PR. The Gateway checks numeric account identity, current session access and the selected
+shared publisher. A private repository also requires current repository access
+for the linked account; shared credentials alone do not grant that access.
+
+Inspection returns the canonical PR URL, author, state, base and head repository
+IDs, branches and observed commits. Closed and merged PRs retain their state;
+a deleted head repository returns a null head. Later operations must check their
+own write eligibility, current authority and head state before making changes.
+
+This action makes no GitHub or workspace writes, creates no publication receipt,
+and does not bind or prepare the PR in the conversation. Its result is data,
+not authority for another action. The separate `inspect` action below keeps its
+existing full-operator and session-publication requirements.
+
+Do not use `inspect_pr` as a credential preflight for the managed publisher.
+A PR authored by that publisher is not necessarily authored by an account linked
+to the requesting person. For the current conversation's existing publication,
+read metadata with `edit` without a title or body. For new work, use `publish`;
+it checks the selected publisher at the publication boundary. A bot-authored PR
+from another conversation is not eligible for own-PR import just because the
+publisher created it; continue in its original publication conversation.
+
+To continue that PR in the same local conversation, use `github_publish` with
+`action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in
+sessions with a writable managed sandbox or an ordinary local Docker or Podman
+sandbox; sessions that run directly on the host do not see it. A separate
+inspection call is
+optional: preparation verifies the current linked author, repository access,
+original head and publisher write eligibility again. The request can be made in
+one message or established earlier in the conversation before the URL arrives.
+An explicitly empty managed workspace can receive the PR without selecting a
+project first. Existing managed projects must match the PR's head or base
+repository.
+
+An ordinary conversation without a project ends its active turn, prepares a new
+session-owned workspace, and resumes in the same conversation. Existing files
+stay in their original source; earlier message links open them read-only,
+including downloads and relative HTML assets. The Files panel shows the current
+PR workspace. Sibling conversations keep their original source. Open editors
+from before the transition cannot overwrite a same-named PR file; reopen the
+current file before saving.
+
+Queued input, background commands or unread results, pending children, terminals,
+and remote workspace work prevent adoption. Preparation preserves that work and
+asks you to finish or observe it before retrying; it does not cancel or drain it.
+Input already being prepared retains its original source. New input after
+adoption uses the PR workspace.
+
+Initial preparation of an already managed workspace requires a clean workspace without dirty, untracked, or
+unpublished work. Otherwise it preserves that work and asks you to keep or finish
+it separately before continuing. A clean workspace receives exactly the verified
+PR head's files, even when the selected project's base is newer. Preparation
+keeps an already managed directory and sandbox scope, and records the original PR
+association. The sandbox's current branch and HEAD remain intact; the source
+files are staged for work on the PR.
+
+The conversation's PR display follows the prepared original PR, even before a
+new publication. It reads the PR's current status without implying that a newer
+remote head has been imported. A changed or inaccessible association clears the
+previous card. Guests can read only their own prepared PR in their own authorized
+conversation, using their current verified GitHub identity and repository access.
+This does not grant general GitHub browsing or additional write actions. Private
+PR metadata and CI details use the same trusted identity as the own-PR check.
+Ordinary temporary GitHub failures retain the same association's last verified
+status with a warning; a failed own-PR authorization clears it.
+
+Repeating a completed preparation of the same head preserves later edits without
+resetting or synchronizing source files. An explicit refresh adopts the PR's
+current destination and updates its review comparison, including after its base
+branch changes. A destination-only change preserves staged and unstaged edits,
+local commits, and the original PR head; it does not merge the destination into
+that head or change GitHub's selected base. The agent uses the user's intent to
+continue recoverable work and asks a focused question when the intended change
+is materially ambiguous. `inspect_pr` supplies current branch and commit facts
+when needed; restoring the old destination is not a prerequisite.
+If the remote PR head has advanced,
+an explicit refresh with `prepare_pr` integrates that head and preserves subsequent
+guest work. Resolve returned `conflictPaths`, then repeat with
+`conflictsResolved: true` and `expectedHeadCommit` set to the returned `headCommit`.
+If a file has both staged and unstaged changes, commit its staged changes first;
+refresh refuses that case so its index-only version is not lost. The returned review base is the common ancestor of the accepted PR
+head and its base, so an older PR head does not make newer base work appear to be
+deleted.
+
+An interrupted preparation retains the same accepted source for retry while
+reconciling the current destination for its review comparison.
+If recovery returns `headChanged: true`, it completed that original accepted
+head while GitHub has since advanced; repeat preparation to integrate the newer
+head. Preparation makes no GitHub writes
+and is not a publication receipt.
+
+After preparation, ordinary shared publication appends changes to the original
+PR's head repository and branch. It preserves the PR number, author, existing
+commits, discussion and draft state, including an update that reverts the original
+contribution completely. The Gateway rechecks the linked author,
+repository access, publisher permission and remote head before pushing. A fork
+can use GitHub's maintainer-edit permission without granting the publisher direct
+write access to the fork. Publisher credentials remain outside the sandbox.
+
+A remote change not already accepted through preparation or an earlier successful
+publication refuses the update and preserves local work until preparation
+integrates it. An interrupted push is
+reconciled against its original commit and PR before another write; it never
+creates a replacement PR. When confirmation is pending, the accepted request
+retains its `requestId` and `requested` or `publishing` status. Finish the turn
+and await that request's result in the conversation; do not submit another
+publication to recover it. Inspecting the remote PR does not settle the
+publication receipt. The Gateway's existing recovery continues the original
+request and reports its result without starting another agent turn.
+
+After preparation, existing metadata, readiness, fixed re-review and evidence
+actions select the original bound PR, including before any new push and when an
+older publication exists in the conversation. Read it with `edit` first. Its
+result includes `pullRequest` (URL, repository and branch), rather than claiming
+that preparation produced a `publication` receipt. For these imported actions,
+send the observed `expectedHeadCommit` without `requestId`; receipt-backed actions
+still require their publication's `requestId`. Every guest action rechecks the
+current linked author and private repository access. Writes also recheck current
+head and publisher eligibility; a changed target or authority refuses the action.
+
+Full-write operators can inspect, close or merge the bound original PR through
+the same existing actions and head preconditions, without linking the guest's
+GitHub identity to their own account. Existing child-session selection and guest
+restrictions remain in force. Preparation does not grant merge or close access,
+and an administrator joining does not elevate later guest turns.
+Keep the updated Gateway when continuing an imported workspace; older versions
+do not understand this association.
+
 Use `github_publish` with `action: "edit"` to change the current session's shared
 PR title or description without publishing source. Call it without `title`/`body`
 to read the current metadata, then send `requestId`, `expectedHeadCommit`, and only
@@ -141,7 +273,9 @@ or merged PRs reject this operation; publisher credentials remain on the Gateway
 
 Use `github_publish` with `action: "upload_evidence"` to upload inspected image or
 video proof from the current conversation's sandbox workspace to its existing
-shared GitHub.com PR. Read the PR with `edit`, then supply its `requestId` and
+shared GitHub.com PR. This action is offered only in active sandboxed sessions
+that can verify file provenance. Read the PR with `edit`, then supply its
+`requestId` and
 `expectedHeadCommit`, plus `evidence` containing a workspace-relative `path`, the
 inspected lowercase `sha256`, and `sizeBytes`. Inspect and redact the media before
 uploading. PNG, JPEG, GIF, WebP, MP4, MOV and WebM files up to 10 MB are supported;
@@ -159,13 +293,13 @@ reconcile the original attachment before requesting another transfer.
 If upload authority changes after the request begins, the denial also warns that
 an attachment may already exist.
 
-A person with full operator write access can request landing in the same conversation, including a guest-created sandboxed session. The agent uses `github_publish` with `action: "inspect"` to read the session's completed shared publication and its current GitHub state. After review and required checks, `action: "ready"` marks its draft ready and `action: "merge"` merges it. To close the PR without merging, use `action: "close"` after inspection. All three writes require the inspected `requestId` and `expectedHeadCommit`; merge also requires an explicit `mergeMethod` (`merge`, `squash`, or `rebase`). GitHub still enforces repository permissions and merge requirements. These operations do not enable auto-merge or delete the branch, workspace, or conversation.
+A person with full operator write access can request landing in the same conversation, including a guest-created sandboxed session. The agent uses `github_publish` with `action: "inspect"` to read the session's completed shared publication and its current GitHub state. After review and required checks, `action: "ready"` marks its draft ready and `action: "merge"` merges it. To close the PR without merging, use `action: "close"` after inspection. All three writes require the inspected `expectedHeadCommit` and, for a publication receipt, its `requestId`; merge also requires an explicit `mergeMethod` (`merge`, `squash`, or `rebase`). GitHub still enforces repository permissions and merge requirements. These operations do not enable auto-merge or delete the branch, workspace, or conversation.
 
 Squash landing uses the current PR title read by the merge action as the commit subject, including for a one-commit PR whose original subject differs. Contributor trailers remain in the commit body. Merge and rebase methods retain GitHub's existing commit-message behavior.
 
 For delegated work, the agent must explicitly select the child's `publishingSessionKey`. An authorized person's managed parent conversation receives these PR actions even when its own workspace is ineligible for publication; publishing from that parent remains unavailable. The Gateway verifies that the publishing session belongs to this conversation and binds the operation to its recorded PR. A changed publication or GitHub head requires another inspection and review. If an action's response is interrupted, inspect the same publication before retrying; already-ready, already-merged, or already-closed requests return their observed state without another write. Closing preserves the branch, workspace, and conversation history; it does not reopen a closed PR. Failed checks or unavailable credentials leave the saved work intact.
 
-Only a current full-write person's tool schema and instructions expose privileged inspection, merging, closing and child selection. Guest turns retain their own publication, current-PR metadata editing and readiness, including after admin participation in the conversation. Each action also rechecks the initiating person's current authority at the Gateway. Admin participation does not elevate the session or later guest requests, and publication never grants merge authority. The Gateway keeps the publisher credentials and executes only the requested operation; the agent remains responsible for review, testing, and sequencing the landing request.
+The tool schema and instructions stay stable across turns, including privileged inspection, merging, closing and child selection. For agent tool calls, those actions require the initiating person's current full operator write authority at execution; internal System scopes alone do not grant it. Guest turns retain their own publication, current-PR metadata editing and readiness, including after admin participation in the conversation. Each action rechecks the initiating person's current authority at the Gateway. Admin participation does not elevate the session or later guest requests, and publication never grants merge authority. The Gateway keeps the publisher credentials and executes only the requested operation; the agent remains responsible for review, testing, and sequencing the landing request.
 
 The Gateway prepares the shared identity for worker launch in the background when a session requests it, and refreshes observed sessions after GitHub configuration, credential, or workspace changes. Idle session rows do not trigger credential discovery. Worker turns consume the last prepared result without waiting; removing a workspace binding retires its old fact. Worker launch still validates current identity authority before attaching any credential.
 
@@ -177,15 +311,21 @@ Publication stages workspace changes with ordinary Git attribute conversion. It 
 
 Session-only write access can publish ordinary source changes from the requester's own sessions through the configured shared account. Membership in another session does not grant that publication authority. Changes to GitHub Actions definitions in `.github/workflows/*.yml` or `.github/workflows/*.yaml` require the original requester's full operator write authority. This includes committed edits, deletions, and renames. If an accepted snapshot changes those definitions, publication preserves the saved work and asks a maintainer to publish it, or asks the requester to restore the definitions before requesting publication again. The check compares exact paths, modes, and blobs (including deleted definitions) with the published branch or original pull request base. Unchanged published definitions remain allowed. An update inherited unchanged from the authenticated target branch is also allowed when the published definition still matches their unambiguous common ancestor. Newly authored changes and conflicting resolutions still require full write authority, even when the result matches the target branch. Repository-only checkpoints cannot prove unambiguous inheritance from a source base that has diverged from the target, or infer a merge from previously copied workflow contents; those ambiguous updates still require a maintainer.
 
+This is an OpenClaw requester-permission check, not a GitHub token-scope check. Reconnecting the publisher or granting its token additional scopes does not grant the requester full operator write authority.
+
 This check covers only workflow definition files. Workflows commonly run code from the pull request branch, such as package scripts, local actions under `.github/actions/`, and repository scripts. When the checkout's `origin` is the upstream repository, publication pushes the session branch into that repository, and its `pull_request` workflows run with repository secrets. If people with session-only access publish, point the checkout's `origin` at a fork owned by the shared account. Publication then pushes to the fork and opens a pull request against the parent repository's default branch, and the shared account no longer needs write access upstream for publication. By default, GitHub withholds repository secrets from `pull_request` workflows triggered by forks. That isolation does not hold when a private repository sends secrets to fork pull requests, or for `pull_request_target` workflows that run pull request code; review those workflows separately. Publication creates open pull requests by default, or drafts when explicitly requested. It never merges, approves, or changes the state of an existing pull request. Same-conversation landing requires the shared account to have merge access to the PR's base repository. Protect that base branch with required reviews and checks, without granting the shared account bypass permission. A publication-only account can remain unable to merge.
 
 Local session-owned worktrees can use the same **Publish PR** action in the Control UI. The Gateway derives the managed worktree, repository, branch, base, and head from current session ownership. It never accepts those authority facts from the browser or model. Publication retries use a durable request ID, an exact commit marker, remote branch observation, and pull-request lookup by head branch so a Gateway restart or lost response does not create duplicate commits, pushes, or pull requests.
+
+Automatic shared-publication recovery backs off after an unresolved attempt: one minute, then two, four, eight, sixteen, and at most one attempt every thirty minutes. Each request has its own cooldown; an unsettled request still prevents later requests from overtaking it in the same worktree. The cooldown and latest diagnostic are held in memory and reset when the Gateway restarts. The durable publication receipt and recorded effects remain unchanged.
+
+During cooldown, publication status includes the remaining wait and the latest failure. Base-fetch failures include bounded, redacted Git diagnostics in status and the recovery warning. Inspect the original branch and PR, repair the reported access, connectivity, or Git-object problem, and let recovery reconcile the existing request. A failed observation does not establish that a push or PR creation failed; do not request a replacement publication to recover it.
 
 During publication, an accepted PR response still completes its owned receipt if the requesting connection closes or publication permission ends. A successful local branch update likewise finishes its matching index transaction while the execution retains workspace ownership. This settlement does not authorize another push or PR creation; unconfirmed outcomes retain their existing recovery or personal-confirmation requirements.
 
 Before creating a publication commit or changing the local branch and index, the Gateway verifies that the accepted commit shares Git history with the authenticated pull request base, and that the published branch is absent or an ancestor of the accepted local head. Recreating a local branch or expiring its reflog does not invalidate shared commit history. A failed lookup is not treated as an absent branch. A rebased, behind, or unrelated branch is rejected with recovery guidance before new local publication changes. Recovery of an already-started request-owned index transaction still runs first. The push is conditional on the exact observed remote head or branch absence, so a concurrent branch change is rejected. The broker never rewrites published history or rewrites local history automatically.
 
-To refresh an existing PR, preserve its published history and apply the intended edits on top of the published head. If rewritten history is intentional, use a new session branch and a replacement PR instead. Do not merge the old published history back merely to make a rebased branch pushable.
+To refresh an existing PR, preserve its published history and apply the intended edits on top of the published head. For an imported original PR, preserve local work until its updated source has been explicitly accepted; never create a replacement PR or redirect its publication to another branch. For ordinary session-created PRs, if rewritten history is intentional, use a new session branch and a replacement PR instead. Do not merge the old published history back merely to make a rebased branch pushable.
 
 A separate request for unchanged content reuses an owned open PR without a new commit when the remote and local heads match, the accepted index and workspace match that tree, and the head already has a publication marker and all currently required contributor trailers. First publication still creates a request-owned marker, including for already-committed work; missing contributor credit also requires a new marker. Repository-only checkpoint publication already rejects unchanged published trees as `no_changes` and extends only its recorded published head. It cannot adopt external changes to that branch; publish the intended checkpoint from a new session branch if the recorded head no longer matches. These paths retain their existing retry and provenance contracts. For title/body-only edits, update the PR text directly rather than requesting workspace publication; reusing a PR does not update its text.
 

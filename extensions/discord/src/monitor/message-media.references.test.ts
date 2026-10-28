@@ -3,8 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "../internal/discord.js";
 import { resolveMediaList, resolveReferencedReplyMediaList } from "./message-media.js";
 
-const readRemoteMediaBuffer = vi.fn();
-const saveMediaBuffer = vi.fn();
+const saveRemoteMediaMock = vi.fn();
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
@@ -12,70 +11,46 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   );
   return {
     ...actual,
-    readRemoteMediaBuffer: (...args: unknown[]) => readRemoteMediaBuffer(...args),
-    saveRemoteMedia: async (...args: unknown[]) => {
-      const fetched = await readRemoteMediaBuffer(...args);
-      const options = (args[0] ?? {}) as { maxBytes?: number; originalFilename?: string };
-      return await saveMediaBuffer(
-        Buffer.from((fetched as { buffer?: Uint8Array }).buffer ?? new Uint8Array()),
-        (fetched as { contentType?: string }).contentType,
-        "inbound",
-        options.maxBytes,
-        options.originalFilename,
-      );
-    },
-    saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
+    saveRemoteMedia: (...args: unknown[]) => saveRemoteMediaMock(...args),
   };
 });
 
-beforeEach(() => {
-  readRemoteMediaBuffer.mockReset();
-  saveMediaBuffer.mockReset();
-});
+beforeEach(() => saveRemoteMediaMock.mockReset());
 
 function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;
 }
 
-function asReferencedMessage(params: {
-  referenceType: MessageReferenceType;
-  attachments: Array<Record<string, unknown>>;
-}): Message {
+const attachment = {
+  id: "att-reply-1",
+  url: "https://cdn.discordapp.com/attachments/1/reply-image.png",
+  filename: "reply-image.png",
+  content_type: "image/png",
+};
+
+function asReferencedMessage(referenceType: MessageReferenceType): Message {
   return asMessage({
-    messageReference: { type: params.referenceType },
-    referencedMessage: asMessage({ attachments: params.attachments }),
+    messageReference: { type: referenceType },
+    referencedMessage: asMessage({ attachments: [attachment] }),
   });
+}
+
+function mockDownload(filename: string) {
+  saveRemoteMediaMock.mockResolvedValueOnce({ path: `/tmp/${filename}`, contentType: "image/png" });
 }
 
 describe("resolveReferencedReplyMediaList", () => {
   it("downloads referenced reply attachments", async () => {
-    const attachment = {
-      id: "att-reply-1",
-      url: "https://cdn.discordapp.com/attachments/1/reply-image.png",
-      filename: "reply-image.png",
-      content_type: "image/png",
-    };
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("image"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({
-      path: "/tmp/reply-image.png",
-      contentType: "image/png",
-    });
-
+    mockDownload("reply-image.png");
     const result = await resolveReferencedReplyMediaList(
-      asReferencedMessage({
-        referenceType: MessageReferenceType.Default,
-        attachments: [attachment],
-      }),
+      asReferencedMessage(MessageReferenceType.Default),
       512,
     );
 
     expect(result).toEqual([
       { path: "/tmp/reply-image.png", contentType: "image/png", fileName: "reply-image.png" },
     ]);
-    expect(readRemoteMediaBuffer).toHaveBeenCalledWith(
+    expect(saveRemoteMediaMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: attachment.url,
         filePathHint: attachment.filename,
@@ -86,33 +61,15 @@ describe("resolveReferencedReplyMediaList", () => {
 
   it("ignores forwarded references", async () => {
     const result = await resolveReferencedReplyMediaList(
-      asReferencedMessage({
-        referenceType: MessageReferenceType.Forward,
-        attachments: [
-          {
-            id: "att-forward-1",
-            url: "https://cdn.discordapp.com/attachments/1/forward.png",
-            filename: "forward.png",
-            content_type: "image/png",
-          },
-        ],
-      }),
+      asReferencedMessage(MessageReferenceType.Forward),
       512,
     );
 
     expect(result).toEqual([]);
-    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expect(saveRemoteMediaMock).not.toHaveBeenCalled();
   });
-});
-
-describe("Discord media SSRF policy", () => {
   it("merges provided ssrfPolicy with Discord CDN defaults", async () => {
-    readRemoteMediaBuffer.mockResolvedValueOnce({
-      buffer: Buffer.from("img"),
-      contentType: "image/png",
-    });
-    saveMediaBuffer.mockResolvedValueOnce({ path: "/tmp/b.png", contentType: "image/png" });
-
+    mockDownload("b.png");
     await resolveMediaList(
       asMessage({
         attachments: [{ id: "b1", url: "https://cdn.discordapp.com/b.png", filename: "b.png" }],
@@ -127,15 +84,12 @@ describe("Discord media SSRF policy", () => {
       },
     );
 
-    const call = readRemoteMediaBuffer.mock.calls[0]?.[0] as
-      | { ssrfPolicy?: Record<string, unknown> }
-      | undefined;
-    expect(call?.ssrfPolicy).toMatchObject({
-      allowPrivateNetwork: true,
-      allowRfc2544BenchmarkRange: true,
+    expect(saveRemoteMediaMock.mock.calls[0]?.[0]).toMatchObject({
+      ssrfPolicy: {
+        allowPrivateNetwork: true,
+        allowRfc2544BenchmarkRange: true,
+        hostnameAllowlist: expect.arrayContaining(["assets.example.com", "cdn.discordapp.com"]),
+      },
     });
-    expect(call?.ssrfPolicy?.hostnameAllowlist).toEqual(
-      expect.arrayContaining(["assets.example.com", "cdn.discordapp.com"]),
-    );
   });
 });

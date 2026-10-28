@@ -8,12 +8,15 @@ import type { SessionsCatalogListResult } from "../../../../packages/gateway-pro
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 import { missingSessionRouteData } from "./route-loader-session-reference.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
+
+registerSessionNavigationEnglish();
 
 function targetFromLocation(context: ApplicationContext, location: RouteLocation) {
   const search = new URLSearchParams(location.search);

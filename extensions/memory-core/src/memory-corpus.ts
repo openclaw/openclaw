@@ -145,12 +145,9 @@ export async function runMemoryCorpusDeadline<T>(params: {
 }
 
 export function composeMemoryCorpusMetadata(
-  attempts: readonly MemoryCorpusAttempt<unknown>[],
+  ordered: readonly MemoryCorpusAttempt<unknown>[],
   extraWarnings: readonly string[] = [],
 ) {
-  const ordered = attempts.toSorted(
-    (left, right) => Number(left.corpus === "wiki") - Number(right.corpus === "wiki"),
-  );
   const warnings = ordered.flatMap((attempt) => {
     const label = attempt.corpus === "memory" ? "Memory" : "Wiki";
     if ("error" in attempt) {

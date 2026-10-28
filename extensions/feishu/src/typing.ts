@@ -30,7 +30,7 @@ async function requestTypingReaction<T, R>(
     const backoffCode = getBackoffCodeFromResponse(response);
     if (backoffCode !== undefined) {
       if (getFeishuRuntime().logging.shouldLogVerbose()) {
-        runtime?.log?.(
+        runtime?.log(
           `[feishu] ${indicator} response contains backoff code ${backoffCode}, stopping keepalive`,
         );
       }
@@ -40,12 +40,12 @@ async function requestTypingReaction<T, R>(
   } catch (err) {
     if (isFeishuBackoffError(err)) {
       if (getFeishuRuntime().logging.shouldLogVerbose()) {
-        runtime?.log?.(`[feishu] ${indicator} hit rate-limit/quota, stopping keepalive`);
+        runtime?.log(`[feishu] ${indicator} hit rate-limit/quota, stopping keepalive`);
       }
       throw err;
     }
     if (getFeishuRuntime().logging.shouldLogVerbose()) {
-      runtime?.log?.(`[feishu] failed to ${operation} typing indicator: ${String(err)}`);
+      runtime?.log(`[feishu] failed to ${operation} typing indicator: ${String(err)}`);
     }
     return undefined;
   }

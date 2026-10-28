@@ -24,6 +24,7 @@ Update instructions at owner; no competing rules here.
 ## Working agreement
 
 - Follow through on actionable requests, including "can you", within authorized scope; plan or progress report = checkpoint, not completion. Preserve unaffected work across corrections and side questions.
+- After a restart, reconcile prior effects and resume already-authorized work under current authority; do not ask for the same approval again solely because the process restarted.
 - Resolve routine, reversible choices with reasonable assumptions; ask only about consequential decisions context cannot resolve. Continue independent authorized work meanwhile. Silence never authorizes gated action.
 - Skill causes pause, permission request, unfinished work, or scope change: link exact `SKILL.md`, quote instruction, explain application (requirement vs interpretation), check prior authorization before asking again.
 - Inspect `git status -sb` before editing or GitHub work. Preserve unrelated work, branches, processes, user-managed checkouts; serialize shared Git mutations; isolate work when needed. Never switch checkout another agent or test run uses.
@@ -41,6 +42,7 @@ Update instructions at owner; no competing rules here.
 - Behavior proven + required gates green: finish/land. No optional proof polish, checkbox demos, or speculative scope growth.
 - Check mergeability first; don't rebase or merge `main` just because it advanced. Integrate for conflicts, a named failing gate, or material base risk, then rerun affected checks. Prior-head CI stays prior-head evidence ([landing](.agents/skills/openclaw-pr-maintainer/references/landing.md)).
 - Time pressure never waives gates. Report concrete blockers.
+- Don't mix shell dialects (for example, zsh `${name:r}` in bash).
 - CLI: `pnpm openclaw ...` or `pnpm dev`, never `node --import tsx src/index.ts`. Never reconcile a shared/worktree install other jobs use. Dependency, vendoring, format, typecheck gotchas: [scripts guide](scripts/AGENTS.md#execution-gotchas).
 
 ## One owner, complete cutover
@@ -82,7 +84,7 @@ Update instructions at owner; no competing rules here.
 - **PR CI = broad proof.** Pre-PR: touched tests + targeted typecheck/lint/format. Proof selection, reuse, gaps: [proof policy](.agents/skills/openclaw-testing/SKILL.md#proof-policy); docs-only: docs sanity + `git diff --check`. Test changes obey the [cost budget](docs/help/testing/writing-tests.md#cost-budget).
 - **Visual changes** need inspected, sanitized before/after screenshots in chat and embedded in PR before merge or completion ([gate](.agents/skills/openclaw-pr-maintainer/references/media.md#screenshot-completion-gate)).
 - Before nontrivial code commit/landing: follow [fresh review](.agents/skills/openclaw-pr-maintainer/SKILL.md#review-and-publish).
-- **Make ClawSweeper happy.** It reviews each PR automatically once, when it opens or leaves draft. Its review is advisory. Fix every real finding in one batch on the exact head, then comment `@clawsweeper re-review` once branch, body, and proof are current. Reject findings that add restrictions without a concrete harm, and say why in the PR. A maintainer's explicit land instruction does not wait for a pending or stale review ([review flow](docs/reference/pull-request-review-flow.md#clawsweeper)).
+- **Choose one review route.** Follow [local review](docs/reference/pull-request-review-flow.md#local-review-before-a-pr) for maintainer requirements, contributor guidance, and the hosted fallback. ClawSweeper is advisory. Address real findings together and request another hosted review only when needed, after branch, body, and proof are current. Reject findings that add restrictions without concrete harm and explain why. A maintainer's explicit land instruction does not wait for a pending or stale review ([review flow](docs/reference/pull-request-review-flow.md#clawsweeper)).
 
 ## Authority and safety
 
@@ -104,6 +106,7 @@ Update instructions at owner; no competing rules here.
 - **Plugins/SDK:** [plugins](extensions/AGENTS.md), [loader](src/plugins/AGENTS.md), [SDK](src/plugin-sdk/AGENTS.md) (owns public boundary expansion, including outside callers).
 - **Channels, message tools/actions, dispatch:** [channel boundary](src/channels/AGENTS.md), [channel responsibilities](docs/plugins/sdk-channel-plugins.md).
 - **Agent tools, prompts, tool results, admission, lifecycle:** [agents](src/agents/AGENTS.md), [Gateway](src/gateway/AGENTS.md).
+- **OpenClaw and OpenClaw Foundation logos:** see the [brand kit](https://github.com/openclaw/carapace/tree/main/brand-kit).
 - **Control UI:** [UI guide](ui/AGENTS.md), including state shared with other Gateway clients. Solid code anywhere (Control UI, plugin views, Canvas hosts): read the [Solid skill](.agents/skills/solid/SKILL.md) first.
 - **Storage:** [database schemas](docs/reference/database-schemas.md) and subpages; read approval checkpoint before schema, transaction, retention, recovery changes.
 - **Config migration:** [Doctor transforms](docs/gateway/doctor/config-migrations.md), never new runtime compatibility readers.

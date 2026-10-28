@@ -21,6 +21,8 @@ export default defineSingleProviderPluginEntry({
   description: "Bundled DeepSeek provider plugin",
   manifest,
   register(api) {
+    // Search reads the prepared credential from each request, not registration config.
+    api.registerReload({ hotPrefixes: ["plugins.entries.deepseek.config.webSearch.apiKey"] });
     api.registerWebSearchProvider(createDeepSeekWebSearchProvider());
   },
   provider: {

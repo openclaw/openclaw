@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -16,14 +16,17 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
-import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import { renderControls } from "./chat-pane-session-controls.test-support.ts";
 import type { TestChatPane } from "./chat-pane.test-support.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
+import { mountChatThread } from "./components/chat-thread.test-support.ts";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
@@ -49,20 +52,72 @@ function globalSession(
 }
 
 function composerControls(state: ChatPageHost, agentDefaultModel?: string) {
-  return renderChatPaneComposerControls({
-    state,
+  return renderControls(state, {
     selectedSession: selectedChatSessionRow(state),
     agentDefaultModel,
-    modelAccess: { allowed: true, requiredScope: "operator.write" },
-    effortAccess: { allowed: true, requiredScope: "operator.write" },
     contextWindowAccess: { allowed: true, requiredScope: "operator.write" },
-    permissionAccess: { allowed: true, requiredScope: "operator.write" },
-    canSelectFull: true,
-    onModelSetup: vi.fn(),
   });
 }
 
 describe("mounted pane session event ownership", () => {
+  it("keeps completed-work metadata when the retained roster omits the observed conversation", async () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:dashboard:observed-work",
+      agentId: "main",
+      sessionId: "observed-work",
+      kind: "direct",
+      label: "Observed work",
+      status: "done",
+      lastRunId: "work-run",
+      runtimeMs: 180_000,
+    };
+    const history = {
+      sessionId: row.sessionId,
+      sessionInfo: row,
+      messages: [
+        {
+          role: "user",
+          content: "Review the report",
+          timestamp: 1_000,
+          __openclaw: { id: "request" },
+        },
+        {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "read-report",
+          runId: "work-run",
+          content: "Report read",
+          timestamp: 2_000,
+        },
+        { role: "assistant", runId: "work-run", content: "Report reviewed", timestamp: 3_000 },
+      ],
+    };
+    const { context, mount } = createMountedPanes([row], "main", undefined, {
+      "chat.history": async () => history,
+      "chat.startup": async () => history,
+    });
+    const pane = mount(row.key);
+    await refreshPane(pane);
+    vi.spyOn(context.sessions, "presentation", "get").mockReturnValue({
+      result: sessionsResult([], 1),
+      agentId: "main",
+    });
+    pane.state.sessionsResult = context.sessions.presentation.result;
+    const layout = pane.render().layout;
+    assert(layout, "Expected chat layout");
+    const transcript = createTestTranscript();
+    const view = mountChatThread({ ...layout.primary.chat, showToolCalls: true }, transcript);
+    onTestFinished(() => {
+      view.unmount();
+      transcript.dispose();
+    });
+    transcript.start();
+    await flushDeferredRowPrune();
+    expect(layout.primary.chat.selectedSession?.lastRunId).toBe("work-run");
+    expect(layout.primary.chat.selectedSession?.runtimeMs).toBe(180_000);
+    expect(view.container.querySelector(".chat-activity-group__label")?.textContent).toBe("Worked");
+  });
+
   it("retires Talk on a provider pause and prevents it from starting again", async () => {
     const row: GatewaySessionRow = {
       key: "agent:main:provider-pause",
@@ -612,7 +667,8 @@ describe("mounted pane session event ownership", () => {
           content: [{ type: "text", text: "The newer run continues." }],
         },
       });
-      expect(continuing.state.chatStream).toBe("The newer run continues.");
+      await vi.dynamicImportSettled();
+      await expect.poll(() => continuing.state.chatStream).toBe("The newer run continues.");
       holdLaterReads = true;
       emitGatewayEvent("chat", {
         sessionKey: "global",

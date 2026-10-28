@@ -12,6 +12,8 @@ type ComposerTextareaResizeObserverState = {
   height: number;
   nativeInputPending: boolean;
   hasScrollbarGutter: boolean;
+  // Width a forced scrollbar takes from this textarea; null until first overflow.
+  scrollbarWidth: number | null;
   editing: boolean;
   getTranscriptElement: () => HTMLElement | null;
 };
@@ -152,10 +154,46 @@ function scheduleNativeTextareaOverflow(el: HTMLTextAreaElement) {
   }
   state.overflowFrame = requestAnimationFrame(() => {
     state.overflowFrame = null;
-    if (el.isConnected && composerTextareaResizeObservers.get(el) === state) {
+    if (
+      el.isConnected &&
+      !el.closest("[inert], [hidden]") &&
+      composerTextareaResizeObservers.get(el) === state
+    ) {
       updateTextareaOverflow(el, false);
     }
   });
+}
+
+// Scrollable drafts trade end padding for a native gutter of the same width,
+// keeping text width constant. WebKit reserves `scrollbar-gutter: stable` only
+// while a scrollbar is shown, and overlay scrollbars reserve nothing, so the
+// trade would widen the text, remove the overflow and undo itself every frame.
+// A forced scrollbar makes the gutter real; overlay platforms keep the padding.
+function setTextareaScrollbarGutter(
+  el: HTMLTextAreaElement,
+  scrollable: boolean,
+  state: ComposerTextareaResizeObserverState | undefined,
+) {
+  const reserveGutter = scrollable && state?.scrollbarWidth !== 0;
+  const overflow = reserveGutter ? "scroll" : scrollable ? "auto" : "hidden";
+  if (el.style.overflowY !== overflow) {
+    el.style.overflowY = overflow;
+  }
+  el.toggleAttribute("data-composer-scrollable", reserveGutter);
+  if (!reserveGutter || !state || state.scrollbarWidth !== null) {
+    return;
+  }
+  // The scrollbar width is fixed per platform and stylesheet: measure it once.
+  const style = getComputedStyle(el);
+  state.scrollbarWidth =
+    el.offsetWidth -
+    el.clientWidth -
+    Number.parseFloat(style.borderLeftWidth) -
+    Number.parseFloat(style.borderRightWidth);
+  if (state.scrollbarWidth === 0) {
+    el.style.overflowY = "auto";
+    el.removeAttribute("data-composer-scrollable");
+  }
 }
 
 function updateTextareaOverflow(
@@ -182,20 +220,19 @@ function updateTextareaOverflow(
     scrollable && clientHeight >= 64 && !composerTextareaResizeObservers.get(el)?.editing;
   const fadeTop = canFade && el.scrollTop > 1;
   const fadeBottom = canFade && el.scrollTop + clientHeight < scrollHeight - 1;
-  const overflow = scrollable ? "auto" : "hidden";
-  if (el.style.overflowY !== overflow) {
-    el.style.overflowY = overflow;
-  }
+  const state = composerTextareaResizeObservers.get(el);
+  setTextareaScrollbarGutter(el, scrollable, state);
   el.toggleAttribute("data-scroll-fade-top", fadeTop);
   el.toggleAttribute("data-scroll-fade-bottom", fadeBottom);
-  const state = composerTextareaResizeObservers.get(el);
   if (state) {
     state.hasScrollbarGutter = false;
     if (scrollable && hasNativeTextareaContentSizing(el)) {
       const style = getComputedStyle(el);
+      // Hiding a reserved gutter cannot free width for intrinsic sizing.
       state.hasScrollbarGutter =
+        !style.getPropertyValue("scrollbar-gutter").includes("stable") &&
         el.offsetWidth - el.clientWidth >
-        Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.borderRightWidth);
+          Number.parseFloat(style.borderLeftWidth) + Number.parseFloat(style.borderRightWidth);
     }
     const changed = state.height !== clientHeight;
     state.height = clientHeight;
@@ -220,6 +257,7 @@ export function adjustTextareaHeight(
   if (el.closest('[data-composer-layout="single-line"]')) {
     el.style.height = "";
     el.style.overflowY = "";
+    el.removeAttribute("data-composer-scrollable");
     el.removeAttribute("data-scroll-fade-top");
     el.removeAttribute("data-scroll-fade-bottom");
     return;
@@ -332,6 +370,7 @@ export function observeTextareaOverflow(
     height: el.clientHeight,
     nativeInputPending: false,
     hasScrollbarGutter: false,
+    scrollbarWidth: null,
     editing: false,
     getTranscriptElement,
   };
@@ -386,7 +425,13 @@ export function handleTextareaOverflowInteraction(event: TextareaEvent) {
     // scrolling can move an ancestor. This signal performs no layout reads.
     invalidateNativeTextareaLayout(el, state);
   }
-  updateTextareaOverflow(el);
+  // Navigation can blur the field while hiding its retained route. Its fades
+  // need no synchronous layout; a reveal's resize observation restores them.
+  if (event.type === "blur") {
+    scheduleNativeTextareaOverflow(el);
+  } else {
+    updateTextareaOverflow(el);
+  }
 }
 
 export function handleTextareaOverflowScroll(event: TextareaEvent) {
@@ -429,26 +474,27 @@ export function focusComposerFromChrome(
   if (!(target instanceof Element)) {
     return;
   }
-  if (event.type === "pointerdown") {
-    // Cancel only pointer focus; click and popover-owned focus still run.
-    if (event.button === 0 && target.closest("summary, .oc-menu-trigger")) {
+  // A menu action can replace its clicked row before this bubbling listener.
+  // The dispatch path still records that the interaction belonged to a control.
+  const interactive = event
+    .composedPath()
+    .some((node) => node instanceof Element && node.matches(COMPOSER_CHROME_INTERACTIVE_SELECTOR));
+  if (event.type === "pointerdown" || event.type === "mousedown") {
+    const touch = event instanceof PointerEvent && event.pointerType === "touch";
+    // Blank padding otherwise moves focus to the page before click restores it,
+    // collapsing and reopening the mobile composer during the same gesture.
+    // WebKit also cancels touch activation when the trigger's pointerdown is cancelled.
+    if (
+      event.button === 0 &&
+      ((!touch && target.closest("summary, .oc-menu-trigger")) || (connected && !interactive))
+    ) {
       event.preventDefault();
     }
     return;
   }
-  if (!connected) {
-    return;
+  if (connected && !interactive) {
+    textarea?.focus({ preventScroll: true });
   }
-  // A menu action can replace its clicked row before this bubbling listener.
-  // The dispatch path still records that the interaction belonged to a control.
-  if (
-    event
-      .composedPath()
-      .some((node) => node instanceof Element && node.matches(COMPOSER_CHROME_INTERACTIVE_SELECTOR))
-  ) {
-    return;
-  }
-  textarea?.focus({ preventScroll: true });
 }
 
 export function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {

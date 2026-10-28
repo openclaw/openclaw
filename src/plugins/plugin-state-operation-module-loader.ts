@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "../infra/path-guards.js";
 import { isTypeScriptPackageEntry } from "./package-entrypoints.js";
-import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import {
+  capturePluginGenerationArtifact,
+  type PluginGenerationArtifact,
+} from "./plugin-generation-artifact.js";
 import type {
   PluginModuleLoaderOwner,
   PluginModuleLoaderRecovery,
@@ -15,12 +18,10 @@ import {
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
 
-/** Bundled worker modules share captured bytes across logical recovery of the same host code. */
-export function captureBundledPluginStateOperationModules(params: {
+/** Select the same operation closure for inline and worker preparation. */
+export function resolveBundledPluginStateOperationCapture(params: {
   rootDir: string;
   source: string;
-  devSourceRoot?: string | null;
-  pluginSdkResolution?: PluginSdkResolutionPreference;
 }) {
   const sourceFamily = isTypeScriptPackageEntry(params.source);
   const operationDirectory = sourceFamily ? params.rootDir : path.dirname(params.source);
@@ -44,7 +45,26 @@ export function captureBundledPluginStateOperationModules(params: {
     ["dist", "dist-runtime"]
       .map((directory) => path.join(hostRoot, directory))
       .find((directory) => isPathInside(path.join(directory, "extensions"), operationDirectory));
-  const artifact = capturePluginGenerationArtifact(buildRoot || params.rootDir, entries);
+  return { rootDir: buildRoot || params.rootDir, source: entries, standalone: true as const };
+}
+
+/** Bundled worker modules share captured bytes across logical recovery of the same host code. */
+export function captureBundledPluginStateOperationModules(params: {
+  rootDir: string;
+  source: string;
+  devSourceRoot?: string | null;
+  pluginSdkResolution?: PluginSdkResolutionPreference;
+  preparedArtifact?: PluginGenerationArtifact;
+}) {
+  const capture = params.preparedArtifact
+    ? undefined
+    : resolveBundledPluginStateOperationCapture(params);
+  const artifact =
+    params.preparedArtifact ??
+    (capture && capturePluginGenerationArtifact(capture.rootDir, capture.source));
+  if (!artifact) {
+    return undefined;
+  }
   try {
     const aliases = preparePluginLoaderAliases({
       modulePath: params.source,
@@ -99,6 +119,7 @@ export function captureBundledPluginStateOperationModules(params: {
     capture(): PluginModuleLoaderRecovery {
       retain();
       let available = true;
+      let disposal: Promise<void> | undefined;
       return {
         bind(instance) {
           if (!available) {
@@ -107,14 +128,12 @@ export function captureBundledPluginStateOperationModules(params: {
           available = false;
           bind(instance);
         },
-        dispose() {
+        async dispose() {
           if (available) {
             available = false;
-            if (--references === 0) {
-              disposed = true;
-              artifact.dispose();
-            }
+            disposal = release();
           }
+          await disposal;
         },
       };
     },

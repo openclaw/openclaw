@@ -32,8 +32,7 @@ export function extractAttemptPermissionNotice(systemPrompt: string) {
 
 /**
  * Builds the embedded system prompt and applies provider-specific transforms
- * unless this is a raw model run. Raw runs still keep `baseSystemPrompt` for
- * diagnostics/cache boundaries, but submit an empty provider prompt.
+ * unless this is a raw model run, which submits an empty provider prompt.
  */
 export async function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptParams) {
   const { buildConfiguredAgentSystemPrompt } = await import("../../system-prompt-config.js");
@@ -65,7 +64,6 @@ export async function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptP
       : stablePrompt;
 
   return {
-    baseSystemPrompt,
     systemPrompt,
     skillsPrompt: params.isRawModelRun ? "" : renderedSkillsPrompt,
     refreshSystemPrompt: (currentSystemPrompt: string, permissionNotice?: string) => {

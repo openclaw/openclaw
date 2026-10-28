@@ -12,10 +12,6 @@ import type {
   OpenClawTransport,
 } from "./types.js";
 
-// Gateway transport adapter that converts the lower-level GatewayClient into the
-// SDK transport interface and replays raw events for late subscribers.
-type GatewayClientLike = Pick<GatewayClient, "request" | "stopAndWait">;
-
 const RAW_EVENT_REPLAY_LIMIT = 1000;
 export const RUN_SUBMISSION_METHODS = new Set(["agent", "chat.send", "sessions.send"]);
 type GatewayConnectionEpoch = { current: boolean };
@@ -107,7 +103,7 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     replayLimit: RAW_EVENT_REPLAY_LIMIT,
   });
   private readonly options: GatewayClientTransportOptions;
-  private client: GatewayClientLike | null = null;
+  private client: GatewayClient | null = null;
   private connectPromise: Promise<void> | null = null;
   private rejectPendingConnect: ((error: Error) => void) | null = null;
   private closePromise: Promise<void> | null = null;

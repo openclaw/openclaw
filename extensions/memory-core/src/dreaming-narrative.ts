@@ -191,9 +191,9 @@ export type DreamNarrativeRequest = {
   runInBackground?: <T>(run: () => Promise<T>) => Promise<T>;
 };
 
-export type DreamNarrativeOutcome =
-  | { status: "completed" | "pending" | "skipped" }
-  | { status: "degraded"; error: string };
+export type DreamNarrativeOutcome = {
+  status: "completed" | "pending" | "skipped" | "degraded";
+};
 
 export type PreparedDreamNarrative = Pick<DreamNarrativeRequest, "data" | "model" | "timezone">;
 
@@ -235,7 +235,7 @@ async function generateAndAppendDreamNarrative(
         nowMs,
         reason: "the narrative run produced no text",
       });
-      return { status: "degraded", error: "the narrative run produced no text" };
+      return { status: "degraded" };
     }
     const dreamsPath = await appendNarrativeEntry({
       workspaceDir: params.workspaceDir,
@@ -268,7 +268,7 @@ async function generateAndAppendDreamNarrative(
         ? "subagent runtime is request-scoped"
         : `the narrative run failed (${formatErrorMessage(error)})`,
     });
-    return { status: "degraded", error: formatErrorMessage(error) };
+    return { status: "degraded" };
   }
   return { status: "completed" };
 }

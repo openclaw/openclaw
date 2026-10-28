@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseQaJson } from "./json.js";
 import { buildQaImageGenerationConfigPatch } from "./providers/image-generation.js";
 import { readFirstMediaPath } from "./providers/mock-openai/mock-openai-directives.js";
 import {
@@ -17,28 +18,10 @@ function extractMediaPathFromText(text: string | undefined): string | undefined 
   if (!text) {
     return undefined;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text) as unknown;
-  } catch {
-    return undefined;
-  }
+  const parsed = safeParseQaJson(text);
   const details = isRecord(parsed) ? parsed.details : undefined;
   const media = isRecord(details) ? details.media : undefined;
   return isRecord(media) ? readFirstMediaPath(media) || undefined : undefined;
-}
-
-function readPluginAllow(config: Record<string, unknown>) {
-  const plugins = config.plugins;
-  if (!isRecord(plugins)) {
-    return [];
-  }
-  const allow = plugins.allow;
-  return Array.isArray(allow)
-    ? allow.filter(
-        (pluginId): pluginId is string => typeof pluginId === "string" && pluginId.length > 0,
-      )
-    : [];
 }
 
 async function resolveGeneratedImagePath(params: {
@@ -116,13 +99,20 @@ async function resolveGeneratedImagePath(params: {
 
 async function ensureImageGenerationConfigured(env: QaSuiteRuntimeEnv) {
   const snapshot = await readConfigSnapshot(env);
+  const plugins = snapshot.config.plugins;
+  const allow = isRecord(plugins) ? plugins.allow : undefined;
+  const existingPluginIds = Array.isArray(allow)
+    ? allow.filter(
+        (pluginId): pluginId is string => typeof pluginId === "string" && pluginId.length > 0,
+      )
+    : [];
   await patchConfig({
     env,
     patch: buildQaImageGenerationConfigPatch({
       providerMode: env.providerMode,
       providerBaseUrl: env.mock ? `${env.mock.baseUrl}/v1` : undefined,
       requiredPluginIds: env.transport.requiredPluginIds,
-      existingPluginIds: readPluginAllow(snapshot.config),
+      existingPluginIds,
       forcedRuntime:
         env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === "codex" ? "codex" : undefined,
     }),

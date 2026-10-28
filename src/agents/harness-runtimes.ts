@@ -144,6 +144,7 @@ export function collectConfiguredAgentHarnessRuntimes(
 
     pushConfiguredModelRuntimeIds(config, runtimes, includeImplicitRuntimePreferences);
 
-    return [...runtimes].toSorted((left, right) => left.localeCompare(right));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is private to this runtime listing.
+    return [...runtimes].sort((left, right) => left.localeCompare(right));
   });
 }

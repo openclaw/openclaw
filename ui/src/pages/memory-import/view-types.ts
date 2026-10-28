@@ -31,6 +31,9 @@ export type MemoryImportViewProps = {
   agents: GatewayAgentRow[];
   selectedAgentId: string | null;
   plan: MigrationsMemoryPlanResult | null;
+  readPlan: () => MigrationsMemoryPlanResult | null;
+  readPreview: () => SessionBackfillGatewayResult | null;
+  readScope: object;
   loading: boolean;
   error: string | null;
   applyError: string | null;
@@ -44,7 +47,6 @@ export type MemoryImportViewProps = {
   backfillTo: string;
   backfillBusy: "preview" | "apply" | "rollback" | null;
   backfillError: string | null;
-  backfillPreview: SessionBackfillGatewayResult | null;
   backfillProgress: SessionBackfillProgress | null;
   backfillRollbackResult: SessionBackfillRollbackResult | null;
   backfillRollbackPending: boolean;

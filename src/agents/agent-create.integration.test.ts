@@ -43,14 +43,12 @@ import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
@@ -62,8 +60,9 @@ import {
   readAgentDeletionJournal,
 } from "../test-utils/agent-deletion-journal.js";
 import { readAgentProvenance } from "../test-utils/agent-provenance.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  createAgentTestState as createState,
+  expectMissing,
   installWorkspacePreparationPause,
   prepareRecoveryHolds,
 } from "./agent-create.integration.test-support.js";
@@ -73,23 +72,6 @@ import { resolveSharedAuthStorePath } from "./auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
-
-async function createState(
-  label: string,
-  options: Parameters<typeof createOpenClawTestState>[0] = {},
-) {
-  const state = await createOpenClawTestState({ scenario: "minimal", label, ...options });
-  onTestFinished(async () => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    await state.cleanup();
-  });
-  const readConfig = () => fs.readFile(state.configPath, "utf8");
-  return Object.assign(state, {
-    readConfig,
-    readJsonConfig: async (): Promise<OpenClawConfig> => JSON.parse(await readConfig()),
-  });
-}
 
 function completeDeletion(
   state: Awaited<ReturnType<typeof createState>>,
@@ -130,11 +112,7 @@ function authBatch(
 const expectCreation = async (params: Parameters<typeof createAgent>[0], result: object) =>
   expect(await createAgent(params)).toMatchObject(result);
 
-async function expectMissing(...paths: string[]) {
-  for (const file of paths) {
-    await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-  }
-}
+const duplicate = { status: "error", reason: "already-exists" };
 
 function claimAuthority(label: string) {
   const authority = claimAgentRunDelegatedAuthority({ instanceId: label, runId: label });
@@ -184,25 +162,13 @@ it("restores only the configured held store after explicit creation, never throu
   ).toThrow("belongs to agent main; requested agent alias");
   const params = { name: "main", workspace: state.workspaceDir };
   await observeSql(async (queries) => {
-    await expectCreation(
-      { ...params, agentDir: path.dirname(recovery.held[1]!.path) },
-      {
-        status: "error",
-        reason: "already-exists",
-      },
-    );
+    await expectCreation({ ...params, agentDir: path.dirname(recovery.held[1]!.path) }, duplicate);
     expect(queries.filter((sql) => /\bmigration_sources\b/i.test(sql))).toEqual([]);
   });
   expect(recovery.readHolds()).toEqual(recovery.held);
   await expectCreation({ ...params, bootstrapMain: true }, { status: "existing" });
   expect(recovery.readHolds()).toEqual(recovery.held);
-  await expectCreation(
-    { ...params, bootstrapFirstAgent: true },
-    {
-      status: "error",
-      reason: "already-exists",
-    },
-  );
+  await expectCreation({ ...params, bootstrapFirstAgent: true }, duplicate);
   expect(recovery.readHolds()).toEqual(recovery.held);
   await expect(
     createAgent({
@@ -214,10 +180,7 @@ it("restores only the configured held store after explicit creation, never throu
   ).rejects.toThrow("restore authority closed");
   expect(recovery.readHolds()).toEqual(recovery.held);
 
-  await expectCreation(
-    { ...params, restorePaths: [] },
-    { status: "error", reason: "already-exists" },
-  );
+  await expectCreation({ ...params, restorePaths: [] }, duplicate);
   expect(recovery.readHolds()).toEqual(recovery.held);
 
   await expectCreation(params, { status: "existing", agentDir: state.agentDir() });
@@ -228,9 +191,7 @@ it("restores only the configured held store after explicit creation, never throu
   expect(
     isHeld(resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env }), "main"),
   ).toBeFalsy();
-  expect(await Promise.all(recovery.held.map((target) => fs.readFile(target.path)))).toEqual(
-    recovery.bytes,
-  );
+  expect(await recovery.readBytes()).toEqual(recovery.bytes);
   expect(readAgentDeletionJournal("main", { env: state.env })).toBeUndefined();
   expect(await readAgentDeletionJournalStatusInWorker("main", { env: state.env })).toBe("absent");
   expect(isAgentDeletionBlocked("main", { env: state.env })).toBe(false);
@@ -320,11 +281,7 @@ it("restores a held custom filename only after its session store configuration s
     workspace: state.path("restored-workspace"),
     agentDir: path.dirname(target.path),
   };
-  await expectCreation(params, {
-    status: "error",
-    reason: "already-exists",
-    message: expect.stringContaining("session.store"),
-  });
+  await expectCreation(params, { ...duplicate, message: expect.stringContaining("session.store") });
   expect(await state.readConfig()).toBe(originalConfig);
   await expectMissing(path.join(params.agentDir, "openclaw-agent.sqlite"));
   await state.writeConfig({ ...config, session: { store: target.path } });
@@ -355,11 +312,7 @@ it.each(["missing", "un-authored"] as const)(
     await expectCreation(
       { name: "main", workspace, bootstrapMain: true },
       configState === "missing"
-        ? {
-            status: "error",
-            reason: "already-exists",
-            message: expect.stringContaining("held databases"),
-          }
+        ? { ...duplicate, message: expect.stringContaining("held databases") }
         : { status: "existing" },
     );
 
@@ -406,8 +359,7 @@ it.each(["bootstrap", "explicit"])(
     );
 
     expect(result).toMatchObject({
-      status: "error",
-      reason: "already-exists",
+      ...duplicate,
       message: expect.stringContaining("held databases"),
     });
     expect(await state.readConfig()).toBe(originalConfig);
@@ -427,9 +379,7 @@ it.each([
 ])("retains the recovery hold when the preserved database is %s", async (change) => {
   const state = await createState("changed-held-store");
 
-  await state.writeConfig({
-    agents: { entries: { ops: { workspace: state.workspaceDir } } },
-  });
+  await state.writeConfig({ agents: { entries: { ops: { workspace: state.workspaceDir } } } });
   const target = { agentId: "main", path: path.join(state.agentDir(), "openclaw-agent.sqlite") };
   const recovery = await prepareRecoveryHolds(state, target.agentId, [target]);
   const originalConfig = await state.readConfig();
@@ -461,7 +411,7 @@ it.each([
       };
     },
   });
-  expect(result).toMatchObject({ status: "error", reason: "already-exists" });
+  expect(result).toMatchObject(duplicate);
   expect(recovery.readHolds()).toEqual([target]);
   expect(await fs.readFile(moved)).toEqual(recovery.bytes[0]);
   if (change.endsWith("after publication")) {
@@ -508,9 +458,7 @@ it("keeps a restored main agent held until its new config entry is published", a
   expect(created).toMatchObject({ status: "created", agentId: "main" });
   expect(await state.readJsonConfig()).toHaveProperty("agents.entries.main");
   expect(recovery.readHolds()).toEqual(recovery.held.slice(1));
-  expect(await Promise.all(recovery.held.map((target) => fs.readFile(target.path)))).toEqual(
-    recovery.bytes,
-  );
+  expect(await recovery.readBytes()).toEqual(recovery.bytes);
 });
 
 it("does not create an agent after delegated authority closes while awaiting the config lock", async () => {
@@ -577,6 +525,10 @@ it.for(["workspace", "workspace-write", "config"] as const)(
       entered.resolve(pausedPhase);
       await resume.promise;
     };
+    if (phase === "workspace-write") {
+      // Bootstrap private state with native ACL inspection before the JS write pause.
+      openOpenClawStateDatabase({ env: state.env });
+    }
     const restoreWorkspacePreparation = installWorkspacePreparationPause(workspace, phase, pause);
     const commit = vi.fn();
     const rollback = vi.fn(async () => await fs.rm(stagedFile));
@@ -875,10 +827,7 @@ it("creates main as an ordinary fresh agent after doctor completes both ownershi
   writeLegacy("agent:main:late", "late-legacy-before-main-reuse", 200);
 
   const blocked = await createAgent({ name: "main", workspace: state.path("workspace-main") });
-  expect(blocked).toMatchObject({
-    status: "error",
-    reason: "legacy-session-migration-required",
-  });
+  expect(blocked).toMatchObject({ status: "error", reason: "legacy-session-migration-required" });
   expect(readSession("agent:main:late", "main", legacyDatabasePath)).toMatchObject({
     sessionId: "late-legacy-before-main-reuse",
   });

@@ -7,14 +7,9 @@ import {
   type resolveClawHubSkillVerificationTarget,
 } from "../skills/lifecycle/clawhub.js";
 
-type ResolvedClawHubSkillVerificationTarget = Extract<
-  Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>,
-  { ok: true }
->;
-
 export function buildSkillVerificationOutput(
   result: ClawHubSkillVerificationResponse,
-  target: ResolvedClawHubSkillVerificationTarget,
+  target: Extract<Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>, { ok: true }>,
 ): Record<string, unknown> {
   const verifiedSourceUrl = readVerifiedClawHubSkillSourceUrl(result.provenance);
   return {

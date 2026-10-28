@@ -10,10 +10,6 @@ type Selection<TRouteId extends string, TModule, TData> = {
   active: RouteMatch<TRouteId, TModule, TData> | undefined;
   pending: RouteMatch<TRouteId, TModule, TData> | undefined;
 };
-type Snapshot<TRouteId extends string, TModule, TData> = Selection<TRouteId, TModule, TData> & {
-  settled: RouteMatch<TRouteId, TModule, TData> | undefined;
-  startupPending?: boolean;
-};
 type Inputs<TRouteId extends string, TLoadContext, TModule, TData> = {
   router?: Router<TRouteId, TLoadContext, TModule, TData>;
   onNotFound?: () => boolean | void;
@@ -38,7 +34,10 @@ export function createRouterOutletPresentation<
   TModule,
   TData = unknown,
 >(props: Inputs<TRouteId, TLoadContext, TModule, TData>) {
-  type OutletSnapshot = Snapshot<TRouteId, TModule, TData>;
+  type OutletSnapshot = Selection<TRouteId, TModule, TData> & {
+    settled: RouteMatch<TRouteId, TModule, TData> | undefined;
+    startupPending?: boolean;
+  };
   type OutletRouter = Inputs<TRouteId, TLoadContext, TModule, TData>["router"];
   const idle = (): OutletSnapshot => ({
     status: "idle",

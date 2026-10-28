@@ -10,6 +10,7 @@ import {
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
+import type { PendingInputRecoveryTrace } from "./pending-input-recovery-trace.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -18,7 +19,11 @@ import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-clie
 export async function resumeChatInput(
   context: GatewayRequestContext,
   target: ChatInputRecoveryTarget,
-  options: { signal: AbortSignal; assertCurrent: () => void },
+  options: {
+    signal: AbortSignal;
+    assertCurrent: () => void;
+    trace?: PendingInputRecoveryTrace;
+  },
   methodRegistry?: GatewayMethodRegistry,
 ): Promise<void> {
   const assertCurrent = () => {
@@ -53,13 +58,16 @@ export async function resumeChatInput(
       throw new Error("Interrupted chat input session was archived, reset, or replaced.");
     }
   };
-  const restored = await restoreGatewayOperatorSource({
-    target,
-    snapshot: source.snapshot,
-    context,
-    assertCurrent,
-    prepareCurrent: checkSource,
-  });
+  const restoreAuthority = () =>
+    restoreGatewayOperatorSource({
+      target,
+      snapshot: source.snapshot,
+      context,
+      assertCurrent,
+      prepareCurrent: () => options.trace?.measure("sessionLoadMs", checkSource) ?? checkSource(),
+    });
+  const restored = await (options.trace?.measure("authorityRestoreMs", restoreAuthority) ??
+    restoreAuthority());
   try {
     const guard = restored.authority.assertCurrent;
     const client = createSyntheticPluginRuntimeClient({
@@ -73,42 +81,44 @@ export async function resumeChatInput(
     }
     const text = extractTextFromChatContent(message.content, { joinWith: "\n" }) ?? "";
     guard();
-    await chatInputRecoveryAdmission.run(
-      {
-        target,
-        requestFingerprint: requestHash.slice("request:".length),
-        suppressCommandInterpretation: metadata.suppressCommandInterpretation === true,
-        requesterProfile: {
-          id: restored.authenticatedUserProfile.profileId,
-          displayName: restored.authenticatedUserProfile.displayName,
-          isCurrent: () => !restored.authority.signal?.aborted,
+    const dispatch = () =>
+      chatInputRecoveryAdmission.run(
+        {
+          target,
+          requestFingerprint: requestHash.slice("request:".length),
+          suppressCommandInterpretation: metadata.suppressCommandInterpretation === true,
+          requesterProfile: {
+            id: restored.authenticatedUserProfile.profileId,
+            displayName: restored.authenticatedUserProfile.displayName,
+            isCurrent: () => !restored.authority.signal?.aborted,
+          },
         },
-      },
-      () =>
-        dispatchGatewayRequestInProcess(
-          "chat.send",
-          {
-            ...request,
-            agentId: target.agentId,
-            sessionKey: target.sessionKey,
-            sessionId: target.sessionId,
-            idempotencyKey: target.runId,
-            message: text || MEDIA_ONLY_USER_TEXT,
-          },
-          {
-            client,
-            context,
-            methodRegistry,
-            signal: options.signal,
-            assertPreparationCurrent: guard,
-            sessionMutationCommitGuard: guard,
-            hasCurrentClientAuthority: () => {
-              guard();
-              return true;
+        () =>
+          dispatchGatewayRequestInProcess(
+            "chat.send",
+            {
+              ...request,
+              agentId: target.agentId,
+              sessionKey: target.sessionKey,
+              sessionId: target.sessionId,
+              idempotencyKey: target.runId,
+              message: text || MEDIA_ONLY_USER_TEXT,
             },
-          },
-        ),
-    );
+            {
+              client,
+              context,
+              methodRegistry,
+              signal: options.signal,
+              assertPreparationCurrent: guard,
+              sessionMutationCommitGuard: guard,
+              hasCurrentClientAuthority: () => {
+                guard();
+                return true;
+              },
+            },
+          ),
+      );
+    await (options.trace?.measure("dispatchAckMs", dispatch) ?? dispatch());
   } finally {
     restored.release();
   }

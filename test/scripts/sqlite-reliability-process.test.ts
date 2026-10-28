@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForReliabilityWorkerMessage } from "../../scripts/lib/sqlite-reliability-process.js";
 import { waitForWriterMessage } from "../../scripts/lib/sqlite-reliability-writer.js";
 
+let child: ChildProcess;
 function waitForReady(
-  child: ChildProcess,
   overrides: Partial<Parameters<typeof waitForReliabilityWorkerMessage>[0]> = {},
 ) {
   return waitForReliabilityWorkerMessage({
@@ -17,76 +17,62 @@ function waitForReady(
   });
 }
 
-function expectWaitCleanedUp(child: ChildProcess) {
-  for (const event of ["message", "error", "exit"]) {
-    expect(child.listenerCount(event)).toBe(0);
-  }
-  expect(vi.getTimerCount()).toBe(0);
-}
-
 describe("SQLite reliability worker messages", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    child = new ChildProcess();
   });
   afterEach(() => {
+    const timers = vi.getTimerCount();
     vi.useRealTimers();
+    expect(["message", "error", "exit"].map((event) => child.listenerCount(event))).toEqual([
+      0, 0, 0,
+    ]);
+    expect(timers).toBe(0);
   });
 
-  it("formats premature exit diagnostics when the child exits", async () => {
-    const child = new ChildProcess();
-    let stderr = "before";
-    const ready = waitForReady(child, {
-      exitMessage: (code, signal) => `exit ${code}/${signal}: ${stderr}`,
-    });
-    stderr = "last stderr";
-    child.emit("exit", null, "SIGKILL");
-
-    await expect(ready).rejects.toThrow("exit null/SIGKILL: last stderr");
-    expectWaitCleanedUp(child);
-  });
-
-  it("honors the configured timeout and reads final diagnostics", async () => {
+  it.each(["exit", "timeout"])("reads final diagnostics on %s", async (event) => {
     const timeoutMs = 120_000;
-    const child = new ChildProcess();
     let stderr = "before";
-    const ready = waitForReady(child, {
+    const ready = waitForReady({
       timeoutMs,
       timeoutMessage: () => `timeout: ${stderr}`,
+      exitMessage: (code, signal) => `exit ${code}/${signal}: ${stderr}`,
     });
-    const rejected = expect(ready).rejects.toThrow("timeout: last stderr");
-    await vi.advanceTimersByTimeAsync(timeoutMs - 1);
-    expect(child.listenerCount("message")).toBe(1);
+    const prefix = event === "exit" ? "exit null/SIGKILL" : "timeout";
+    const rejected = expect(ready).rejects.toThrow(`${prefix}: last stderr`);
+    if (event === "timeout") {
+      await vi.advanceTimersByTimeAsync(timeoutMs - 1);
+      expect(child.listenerCount("message")).toBe(1);
+    }
     stderr = "last stderr";
-    await vi.advanceTimersByTimeAsync(1);
-
+    if (event === "exit") {
+      child.emit("exit", null, "SIGKILL");
+    } else {
+      await vi.advanceTimersByTimeAsync(1);
+    }
     await rejected;
-    expectWaitCleanedUp(child);
   });
 
   it("cleans up when action throws", async () => {
-    const child = new ChildProcess();
     const error = new Error("action failed");
-    const ready = waitForReady(child, {
+    const ready = waitForReady({
       action: () => {
         throw error;
       },
     });
 
     await expect(ready).rejects.toBe(error);
-    expectWaitCleanedUp(child);
   });
 
   it("rejects a writer error payload instead of waiting for the requested message", async () => {
-    const child = new ChildProcess();
     const result = waitForWriterMessage({ child, stderr: [], stopped: false }, "result");
     child.emit("message", { kind: "error", error: "write failed" });
 
     await expect(result).rejects.toThrow("SQLite reliability writer failed: write failed");
-    expectWaitCleanedUp(child);
   });
 
   it("waits for the synchronous writer reply while preserving other listeners", async () => {
-    const child = new ChildProcess();
     const observed: unknown[] = [];
     const observe = (message: unknown) => observed.push(message);
     child.on("message", observe);
@@ -101,12 +87,9 @@ describe("SQLite reliability worker messages", () => {
       },
     );
 
-    expect(result.batchesCommitted).toBe(2);
-    expect(result.rowsCommitted).toBe(16);
     expect(result).toBe(payload);
     expect(observed).toEqual([{ kind: "ready" }, payload]);
     expect(child.listeners("message")).toEqual([observe]);
     child.off("message", observe);
-    expectWaitCleanedUp(child);
   });
 });

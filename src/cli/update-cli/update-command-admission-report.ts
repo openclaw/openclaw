@@ -162,7 +162,7 @@ async function preparePreMutationUpdateOutcome(
         origin: { nextAction },
         ...(params.installKind !== "unknown" ? { target: { kind: params.installKind } } : {}),
       },
-      { env: run.env },
+      run,
     );
   }
   const outcome = await prepareOutcome();

@@ -1,4 +1,31 @@
+import { vi } from "vitest";
 import type { readRetainedSessionEntryFacts } from "../../config/sessions/session-entry-read-facts.js";
+
+const sessionWorkspaceMocks = vi.hoisted(() => ({
+  loadSessionEntry: vi.fn(),
+  resolveAgentWorkspaceDir: vi.fn(),
+  resolveDefaultAgentId: vi.fn(),
+}));
+
+export { sessionWorkspaceMocks };
+
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
+  resolveAgentWorkspaceDir: sessionWorkspaceMocks.resolveAgentWorkspaceDir,
+  resolveDefaultAgentId: sessionWorkspaceMocks.resolveDefaultAgentId,
+}));
+
+vi.mock("../../config/sessions/session-entry-read-facts.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-entry-read-facts.js")>();
+  return {
+    ...actual,
+    readRetainedSessionEntryFacts: createRepositorySessionEntryReader(
+      actual.readRetainedSessionEntryFacts,
+      (key) => sessionWorkspaceMocks.loadSessionEntry(key),
+    ),
+  };
+});
 
 type SessionEntryReader = typeof readRetainedSessionEntryFacts;
 type LoadedSessionEntry = {
@@ -8,7 +35,7 @@ type LoadedSessionEntry = {
   entry: NonNullable<ReturnType<SessionEntryReader>>["entries"][number]["entry"];
 };
 
-export function createRepositorySessionEntryReader(
+function createRepositorySessionEntryReader(
   readActual: SessionEntryReader,
   load: (sessionKey?: string) => LoadedSessionEntry | undefined,
 ): SessionEntryReader {

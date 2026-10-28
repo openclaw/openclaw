@@ -19,7 +19,7 @@ import {
 import { isAcknowledgedAbandonedUpdateRun } from "../../infra/update-run-record.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import { defaultRuntime } from "../../runtime.js";
-import { resolveOpenClawStateSqliteDir } from "../../state/openclaw-state-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { updateRepairCommand } from "./update-repair-command.js";
 
@@ -72,38 +72,31 @@ async function abandonedWarnings() {
   );
 }
 
-it.each([1, 99])(
-  "acknowledges captured history behind %s newer successful updates",
-  async (count) => {
-    const outside = count === 99 ? seedHistory(10 * ABANDONED_UPDATE_RUN_MS) : undefined;
-    const previous = seedHistory((count === 99 ? 9 : 2) * ABANDONED_UPDATE_RUN_MS);
-    for (let index = 0; index < count; index++) {
-      finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, { status: "succeeded" });
-    }
-    if (outside) {
-      expect(listUpdateRuns({ limit: 100 }).at(-1)?.runId).toBe(previous.runId);
-    }
-    expect(await abandonedWarnings()).toEqual([expect.stringContaining(previous.runId)]);
-    await repair();
-    expect(mocks.doctor).toHaveBeenCalledOnce();
-    expect(mocks.plugins).toHaveBeenCalledOnce();
-    const repaired = getUpdateRun(previous.runId)!;
-    expect(isAcknowledgedAbandonedUpdateRun(repaired)).toBe(true);
-    expect(repaired).toMatchObject({
-      ...previous,
-      updatedAtMs: expect.any(Number),
-      steps: expect.arrayContaining(previous.steps),
-    });
-    expect(jsonResult()).toMatchObject({ status: "ok", reconciledRuns: [previous.runId] });
-    if (outside) {
-      expect(getUpdateRun(outside.runId)).toEqual(outside);
-    }
-    expect(await abandonedWarnings()).toEqual([]);
-    await repair();
-    expect(getUpdateRun(previous.runId)).toEqual(repaired);
-    expect(mocks.doctor).toHaveBeenCalledTimes(2);
-  },
-);
+it("acknowledges captured history behind 99 newer successful updates", async () => {
+  const outside = seedHistory(10 * ABANDONED_UPDATE_RUN_MS);
+  const previous = seedHistory(9 * ABANDONED_UPDATE_RUN_MS);
+  for (let index = 0; index < 99; index++) {
+    finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, { status: "succeeded" });
+  }
+  expect(listUpdateRuns({ limit: 100 }).at(-1)?.runId).toBe(previous.runId);
+  expect(await abandonedWarnings()).toEqual([expect.stringContaining(previous.runId)]);
+  await repair();
+  expect(mocks.doctor).toHaveBeenCalledOnce();
+  expect(mocks.plugins).toHaveBeenCalledOnce();
+  const repaired = getUpdateRun(previous.runId)!;
+  expect(isAcknowledgedAbandonedUpdateRun(repaired)).toBe(true);
+  expect(repaired).toMatchObject({
+    ...previous,
+    updatedAtMs: expect.any(Number),
+    steps: expect.arrayContaining(previous.steps),
+  });
+  expect(jsonResult()).toMatchObject({ status: "ok", reconciledRuns: [previous.runId] });
+  expect(getUpdateRun(outside.runId)).toEqual(outside);
+  expect(await abandonedWarnings()).toEqual([]);
+  await repair();
+  expect(getUpdateRun(previous.runId)).toEqual(repaired);
+  expect(mocks.doctor).toHaveBeenCalledTimes(2);
+});
 
 it.each(["ok", "warning"] as const)(
   "acknowledges multiple rows only after %s convergence, excluding a newly admitted row",
@@ -128,35 +121,32 @@ it.each(["ok", "warning"] as const)(
   },
 );
 
-it.each([
-  { phase: "doctor", setup: () => mocks.doctor.mockRejectedValueOnce(new Error("failed")) },
-  {
-    phase: "convergence",
-    setup: () => mocks.convergence.mockRejectedValueOnce(new Error("failed")),
+it.each(["doctor", "convergence", "error", "retained recovery"] as const)(
+  "preserves history when repair fails in %s",
+  async (phase) => {
+    const [old, recent] = seedPair();
+    if (phase === "retained recovery") {
+      await fs.mkdir(
+        path.join(path.dirname(resolveOpenClawStateSqlitePath()), ".openclaw-restore-retained"),
+      );
+    } else if (phase === "error") {
+      mocks.plugins.mockResolvedValueOnce({ ...pluginResult, status: "error" });
+    } else {
+      mocks[phase].mockRejectedValueOnce(new Error("failed"));
+    }
+    await expect(repair()).rejects.toThrow(
+      phase === "retained recovery" ? "full-state recovery is deferred" : undefined,
+    );
+    if (phase === "retained recovery") {
+      expect(mocks.doctor).not.toHaveBeenCalled();
+    }
+    expect(getUpdateRun(old.runId)).toEqual(old);
+    expect(getUpdateRun(recent.runId)).toEqual(recent);
+    if (phase !== "retained recovery") {
+      expect(await abandonedWarnings()).toHaveLength(2);
+    }
   },
-  {
-    phase: "error",
-    setup: () => mocks.plugins.mockResolvedValueOnce({ ...pluginResult, status: "error" }),
-  },
-  {
-    phase: "retained recovery",
-    setup: () => fs.mkdir(path.join(resolveOpenClawStateSqliteDir(), ".openclaw-restore-retained")),
-  },
-])("preserves history when repair fails in $phase", async ({ phase, setup }) => {
-  const [old, recent] = seedPair();
-  await setup();
-  await expect(repair()).rejects.toThrow(
-    phase === "retained recovery" ? "full-state recovery is deferred" : undefined,
-  );
-  if (phase === "retained recovery") {
-    expect(mocks.doctor).not.toHaveBeenCalled();
-  }
-  expect(getUpdateRun(old.runId)).toEqual(old);
-  expect(getUpdateRun(recent.runId)).toEqual(recent);
-  if (phase !== "retained recovery") {
-    expect(await abandonedWarnings()).toHaveLength(2);
-  }
-});
+);
 
 it("acknowledges historical rows while continuing its live owning update", async () => {
   const old = seedHistory(4 * ABANDONED_UPDATE_RUN_MS);

@@ -48,48 +48,32 @@ const expectedMixedConfig = {
   model_auto_compact_token_limit_scope: "total",
   features: { fast_mode: false },
 };
+const rootArgs = [...rootOverrides, "app-server", "--listen", "stdio://"];
+const markerArgs = ["--model", "app-server", "--image", "photo.png", "app-server"];
 
-const cases = [
-  "managed package",
-  "root overrides",
-  "mixed overrides",
-  "node wrapper",
-  "shell wrapper",
-  "shell marker values",
-  "native auth",
-] as const;
-type NativeConfigCase = (typeof cases)[number];
-
-function invocation(mode: NativeConfigCase, command: string, launcher: string) {
-  switch (mode) {
-    case "managed package":
-      return { command: "codex", args: [...mixedArgs] };
-    case "root overrides":
-      return { command, args: [...rootOverrides, "app-server", "--listen", "stdio://"] };
-    case "node wrapper":
-      return { command: process.execPath, args: [launcher, ...mixedArgs, "--"] };
-    case "shell wrapper":
-      return { command: "/bin/sh", args: ["-c", 'exec "$@"', "--", command, ...mixedArgs, "--"] };
-    case "shell marker values":
-      return {
-        command: "/bin/sh",
-        args: [
-          "-c",
-          'exec "$@" app-server --listen stdio://',
-          "--",
-          command,
-          "--model",
-          "app-server",
-          "--image",
-          "photo.png",
-          "app-server",
-          ...rootOverrides,
-        ],
-      };
-    default:
-      return { command, args: [...mixedArgs] };
-  }
-}
+type NativeState = Awaited<ReturnType<typeof createCodexNativeTestState>>;
+type Invocation = Pick<CodexAppServerStartOptions, "command" | "args">;
+const direct = ({ command }: NativeState): Invocation => ({ command, args: [...mixedArgs] });
+const shell = (command: string, script: string, ...args: string[]): Invocation => ({
+  command: "/bin/sh",
+  args: ["-c", script, "--", command, ...args],
+});
+const cases: Array<[string, (state: NativeState) => Invocation]> = [
+  ["managed package", () => ({ command: "codex", args: [...mixedArgs] })],
+  ["root overrides", ({ command }) => ({ command, args: rootArgs })],
+  ["mixed overrides", direct],
+  [
+    "node wrapper",
+    ({ launcher }) => ({ command: process.execPath, args: [launcher, ...mixedArgs, "--"] }),
+  ],
+  ["shell wrapper", ({ command }) => shell(command, 'exec "$@"', ...mixedArgs, "--")],
+  [
+    "shell marker values",
+    ({ command }) =>
+      shell(command, 'exec "$@" app-server --listen stdio://', ...markerArgs, ...rootOverrides),
+  ],
+  ["native auth", direct],
+];
 
 async function readNativeConfig(startOptions: CodexAppServerStartOptions, env: NodeJS.ProcessEnv) {
   const child = await createStdioTransport(startOptions, env);
@@ -121,13 +105,14 @@ async function readNativeConfig(startOptions: CodexAppServerStartOptions, env: N
 }
 
 describe("Codex stdio effective configuration", () => {
-  it.for(cases)("preserves %s", { timeout: 75_000 }, async (mode, context) => {
+  it.for(cases)("preserves %s", { timeout: 75_000 }, async ([mode, invocation], context) => {
     if (mode.startsWith("shell") && process.platform === "win32") {
       context.skip();
     }
     await withTempDir("openclaw-codex-config-", async (dir) => {
       const root = await fs.realpath(dir);
-      const { command, launcher, cwd, codexHome, env } = await createCodexNativeTestState(root);
+      const state = await createCodexNativeTestState(root);
+      const { cwd, codexHome, env } = state;
       if (mode === "managed package") {
         // Exercise the real package launcher without any alternate Node on PATH.
         env.PATH = path.join(root, "no-path-executables");
@@ -138,7 +123,7 @@ describe("Codex stdio effective configuration", () => {
         'cli_auth_credentials_store="file"\n[features]\nrespect_system_proxy=false\n[analytics]\nenabled=false\n[feedback]\nenabled=false\n',
       );
       const options: CodexAppServerStartOptions = {
-        ...invocation(mode, command, launcher),
+        ...invocation(state),
         transport: "stdio",
         commandSource: mode === "managed package" ? "managed" : "config",
         cwd,

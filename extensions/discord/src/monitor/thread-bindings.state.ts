@@ -274,7 +274,7 @@ export function toReusableWebhookKey(params: { accountId: string; channelId: str
   return `${normalizeLowercaseStringOrEmpty(params.accountId)}:${params.channelId.trim()}`;
 }
 
-export function rememberReusableWebhook(record: ThreadBindingRecord) {
+function rememberReusableWebhook(record: ThreadBindingRecord) {
   const webhookId = record.webhookId?.trim();
   const webhookToken = record.webhookToken?.trim();
   if (!webhookId || !webhookToken) {
