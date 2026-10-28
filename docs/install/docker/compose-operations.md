@@ -66,6 +66,31 @@ for shared state. Missing or unreadable namespace identity also keeps ownership
 protected. A replacement container cannot verify that the previous owner died,
 even when its heartbeat is old; elapsed time never authorizes takeover.
 
+## CLI invocations inside the Gateway container
+
+`docker compose exec openclaw-gateway openclaw <command>` boots a complete CLI
+runtime inside the container. It competes with the running Gateway for CPU and
+opens its own read-only database connection, so overlapping invocations — several
+scheduled host jobs polling `channel status`, `cron list`, or `agent list` — can
+stall Gateway turns and drop channel connections while they start. Prefer the
+one-shot `openclaw-cli` service above for status and inspection commands, and do
+not schedule overlapping `exec` invocations against a busy Gateway.
+
+## Stop grace period
+
+The Gateway drains admitted work for up to 315 s and reserves another 10 s to
+settle shutdown, and the managed service stop timeout is 330 s. Docker's default
+stop timeout is 10 s, and many Compose files use 90 s, which kills the container
+mid-drain: the agent database gets no clean-close seal, and the next start repeats
+the full session validation, which lengthens startup. Set a grace period that
+covers the whole budget:
+
+```yaml
+services:
+  openclaw-gateway:
+    stop_grace_period: 340s
+```
+
 For a genuinely stopped or crashed foreign owner, stop the Gateway service and
 inspect its recorded holder using the same image and state mount:
 

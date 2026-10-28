@@ -235,6 +235,8 @@ Human validation diagnostics quote literal record keys, such as `agents.defaults
 
 Validates the current config against the active schema without starting the gateway. It also checks provider/source compatibility for every registry-declared SecretRef, including disabled plugin or channel configuration. This strict command can report an inactive mismatch that does not block normal Gateway startup, where SecretRef resolution remains limited to effectively active surfaces.
 
+Plugin-owned schema is only checked where that plugin is available to the validating process. Validating a config copy in a container that lacks the channel or provider plugins can therefore report `valid: true` for keys the running Gateway later rejects on hot reload; validate with the same plugins installed, or re-validate after loading them.
+
 After schema validation, it checks every configured manual exec provider's command path using the same non-executing trust checks as startup: file presence, symlinks, trusted directories, permissions, ownership, and Windows ACL availability. `config set`, `config patch`, and `config unset` apply these checks only to providers changed or referenced by the operation, including during dry runs. Replacing the `secrets` or `secrets.providers` collection checks every remaining provider. An unrelated inactive provider does not block targeted repairs or removal of that provider.
 
 Path validation does not execute providers or verify their output. Passing it does not guarantee successful secret resolution; exec dry runs require `--allow-exec` to test that separately.
