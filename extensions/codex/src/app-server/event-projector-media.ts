@@ -1,3 +1,7 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -221,11 +225,28 @@ export class CodexGeneratedMediaProjection {
     }
     const sentMediaUrls = new Set(params.messagingToolSentMediaUrls);
     const generatedUrlsByTarget = new Map<MessagingToolSend, Set<string>>();
+    let generatedByContent: { urls: Map<string, string>; sizes: Set<number> } | undefined;
+    const findGeneratedCopy = (sourceUrl: string) => {
+      // The agent may send its own copy of a generated image. Matching bytes
+      // still mean this delivery carried that image.
+      if (!generatedByContent) {
+        generatedByContent = { urls: new Map(), sizes: new Set() };
+        for (const url of generatedUrls) {
+          const content = readLocalFileContent(url);
+          if (content) {
+            generatedByContent.urls.set(content.key, url);
+            generatedByContent.sizes.add(content.size);
+          }
+        }
+      }
+      const content = readLocalFileContent(sourceUrl, generatedByContent.sizes);
+      return content && generatedByContent.urls.get(content.key);
+    };
     for (const delivery of params.confirmedMediaDeliveries ?? []) {
       for (const sourceUrl of delivery.sourceUrls) {
-        const generatedUrl = generatedUrlBySource.get(
-          normalizeMediaReferenceForComparison(sourceUrl),
-        );
+        const generatedUrl =
+          generatedUrlBySource.get(normalizeMediaReferenceForComparison(sourceUrl)) ??
+          (generatedUrls.size > 0 ? findGeneratedCopy(sourceUrl) : undefined);
         if (!generatedUrl) {
           continue;
         }
@@ -255,5 +276,28 @@ export class CodexGeneratedMediaProjection {
           : target;
       }),
     };
+  }
+}
+
+/** Size and SHA-256 of a regular local file, without following symlinks.
+ * A file whose size is not in `sizes` is not read. */
+function readLocalFileContent(
+  reference: string,
+  sizes?: ReadonlySet<number>,
+): { key: string; size: number } | undefined {
+  try {
+    const file = reference.startsWith("file://") ? fileURLToPath(reference) : reference;
+    if (!path.isAbsolute(file)) {
+      return undefined;
+    }
+    const stat = fs.lstatSync(file);
+    const size = stat.size;
+    if (!stat.isFile() || (sizes && !sizes.has(size))) {
+      return undefined;
+    }
+    const digest = createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+    return { key: `${size}:${digest}`, size };
+  } catch {
+    return undefined;
   }
 }

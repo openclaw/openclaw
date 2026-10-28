@@ -355,6 +355,29 @@ describe("CodexAppServerEventProjector media projection", () => {
     },
   );
 
+  it("treats a sent byte-identical copy of a generated image as delivered", async () => {
+    const params = await createParams();
+    const { events } = await createProjection(params);
+    await events.completed(codexImage("generated-copied"));
+    await events.completed(nativeImage("generated-unsent", SECOND_PNG_BASE64));
+    const copy = path.join(params.workspaceDir, "copy.png");
+    await fs.writeFile(copy, Buffer.from(tinyPngBase64, "base64"));
+    const { bridge } = createMessageBridge(async () =>
+      messageResult({ messageDelivery: receipt() }),
+    );
+    await sendMedia(bridge, copy, "chat-source");
+    await events.complete();
+    const result = events.result(bridge.telemetry);
+
+    const images = await readImages(result.hostOwnedToolMediaUrls);
+    const copied = images.find((image) => image.base64 === tinyPngBase64)?.url;
+    expect(copied).toBeDefined();
+    expect(result.messagingToolSentMediaUrls).toEqual([copy, copied]);
+    expect(result.messagingToolSentTargets).toEqual([
+      expect.objectContaining({ to: "chat-source", mediaUrls: [copy, copied] }),
+    ]);
+  });
+
   it("keeps correct local image delivery evidence for a partial saved-path send", async () => {
     const params = await createParams();
     const { events } = await createProjection(params);
