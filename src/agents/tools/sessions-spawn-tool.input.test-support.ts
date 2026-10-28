@@ -43,7 +43,7 @@ export function registerSessionsSpawnInputTests({
     mockGateway,
     mocks: hoisted,
   });
-registerSessionsSpawnVisibleThinkingTests({ createTool, mockCallArg });
+  registerSessionsSpawnVisibleThinkingTests({ createTool, mockCallArg });
 
   it.each([false, true])(
     "keeps collector inputs within the declared spawn contract (placement=%s)",
@@ -102,7 +102,6 @@ registerSessionsSpawnVisibleThinkingTests({ createTool, mockCallArg });
       "unsupported visible parameters",
       {
         runtime: "acp",
-        thinking: "high",
         thread: true,
         mode: "session",
         lightContext: true,
@@ -110,7 +109,7 @@ registerSessionsSpawnVisibleThinkingTests({ createTool, mockCallArg });
         attachAs: { mountPath: "inputs" },
         visible: true,
       },
-      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
+      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
     ],
     [
       "hidden cloud placement",
