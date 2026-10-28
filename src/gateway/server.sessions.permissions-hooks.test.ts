@@ -83,6 +83,7 @@ test("webchat session mutations follow operator scope policy", async () => {
     ["sessions.rewind", { sessionKey: mainKey, entryId: "entry-1" }, "operator.admin"],
     ["sessions.fork", { sessionKey: mainKey, entryId: "entry-1" }, "operator.write"],
     ["sessions.dispatch", { key: mainKey, profileId: "test" }, "operator.write"],
+    ["sessions.dispatch", { key: mainKey }, "operator.admin"],
     ["sessions.dispatch", { key: mainKey, deviceId: "device-1" }, "operator.write"],
     ["sessions.reclaim", { key: mainKey }, "operator.write"],
     [
