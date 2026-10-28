@@ -5,6 +5,7 @@ import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inboun
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { prependUniqueNativeMessages } from "../../lib/chat/history-message-identity.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
 import { resolveWorkingProgress } from "./chat-progress.ts";
@@ -38,7 +39,11 @@ import {
 import { coalesceStreamRuns, collapseCompletedTurnWork } from "./chat-turn-presentation.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 import { createSnapshotRecord } from "./session-snapshot-projection.ts";
-import { readLiveTerminalRevision, rememberLiveTerminalRun } from "./terminal-message-identity.ts";
+import {
+  normalizeFinalAssistantMessage,
+  readLiveTerminalRevision,
+  rememberLiveTerminalRun,
+} from "./terminal-message-identity.ts";
 
 const { extractToolCardsCached: extractToolCards } = toolCards;
 
@@ -1412,6 +1417,7 @@ describe("buildCachedChatItems", () => {
     {},
     { tailFirst: true },
     { shortcode: "string", reload: true },
+    { shortcode: "text", reload: true },
     { shortcode: true, otherShortcode: true, count: 2, reload: true },
     { steer: true },
     { steer: true, includeOriginal: false },
@@ -1477,7 +1483,15 @@ describe("buildCachedChatItems", () => {
       if (shortcode === "string") {
         final.content = 'Final tail. [embed ref="cv_final" /]';
       }
-      const terminal = live ? rememberLiveTerminalRun(final, finalRun) : final;
+      const source =
+        shortcode === "text"
+          ? normalizeFinalAssistantMessage({
+              role: "assistant",
+              text: 'Final tail. [embed ref="cv_final" /]',
+              timestamp: 1_005,
+            })
+          : final;
+      const terminal = live ? rememberLiveTerminalRun(source, finalRun) : source;
       const messages = [
         ...(includeOriginal ? [nativeUser(runId, "Show a counter", 1_000, { runId })] : []),
         ...(tailFirst ? [terminal] : []),
@@ -1509,6 +1523,9 @@ describe("buildCachedChatItems", () => {
         : null;
       if (reload) {
         expect(cached?.record.snapshot.historyState).toBeUndefined();
+        expect(cached?.record.snapshot.messages.map(extractText).join("\n")).not.toContain(
+          'ref="cv_final"',
+        );
       }
       const groups = messageGroups({
         messages: cached?.record.snapshot.messages ?? messages,

@@ -140,10 +140,14 @@ function projectTerminalCanvasMessage(
     }
     return [value];
   });
-  if (!changed) {
+  const text =
+    typeof terminal.text === "string"
+      ? stripOwnedCanvasShortcodes(terminal.text, runId, ownedCanvas)
+      : undefined;
+  if (!changed && (text === undefined || text === terminal.text)) {
     return source;
   }
-  const projection = { ...terminal, content };
+  const projection = { ...terminal, content, ...(text !== undefined ? { text } : {}) };
   copyLiveTerminalIdentity(terminal, projection);
   return projection;
 }
