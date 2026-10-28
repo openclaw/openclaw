@@ -97,13 +97,13 @@ it.each(["image", "edit", "video"] as const)(
   async (kind) => {
     await withXaiServer(async (baseUrl, requests) => {
       expect(await generate(kind, baseUrl, true)).toEqual(media);
+      const headers = { authorization: "Bearer test-xai-key", "x-xai-trace": "transport-proof" };
       if (kind !== "video") {
-        expect(requests.map((req) => req.url)).toEqual([
-          `/v1/images/${kind === "edit" ? "edits" : "generations"}`,
+        expect(requests).toMatchObject([
+          { url: `/v1/images/${kind === "edit" ? "edits" : "generations"}`, headers },
         ]);
         return;
       }
-      const headers = { authorization: "Bearer test-xai-key", "x-xai-trace": "transport-proof" };
       expect(requests).toMatchObject([
         { method: "POST", url: "/v1/videos/generations", headers },
         { method: "GET", url: "/v1/videos/local_request", headers },
