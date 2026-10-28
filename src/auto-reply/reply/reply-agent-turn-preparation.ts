@@ -84,6 +84,7 @@ export type AdmittedFollowupTurn = {
   sessionStore?: Record<string, SessionEntry>;
   sendPolicy: "allow" | "deny";
   preflightCompactionApplied: boolean;
+  memoryFlushAttempted?: boolean;
   preflightFailurePayload?: ReplyPayload;
   preflightError?: Error;
   restartRecovery?: ReplyRestartRecoveryClaimController;
@@ -550,6 +551,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
                     sessionEntry: entry,
                   }),
                 );
+                turn.memoryFlushAttempted ||= flushed.outcome !== "skipped";
                 session.publish(flushed.sessionEntry);
                 operation.abortSignal.throwIfAborted();
                 if (flushed.outcome === "exhausted") {
