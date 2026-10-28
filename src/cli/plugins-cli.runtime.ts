@@ -4,7 +4,11 @@ import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { collectConfiguredRuntimePluginIds } from "../commands/doctor/shared/configured-runtime-plugin-owners.js";
-import { captureRuntimeConfigAsyncReader, readConfigFileSnapshot } from "../config/config.js";
+import {
+  assertConfigWriteAllowedInCurrentMode,
+  captureRuntimeConfigAsyncReader,
+  readConfigFileSnapshot,
+} from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitDiagnosticsTimelineEvent } from "../infra/diagnostics-timeline.js";
@@ -21,8 +25,10 @@ import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { displayPath, shortenHomeInString, shortenHomePath } from "../utils.js";
+import { formatMissingPluginMessage } from "./error-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
+import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import type {
   PluginDoctorOptions,
   PluginMarketplaceEntriesOptions,
@@ -44,6 +50,93 @@ function isConfigSelectedShadowDiagnostic(entry: { level?: string; message?: str
     typeof entry.message === "string" &&
     entry.message.includes("duplicate plugin id resolved by explicit config-selected plugin")
   );
+}
+
+async function applyPluginEnabledThroughGateway(
+  pluginId: string,
+  enabled: boolean,
+  opts: { acceptCapabilities?: boolean } = {},
+): Promise<boolean> {
+  const { resolvePluginLifecycleGateway } = await import("./plugins-lifecycle-client.js");
+  const gateway = await resolvePluginLifecycleGateway();
+  if (!gateway) {
+    return false;
+  }
+  const consent = resolvePluginCapabilityConsentCliOptions({ ...opts, action: "enable" });
+  const result = await gateway<{ plugin: { id: string }; warnings?: string[] }>(
+    "plugins.setEnabled",
+    { pluginId, enabled, ...(enabled ? { allowlistPolicy: "preserve" } : {}) },
+    consent.onCapabilityConsent,
+  );
+  for (const warning of result.warnings ?? []) {
+    defaultRuntime.log(theme.warn(terminalText`${warning}`));
+  }
+  defaultRuntime.log(
+    terminalText`${enabled ? "Enabled" : "Disabled"} plugin "${result.plugin.id}".`,
+  );
+  return true;
+}
+
+export async function runPluginsEnableCommand(
+  id: string,
+  opts: { acceptCapabilities?: boolean } = {},
+): Promise<void> {
+  await runPluginPolicyCommand(id, true, opts.acceptCapabilities);
+}
+
+export async function runPluginsDisableCommand(id: string): Promise<void> {
+  await runPluginPolicyCommand(id, false);
+}
+
+async function runPluginPolicyCommand(
+  id: string,
+  enabled: boolean,
+  acceptCapabilities?: boolean,
+): Promise<void> {
+  assertConfigWriteAllowedInCurrentMode();
+  if (await applyPluginEnabledThroughGateway(id, enabled, { acceptCapabilities })) {
+    return;
+  }
+  return await runWithLocalPluginState(enabled ? "enable" : "disable", async (assertCurrent) => {
+    const { mutateManagedPluginEnabled } = await import("../plugins/management-mutations.js");
+    const { ManagedPluginLifecycleError } =
+      await import("../plugins/management-lifecycle-error.js");
+    await withPluginLifecycleLease({}, async () => {
+      try {
+        const result = await mutateManagedPluginEnabled({
+          pluginId: id,
+          enabled,
+          caller: "cli",
+          beforePersistentApply: assertCurrent,
+          requestCapabilityConsent: acceptCapabilities,
+          ...resolvePluginCapabilityConsentCliOptions({ acceptCapabilities, action: "enable" }),
+        });
+        if (result.status === "missing") {
+          const message = formatMissingPluginMessage({ id: result.pluginId, includeSearch: true });
+          defaultRuntime.error(terminalText`${message}`);
+          return defaultRuntime.exit(1);
+        }
+        if (result.status === "blocked") {
+          defaultRuntime.error(
+            terminalText`Plugin "${result.pluginId}" could not be enabled (${result.reason ?? "unknown reason"}).`,
+          );
+          return defaultRuntime.exit(1);
+        }
+        for (const warning of result.warnings) {
+          defaultRuntime.log(theme.warn(terminalText`${warning}`));
+        }
+        defaultRuntime.log(
+          terminalText`${enabled ? "Enabled" : "Disabled"} plugin "${result.pluginId}". Saved for the next Gateway start.`,
+        );
+      } catch (error) {
+        if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
+          throw error;
+        }
+        defaultRuntime.error(terminalText`${error.message}`);
+        return defaultRuntime.exit(1);
+      }
+    });
+  });
 }
 
 export async function runPluginsInstallAction(
