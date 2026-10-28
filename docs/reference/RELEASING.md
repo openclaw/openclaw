@@ -85,11 +85,16 @@ install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwis
 varies by profile and selected operating systems. Check the release's recorded
 coverage: skipped or deferred checks are not passes.
 
-Dependency advisories never block or delay a release. Release dependency
-evidence records every advisory finding, at any severity, and CI dispatched by
-release validation or publication reports a failing dependency audit as a
-warning. The dependency fix ships through `main` after publication. Only a
-known-malware finding stops publication.
+Dependency advisories never block CI, local commits, or delay a release. Ordinary
+pull-request, push, and scheduled CI skip the production dependency audit. It
+runs only for release dispatch IDs beginning with `full-release-validation-`
+or `release-native-android-`, where every audit failure is a warning with exit
+code 0. The optional production audit pre-commit hook follows the same policy.
+The separate daily Dependency Audit stays strict for triage and is not a required
+PR check. Release dependency evidence records every advisory finding, at any
+severity. The dependency fix ships through `main` after publication. The release
+`pnpm deps:vuln:gate` still stops publication on known malware, which identifies
+a compromised package rather than a vulnerability advisory.
 
 The health of `main` CI does not gate a release. Validation and publication run
 from the release branch with pinned release tooling, so a red `main` is not a
