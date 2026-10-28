@@ -111,6 +111,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/maintenance-custody.conformance.test.ts",
   "src/infra/database-engine/postgres-search-admission.postgres.test.ts",
   "src/infra/database-engine/postgres-search.conformance.test.ts",
+  "src/infra/database-engine/postgres-text-search-schema.postgres.test.ts",
   "src/infra/database-engine/postgres-vector-search-schema.postgres.test.ts",
   "src/infra/database-engine/search-extension.postgres.test.ts",
   "src/infra/database-engine/multi-namespace.postgres.test.ts",

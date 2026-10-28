@@ -10,7 +10,6 @@ import {
   deleteSessionEntryLifecycle,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { prepareGitHubPublicationSession } from "../../gateway/github-publication-availability.js";
 import { localWorkspaceProjectionPath } from "../../gateway/worker-environments/local-workspace-checkout.js";
 import {
@@ -31,14 +30,7 @@ import { useSandboxRegistryState } from "./registry.test-support.js";
 
 const state = useSandboxRegistryState("openclaw-browser-registry-authority-");
 
-it.each([
-  ["retired worktree", "Worktree owner or binding changed"],
-  ["replaced worktree", "Worktree owner or binding changed"],
-  ["deleted session", "Local sandbox workspace authority changed"],
-  ["rotated session", "Local sandbox workspace authority changed"],
-  ["released publication", "GitHub publication session lifecycle changed"],
-])("refuses the next filesystem effect after %s", async (change, refusal) => {
-  const row = localWorkspaceProjectionFixture(randomUUID(), state.root);
+async function managedWorkspace(row = localWorkspaceProjectionFixture(randomUUID(), state.root)) {
   const sessionKey = row.session_key;
   const worktree: ManagedWorktreeRecord = {
     id: row.worktree_id,
@@ -63,6 +55,17 @@ it.each([
   };
   await replaceSessionEntry(scope, session);
   const cfg = { session: { store: storePath } };
+  return { row, sessionKey, worktree, scope, session, cfg };
+}
+
+it.each([
+  ["retired worktree", "Worktree owner or binding changed"],
+  ["replaced worktree", "Worktree owner or binding changed"],
+  ["deleted session", "Local sandbox workspace authority changed"],
+  ["rotated session", "Local sandbox workspace authority changed"],
+  ["released publication", "GitHub publication session lifecycle changed"],
+])("refuses the next filesystem effect after %s", async (change, refusal) => {
+  const { row, sessionKey, worktree, scope, session, cfg } = await managedWorkspace();
   using publication =
     change === "released publication"
       ? await prepareGitHubPublicationSession(sessionKey, { agentId: "main", cfg })
@@ -139,37 +142,18 @@ it.each([
 });
 
 it("retains local-workspace authority through browser transaction and commit grants", async () => {
-  const { root } = state;
-  const sessionKey = "agent:main:browser-authority";
-  const worktree: ManagedWorktreeRecord = {
-    id: "browser-worktree",
-    name: "browser",
-    repoFingerprint: "synthetic-browser-repo",
-    repoRoot: path.join(root, "repo"),
-    path: path.join(root, "checkout"),
-    branch: "openclaw/browser",
-    baseRef: "main",
-    ownerKind: "session",
-    ownerId: sessionKey,
-    createdAt: 1,
-    lastActiveAt: 1,
-  };
-  await insertRegistryWorktree(process.env, worktree);
-  const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-  const sessionTarget = { agentId: "main", sessionKey, storePath };
-  const session = {
-    sessionId: "browser-session",
-    updatedAt: 1,
-    worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
-  };
-  replaceSessionEntrySync(sessionTarget, session);
+  const { sessionKey, worktree, scope, session, cfg } = await managedWorkspace({
+    ...localWorkspaceProjectionFixture("browser-worktree", state.root),
+    session_key: "agent:main:browser-authority",
+    session_id: "browser-session",
+  });
 
   class WorkspaceRevokedError extends Error {}
   const refusal = new WorkspaceRevokedError("Browser workspace authority revoked");
   let stage: SqliteWorkerAdmissionRequest["stage"] | undefined;
   let revokeAt: SqliteWorkerAdmissionRequest["stage"] | undefined;
   const ownerParams = {
-    cfg: { session: { store: storePath } },
+    cfg,
     agentId: "main",
     sessionKey,
     workspaceDir: worktree.path,
@@ -224,7 +208,7 @@ it("retains local-workspace authority through browser transaction and commit gra
     expect((await readBrowserRegistry()).entries).toEqual([entry]);
   }
   revokeAt = undefined;
-  await replaceSessionEntry(sessionTarget, {
+  await replaceSessionEntry(scope, {
     ...session,
     lifecycleRevision: "replacement",
     updatedAt: 2,

@@ -157,7 +157,11 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
     case "message":
       return previous.kind === "message" && sameFields(previous, next, CHAT_ITEM_FIELDS.message);
     case "notice":
-      return previous.kind === "notice" && sameFields(previous, next, CHAT_ITEM_FIELDS.notice);
+      return (
+        previous.kind === "notice" &&
+        sameFields(previous, next, CHAT_ITEM_FIELDS.notice) &&
+        sameFields(previous.modelChange, next.modelChange, ["from", "to"])
+      );
     case "divider":
       return previous.kind === "divider" && sameFields(previous, next, CHAT_ITEM_FIELDS.divider);
     case "stream":

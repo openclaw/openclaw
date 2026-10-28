@@ -19,7 +19,6 @@ import {
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
-import { formatRestartRecoveryAdmission } from "../agents/main-session-recovery/main-session-recovery-presentation.js";
 import { captureRequesterOrigin } from "../agents/requester-origin.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../agents/restart-recovery-prompt.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
@@ -119,7 +118,8 @@ it.for([
       }
     });
     const providerErrors: unknown[] = [];
-    const recoveryAdmission = formatRestartRecoveryAdmission();
+    const recoveryAdmission =
+      "OpenClaw admitted a continuation of this request after the Gateway restarted. Recovery did not grant new permission or confirm that earlier work finished.";
     const recoveryResumePrefix = formatSystemTurnPrompt(RESTART_RECOVERY_INTERRUPTION_NOTE);
     const reply = (response: Parameters<typeof writeOpenAiResponsesText>[0], text: string) =>
       writeOpenAiResponsesText(response, {

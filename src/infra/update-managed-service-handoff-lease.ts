@@ -298,8 +298,23 @@ function createLeaseStore(
     admit,
     originalUpdateAdmissions,
   });
-  const { storedCurrent, originalAllowsMutation, childAliases, mutationCurrent, current } =
-    createManagedHandoffMutationReader({ withDatabase, row, handle, sameRow, currentLegacyParent });
+  const {
+    storedCurrent,
+    originalAllowsMutation,
+    childAliases,
+    mutationCurrent,
+    current,
+    owns,
+    ownsDelegation,
+  } = createManagedHandoffMutationReader({
+    withDatabase,
+    row,
+    handle,
+    sameRow,
+    currentLegacyParent,
+    isProcessIdentityCurrent,
+    acceptSelfIdentity,
+  });
   const cancelUpdate = createManagedHandoffCancellation({
     existingIdentity: options.existingIdentity,
     originalUpdateAdmissions,
@@ -316,18 +331,6 @@ function createLeaseStore(
     deleteRow,
     processState,
   });
-  function owns(lease: ManagedHandoffLease, role: "helper" | "executor" = "helper") {
-    return (
-      current(lease) &&
-      !(
-        lease.action.kind === "triage" &&
-        ["closing", "closed", "uncertain"].includes(lease.action.phase)
-      ) &&
-      lease[role].pid === process.pid &&
-      isProcessIdentityCurrent(lease.helper) &&
-      acceptSelfIdentity(lease[role])
-    );
-  }
   function acceptParentBoundExecutor(lease: ManagedHandoffLease) {
     return (
       current(lease) &&
@@ -675,6 +678,7 @@ function createLeaseStore(
     retarget,
     activate,
     owns,
+    ownsDelegation,
     hasUnsettledChildren,
     readCommandChildren,
     acceptParentBoundExecutor,

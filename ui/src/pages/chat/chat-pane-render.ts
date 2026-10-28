@@ -509,7 +509,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         state.settings = patchSettings({ composerHoldToRecord: enabled });
       },
       onOpenTalkSettings: () => this.context.navigate("talk"),
-      onOpenDictationSettings: () => this.context.navigate("model-setup"),
+      onOpenDictationSettings: () => this.context.navigate("talk"),
       suggestionComposer: suggestionViewer,
       typingActors: multiIdentity ? this.collaboration.typingViews : [],
       typingOverflow: multiIdentity ? this.collaboration.typingOverflow : undefined,

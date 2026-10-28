@@ -12,6 +12,7 @@ import type { ModelFallbackRouteResolution } from "../../model-fallback.types.js
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
 import type { ReplyDeliveryFactsObserver } from "../../reply-completion.js";
 import type { BoundAgentRunSessionTarget } from "../../run-session-target.types.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { ResolvedRunEntryModelSelection } from "../run-entry.types.js";
@@ -116,6 +117,8 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
       readonly target: Readonly<BoundAgentRunSessionTarget & SessionTranscriptTargetBinding>;
       assertCurrent: PreparedSessionSourceAssertion;
     };
+    /** Frozen source-attempt model view; transcript writer custody remains unchanged. */
+    settledTurnFinalizationMessages?: readonly AgentMessage[];
     compactionCountOwner?: "subscription" | "caller";
     /** Current-run committed plan facts; retained across attempts, never loaded from history. */
     completionCheck?: EmbeddedRunCompletionCheck;
