@@ -11,7 +11,7 @@ export function createMockChannelManager(overrides?: Partial<ChannelManager>): C
     startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
     captureAccountRestart: vi.fn(
-      (channelId, accountId, reason, options) => async (shouldContinue) => {
+      (channelId, accountId, reason, options) => async (shouldContinue: () => boolean) => {
         if (!shouldContinue()) {
           return false;
         }
