@@ -17,6 +17,7 @@ import {
   writeSessionSqliteMigrationManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
+import { readMainDatabasePosixLocks } from "../infra/sqlite-posix-locks.test-support.js";
 import * as sqlitePrivateDirectory from "../infra/sqlite-private-directory.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -443,6 +444,10 @@ it("retires verified originals after remount while preserving current SQLite and
   // Keep real source sidecars present independently of cached owner inspection.
   using sourceReader = new DatabaseSync(sqlitePath, { readOnly: true });
   sourceReader.prepare("SELECT count(*) FROM sqlite_schema").get();
+  const locks =
+    process.platform === "linux" || process.platform === "darwin"
+      ? readMainDatabasePosixLocks(sqlitePath)
+      : undefined;
   const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
   expect(artifact(preview, originalMove.archivePath)?.outcome).toBe("candidate");
   const cleanup = await retire(
@@ -450,11 +455,21 @@ it("retires verified originals after remount while preserving current SQLite and
     async () => {
       expect(fs.existsSync(`${sqlitePath}-wal`)).toBe(true);
       expect(fs.existsSync(`${sqlitePath}-shm`)).toBe(true);
+      // Read-only opens can update sidecar bookkeeping without changing history.
+      using reader = new DatabaseSync(sqlitePath, { readOnly: true });
+      reader.prepare("SELECT count(*) FROM sqlite_schema").get();
+      for (const suffix of ["-wal", "-shm"]) {
+        fs.utimesSync(`${sqlitePath}${suffix}`, new Date(0), new Date(0));
+      }
       return true;
     },
     preview,
   );
   expect(cleanup).toMatchObject({ status: "complete", totals: { removedFiles: 2 } });
+  if (locks) {
+    expect(locks.length).toBeGreaterThan(0);
+    expect(readMainDatabasePosixLocks(sqlitePath)).toEqual(locks);
+  }
   expect(cleanup.totals.removedBytes).toBeGreaterThan(original.length);
   expectMissing(originalMove.archivePath);
   expectFiles(databaseBefore, sqlitePath);

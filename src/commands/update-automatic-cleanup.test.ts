@@ -175,7 +175,7 @@ async function complete(runId: string, at: number, json = true) {
   return result;
 }
 
-async function migrationOriginal() {
+async function migrationOriginal(deviceChanged = false) {
   await closeOpenClawStateDatabaseAsync();
   const source = resolveOpenClawStateSqlitePath(env);
   const backupId = randomUUID();
@@ -191,10 +191,20 @@ async function migrationOriginal() {
       completeDoctorMigrationBackups(env, [source]);
     },
   });
+  if (deviceChanged) {
+    const manifestPath = path.join(
+      resolveSessionSqliteMigrationRunsDir(env),
+      `startup-migration-${backupId}.json`,
+    );
+    const manifest = readSessionSqliteMigrationManifest(manifestPath)!;
+    const identity = manifest.targets[0]!.databaseIdentity!;
+    identity.dev = String(BigInt(identity.dev) + 1n);
+    writeSessionSqliteMigrationManifest({ manifestPath, manifest });
+  }
   return backup;
 }
 
-it("retires the previous successful generation and migration originals, but retains current and protected recovery", async () => {
+it("retires previous recovery after remount while protecting current recovery", async () => {
   const { runId: failed, directory: failedCapture } = failedRun(now - 240_000, [
     "staging",
     "validating",
@@ -202,7 +212,7 @@ it("retires the previous successful generation and migration originals, but reta
   ]);
   finishUpdateRun(failed, { status: "failed" }, { env });
   const { runId: first, directory: firstCapture } = capturedRun(now - 120_000);
-  const backup = await migrationOriginal();
+  const backup = await migrationOriginal(true);
   await complete(first, now + 1_000);
   expect(fs.existsSync(firstCapture)).toBe(true);
   expect(fs.existsSync(backup)).toBe(true);

@@ -29,7 +29,12 @@ import {
   verifyTranscriptEvents,
   verifyCanonicalSessionTranscriptSources,
 } from "../infra/session-sqlite-transcript-verification.js";
+import {
+  parseSqliteFileGeneration,
+  type SqliteFileGeneration,
+} from "../infra/sqlite-file-generation.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { runSqliteReadOnlyWorkerSync } from "../infra/sqlite-readonly-worker.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -42,7 +47,7 @@ import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-ma
 export function createRecoveryDestinationVerifier(stateDir: string) {
   const destinations = new Map<
     string,
-    { agentId?: string; files: (fs.BigIntStats | undefined)[] }
+    { agentId?: string; files: (fs.BigIntStats | undefined)[]; generation: SqliteFileGeneration }
   >();
   return (refs: Iterable<{ target: SessionSqliteMigrationTargetManifest }>) => {
     for (const { target } of refs) {
@@ -57,32 +62,49 @@ export function createRecoveryDestinationVerifier(stateDir: string) {
       if (!target.databaseIdentity && agentId !== target.agentId) {
         throw new Error("destination database ownership cannot be verified");
       }
-      // Even a read-only SQLite connection can create WAL/SHM files. Establish the baseline
-      // after owner inspection closes it; later checks only stat, never reopen or hash the DB.
+      // Establish the baseline after owner inspection closes its SQLite reader. Later checks
+      // never reopen SQLite: that would itself change sidecar bookkeeping.
       const files = paths.map((file) =>
         fs.lstatSync(file, { bigint: true, throwIfNoEntry: false }),
       );
       if (
         !files[0]?.isFile() ||
-        (target.databaseIdentity &&
-          (String(files[0]?.dev) !== target.databaseIdentity.dev ||
-            String(files[0]?.ino) !== target.databaseIdentity.ino)) ||
+        (target.databaseIdentity && String(files[0]?.ino) !== target.databaseIdentity.ino) ||
         files.some((file) => file && (!file.isFile() || file.nlink !== 1n)) ||
         (expected &&
           files.some((file, index) =>
-            (["dev", "ino", "ctimeNs", "mtimeNs", "size"] as const).some(
-              (key) => file?.[key] !== expected.files[index]?.[key],
-            ),
+            (index === 0
+              ? (["ino", "ctimeNs", "mtimeNs", "size"] as const)
+              : (["dev", "ino", "size"] as const)
+            ).some((key) => file?.[key] !== expected.files[index]?.[key]),
           ))
       ) {
         throw new Error("Recovery destination database changed; preview cleanup again.");
       }
-      if (!expected) {
-        destinations.set(target.sqlitePath, {
-          agentId,
-          files,
-        });
+      // Shipped manifests record no destination digest, only dev/ino. APFS dev can change
+      // after remount, so retain the recorded inode and bind this run to the current bytes.
+      // Ignore SHM reader bookkeeping, but freshly fingerprint WAL/journal contents even
+      // on coarse filesystem clocks. Raw descriptor closes stay outside the serving process.
+      const generation = parseSqliteFileGeneration(
+        runSqliteReadOnlyWorkerSync(target.sqlitePath, undefined, "file-generation"),
+      );
+      if (
+        (
+          [
+            ["database", 0],
+            ["wal", 1],
+            ["journal", 3],
+          ] as const
+        ).some(
+          ([key, index]) =>
+            generation[key]?.ino !== files[index]?.ino ||
+            generation[key]?.size !== files[index]?.size ||
+            (expected && generation[key]?.sha256 !== expected.generation[key]?.sha256),
+        )
+      ) {
+        throw new Error("Recovery destination database changed; preview cleanup again.");
       }
+      destinations.set(target.sqlitePath, { agentId, files, generation });
     }
   };
 }
