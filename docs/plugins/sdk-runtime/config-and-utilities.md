@@ -443,8 +443,10 @@ deadline into a local budget once when admitting the work.
 `raceWithTimeout(operation, timeoutMs, onTimeout, { ref?, signal?, onAbort? })`. Pass an existing
 promise, or a function returning a promise when the timer must start before the
 work. The timeout callback returns a fallback or throws the caller's error.
-Delays use native `setTimeout` semantics; the timer keeps the process alive
-unless `ref` is `false`, and is cleared when the race settles.
+Delays larger than Node's timer limit, plus positive `Infinity`, saturate at the largest safe timer
+delay instead of overflowing into a near-immediate timeout. Supported delays retain their exact
+native `setTimeout` semantics. The timer keeps the process alive unless `ref` is `false`, and is
+cleared when the race settles.
 
 When `signal` is supplied, the same wait owns cancellation and clears both the
 timer and listener on any outcome. `onAbort(signal)` returns a fallback or throws
