@@ -123,18 +123,20 @@ describe("collectArchivedSources scan reuse", () => {
     writeManifest("run-a", manifest("run-a", [move("alpha")]));
     const otherSqlitePath = path.join(root, "agents", "main", "agent", "replacement.sqlite");
 
-    expect([...collectArchivedSources({ agentId: "main", sqlitePath, storePath }, env).keys()])
-      .toHaveLength(1);
+    expect([
+      ...collectArchivedSources({ agentId: "main", sqlitePath, storePath }, env).keys(),
+    ]).toHaveLength(1);
     expect(reads.manifests).toBe(1);
 
     // Same agent and store, different database: the manifest does not describe it.
-    expect(
-      [...collectArchivedSources({ agentId: "main", sqlitePath: otherSqlitePath, storePath }, env)],
-    ).toEqual([]);
+    expect([
+      ...collectArchivedSources({ agentId: "main", sqlitePath: otherSqlitePath, storePath }, env),
+    ]).toEqual([]);
     expect(reads.manifests).toBe(2);
 
-    expect([...collectArchivedSources({ agentId: "main", sqlitePath, storePath }, env).keys()])
-      .toHaveLength(1);
+    expect([
+      ...collectArchivedSources({ agentId: "main", sqlitePath, storePath }, env).keys(),
+    ]).toHaveLength(1);
     expect(reads.manifests).toBe(2);
   });
 

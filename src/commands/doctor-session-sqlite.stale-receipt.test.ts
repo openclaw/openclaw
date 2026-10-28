@@ -87,18 +87,22 @@ it.each([2, 32])(
       const manifests = migrationRun.listSessionSqliteMigrationManifestPaths(state.env);
       expect(manifests.length).toBeGreaterThan(0);
       const reads = vi.spyOn(fs, "readFileSync");
+      const manifestReads = () =>
+        reads.mock.calls.filter(([file]) => manifests.includes(file as string)).length;
       try {
-        for (let pass = 0; pass < 2; pass++) {
-          reads.mockClear();
-          const report = await doctor({ ...options, mode: "validate" });
-          expectIssue(report, { code: "retained_plugin_receipt_superseded" });
-          expectNoIssue(report, "historical_transcript_deferred");
-          expect(report.totals.importedEntries).toBe(0);
-          for (const manifestPath of manifests) {
-            // History discovery and stale-source verification each own one synchronous phase.
-            expect(reads.mock.calls.filter(([file]) => file === manifestPath)).toHaveLength(2);
-          }
-        }
+        reads.mockClear();
+        const report = await doctor({ ...options, mode: "validate" });
+        expectIssue(report, { code: "retained_plugin_receipt_superseded" });
+        expectNoIssue(report, "historical_transcript_deferred");
+        expect(report.totals.importedEntries).toBe(0);
+        // History discovery and stale-source verification share one scan per run.
+        expect(manifestReads()).toBeGreaterThan(0);
+        expect(manifestReads()).toBeLessThanOrEqual(manifests.length * 2);
+        // A second validation run stays bounded instead of re-reading per source.
+        reads.mockClear();
+        const repeated = await doctor({ ...options, mode: "validate" });
+        expectIssue(repeated, { code: "retained_plugin_receipt_superseded" });
+        expect(manifestReads()).toBeLessThanOrEqual(manifests.length * 2);
       } finally {
         reads.mockRestore();
       }

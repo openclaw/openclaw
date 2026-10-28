@@ -93,7 +93,6 @@ export function collectArchivedSources(
   return archives;
 }
 
-
 export function existingSessionSourcePaths(
   sourcePath: string,
   target: SessionSqliteMigrationTargetInput,
