@@ -32,6 +32,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
   let restoreUpsert: () => void;
   let forkedEntry: SessionEntry | undefined;
+  let initialForkVisibility: string | undefined;
+  let visibilityDuringFork: "shared" | undefined;
   const registerSubagentRun = vi.fn();
   const startQueuedSubagentRun = vi.fn();
   const prepareSubagentSpawn = vi.fn();
@@ -75,6 +77,14 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   }
   const fork = vi.fn(async (input: unknown) => {
     const params = input as Parameters<ForkSession>[0];
+    if (read()?.visibility === "draft") {
+      initialForkVisibility = read(params.sessionKey)?.visibility ?? "shared";
+    }
+    if (visibilityDuringFork) {
+      await sessions.upsertSessionEntryCore(scope(params.sessionKey), {
+        visibility: visibilityDuringFork,
+      });
+    }
     const result = await forkSession(params);
     if (result.status === "forked") {
       forkedEntry = result.sessionEntry;
@@ -149,6 +159,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     };
     threadBindingAvailable = false;
     forkedEntry = undefined;
+    initialForkVisibility = undefined;
+    visibilityDuringFork = undefined;
     fork.mockClear();
     registerSubagentRun.mockReset().mockResolvedValue(undefined);
     startQueuedSubagentRun.mockReset().mockResolvedValue(false);
@@ -307,6 +319,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       parentTokens: undefined,
       preparedMode: "fork",
       operation: "fork",
+      changedChildVisibility: undefined,
     },
     {
       scenario: "a queued oversized fork starts isolated",
@@ -314,10 +327,21 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       parentTokens: 150_000,
       preparedMode: "isolated",
       operation: "create",
+      changedChildVisibility: undefined,
+    },
+    {
+      scenario: "the child is explicitly shared during fork preparation",
+      args: { context: "fork" },
+      parentTokens: undefined,
+      preparedMode: "fork",
+      operation: "fork",
+      changedChildVisibility: "shared",
     },
   ] as const)(
     "records the committed context when $scenario",
-    async ({ args, parentTokens, preparedMode, operation }) => {
+    async ({ args, parentTokens, preparedMode, operation, changedChildVisibility }) => {
+      await sessions.upsertSessionEntryCore(parentScope(), { visibility: "draft" });
+      visibilityDuringFork = changedChildVisibility;
       prepareSubagentSpawn.mockResolvedValue(undefined);
       startQueuedSubagentRun.mockResolvedValue(true);
       threadBindingAvailable = true;
@@ -364,6 +388,8 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
           "accepted child key",
         );
         const child = expectDefined(read(childSessionKey), "accepted child entry");
+        expect(initialForkVisibility).toBe("draft");
+        expect(child.visibility).toBe(changedChildVisibility ?? "draft");
         expect(prepareSubagentSpawn).toHaveBeenCalledWith(
           expect.objectContaining({
             contextMode: preparedMode,

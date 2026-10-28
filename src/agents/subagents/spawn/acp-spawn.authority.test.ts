@@ -152,6 +152,7 @@ it.each([
     if (live) {
       await sessionAccessor.upsertSessionEntryCore(parentScope, {
         inheritedGitContributorProfileIds: ["unrelated-a", "unrelated-b"],
+        visibility: "draft",
       });
       await sessionAccessor.recordSessionParticipant(parentScope, {
         identity: { type: "profile", id: "human-contributor" },
@@ -279,12 +280,14 @@ it.each([
     const pausesRuntime = stage === "runtime" || thread;
     const initializesRuntime = pausesRuntime || stage === "metadata" || stage === "initialized";
     const ensuredSessions: string[] = [];
+    let initialChildVisibility: string | undefined;
     const closeRuntime = vi.fn(async () => {});
     const runtime: AcpRuntime = {
       ownerAwareSessions: 1,
       async ensureSession(input) {
         if (live) {
           const entry = readChild(input.sessionKey);
+          initialChildVisibility = entry?.visibility ?? "shared";
           expect({
             profiles: entry?.inheritedGitContributorProfileIds,
             participants: entry?.participants ?? [],
@@ -431,6 +434,7 @@ it.each([
       await work.drain();
       if (live) {
         expect(result).toMatchObject({ details: { status: "accepted", childSessionKey } });
+        expect(initialChildVisibility).toBe("draft");
         const events = (await listSessionStateEventsSince(childSessionKey, "fixture", 0)).events;
         expect(events.map((event) => event.kind)).toEqual(["created", "child_spawned"]);
         const spawned = events[1]!;
@@ -448,6 +452,7 @@ it.each([
           material_sequence: spawned.sequence,
         });
         expect(sourceBoundary.entry).toMatchObject({
+          visibility: "draft",
           spawnedBy: parentSessionKey,
           parentSessionKey,
           spawnedBySessionId: "parent-session",

@@ -522,6 +522,9 @@ export async function spawnAcpDirect(
             ...(params.label ? { label: params.label } : {}),
             // Same trust rules as native spawn: stamped last, from trusted host facts only.
             ...parentLineage,
+            ...(parentEntry?.visibility === "draft" && cfg.session?.sharing?.drafts !== false
+              ? { visibility: "draft" as const }
+              : {}),
           },
           sessionEntryCommitGuardOptions(ctx.assertActive),
         )) ?? undefined;

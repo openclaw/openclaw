@@ -297,6 +297,10 @@ export async function createInitialSubagentSession(input: {
                   ...childSessionIdentity,
                   // Stamp after all request patches so model input cannot create a grant.
                   ...parentLineage,
+                  ...(parentEntry?.visibility === "draft" &&
+                  params.cfg.session?.sharing?.drafts !== false
+                    ? { visibility: "draft" as const }
+                    : {}),
                   ...(parentEntry?.skillLibrarySelections
                     ? {
                         // Committed pins belong to the admitted turn, even if the parent refreshes.

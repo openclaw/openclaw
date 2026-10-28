@@ -1,7 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
-import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { normalizeAcceptedSessionSpawnResult as acceptedSpawn } from "../../accepted-session-spawn.js";
 import { readAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
@@ -40,11 +43,36 @@ export function registerGuestSpawnCases(
     waitForEmbeddedRun: WaitForEmbeddedRun;
   },
 ) {
-  it.for([false, true])(
-    "launches an owned hidden child and returns its result (audit=%s)",
-    async (audit, { signal }) => {
+  it.for([
+    { audit: false, visibility: "shared", context: "isolated" },
+    { audit: true, visibility: "shared", context: "isolated" },
+    { audit: false, visibility: "draft", context: "isolated" },
+    { audit: false, visibility: "draft", context: "fork" },
+  ] as const)(
+    "launches an owned $visibility child and returns its result (audit=$audit, context=$context)",
+    async ({ audit, visibility, context }, { signal }) => {
       const { bound, source, modelPolicy, scopes } = await options.createGuestParent(audit);
+      await upsertSessionEntryCore(
+        { storePath: bound.storePath, sessionKey: bound.parentSessionKey },
+        { visibility },
+      );
       const readSession = sessionReader(bound.storePath);
+      if (context === "fork") {
+        const parent = expectDefined(readSession(bound.parentSessionKey), "fork parent");
+        for (const message of [
+          { role: "user", content: "Plan a small picnic." },
+          { role: "assistant", content: "Let us compare indoor backups.", stopReason: "stop" },
+        ]) {
+          await appendTranscriptMessage(
+            {
+              storePath: bound.storePath,
+              sessionKey: bound.parentSessionKey,
+              sessionId: parent.sessionId,
+            },
+            { message },
+          );
+        }
+      }
       const { runtime } = await options.createBoundGateway(bound);
       const nativeAnnounce = await vi.importActual<
         typeof import("../announce/subagent-announce.js")
@@ -80,9 +108,10 @@ export function registerGuestSpawnCases(
         return result;
       });
       let childRunId: string | undefined;
+      let initialChildVisibility: string | undefined;
       const failures: unknown[] = [];
       await collectFailure(failures, async () => {
-        const result = await createBoundSpawnInvocation(bound, hiddenSpawn)();
+        const result = await createBoundSpawnInvocation(bound, { ...hiddenSpawn, context })();
         const details = expectDefined(
           acceptedSpawn(result),
           `accepted child: ${JSON.stringify(result.details)}`,
@@ -99,6 +128,7 @@ export function registerGuestSpawnCases(
           },
           sandbox: "required",
         });
+        initialChildVisibility = readSession(details.childSessionKey)?.visibility ?? "shared";
         expect(
           await settleRequesterAfterSessionSpawns({
             requesterSessionKey: bound.parentSessionKey,
@@ -123,6 +153,7 @@ export function registerGuestSpawnCases(
       modelResult.resolve(visibleResult("guest child complete"));
       failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));
       options.throwBoundFailures(failures);
+      expect(initialChildVisibility).toBe(visibility);
     },
   );
 

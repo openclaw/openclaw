@@ -11,6 +11,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   loadSessionEntry,
+  loadTranscriptEvents,
   onSessionIdentityMutation,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
@@ -35,7 +36,11 @@ import {
 } from "./server.sessions.create.test-support.js";
 import * as sessionStoreWorker from "./session-utils-store-worker.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
-import { sessionStoreEntry, directSessionReq } from "./test/server-sessions.test-helpers.js";
+import {
+  sessionStoreEntry,
+  directSessionReq,
+  seedSessionTranscript,
+} from "./test/server-sessions.test-helpers.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
 
@@ -61,75 +66,127 @@ async function holdSessionWriter(storePath: string) {
   return { releaseWriter, heldWriter };
 }
 
-test("sessions.create atomically persists trusted visible-spawn tool policy with required parent", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const parentSessionKey = "agent:main:main";
-  const actor = { type: "human", source: "profile", id: "visible-spawn-creator" } as const;
-  await writeSessionStore({
-    entries: {
-      [parentSessionKey]: {
-        ...sessionStoreEntry("sess-visible-spawn-parent"),
-        createdVia: "operator",
-        createdActor: actor,
-        sandbox: "required",
+test.each([
+  { drafts: true, fork: false },
+  { drafts: true, fork: true },
+])(
+  "sessions.create preserves a Draft spawn parent's audience (draft selection=$drafts, fork=$fork)",
+  async ({ drafts, fork }) => {
+    const { storePath } = await createSessionStoreDir();
+    const parentSessionKey = "agent:main:main";
+    const actor = { type: "human", source: "profile", id: "visible-spawn-creator" } as const;
+    await writeSessionStore({
+      entries: {
+        [parentSessionKey]: {
+          ...sessionStoreEntry("sess-visible-spawn-parent"),
+          createdVia: "operator",
+          createdActor: actor,
+          sandbox: "required",
+          visibility: "draft",
+        },
       },
-    },
-  });
+    });
+    if (fork) {
+      await seedSessionTranscript({
+        agentId: "main",
+        sessionId: "sess-visible-spawn-parent",
+        sessionKey: parentSessionKey,
+        storePath,
+        messages: [
+          { role: "user", content: "Synthetic picnic planning context" },
+          { role: "assistant", content: "We can plan around the weather.", stopReason: "stop" },
+        ],
+      });
+    }
+    testState.sessionConfig = { sharing: { drafts } };
 
-  const created = await directSessionReq<CreatedSessionPayload>(
-    "sessions.create",
-    {
-      agentId: "main",
-      label: "Restricted visible child",
-      parentSessionKey,
-      spawnDepth: 1,
-    },
-    {
-      client: {
-        connect: { scopes: ["operator.write"] },
-        internal: {
-          syntheticClient: true,
-          operatorRoleActor: { kind: "system" },
-          sessionCreation: {
-            via: "spawn",
-            actor: { type: "agent", id: "main" },
-            requesterSessionKey: parentSessionKey,
-            completionOwnerSessionKey: "agent:main:discord:direct:alice",
-            inheritedToolPolicy: {
-              version: 1,
-              allow: ["read", "sessions_spawn"],
-              deny: ["exec"],
+    const created = await directSessionReq<CreatedSessionPayload>(
+      "sessions.create",
+      {
+        agentId: "main",
+        label: "Restricted visible child",
+        parentSessionKey,
+        spawnDepth: 1,
+        fork,
+      },
+      {
+        client: {
+          connect: { scopes: ["operator.write"] },
+          internal: {
+            syntheticClient: true,
+            operatorRoleActor: { kind: "system" },
+            sessionCreation: {
+              via: "spawn",
+              actor: { type: "agent", id: "main" },
+              requesterSessionKey: parentSessionKey,
+              completionOwnerSessionKey: "agent:main:discord:direct:alice",
+              inheritedToolPolicy: {
+                version: 1,
+                allow: ["read", "sessions_spawn"],
+                deny: ["exec"],
+              },
             },
           },
-        },
-      } as never,
-    },
-  );
+        } as never,
+      },
+    );
 
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
-  expect(created.payload?.entry).toMatchObject({
-    label: "Restricted visible child",
-    spawnedBy: parentSessionKey,
-    completionOwnerSessionKey: "agent:main:discord:direct:alice",
-    parentSessionKey,
-    spawnDepth: 1,
-    inheritedToolPolicyVersion: 1,
-    inheritedToolAllow: ["read", "sessions_spawn"],
-    inheritedToolDeny: ["exec"],
-  });
-  const key = requireNonEmptyString(created.payload?.key, "visible child key");
-  const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-  expect(child).toMatchObject({
-    spawnedBy: parentSessionKey,
-    completionOwnerSessionKey: "agent:main:discord:direct:alice",
-    inheritedToolPolicyVersion: 1,
-    inheritedToolAllow: ["read", "sessions_spawn"],
-    inheritedToolDeny: ["exec"],
-    createdActor: actor,
-  });
-  expect(child?.sandbox).toBe("required");
-});
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
+    expect(created.payload?.entry).toMatchObject({
+      label: "Restricted visible child",
+      spawnedBy: parentSessionKey,
+      completionOwnerSessionKey: "agent:main:discord:direct:alice",
+      parentSessionKey,
+      spawnDepth: 1,
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read", "sessions_spawn"],
+      inheritedToolDeny: ["exec"],
+      visibility: "draft",
+    });
+    const key = requireNonEmptyString(created.payload?.key, "visible child key");
+    const child = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    expect(child).toMatchObject({
+      spawnedBy: parentSessionKey,
+      completionOwnerSessionKey: "agent:main:discord:direct:alice",
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["read", "sessions_spawn"],
+      inheritedToolDeny: ["exec"],
+      createdActor: actor,
+    });
+    expect(child?.sandbox).toBe("required");
+    expect(child?.visibility).toBe("draft");
+    if (fork) {
+      expect(
+        await loadTranscriptEvents({
+          agentId: "main",
+          sessionKey: key,
+          sessionId: requireNonEmptyString(child?.sessionId, "forked child session id"),
+          storePath,
+        }),
+      ).toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({ content: "Synthetic picnic planning context" }),
+        }),
+      );
+    }
+    const explicitShared = await directSessionReq<CreatedSessionPayload>("sessions.create", {
+      agentId: "main",
+      parentSessionKey,
+      visibility: "shared",
+    });
+    expect(explicitShared.ok, JSON.stringify(explicitShared.error)).toBe(true);
+    expect(explicitShared.payload?.entry?.visibility).toBe("shared");
+    const publishedParent = await directSessionReq("session.visibility.set", {
+      sessionKey: parentSessionKey,
+      visibility: "shared",
+    });
+    expect(publishedParent.ok, JSON.stringify(publishedParent.error)).toBe(true);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.visibility).toBe(
+      "draft",
+    );
+  },
+);
 
 test("sessions.create persists trusted agent-runtime spawn permissions", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -201,6 +258,7 @@ test("sessions.create persists trusted agent-runtime spawn permissions", async (
     createdActor: { type: "agent", id: "main" },
   });
   expect(child?.sandbox).toBeUndefined();
+  expect(child?.visibility ?? "shared").toBe("shared");
 });
 
 test("sessions.create rejects a replaced required spawn parent before child creation", async () => {
