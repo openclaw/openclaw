@@ -490,6 +490,29 @@ it("reconciles an orphaned recovery fence before admitting channel input", async
   expect(retry).toHaveBeenCalledOnce();
 });
 
+it("admits the next room message after a live stop without restart recovery", async () => {
+  // openclaw#1468: a stop leaves a killed outcome beside its message-tool-only claim.
+  const f = recoveryFixture({
+    status: "killed",
+    restartRecoveryDeliveryRunId: "stopped-run",
+    restartRecoverySourceIngress: "channel",
+    restartRecoverySourceReplyDeliveryMode: "message_tool_only",
+    restartRecoveryDeliveryContext: { channel: "discord", to: "discord:channel:room" },
+  });
+  const context = createRecoveryGatewayContext(f.storePath);
+  const retry = vi.spyOn(restartRecovery, "retryRestartAbortedMainSessionRecovery");
+  const selected = await f.claim();
+  owned(await f.admit({ mailboxClaim: selected, resolveGatewayContext: () => context }));
+  expect(retry).not.toHaveBeenCalled();
+  expect(context.recoveryRuntime?.sendRecoveryNotice).not.toHaveBeenCalled();
+  expect(f.read()).toMatchObject({
+    status: "killed",
+    abortedLastRun: true,
+    restartRecoveryDeliveryRunId: "stopped-run",
+  });
+  expect(f.read()?.mainRestartRecovery).toBeUndefined();
+});
+
 it("revalidates channel authority before reclaiming orphaned recovery", async ({ signal }) => {
   const f = fencedRecovery("admitted-recovery", 1, channelDelivery);
   const selected = await f.claim();

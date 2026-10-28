@@ -75,7 +75,7 @@ async function claimFixture(sessionKey: string, overrides: Partial<InternalSessi
 it.each([
   [undefined, true, false],
   ["interrupted", true, false],
-  ["killed", false, false],
+  ["killed", true, false],
   ["failed", false, false],
   ["interrupted", false, true],
 ] as const)(
