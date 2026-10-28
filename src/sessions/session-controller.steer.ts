@@ -125,6 +125,11 @@ export async function beginSessionControllerSteer(
         injection.finish(true);
         throw error;
       }
+      if (nativeOutcome.status === "rejected" && nativeOutcome.withdrawn) {
+        injection.withdraw();
+        injection.finish(false);
+        return nativeOutcome;
+      }
       injection.finish(
         accepted || nativeOutcome.status === "accepted" || nativeOutcome.status === "indeterminate",
       );

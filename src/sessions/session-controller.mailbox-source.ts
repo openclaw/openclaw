@@ -68,7 +68,7 @@ export function beginSessionControllerSourceInjection(
     input.custody.cancellationRetired ||
     input.abortSignal.aborted
   ) {
-    return { admit: async () => false, accepted() {}, finish() {} };
+    return { admit: async () => false, accepted() {}, withdraw() {}, finish() {} };
   }
   const phase = input.phase;
   const olderReservations = input.mailbox.entries
@@ -199,6 +199,15 @@ export function beginSessionControllerSourceInjection(
         // Native commits can depend on later input, e.g. an answer to a pending question.
         settleSessionControllerSourceInjectionOrder(input, true);
       }
+    },
+    withdraw() {
+      if (finished || input.injection !== pending) {
+        return;
+      }
+      // Unlike a bare rejection, the runtime proved removal before delivery, so
+      // the input was never used and may run as its own turn. Released order is
+      // not re-held: a steer admitted meanwhile may still land first.
+      pending.accepted = false;
     },
     finish,
   };

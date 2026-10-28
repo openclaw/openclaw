@@ -32,6 +32,7 @@ import {
   attachSteerBackend,
   createSteerParams,
 } from "./agent-runner-steer-adoption.test-support.js";
+import { MessageInjectionWithdrawnError } from "./message-injection-authority.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { clearSessionQueues } from "./queue/cleanup.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
@@ -318,7 +319,7 @@ describe("question response custody through reply adoption", () => {
     },
   );
 
-  it.for(["accepted", "rejected", "indeterminate"] as const)(
+  it.for(["accepted", "rejected", "indeterminate", "withdrawn"] as const)(
     "injects the next native steer after an early ACK and keeps the first ahead through a %s outcome",
     async (outcome, { signal }) => {
       const key = "agent:main:steer-outcome-" + outcome;
@@ -380,19 +381,26 @@ describe("question response custody through reply adoption", () => {
             nativeOutcome.reject(
               outcome === "indeterminate"
                 ? new QuestionAnswerUnconfirmedError("native input outcome unknown")
-                : new Error("native queue rejected after acceptance"),
+                : outcome === "withdrawn"
+                  ? new MessageInjectionWithdrawnError("active session ended before commit")
+                  : new Error("native queue rejected after acceptance"),
             );
           }
           await Promise.all([firstSteer, secondSteer]);
-          await Promise.all(
-            [first, second].map((run) =>
-              captureSessionControllerSourceSettlement(run.controllerInput!),
-            ),
-          );
+          await captureSessionControllerSourceSettlement(second.controllerInput!);
           expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first", "second"]);
-          expectNotCalled(followup, abandoned);
-          expect(first.controllerInput?.phase).toBe("consumed");
+          expectNotCalled(abandoned);
           expect(second.controllerInput?.phase).toBe("consumed");
+          if (outcome === "withdrawn") {
+            // Removal before delivery proves the early ACK unused: the first input
+            // stays runnable as its own turn instead of being consumed.
+            expect(first.controllerInput?.phase).toBe("waiting");
+            expect(first.controllerInput?.injection).toBeUndefined();
+            return;
+          }
+          await captureSessionControllerSourceSettlement(first.controllerInput!);
+          expectNotCalled(followup);
+          expect(first.controllerInput?.phase).toBe("consumed");
         } finally {
           nativeOutcome.resolve();
           await Promise.allSettled([firstSteer, secondSteer]);

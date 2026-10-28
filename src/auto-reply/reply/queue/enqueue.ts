@@ -381,6 +381,8 @@ function reapplyDeferredOverflow(queue: ReturnType<typeof getFollowupQueue>): vo
 type MailboxSteerReservation = {
   admit: () => Promise<"steer" | "fallback" | "cancelled">;
   accepted: (accepted: boolean) => void;
+  /** The runtime proved removal before delivery; a following fallback replays the input. */
+  withdraw: () => void;
   /** Native outcome settled without consumption, or no native handoff occurred. */
   fallback: () => void;
   /** Native outcome settled; accepted/uncertain input must never be replayed. */
@@ -476,6 +478,7 @@ export function reserveSteerCandidate(
       }
     },
     accepted: (accepted) => injection.accepted(accepted),
+    withdraw: () => injection.withdraw(),
     fallback: () => finish(false),
     consume: (disposition) => finish(true, disposition),
   };

@@ -362,7 +362,6 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
           preserveLeaf:
             attempt.skipPreparedUserTurnMessage === true ||
             isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
-          currentUserIdempotencyKey: currentUserTurnMessage?.idempotencyKey,
         });
         const reconciledCurrentUser = reconcilePrePersistedCurrentUserTurn({
           activeSession,

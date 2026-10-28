@@ -130,7 +130,13 @@ export type ReplyMessageInjectionOutcome =
   | { status: "accepted" }
   /** Terminal authority failure; the separately recorded acceptance stays unchanged. */
   | { status: "failed"; error: Error }
-  | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
+  | {
+      status: "rejected";
+      reason: ReplyMessageInjectionRejectionReason;
+      errorMessage?: string;
+      /** The runtime removed the queued input before any model saw it; earlier acceptance is void. */
+      withdrawn?: true;
+    };
 
 export type ReplyMessageInjectionAttempt = {
   /** Native run identity captured with the opaque execution owner. */
@@ -638,6 +644,8 @@ export type SessionControllerSourceAdapter = {
 export type SessionControllerSourceInjection = {
   admit(): Promise<boolean>;
   accepted(accepted: boolean): void;
+  /** Proven withdrawal returns custody that acceptance claimed; `finish(false)` then declines. */
+  withdraw(): void;
   finish(consumed: boolean): void;
 };
 

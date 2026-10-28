@@ -91,37 +91,10 @@ function isUserSessionMessageEntry(
   return entry.message.role === "user";
 }
 
-function followsCurrentUserTurn(
-  sessionManager: OrphanRepairSessionManager,
-  leaf: SessionMessageEntry,
-  currentUserIdempotencyKey: string | undefined,
-): boolean {
-  if (!currentUserIdempotencyKey) {
-    return false;
-  }
-  const visited = new Set<string>();
-  let entry = leaf.parentId ? sessionManager.getEntry(leaf.parentId) : undefined;
-  while (entry && !visited.has(entry.id)) {
-    if (
-      entry.type === "message" &&
-      entry.message.role === "user" &&
-      "idempotencyKey" in entry.message &&
-      entry.message.idempotencyKey === currentUserIdempotencyKey
-    ) {
-      return true;
-    }
-    visited.add(entry.id);
-    entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
-  }
-  return false;
-}
-
 export function resolveOrphanRepairPlan(params: {
   sessionManager: OrphanRepairSessionManager;
   prompt: string;
   preserveLeaf: boolean;
-  /** Key of this turn's user row; a user leaf after that durable row is newer accepted input. */
-  currentUserIdempotencyKey?: string;
 }): OrphanRepairPlan | undefined {
   const candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);
   if (
@@ -130,14 +103,6 @@ export function resolveOrphanRepairPlan(params: {
     !params.sessionManager.hasLoadedTranscriptTail(
       candidate.messageEntry.id,
       candidate.messageEntry.parentId,
-    ) ||
-    // Input accepted after this turn's durable user row (for example, steered into a run that
-    // then retries) is ordinary history, not an orphan: a replay resends the original row from
-    // context, so a removed or merged leaf would vanish from both the request and the transcript.
-    followsCurrentUserTurn(
-      params.sessionManager,
-      candidate.messageEntry,
-      params.currentUserIdempotencyKey,
     )
   ) {
     return undefined;

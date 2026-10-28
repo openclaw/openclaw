@@ -131,7 +131,13 @@ export function resolveReplyMessageInjectionFailure(
     (candidate) => candidate instanceof MessageInjectionTargetUnavailableError,
   );
   if (targetUnavailable) {
-    return { status: "rejected", reason: "injection_unavailable" };
+    return {
+      status: "rejected",
+      reason: "injection_unavailable",
+      ...(candidates.some((candidate) => candidate instanceof MessageInjectionWithdrawnError)
+        ? { withdrawn: true as const }
+        : {}),
+    };
   }
   const policyMismatch = candidates.findLast(
     (candidate) => candidate instanceof MessageInjectionPolicyMismatchError,

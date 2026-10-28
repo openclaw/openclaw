@@ -615,7 +615,6 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
         resetLeafAsync,
         setNextUserMessagePersistence,
         [sessionManagerReadInitialContext]: async () => ({ messages: repairedMessages }),
-        getEntry: () => undefined,
         getLeafEntry: () => ({
           id: differentLeaf ? "orphan-user" : "current-user",
           parentId: "previous-assistant",
@@ -669,56 +668,6 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
       }
     },
   );
-
-  it("keeps input steered into a failed attempt when the retry replays its persisted user", async () => {
-    const currentUser: PersistedUserTurnMessage = {
-      role: "user",
-      content: "current prompt",
-      idempotencyKey: "current-run:user",
-      timestamp: 1,
-    };
-    await withPersistedOrphanBoundary(
-      {
-        parent: true,
-        metadata: false,
-        idempotencyKey: "steered-run:user",
-        history: [
-          currentUser,
-          makeAssistantMessageFixture({ content: [], stopReason: "error", timestamp: 1 }),
-        ],
-      },
-      async ({ input, manager, orphanId, target }) => {
-        input.attempt.prompt = "current prompt";
-        input.attempt.userTurnTranscriptRecorder = {
-          hasPersisted: () => true,
-          getPersistedMessage: () => currentUser,
-        } as NonNullable<typeof input.attempt.userTurnTranscriptRecorder>;
-
-        await prepareEmbeddedAttemptSessionBoundary(input);
-
-        const reply = await manager.appendMessageAsync(
-          makeAssistantMessageFixture({
-            content: [{ type: "text", text: "retry reply" }],
-            stopReason: "stop",
-            timestamp: 3,
-          }),
-        );
-        expect(manager.getEntry(reply!)?.parentId).toBe(orphanId);
-        const reopened = SessionManager.openBounded(target, { maxBytes: 4096, maxEvents: 20 });
-        expect(reopened.buildSessionContext().messages).toMatchObject([
-          { role: "user", content: "current prompt" },
-          { role: "assistant", stopReason: "error" },
-          { role: "user", content: "orphan wake", idempotencyKey: "steered-run:user" },
-          { role: "assistant", content: [{ type: "text", text: "retry reply" }] },
-        ]);
-        // The replay resends the persisted user from context, so the later input must stay there.
-        expect(input.activeSession.agent.state.messages.at(-1)).toMatchObject({
-          role: "user",
-          content: "orphan wake",
-        });
-      },
-    );
-  });
 
   it("keeps failed-dispatch user input through repeated internal continuations", async () => {
     await withPersistedOrphanBoundary(

@@ -5,6 +5,7 @@ import {
 } from "../agents/embedded-agent-runner/runs.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import { MessageInjectionWithdrawnError } from "../auto-reply/reply/message-injection-authority.js";
 import type { AgentHarnessAttemptParams } from "../plugin-sdk/agent-harness-runtime.js";
 import {
   markGatewayRestartDraining,
@@ -377,6 +378,31 @@ describe("submitSessionControllerSteer", () => {
     await input.settlement.promise;
     expect(input.phase).toBe("consumed");
   });
+
+  it.each(["failed", "withdrawn"] as const)(
+    "after an early ACK, a %s injection settles custody",
+    async (outcome) => {
+      const { input } = startTurn({
+        queueMessage: async ({ onQueueAccepted }) => {
+          onQueueAccepted?.(true);
+          throw outcome === "withdrawn"
+            ? new MessageInjectionWithdrawnError("active session ended before commit")
+            : new Error("backend failed after acceptance");
+        },
+      });
+
+      const result = steer(input);
+      if (outcome === "withdrawn") {
+        // Removal before delivery voids the ACK: the input runs as its own turn.
+        await expectRejected(result, "injection_unavailable");
+        expectQueued(input);
+      } else {
+        await expect(result).resolves.toMatchObject({ status: "indeterminate" });
+        await input.settlement.promise;
+        expect(input.phase).toBe("consumed");
+      }
+    },
+  );
 
   it.each([
     ["v2", "accepted"],

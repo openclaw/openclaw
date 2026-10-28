@@ -427,6 +427,11 @@ export async function runActiveReplySteer(
       shouldAbortOnAdoptionError: isIngressAdoptionLostError,
     });
     if (finalization.status === "rejected") {
+      if (finalization.outcome.withdrawn) {
+        // Withdrawn before any model saw it (e.g. the request failed and the run
+        // retries): the message runs as its own turn after this one.
+        parked.withdraw();
+      }
       if (followupRun.controllerInput?.injection?.accepted !== true) {
         return await fallback(finalization.outcome.reason, injectionAttempt.targetRunId);
       }
