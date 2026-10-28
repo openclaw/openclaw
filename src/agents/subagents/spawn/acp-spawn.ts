@@ -66,6 +66,7 @@ import {
   toGatewayImageAttachments,
   type AcpSpawnBootstrapDeliveryPlan,
 } from "./acp-spawn-bootstrap-delivery.js";
+import { prepareAcpSpawnCreation } from "./acp-spawn-creation.js";
 import { launchAcpChildThroughGateway } from "./acp-spawn-gateway.js";
 import {
   startAcpSpawnParentStreamRelay,
@@ -76,7 +77,6 @@ import {
   resolveAcpSpawnRuntimePolicyError,
 } from "./acp-spawn-policy.js";
 import {
-  buildAcpSpawnCreationStamp,
   resolveAcpSpawnRequesterState,
   readAcpSpawnParentDeliveryContext,
   resolveRequesterInternalSessionKey,
@@ -97,7 +97,6 @@ import {
 } from "./acp-spawn-runtime.js";
 import { resolveTargetAcpAgentId } from "./acp-spawn-target.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
-import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -470,18 +469,16 @@ export async function spawnAcpDirect(
         ? undefined
         : await readParentEntry();
       // Incognito parents are never read here, so like rowless parents they record no incarnation.
-      const parentLineage = captureSpawnParentLineage({
-        parentEntry,
-        expectedParentSessionId: ctx.expectedParentSessionId,
-        senderIsOwner: ctx.senderIsOwner,
-      });
-      const creationStamp = buildAcpSpawnCreationStamp({
+      const creation = prepareAcpSpawnCreation({
         cfg,
         parentEntry,
         requesterAgentId,
         requesterSessionKey: requesterInternalKey,
         creatorProfileId,
         gitContributorProfileId: ctx.gitContributorProfileId,
+        expectedParentSessionId: ctx.expectedParentSessionId,
+        senderIsOwner: ctx.senderIsOwner,
+        assertActive: ctx.assertActive,
       });
       const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: ownerAgentId });
       const childSessionPatch = admission.childSessionPatch
@@ -498,7 +495,7 @@ export async function spawnAcpDirect(
         (await upsertSessionEntryCore(
           { storePath, sessionKey, agentId: ownerAgentId },
           {
-            ...creationStamp,
+            ...creation.stamp,
             spawnedBy: requesterInternalKey,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
             // Navigation parent is stamped at creation so the durable tree edge
@@ -521,12 +518,9 @@ export async function spawnAcpDirect(
               : {}),
             ...(params.label ? { label: params.label } : {}),
             // Same trust rules as native spawn: stamped last, from trusted host facts only.
-            ...parentLineage,
-            ...(parentEntry?.visibility === "draft" && cfg.session?.sharing?.drafts !== false
-              ? { visibility: "draft" as const }
-              : {}),
+            ...creation.parentPatch,
           },
-          sessionEntryCommitGuardOptions(ctx.assertActive),
+          sessionEntryCommitGuardOptions(creation.assertCurrent),
         )) ?? undefined;
       const initializedSession = await withAcpResumeSessionAuthorization(
         resumeOwnership,

@@ -34,6 +34,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let forkedEntry: SessionEntry | undefined;
   let initialForkVisibility: string | undefined;
   let visibilityDuringFork: "shared" | undefined;
+  let disableDraftsDuringFork: boolean;
   const registerSubagentRun = vi.fn();
   const startQueuedSubagentRun = vi.fn();
   const prepareSubagentSpawn = vi.fn();
@@ -84,6 +85,9 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       await sessions.upsertSessionEntryCore(scope(params.sessionKey), {
         visibility: visibilityDuringFork,
       });
+    }
+    if (disableDraftsDuringFork) {
+      config = { ...config, session: { ...config.session, sharing: { drafts: false } } };
     }
     const result = await forkSession(params);
     if (result.status === "forked") {
@@ -161,6 +165,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     forkedEntry = undefined;
     initialForkVisibility = undefined;
     visibilityDuringFork = undefined;
+    disableDraftsDuringFork = false;
     fork.mockClear();
     registerSubagentRun.mockReset().mockResolvedValue(undefined);
     startQueuedSubagentRun.mockReset().mockResolvedValue(false);
@@ -224,6 +229,27 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     vi.doUnmock("./subagent-depth.js");
     vi.doUnmock("../registry/subagent-registry.js");
     vi.doUnmock("../../provider-model-normalization.runtime.js");
+  });
+
+  it("refuses a Draft child after the prepared request's policy is replaced", async () => {
+    await sessions.upsertSessionEntryCore(parentScope(), { visibility: "draft" });
+    const before = children();
+    const expectParentUnchanged = await snapshotParent();
+    const disableDrafts = vi.fn(() => {
+      config = { ...config, session: { ...config.session, sharing: { drafts: false } } };
+    });
+    const result = await spawnSubagentDirect(
+      { task: "Keep this delegated work private", context: "isolated" },
+      { agentSessionKey: parentKey, onSpawnEffectsStart: disableDrafts },
+    );
+    expect(disableDrafts).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("session visibility is disabled: draft"),
+    });
+    expect(children()).toEqual(before);
+    expectNotLaunched();
+    await expectParentUnchanged();
   });
 
   it("cleans up the provisional child when fork parent lookup rejects", async () => {
@@ -320,6 +346,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       preparedMode: "fork",
       operation: "fork",
       changedChildVisibility: undefined,
+      disableDrafts: false,
     },
     {
       scenario: "a queued oversized fork starts isolated",
@@ -328,6 +355,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       preparedMode: "isolated",
       operation: "create",
       changedChildVisibility: undefined,
+      disableDrafts: false,
     },
     {
       scenario: "the child is explicitly shared during fork preparation",
@@ -336,12 +364,30 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       preparedMode: "fork",
       operation: "fork",
       changedChildVisibility: "shared",
+      disableDrafts: false,
+    },
+    {
+      scenario: "Draft creation is disabled after the child exists",
+      args: { context: "fork" },
+      parentTokens: undefined,
+      preparedMode: "fork",
+      operation: "fork",
+      changedChildVisibility: undefined,
+      disableDrafts: true,
     },
   ] as const)(
     "records the committed context when $scenario",
-    async ({ args, parentTokens, preparedMode, operation, changedChildVisibility }) => {
+    async ({
+      args,
+      parentTokens,
+      preparedMode,
+      operation,
+      changedChildVisibility,
+      disableDrafts,
+    }) => {
       await sessions.upsertSessionEntryCore(parentScope(), { visibility: "draft" });
       visibilityDuringFork = changedChildVisibility;
+      disableDraftsDuringFork = disableDrafts;
       prepareSubagentSpawn.mockResolvedValue(undefined);
       startQueuedSubagentRun.mockResolvedValue(true);
       threadBindingAvailable = true;
