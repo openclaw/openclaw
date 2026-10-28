@@ -1,7 +1,11 @@
 import { Buffer } from "node:buffer";
 import { convertToLlm } from "openclaw/plugin-sdk/agent-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  asOptionalObjectRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isCodexDurableCustomMessage } from "./context-engine-projection.js";
 import { CodexHistoryRejection } from "./history-rejection.js";
 import type { JsonValue } from "./protocol.js";
@@ -17,6 +21,46 @@ const MAX_TEXT_BYTES = 64 * 1024;
 // that used such a tool can never finalize.
 const TOOL_NAME_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/u;
 const TOOL_ERROR_STATUS_PREFIX = "[Tool result status: error]\n";
+const MAX_USER_MEDIA_PLACEHOLDER_ENTRIES = 8;
+
+/**
+ * Media-only user turns persist empty text with ordered `__openclaw.media`
+ * facts. Their payloads are not replayable through the text-oriented recovery
+ * projection, so a legitimate historical attachment projects as a bounded,
+ * deterministic marker; only messages without any well-formed media fact stay
+ * a content rejection. Empty positional slots are not media, so an entry needs
+ * an actual reference — path, URL, content type, or a known kind — to count.
+ */
+function userMediaPlaceholder(
+  message: Extract<AgentMessage, { role: "user" }>,
+): string | undefined {
+  const media = asOptionalObjectRecord(Reflect.get(message, "__openclaw"))?.media;
+  if (!Array.isArray(media)) {
+    return undefined;
+  }
+  const labels = media.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    const contentType = normalizeOptionalString(entry.contentType);
+    const kind = normalizeOptionalString(entry.kind);
+    const reference =
+      contentType ?? normalizeOptionalString(entry.path) ?? normalizeOptionalString(entry.url);
+    if (!reference && (!kind || kind === "unknown")) {
+      return [];
+    }
+    return [contentType ?? kind ?? "unknown type"];
+  });
+  if (labels.length === 0) {
+    return undefined;
+  }
+  const shown = labels.slice(0, MAX_USER_MEDIA_PLACEHOLDER_ENTRIES).join("; ");
+  const overflow =
+    labels.length > MAX_USER_MEDIA_PLACEHOLDER_ENTRIES
+      ? `; +${labels.length - MAX_USER_MEDIA_PLACEHOLDER_ENTRIES} more`
+      : "";
+  return `[User media attachment unavailable in this context: ${shown}${overflow}]`;
+}
 
 function responseItemBytes(item: JsonValue): number {
   return Buffer.byteLength(JSON.stringify(item), "utf8");
@@ -85,6 +129,17 @@ class HistoryProjection {
   private projectUserMessage(message: Extract<AgentMessage, { role: "user" }>): void {
     const upstreamUserText = readUpstreamUserText(message);
     if (typeof message.content === "string") {
+      if (!upstreamUserText && !message.content.trim()) {
+        const mediaPlaceholder = userMediaPlaceholder(message);
+        if (mediaPlaceholder) {
+          this.appendItem({
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: mediaPlaceholder }],
+          });
+          return;
+        }
+      }
       const text = upstreamUserText
         ? this.requireBoundedText(upstreamUserText, MAX_PROJECTION_BYTES)
         : this.requireBoundedText(message.content);
