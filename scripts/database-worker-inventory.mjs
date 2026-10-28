@@ -3928,8 +3928,9 @@ export function inventory(
   ref = "",
   staged = false,
   texts = loadInventorySources(root, ref, staged),
-  { observer } = {},
+  options = {},
 ) {
+  const { observer } = options;
   using parser = createNativeTypeScriptParser({
     cwd: root,
     observer: observer && ((phase, facts) => observer(`syntax.${phase}`, facts)),
