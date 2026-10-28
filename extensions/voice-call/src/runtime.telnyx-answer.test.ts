@@ -13,11 +13,7 @@ import {
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
-const PUBLIC_URL = "https://voice.example.test/voice/webhook";
-
-const apiMocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn<typeof fetchWithSsrFGuard>(),
-}));
+const apiMocks = vi.hoisted(() => ({ fetchWithSsrFGuard: vi.fn<typeof fetchWithSsrFGuard>() }));
 
 // Only the outbound Telnyx HTTP edge is simulated; config parsing, the webhook server,
 // event handling, stream session issuing, and the provider all run for real.
@@ -32,78 +28,40 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** Answer every Telnyx command with a 200 unless `fail` supplies a response for its action. */
-function mockTelnyxApi(fail?: (action: string) => Response | undefined) {
-  apiMocks.fetchWithSsrFGuard.mockImplementation(async (request) => ({
-    response:
-      fail?.(request.url.split("/").pop() ?? "") ??
-      new Response(JSON.stringify({ data: {} }), { status: 200 }),
-    finalUrl: request.url,
-    release: vi.fn(async () => {}),
-  }));
-}
-
-/** Telnyx actions sent so far, in order, with their parsed JSON bodies. */
-function readTelnyxCommands() {
-  return apiMocks.fetchWithSsrFGuard.mock.calls.map(([request]) => {
-    const body = (request as { init?: { body?: unknown } }).init?.body;
-    return {
-      url: request.url,
-      action: request.url.split("/actions/").pop(),
-      body: typeof body === "string" ? (JSON.parse(body) as Record<string, unknown>) : undefined,
-    };
-  });
-}
-
-function createTelnyxRealtimeConfig(
+async function startRuntime(
   noiseSuppression?: NonNullable<VoiceCallConfig["telnyx"]>["noiseSuppression"],
-): VoiceCallConfig {
-  const config = createVoiceCallBaseConfig({ provider: "telnyx" });
-  config.store = createTestStorePath();
-  config.publicUrl = PUBLIC_URL;
-  config.serve = { ...config.serve, port: 0 };
-  config.inboundPolicy = "open";
-  config.staleCallReaperSeconds = 0;
-  config.skipSignatureVerification = true;
-  config.realtime.enabled = true;
-  config.telnyx = {
-    apiKey: "KEY123",
-    connectionId: "CONN456",
-    ...(noiseSuppression ? { noiseSuppression } : {}),
-  };
-  return config;
-}
-
-async function startRuntime(config: VoiceCallConfig): Promise<VoiceCallRuntime> {
+): Promise<VoiceCallRuntime> {
+  const base = createVoiceCallBaseConfig({ provider: "telnyx" });
   return createVoiceCallRuntime({
     scheduler: createTestPluginServiceScheduler(),
-    config,
+    config: {
+      ...base,
+      store: createTestStorePath(),
+      publicUrl: "https://voice.example.test/voice/webhook",
+      serve: { ...base.serve, port: 0 },
+      inboundPolicy: "open",
+      staleCallReaperSeconds: 0,
+      skipSignatureVerification: true,
+      realtime: { ...base.realtime, enabled: true },
+      telnyx: { apiKey: "KEY123", connectionId: "CONN456", noiseSuppression },
+    },
     coreConfig: { agents: { entries: { main: {} } } } as OpenClawConfig,
     agentRuntime: {} as never,
     stateRuntime: createVoiceCallStateRuntimeForTests(),
   });
 }
 
-/**
- * POST a Telnyx `call.initiated` webhook for a new inbound call to the runtime's local listener.
- * Returns the call control ID; each call is unique so webhook replay protection never skips it.
- */
+/** POST a Telnyx `call.initiated` webhook for a new inbound call and return its call control ID. */
 async function deliverInboundCall(runtime: VoiceCallRuntime): Promise<string> {
   const callControlId = `v3:${crypto.randomUUID()}`;
-  const localUrl = await runtime.webhookServer.start();
-  const response = await fetch(localUrl, {
+  const response = await fetch(await runtime.webhookServer.start(), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       data: {
         id: crypto.randomUUID(),
         event_type: "call.initiated",
-        payload: {
-          call_control_id: callControlId,
-          direction: "incoming",
-          from: "+15550009999",
-          to: "+15550001234",
-        },
+        payload: { call_control_id: callControlId, direction: "incoming", from: "+15550009999" },
       },
     }),
   });
@@ -111,66 +69,45 @@ async function deliverInboundCall(runtime: VoiceCallRuntime): Promise<string> {
   return callControlId;
 }
 
-/** Wait until the runtime has sent `count` Telnyx commands for the call, then return them. */
-async function waitForTelnyxCommands(callControlId: string, count: number) {
+/** Wait for `count` Telnyx commands for the call; return each action with its parsed body. */
+async function waitForCommands(callControlId: string, count: number) {
+  const timeout = 3_000;
   await vi.waitFor(() => expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(count), {
-    timeout: 3_000,
+    timeout,
   });
-  const commands = readTelnyxCommands();
-  for (const { url } of commands) {
-    expect(url.startsWith(`https://api.telnyx.com/v2/calls/${callControlId}/actions/`)).toBe(true);
-  }
-  return commands;
+  const prefix = `https://api.telnyx.com/v2/calls/${callControlId}/actions/`;
+  return apiMocks.fetchWithSsrFGuard.mock.calls.map(([{ url, init }]) => {
+    expect(url.startsWith(prefix)).toBe(true);
+    const body = (init as { body?: string } | undefined)?.body;
+    return {
+      action: url.slice(prefix.length),
+      body: body ? (JSON.parse(body) as object) : undefined,
+    };
+  });
 }
 
-/** Assert a streaming field set points the call at this runtime's public realtime stream. */
-function expectRealtimeStreamFields(body: Record<string, unknown> | undefined) {
-  const streamUrl = new URL(String(body?.stream_url));
-  expect(streamUrl.protocol).toBe("wss:");
-  expect(streamUrl.host).toBe("voice.example.test");
-  expect(streamUrl.pathname.startsWith("/voice/stream/realtime")).toBe(true);
-  expect(body).toMatchObject({
-    stream_track: "inbound_track",
-    stream_bidirectional_mode: "rtp",
-    stream_auth_token: expect.any(String),
-  });
-}
+const STREAM_FIELDS = {
+  stream_url: expect.stringMatching(/^wss:\/\/voice\.example\.test\/voice\/stream\/realtime\//),
+  stream_track: "inbound_track",
+  stream_bidirectional_mode: "rtp",
+  stream_auth_token: expect.any(String),
+};
 
 describe("voice-call runtime answering inbound Telnyx realtime calls", () => {
-  it("answers with the stream inline when noise suppression is not configured", async () => {
-    mockTelnyxApi();
-    const runtime = await startRuntime(createTelnyxRealtimeConfig());
-    try {
-      const callControlId = await deliverInboundCall(runtime);
-      const commands = await waitForTelnyxCommands(callControlId, 1);
-
-      expect(commands.map(({ action }) => action)).toEqual(["answer"]);
-      expectRealtimeStreamFields(commands[0]?.body);
-    } finally {
-      await runtime.stop();
-    }
-  });
-
-  it("starts Krisp suppression between the stream-less answer and streaming_start", async () => {
-    mockTelnyxApi();
-    const runtime = await startRuntime(
-      createTelnyxRealtimeConfig({
+  it.each([
+    {
+      name: "answers with the stream inline when noise suppression is not configured",
+      actions: ["answer"],
+    },
+    {
+      name: "starts Krisp suppression between the stream-less answer and streaming_start",
+      noiseSuppression: {
         direction: "outbound",
         engine: "Krisp",
         engineConfig: { model: "krisp-viva-tel-lite-v1.kef", suppressionLevel: 100 },
-      }),
-    );
-    try {
-      const callControlId = await deliverInboundCall(runtime);
-      const [answer, suppression, streaming] = await waitForTelnyxCommands(callControlId, 3);
-
-      expect([answer?.action, suppression?.action, streaming?.action]).toEqual([
-        "answer",
-        "suppression_start",
-        "streaming_start",
-      ]);
-      expect(answer?.body).not.toHaveProperty("stream_url");
-      expect(suppression?.body).toEqual({
+      },
+      actions: ["answer", "suppression_start", "streaming_start"],
+      suppressionBody: {
         command_id: expect.stringMatching(/^openclaw-suppression-/),
         direction: "outbound",
         noise_suppression_engine: "Krisp",
@@ -178,37 +115,39 @@ describe("voice-call runtime answering inbound Telnyx realtime calls", () => {
           model: "krisp-viva-tel-lite-v1.kef",
           suppression_level: 100,
         },
-      });
-      expectRealtimeStreamFields(streaming?.body);
-      expect(runtime.manager.getActiveCalls()).toHaveLength(1);
-    } finally {
-      await runtime.stop();
-    }
-  });
-
-  it("keeps the call and streams without suppression when Telnyx rejects suppression_start", async () => {
+      },
+    },
+    {
+      name: "keeps the call and streams without suppression when Telnyx rejects suppression_start",
+      noiseSuppression: { direction: "outbound", engine: "Krisp" },
+      reject: "suppression_start",
+      actions: ["answer", "suppression_start", "streaming_start"],
+      warning: "Noise suppression failed to start",
+    },
+  ] as const)("$name", async ({ noiseSuppression, reject, actions, suppressionBody, warning }) => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    mockTelnyxApi((action) =>
-      action === "suppression_start"
-        ? new Response(JSON.stringify({ errors: [{ code: "90045" }] }), { status: 422 })
-        : undefined,
-    );
-    const runtime = await startRuntime(
-      createTelnyxRealtimeConfig({ direction: "outbound", engine: "Krisp" }),
-    );
+    apiMocks.fetchWithSsrFGuard.mockImplementation(async ({ url }) => ({
+      response:
+        reject && url.endsWith(`/${reject}`)
+          ? new Response(JSON.stringify({ errors: [{ code: "90045" }] }), { status: 422 })
+          : new Response(JSON.stringify({ data: {} }), { status: 200 }),
+      finalUrl: url,
+      release: vi.fn(async () => {}),
+    }));
+    const runtime = await startRuntime(noiseSuppression);
     try {
-      const callControlId = await deliverInboundCall(runtime);
-      const commands = await waitForTelnyxCommands(callControlId, 3);
+      const commands = await waitForCommands(await deliverInboundCall(runtime), actions.length);
 
-      expect(commands.map(({ action }) => action)).toEqual([
-        "answer",
-        "suppression_start",
-        "streaming_start",
-      ]);
-      expectRealtimeStreamFields(commands[2]?.body);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("Noise suppression failed to start"),
-      );
+      expect(commands.map((command) => command.action)).toEqual(actions);
+      // The stream fields ride on the only answer when unset, otherwise on streaming_start.
+      expect(commands.at(-1)?.body).toMatchObject(STREAM_FIELDS);
+      if (suppressionBody) {
+        expect(commands[0]?.body).not.toHaveProperty("stream_url");
+        expect(commands[1]?.body).toEqual(suppressionBody);
+      }
+      if (warning) {
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(warning));
+      }
       expect(runtime.manager.getActiveCalls()).toHaveLength(1);
     } finally {
       await runtime.stop();
