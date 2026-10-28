@@ -136,6 +136,16 @@ suite.define(() => {
         }
         const link = page.locator(action.selector);
         await link.hover();
+        if (index === 0) {
+          // Exercise the neighboring header with the shortcut hint already open.
+          await expect
+            .poll(() =>
+              link.evaluate(
+                (element) => element.closest("openclaw-tooltip")?.hasAttribute("open") ?? false,
+              ),
+            )
+            .toBe(true);
+        }
         const expectedUrl = new URL(`${basePath}/new`, suite.server.baseUrl);
         expectedUrl.search = new URLSearchParams(action.params).toString();
         expect(await link.getAttribute("href")).toBe(
