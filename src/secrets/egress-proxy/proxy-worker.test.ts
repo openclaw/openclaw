@@ -1,9 +1,11 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer, type Server } from "node:https";
 import type { Socket } from "node:net";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -180,6 +182,41 @@ afterEach(async () => {
 });
 
 describe("secret egress Worker boundary", () => {
+  it("exports trust that rejects a disclosed eMudhra chain while retaining its local CA", async () => {
+    const grant = await register();
+    const fixture = new URL("./fixtures/emudhra/", import.meta.url);
+    // -trusted disables implicit CA files/directories/stores. Fixed verification
+    // time keeps certificate expiry separate from this trust-export regression.
+    const rejected = spawnSync(
+      "openssl",
+      [
+        "verify",
+        "-trusted",
+        grant.env.SSL_CERT_FILE!,
+        "-purpose",
+        "sslserver",
+        "-verify_hostname",
+        "dv-g3b-emudhra.we-have-a-problem.com",
+        "-attime",
+        String(Date.UTC(2026, 9, 21) / 1000),
+        "-untrusted",
+        fileURLToPath(new URL("untrusted.pem", fixture)),
+        fileURLToPath(new URL("leaf.pem", fixture)),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(rejected.error).toBeUndefined();
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stderr).toContain("unable to get local issuer certificate");
+    expect(() =>
+      execFileSync("openssl", ["verify", "-trusted", grant.env.SSL_CERT_FILE!, proxy.caCertPath], {
+        stdio: "pipe",
+      }),
+    ).not.toThrow();
+    expect(await readResponse(await openRequest(grant))).toEqual({ status: 200, body: "ok" });
+    expect(observed).toEqual([{ authorization: `Bearer ${secret}`, body: "" }]);
+  });
+
   it("acknowledges usable grants while keeping bindings, host policy, and audit data scoped", async () => {
     const grant = await register();
     expect(await readResponse(await openRequest(grant, { body: `${sentinel}:body` }))).toEqual({
