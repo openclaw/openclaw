@@ -6,9 +6,11 @@ import { extractAssistantPhaseText } from "../../shared/chat-message-content.js"
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionTranscriptTurnMutation } from "./goals-operations.types.js";
+import { assertAcceptedRecoveryNotice } from "./recovery-notice.js";
 import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
 import {
   findAssistantTranscriptEventInDatabase,
+  readTranscriptEventAtSeqInTransaction,
   readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
@@ -100,8 +102,10 @@ export function prepareSessionTurnRouting(
 export function sessionTurnPredicateMatches(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
-  predicate: SessionTranscriptTurnMessageAppend["predicate"],
+  append: SessionTranscriptTurnMessageAppend,
+  entry: SessionEntry,
 ): boolean {
+  const predicate = append.predicate;
   if (!predicate) {
     return true;
   }
@@ -114,6 +118,34 @@ export function sessionTurnPredicateMatches(
       })
     ) {
       throw new Error(predicate.errorMessage);
+    }
+    return true;
+  }
+  if (predicate.kind === "recovery-notice") {
+    const anchor = readActiveTranscriptEntryAnchorInTransaction({
+      database,
+      resolved,
+      entryId: predicate.anchor.entryId,
+    });
+    const local =
+      anchor && readTranscriptEventAtSeqInTransaction(database, resolved.sessionId, anchor.rawSeq);
+    assertAcceptedRecoveryNotice({
+      sessionKey: resolved.sessionKey,
+      entry,
+      predicate,
+      anchor,
+      localMessage: local && readTranscriptEventMessage(local.event),
+      message: append.message,
+    });
+    if (
+      predicate.priorEntryId &&
+      !readActiveTranscriptEntryAnchorInTransaction({
+        database,
+        resolved,
+        entryId: predicate.priorEntryId,
+      })
+    ) {
+      throw new Error("background result no longer owns the active transcript");
     }
     return true;
   }

@@ -115,6 +115,8 @@ the current run's latest stop and restarts the installed package after Doctor's
 writers settle. It records the observed recovery outcome while preserving the
 failed update result. Earlier runs' stop receipts never authorize that restart;
 operator-stopped services and explicit data-risk refusals remain stopped.
+When `openclaw update repair` finishes with the managed Gateway still stopped, it
+records a warning naming `openclaw gateway start` instead of reporting a silent success.
 Normal Doctor exits do not require a separate process-settlement receipt. On
 Windows, recovery restores the suspended Scheduled Task before restarting the
 Gateway, while preserving the failed Doctor check IDs in the update report.
@@ -245,6 +247,8 @@ capture as restored only when the restoration evidence identifies its manifest.
 Standalone Doctor copies appear as `manual`; their presence does not record a
 successful or failed repair. An unfinished capture appears as `incomplete`
 alongside valid captures, with its directory and no sealed manifest reference.
+Discovery recognizes capture directories by their `.openclaw-private-update-capture`
+marker; unrelated files and unmarked directories do not hide retained captures.
 Keep current data and inspect the originals before attempting restoration.
 Older installed updaters may not preserve or forward an original capture; a
 newer Doctor reports that limitation instead of treating current bytes as the
@@ -956,6 +960,16 @@ a `skipped` migration receipt with a warning. Other repairs continue, and update
 finalization can complete with warnings. An unsafe recovery failure, such as an
 interrupted archive that cannot be restored, still stops Doctor.
 
+A checkpointed raw archive whose sanitized companion is missing also produces a
+warning-bearing skip when its raw prefix still matches the checkpoint and it has
+no records, or every record is already in SQLite. Doctor preserves the raw file
+and checkpoint, records the skip, and continues later repairs and update
+finalization. If any record is still unimported, Doctor preserves the archive and
+refuses recovery. Restore the named sanitized companion from a verified backup,
+then rerun `openclaw doctor --fix` against the same state directory. A truncated
+or modified companion still requires reconciliation; Doctor does not recreate
+missing historical bytes from checkpoint hashes.
+
 Preserve the reported source, its sanitized companion (for example,
 `logs/config-audit.jsonl.migrated` beside `logs/config-audit.jsonl.migrated.raw`),
 and any recovery journals or backups. Follow [backup guidance](/install/backups)
@@ -1039,9 +1053,20 @@ cleanup can finish it.
 Before applying, stop the Gateway for that same profile/state directory and wait
 for other SQLite maintenance commands to finish. Stop database readers too,
 including watchers that repeatedly run `openclaw sessions --all-agents --json`,
-and keep them stopped until cleanup exits. Read-only SQLite connections can
-create or change WAL/SHM sidecars, invalidating cleanup's destination check even
-when session content is unchanged. If cleanup reports `Recovery destination
+and keep them stopped until cleanup exits. Cleanup tolerates timestamp changes
+from read-only WAL/SHM bookkeeping, but still rejects replaced files, size changes,
+and changed database, WAL, or rollback-journal contents. A changed device number
+requires independent content evidence as well as the recorded inode. Cleanup can
+re-verify a closed destination against a producer-verified full original or an
+earlier verified destination fingerprint. A successful check restamps the device
+and records an optional `databaseIdentity.sha256` fingerprint in the existing
+manifest. Older manifests remain readable. Scoped backups and destinations with
+data-bearing WAL or rollback journals cannot supply this full-image proof.
+If the contents differ or proof is unavailable, cleanup retains the originals
+with `destination-verification-failed` and names the device change. Run
+`openclaw doctor --fix` to check current state; Doctor does not automatically
+re-certify an old backup's destination identity. Preserve those originals for
+manual verification. If cleanup reports `Recovery destination
 database changed; preview cleanup again.`, stop those readers, preview again,
 and retry. Manual cleanup requires exclusive offline state ownership and never stops
 or restarts a service itself. On owner or maintenance-lock contention, cleanup

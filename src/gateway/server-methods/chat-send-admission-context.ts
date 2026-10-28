@@ -4,6 +4,7 @@ import {
   type AcpSessionEntryExpectation,
 } from "../../acp/runtime/session-meta-entry.kernel.js";
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
+import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveChatSendOriginatingRoute } from "./chat-origin-routing.js";
 import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
@@ -16,12 +17,30 @@ export function prepareChatSendAdmissionContext(params: {
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
   client: GatewayRequestHandlerOptions["client"];
+  controllerInput?: ChatSendAdmissionParams["controllerInput"];
 }) {
   const { request, session, client } = params;
   const { p, explicitOrigin, normalizedAttachments } = request;
   const { cfg, entry, sessionKey, selectedAgent, agentId, clientRunId, resolvedSessionModel } =
     session;
+  const originatingRoute = resolveChatSendOriginatingRoute({
+    client: request.clientInfo,
+    deliver: p.deliver,
+    entry,
+    explicitOrigin,
+    hasConnectedClient: client?.connect !== undefined,
+    mainKey: cfg.session?.mainKey,
+    sessionKey,
+  });
   return {
+    queuePolicy:
+      params.controllerInput?.policy ??
+      resolveQueueSettings({
+        cfg,
+        channel: originatingRoute.originatingChannel,
+        sessionEntry: entry,
+        inlineMode: p.queueMode,
+      }),
     chatSendTraceAttributes: {
       runId: clientRunId,
       sessionKey,
@@ -32,15 +51,7 @@ export function prepareChatSendAdmissionContext(params: {
       hasExplicitOrigin: explicitOrigin !== undefined,
       hasConnectedClient: client?.connect !== undefined,
     },
-    originatingRoute: resolveChatSendOriginatingRoute({
-      client: request.clientInfo,
-      deliver: p.deliver,
-      entry,
-      explicitOrigin,
-      hasConnectedClient: client?.connect !== undefined,
-      mainKey: cfg.session?.mainKey,
-      sessionKey,
-    }),
+    originatingRoute,
   };
 }
 

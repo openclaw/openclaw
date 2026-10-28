@@ -15,14 +15,15 @@ import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/
 import { connectedElementRef, elementRef } from "../../lib/reactive/element-ref.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { projectPresentation } from "../../lib/reactive/presentation.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { orderSessionPullRequests } from "../../lib/session-pull-request-presentation.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { listDismissablePendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import { listDismissablePendingInputIds, loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
-import { listSubagents } from "./chat-subagent-wait.ts";
+import { listSubagents, projectProgressCardRuntime } from "./chat-subagent-wait.ts";
 import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
 import {
   renderChatComposerNotices as ChatComposerNoticesView,
@@ -139,19 +140,25 @@ function ChatFooterContent(
     activities?: ChatActivityPillsProps;
   },
 ) {
-  const pendingInputs = () => input.frame.pendingInputs;
-  const dismissableInputIds = () => {
-    const view = pendingInputs();
+  const search = createMemo(() =>
+    projectOwner(
+      getTranscriptState(input.props.paneId).search,
+      (owner) => owner.snapshot,
+      Object.is,
+    ),
+  );
+  const dismissableInputIds = createMemo(() => {
+    const view = input.frame.pendingInputs;
     return input.frame.dismissPendingInputs && view
-      ? listDismissablePendingInputs(view).map((pending) => pending.id)
+      ? listDismissablePendingInputIds(view, input.frame.threadProps.messages, search().read())
       : [];
-  };
+  });
   return (
     <>
-      <Show when={pendingInputs()?.error || dismissableInputIds().length}>
+      <Show when={input.frame.pendingInputs?.error || dismissableInputIds().length}>
         <div class="chat-pending-inputs" role="status">
-          <Show when={pendingInputs()?.error}>
-            <span>{pendingInputs()?.error}</span>
+          <Show when={input.frame.pendingInputs?.error}>
+            <span>{input.frame.pendingInputs?.error}</span>
           </Show>
           <Show when={dismissableInputIds().length}>
             <button
@@ -264,6 +271,12 @@ function ChatComposerView(input: ChatViewInput) {
               startedAt: input.props.selectedSession?.startedAt,
               endedAt: input.props.selectedSession?.endedAt,
               hasActiveRun: isChatRunWorking(input.props),
+              runtime: projectProgressCardRuntime(
+                input.props.selectedSession,
+                input.props,
+                card.updatedAt,
+                input.props.connected,
+              ),
               refresh: input.props.progressCardRefresh?.state,
               onOpen: destinations.onOpenProgress,
             }

@@ -17,6 +17,7 @@ import {
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { ANCHOR_PREFIX, assertDependencyTarget } from "./cache-lifetime.mjs";
 
 // Recovery runs from the current trusted wrapper, under its actual PR lock.
 // The retained anchor is data; its own materializer still owns package selection.
@@ -96,6 +97,7 @@ const dependencies = [
       );
   try {
     const target = realpathSync(installedPath);
+    assertDependencyTarget(target, process.argv[3]);
     if (!statSync(target).isDirectory()) {
       throw new Error("not a package directory");
     }
@@ -225,7 +227,8 @@ async function recover() {
   const donor = physical(plan.donor.path);
   const live = physical(join(anchor, "node_modules"));
   if (
-    !basename(anchor).startsWith("openclaw-pr-anchor.") ||
+    (!basename(anchor).startsWith(ANCHOR_PREFIX) &&
+      !basename(anchor).startsWith("openclaw-pr-anchor.")) ||
     anchor === dirname(dirname(dirname(fileURLToPath(import.meta.url)))) ||
     anchor === donor ||
     within(anchor, donor) ||

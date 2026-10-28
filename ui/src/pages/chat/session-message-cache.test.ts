@@ -1,10 +1,13 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import { cacheChatBoardSnapshotAfterHydration } from "./chat-board-snapshot.ts";
+import { projectDetailsSubagents } from "./chat-details-snapshot.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
   clearChatMessagesFromCache,
+  captureChatDetailsSnapshot,
   createChatWidgetLayout,
   observeChatCache,
   readChatMessagesFromCache,
@@ -17,13 +20,25 @@ function createCacheContext(
   assistantAgentId = "ops",
   agentsList = { defaultId: "ops", mainKey: "home" },
 ) {
-  const host = { assistantAgentId, agentsList };
   const cache: ChatMessageCache = new Map();
+  const host = {
+    assistantAgentId,
+    agentsList,
+    chatMessagesBySession: cache,
+    sessionKey: "home",
+    currentSessionId: "session-1",
+    connected: true,
+    connectionEpoch: 0,
+    settings: { gatewayUrl: "wss://cache.example" },
+    client: { recoveryScope: "account-a", recoveryScopeReady: true },
+  };
   const target = (sessionKey = "home", agentId?: string) => ({ sessionKey, agentId });
   const read = (sessionKey = "home") => readChatSessionSnapshot(cache, host, target(sessionKey));
   const write = (snapshot: ChatSessionSnapshot, sessionKey = "home") =>
     cacheChatSessionSnapshot(cache, host, target(sessionKey), snapshot);
   return {
+    cache,
+    host,
     read,
     write,
     messages: (sessionKey: string, agentId?: string) =>
@@ -50,49 +65,105 @@ const widgetSnapshot = (
 
 describe("session message cache", () => {
   it("persists changed session display facts once without repeating unchanged writes", () => {
-    const cache: ChatMessageCache = new Map();
-    const host = { assistantAgentId: "main" };
-    const target = { sessionKey: "agent:main:archived" };
-    const write = vi.fn();
-    observeChatCache(cache, { write, delete: vi.fn() });
-    const snapshot = widgetSnapshot(["saved conversation"]);
+    const { cache, write, read } = createCacheContext();
+    const persisted = vi.fn();
+    observeChatCache(cache, { write: persisted, delete: vi.fn() });
     const sessionState = { archived: true, unarchiveAllowed: true, parentSession: null };
-    cacheChatSessionSnapshot(cache, host, target, { ...snapshot, sessionState });
-    cacheChatSessionSnapshot(cache, host, target, {
-      ...snapshot,
-      sessionState: { ...sessionState },
-    });
-    expect(write).toHaveBeenCalledTimes(1);
-    cacheChatSessionSnapshot(cache, host, target, {
-      ...snapshot,
-      sessionState: { ...sessionState, archived: false },
-    });
-    expect(write).toHaveBeenCalledTimes(2);
-    expect(readChatSessionSnapshot(cache, host, target)?.sessionState?.archived).toBe(false);
+    const snapshot = widgetSnapshot(["saved conversation"], "session-1", { sessionState });
+    write(snapshot);
+    write({ ...snapshot, sessionState: { ...sessionState } });
+    expect(persisted).toHaveBeenCalledTimes(1);
+    write({ ...snapshot, sessionState: { ...sessionState, archived: false } });
+    expect(persisted).toHaveBeenCalledTimes(2);
+    expect(read()?.sessionState?.archived).toBe(false);
   });
-  it("retains reaction facts only across the same session incarnation", () => {
+  it.each([
+    { messageReactions: { reply: [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }] } },
+    { composer: { id: "saved", provider: "example", name: "Saved", permissionMode: "full" } },
+    {
+      headerViewers: { users: [{ id: "peer", name: "Peer" }], totalCount: 5, ownerViewing: false },
+      headerSharing: "public",
+      sessionState: { archived: true, unarchiveAllowed: false },
+    },
+    {
+      details: {
+        locale: "en",
+        subagents: { total: 0, rows: [], counts: [] },
+        automations: { rows: [], more: false },
+        outputs: 1,
+      },
+    },
+  ] satisfies Partial<ChatSessionSnapshot>[])("retains %j across the same incarnation", (facts) => {
     const { read, write } = createCacheContext();
-    const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }];
-    write(widgetSnapshot(["first"], "session-1", { messageReactions: { reply: summaries } }));
-    write(widgetSnapshot(["new history"], "session-1"));
-    expect(read()?.messageReactions).toEqual({ reply: summaries });
-    write(widgetSnapshot(["replacement"], "session-2"));
-    expect(read()?.messageReactions).toBeUndefined();
+    write(widgetSnapshot(["cached"], "session-1", facts));
+    write(widgetSnapshot(["live"], "session-1"));
+    expect(read()).toMatchObject(facts);
+    write(widgetSnapshot(["reset"], "session-2"));
+    for (const field of Object.keys(facts)) {
+      expect(read()).not.toHaveProperty(field);
+    }
   });
 
-  it("retains composer display facts only for the same session incarnation", () => {
-    const { read, write } = createCacheContext();
-    const composer = {
-      id: "saved",
-      provider: "example",
-      name: "Saved",
-      permissionMode: "full" as const,
-    };
-    write(widgetSnapshot(["cached"], "session-1", { composer }));
-    write(widgetSnapshot(["live"], "session-1"));
-    expect(read()?.composer).toEqual(composer);
-    write(widgetSnapshot(["reset"], "session-2"));
-    expect(read()?.composer).toBeUndefined();
+  it("merges current-locale Details receipts without overwriting row footprints", () => {
+    const { host, read, write, layout } = createCacheContext();
+    write(
+      widgetSnapshot([], "session-1", {
+        details: { locale: "other-locale", automations: { rows: [], more: false } },
+      }),
+    );
+    const receipt = captureChatDetailsSnapshot(host)!;
+    expect(receipt.details).toBeUndefined();
+    receipt.write({ subagents: { total: 0, rows: [], counts: [] } });
+    const widgetHeights = { 'row:v1:768:appearance:revision:"reply"': 200 };
+    layout().writeRows(widgetHeights);
+    receipt.write({ outputs: 2 });
+    expect(read()?.details).toEqual({
+      locale: i18n.getLocale(),
+      subagents: { total: 0, rows: [], counts: [] },
+      outputs: 2,
+    });
+    expect(read()?.widgetHeights).toEqual(widgetHeights);
+  });
+
+  it.each<[string, (host: ReturnType<typeof createCacheContext>["host"]) => void]>([
+    ["connection epoch", (host) => Object.assign(host, { connectionEpoch: 1 })],
+    [
+      "account scope on the same client",
+      (host) => Object.assign(host.client, { recoveryScope: "other" }),
+    ],
+    ["connection client", (host) => Object.assign(host, { client: { ...host.client } })],
+    ["disconnect", (host) => Object.assign(host, { connected: false })],
+    ["session incarnation", (host) => Object.assign(host, { currentSessionId: "replacement" })],
+    ["selected session", (host) => Object.assign(host, { sessionKey: "other" })],
+  ])("rejects a late Details receipt after %s changes", (_, change) => {
+    const { host, read, write } = createCacheContext();
+    write(widgetSnapshot());
+    const receipt = captureChatDetailsSnapshot(host)!;
+    change(host);
+    write(widgetSnapshot());
+    receipt.write({ outputs: 99 });
+    expect(read()?.details).toBeUndefined();
+  });
+
+  it("bounds Subagents to display fields, prioritizing working rows and counting every row", () => {
+    const rows = Array.from({ length: 6 }, (_, index) => ({
+      key: String(index),
+      label: "Worker",
+      status: index === 5 ? ("running" as const) : ("done" as const),
+      transcript: "not display data",
+    }));
+    expect(projectDetailsSubagents(rows)).toEqual({
+      total: 6,
+      rows: [5, 0, 1, 2].map((index) => ({
+        key: String(index),
+        label: "Worker",
+        status: index === 5 ? "running" : "done",
+      })),
+      counts: [
+        { status: "running", count: 1 },
+        { status: "done", count: 5 },
+      ],
+    });
   });
 
   it("publishes a footprint batch once and rejects a retired session's deferred batch", () => {
@@ -137,17 +208,19 @@ describe("session message cache", () => {
       cache,
       host,
       target,
-      widgetSnapshot([], "one", { widgetHeights: { [row]: 100 } }),
+      widgetSnapshot([], "one", { widgetHeights: { [row]: 100 }, headerSharing: "public" }),
     );
     const layout = createChatWidgetLayout()(cache, host, target);
     expect(layout.readRows()).toEqual({ [row]: 100 });
     host.client.recoveryScope = "account-b";
+    expect(readChatSessionSnapshot(cache, host, target)).toBeNull();
     cacheChatSessionSnapshot(
       cache,
       host,
       target,
       widgetSnapshot([], "one", { widgetHeights: { [row]: 200 } }),
     );
+    expect(readChatSessionSnapshot(cache, host, target)?.headerSharing).toBeUndefined();
     expect(layout.readRows()).toBeUndefined();
     expect(layout.read(row)).toBeUndefined();
     expect(createChatWidgetLayout()(cache, host, target).readRows()).toEqual({ [row]: 200 });
@@ -276,6 +349,7 @@ describe("session message cache", () => {
     layout.write(row, 80);
     expect(context.layout().read(row)).toBe(80);
   });
+
   it("retains a scoped board through transcript replacement and clears it authoritatively", () => {
     const cache: ChatMessageCache = new Map();
     const host = {

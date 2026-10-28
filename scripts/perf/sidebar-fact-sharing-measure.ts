@@ -11,6 +11,8 @@
  * Acceptance: lower allocation or CPU, unchanged bytes, no material controlled harm.
  * Run matched A/A controls before interpreting adverse timing/GC. Sparse tails are context.
  * Add --cold to replace every row identity (includes shallow fixture copying/freezing).
+ * Repeat --source-file <path/session-list-view-cache.ts> (or session-row-serialization.ts)
+ * to pin those owners independently; each source retains its original basename.
  * --max-owner-bytes-per-call <bytes> adds an opt-in sampled allocation regression
  * budget; it requires --allocations and is never an ordinary-CI timing threshold.
  */
@@ -31,6 +33,7 @@ import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 const { values } = parseArgs({
   options: {
     "owner-file": { type: "string" },
+    "source-file": { type: "string", multiple: true },
     output: { type: "string" },
     iterations: { type: "string", default: "3000" },
     allocations: { type: "boolean", default: false },
@@ -62,20 +65,27 @@ process.env = createGatewayBenchEnv(root, configPath, {
 });
 const ownerFile = values["owner-file"] ?? "src/gateway/session-row-presentation.ts";
 const ownerSource = readFileSync(ownerFile, "utf8");
-let replaced = false;
+const sources = new Map([["session-row-presentation.ts", ownerSource]]);
+for (const file of values["source-file"] ?? []) {
+  sources.set(path.basename(file), readFileSync(file, "utf8"));
+}
+const replaced = new Set<string>();
 const hook = registerHooks({
   load(url, context, next) {
     const loaded = next(url, context);
-    if (url.endsWith("/src/gateway/session-row-presentation.ts")) {
-      replaced = true;
-      return { ...loaded, source: stripTypeScriptTypes(ownerSource) };
+    for (const [name, source] of sources) {
+      if (url.endsWith(`/src/gateway/${name}`)) {
+        replaced.add(name);
+        return { ...loaded, source: stripTypeScriptTypes(source) };
+      }
     }
     return loaded;
   },
 });
 const { shareSidebarSessionRows } = await import("../../src/gateway/session-row-presentation.js");
+const { serializeGatewayFrame } = await import("../../src/gateway/serialized-json.js");
 hook.deregister();
-assert(replaced, "owner substitution did not run");
+assert.equal(replaced.size, sources.size, "owner substitution did not run");
 
 const rowCount = 10_000;
 const pageSize = 500;
@@ -120,6 +130,8 @@ for (let index = 0; index < slots * 2; index++) {
   const input = page(index);
   const result = shareSidebarSessionRows(input);
   assert.deepEqual(expandSessionRowFacts(result.sessions, result.sharedFacts), input);
+  const frame = { type: "res", id: "sidebar", ok: true, payload: result };
+  assert.equal(serializeGatewayFrame(frame).toString(), JSON.stringify(frame));
   golden.update(JSON.stringify({ sessions: result.sessions, sharedFacts: result.sharedFacts }));
 }
 for (let index = 0; index < 1000; index++) {
@@ -207,6 +219,18 @@ const result = {
   scope: "Sidebar fact sharing only; no Gateway, selection, authorization, RPC, or model turns",
   node: process.version,
   sourceHash: createHash("sha256").update(ownerSource).digest("hex"),
+  sourceHashes: Object.fromEntries(
+    [
+      "session-row-presentation.ts",
+      "session-list-view-cache.ts",
+      "session-row-serialization.ts",
+    ].map((name) => [
+      name,
+      createHash("sha256")
+        .update(sources.get(name) ?? readFileSync(path.resolve("src/gateway", name), "utf8"))
+        .digest("hex"),
+    ]),
+  ),
   mode: values.allocations ? "sampled-allocation" : "untraced-timing",
   scenario: values.cold ? "cold-identities" : "warm-identities",
   rowCount,

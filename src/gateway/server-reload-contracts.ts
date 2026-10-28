@@ -6,10 +6,10 @@ import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
+import type { ChannelManager } from "./server-channels.js";
 import type { GatewayCronState } from "./server-cron-contract.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayConfigReloaderHandle } from "./server-runtime-handles.js";
-import type { GatewayChannelManager } from "./server-runtime-services.js";
 import type {
   SharedGatewayAuthClient,
   SharedGatewaySessionGenerationState,
@@ -140,11 +140,11 @@ export type GatewayReloadHandlerParams = {
   setState: (state: GatewayHotReloadState) => void;
   getPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
   getPluginRegistry: () => PluginRegistry;
-  startChannel: GatewayChannelManager["startChannel"];
-  stopChannel: GatewayChannelManager["stopChannel"];
-  releaseChannelRouteHandoffs: GatewayChannelManager["releaseChannelRouteHandoffs"];
+  startChannel: ChannelManager["startChannel"];
+  stopChannel: ChannelManager["stopChannel"];
+  releaseChannelRouteHandoffs: ChannelManager["releaseChannelRouteHandoffs"];
   pruneInactiveChannelAccountState: (activeChannelIds: ReadonlySet<ChannelKind>) => void;
-  getChannelAutostartSuppression?: GatewayChannelManager["getAutostartSuppression"];
+  getChannelAutostartSuppression?: ChannelManager["getAutostartSuppression"];
   stopPostReadySidecars?: () => Promise<void> | void;
   reloadPluginServices?: (config: OpenClawConfig, serviceIds: ReadonlySet<string>) => Promise<void>;
   reloadPlugins: (params: {
@@ -205,7 +205,7 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   promoteSnapshot: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;
   subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
   logReload: GatewayReloadLog & { error: (msg: string) => void };
-  channelManager: GatewayChannelManager & {
+  channelManager: ChannelManager & {
     pruneInactiveChannelAccountState: GatewayReloadHandlerParams["pruneInactiveChannelAccountState"];
   };
   activateRuntimeSecrets: ActivateRuntimeSecrets;

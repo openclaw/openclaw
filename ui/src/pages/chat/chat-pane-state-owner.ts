@@ -652,6 +652,7 @@ export abstract class ChatPaneStateOwner {
     catalogMessages: unknown[];
     catalogLoading: boolean;
     loadingOlder: boolean;
+    olderError: string | null;
     catalogCursor: string | undefined;
     catalogSession: SessionCatalogSession | null;
     catalogHost: SessionCatalogHost | null;
@@ -659,6 +660,7 @@ export abstract class ChatPaneStateOwner {
     catalogMessages: [],
     catalogLoading: false,
     loadingOlder: false,
+    olderError: null,
     catalogCursor: undefined,
     catalogSession: null,
     catalogHost: null,

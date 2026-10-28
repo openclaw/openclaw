@@ -16,6 +16,7 @@ export type RpcSourceTiming = {
   readonly queuedAtMs: number;
   startedAtMs?: number;
   expiresAtMs: number;
+  /** Process-local monotonic reading; unlike the surrounding timestamps, not an epoch. */
   readonly queueDeadlineAtMs?: number;
   readonly timeoutMs: number;
   cancelQueueDeadline: () => void;

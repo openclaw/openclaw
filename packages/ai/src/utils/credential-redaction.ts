@@ -232,7 +232,7 @@ export function projectDiagnosticValue(
   return projectValue(false, value, policy, seen, mediaPayload, state);
 }
 
-/** Internal producers supply a fresh graph of ordinary records and assigned array elements. */
+/** Internal producers transfer fresh ordinary records and dense arrays; arrays may be reused. */
 export function projectPreparedDiagnosticValue(
   value: unknown,
   policy?: DiagnosticProjectionPolicy,
@@ -277,10 +277,8 @@ function projectValue(
       state.changed = true;
       return "[Truncated]";
     }
-    if (
-      !Array.isArray(value) &&
-      (!producerOwned || Object.getPrototypeOf(value) !== Object.prototype)
-    ) {
+    const array = Array.isArray(value);
+    if (!array && (!producerOwned || Object.getPrototypeOf(value) !== Object.prototype)) {
       try {
         // Brand-check without provider getters; retain only numeric retry timing.
         Headers.prototype.has.call(value, "retry-after");
@@ -298,7 +296,7 @@ function projectValue(
     const trusted =
       keys.length <= maxKeys &&
       producerOwned &&
-      Object.getPrototypeOf(value) === (Array.isArray(value) ? Array.prototype : Object.prototype);
+      Object.getPrototypeOf(value) === (array ? Array.prototype : Object.prototype);
     let descriptors: PropertyDescriptorMap | undefined;
     if (!trusted) {
       // Snapshot descriptors before recursion; the map restores numeric key order from proxies.
@@ -323,7 +321,10 @@ function projectValue(
           : undefined;
     state.changed ||= keys.length > maxKeys;
     seen.add(value);
-    const out = (Array.isArray(value) ? [] : {}) as Record<string, unknown>;
+    const out = (Array.isArray(value) ? (trusted && !policy.omitField ? value : []) : {}) as Record<
+      string,
+      unknown
+    >;
     const name = field("name");
     const rawName = typeof name === "string" ? name : field("key");
     const redactValueField =
@@ -372,8 +373,7 @@ function projectValue(
         state.changed = true;
         continue;
       }
-      const childMedia = media?.kind === "context";
-      out[key] = projectValue(producerOwned, child, policy, seen, childMedia, state);
+      out[key] = projectValue(producerOwned, child, policy, seen, media?.kind === "context", state);
     }
     return out;
   } catch {

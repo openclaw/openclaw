@@ -14,6 +14,7 @@ import {
   onCleanup,
   onSettled,
 } from "solid-js";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -540,7 +541,7 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
         <Show
           when={props.model.presentation().embedded}
           fallback={
-            <>
+            <ShellLayoutBoundary traits={{ portalsPage: true }}>
               <HubPageHeader
                 active="portals"
                 wide
@@ -581,7 +582,7 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
                   </section>
                 </Show>
               </PortalReadiness>
-            </>
+            </ShellLayoutBoundary>
           }
         >
           <div

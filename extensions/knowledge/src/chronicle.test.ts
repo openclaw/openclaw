@@ -468,7 +468,7 @@ it("temporal source summaries fit the full response budget and never skip rows",
       "event_" + n,
       event("2020-05-10", { source_page: "meeting_" + n, source_event: true }),
       "private",
-      "🌱".repeat(1000),
+      "🌱".repeat(499) + "x😀",
     );
   }
   const input = { includeSources: true, limit: 100 };
@@ -477,6 +477,7 @@ it("temporal source summaries fit the full response budget and never skip rows",
   expect(page.nextOffset !== null).toBeTruthy();
   for (;;) {
     expect(Buffer.byteLength(JSON.stringify(page)) <= 24 * 1024).toBeTruthy();
+    expect(page.items.every((row) => row.summary.isWellFormed())).toBeTruthy();
     expect(page.sources!.length).toBe(page.items.length);
     expect(page.sources!.every((s) => page.items.some((i) => i.sourcePage === s.id))).toBeTruthy();
     all.push(...ids(page));
@@ -488,6 +489,5 @@ it("temporal source summaries fit the full response budget and never skip rows",
       f.owner,
     );
   }
-  expect(all.length).toBe(35);
-  expect(new Set(all).size).toBe(35);
+  expect([all.length, new Set(all).size]).toStrictEqual([35, 35]);
 });

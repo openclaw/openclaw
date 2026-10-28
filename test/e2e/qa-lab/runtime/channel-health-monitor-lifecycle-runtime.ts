@@ -11,7 +11,10 @@ import {
   evaluateChannelHealth,
   type ChannelHealthPolicy,
 } from "../../../../src/gateway/channel-health-policy.js";
-import type { ChannelRuntimeSnapshot } from "../../../../src/gateway/server-channel-runtime.types.js";
+import type {
+  ChannelAccountStartOutcome,
+  ChannelRuntimeSnapshot,
+} from "../../../../src/gateway/server-channel-runtime.types.js";
 import type { ChannelManager } from "../../../../src/gateway/server-channels.js";
 import { GatewayScheduler } from "../../../../src/infra/gateway-scheduler.js";
 import { resetLogger, setLoggerOverride } from "../../../../src/logging/logger.js";
@@ -148,7 +151,8 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
       configured: true,
       lastStartAt: now - 300_000,
     };
-    const manager = {
+    const manager: Parameters<typeof startChannelHealthMonitor>[0]["channelManager"] &
+      Pick<ChannelManager, "stopChannel"> = {
       getRuntimeSnapshot() {
         snapshotCalls += 1;
         firstSnapshotAt ??= clock.clock.now();
@@ -165,14 +169,14 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
           activeSnapshots -= 1;
         }
       },
-      async stopChannel(channelId: ChannelId, accountId: string, options: { manual: boolean }) {
-        operations.push(`stop:${channelId}:${accountId}:${String(options.manual)}`);
+      async stopChannel(channelId, accountId, options) {
+        operations.push(`stop:${channelId}:${accountId}:${String(options?.manual)}`);
         await stopGate.promise;
       },
       resetRestartAttempts(channelId: ChannelId, accountId: string) {
         operations.push(`reset:${channelId}:${accountId}`);
       },
-      async startChannel(channelId: ChannelId, accountId: string) {
+      async startChannel(channelId, accountId) {
         operations.push(`start:${channelId}:${accountId}`);
         account = {
           ...account,
@@ -181,7 +185,25 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
           lastStartAt: clock.clock.now(),
           lastTransportActivityAt: clock.clock.now(),
         };
+        return new Map<string, ChannelAccountStartOutcome>([
+          [account.accountId, { status: "handed-off" }],
+        ]);
       },
+      captureAccountRestart:
+        (channelId, accountId, reason, options) => async (shouldContinue: () => boolean) => {
+          if (!shouldContinue()) {
+            return false;
+          }
+          await manager.stopChannel(channelId, accountId, { manual: false });
+          if (!shouldContinue()) {
+            return false;
+          }
+          if (options?.resetRestartAttempts) {
+            manager.resetRestartAttempts(channelId, accountId);
+          }
+          await manager.startChannel(channelId, accountId, { reason, preserveManualStop: true });
+          return true;
+        },
       getAutostartSuppression: () => null,
       recoverAutostartSuppression: () => undefined,
       isAmbientAutostartSuppressed: () => false,
@@ -189,7 +211,7 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
       isAccountListed: () => true,
       isManuallyStopped: () => false,
       isAutoRestartScheduled: () => false,
-    } as unknown as ChannelManager;
+    };
 
     const monitorStartupGraceMs = 60_000;
     const checkIntervalMs = 5 * 60_000;

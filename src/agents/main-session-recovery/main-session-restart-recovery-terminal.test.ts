@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
@@ -7,7 +7,9 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { createSessionGoalFixture } from "../../gateway/session-goal.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { finishAgentCommandCleanup } from "../command/cleanup.js";
@@ -84,11 +86,13 @@ it("does not replay a terminally failed legacy pending final on the next boot", 
   });
 });
 
-it.each(["none", "local", "channel"] as const)(
+it.each(["none", "local", "channel", "channel-suppressed"] as const)(
   "records a failed worker placement once across two restarts (saved final=%s)",
   async (savedFinal) => {
     await withOpenClawTestState({ label: "failed-placement-recovery" }, async (state) => {
       await captureRuntimeConfigAsyncReader()();
+      using info = vi.spyOn(mainSessionRecoveryLog, "info");
+      const channel = savedFinal.startsWith("channel");
       const target = {
         agentId: "main",
         sessionKey: "agent:main:dashboard:failed-worker",
@@ -101,15 +105,14 @@ it.each(["none", "local", "channel"] as const)(
         status: savedFinal !== "none" ? "failed" : "interrupted",
         abortedLastRun: true,
         mainRestartRecovery: { cycleId: "failed-placement-cycle", revision: 1, chargedAttempts: 0 },
+        goal: createSessionGoalFixture("placement-goal", "Finish the worker task"),
         ...(savedFinal !== "none"
           ? {
               pendingFinalDelivery: {
                 kind: "replayable" as const,
                 text: "Retained answer",
                 createdAt: 100,
-                ...(savedFinal === "channel"
-                  ? { context: { channel: "telegram", to: "synthetic-recipient" } }
-                  : {}),
+                ...(channel ? { context: { channel: "telegram", to: "synthetic-recipient" } } : {}),
               },
             }
           : {}),
@@ -122,7 +125,9 @@ it.each(["none", "local", "channel"] as const)(
         throw new Error("failed placement recovery must not wait or deliver");
       };
       const release = vi.fn();
-      const sendRecoveryNotice = vi.fn(async () => ({ suppressed: false }));
+      const sendRecoveryNotice = vi.fn<GatewayRecoveryRuntime["sendRecoveryNotice"]>(async () => ({
+        suppressed: savedFinal === "channel-suppressed",
+      }));
       const gatewayRuntime: GatewayRecoveryRuntime = {
         prepareRestartRecovery: () => undefined,
         prepareFailedWorkerPlacement: async () => ({ reason, isCurrent: () => true, release }),
@@ -146,18 +151,52 @@ it.each(["none", "local", "channel"] as const)(
           status: "failed",
           abortedLastRun: false,
           mainRestartRecovery: { tombstone: { reason } },
+          goal: {
+            id: "placement-goal",
+            status: "paused",
+            lastStatusNote: expect.stringContaining(reason),
+          },
         });
       }
       expect(release).toHaveBeenCalledOnce();
-      expect(sendRecoveryNotice).toHaveBeenCalledTimes(savedFinal === "channel" ? 1 : 0);
-      const transcript = JSON.stringify(
-        await loadTranscriptEvents({ ...target, sessionId: "failed-worker-session" }),
-      );
+      expect(sendRecoveryNotice).toHaveBeenCalledTimes(channel ? 1 : 0);
+      const records = await loadTranscriptEvents({ ...target, sessionId: "failed-worker-session" });
+      const transcript = JSON.stringify(records);
       expect(transcript.split(reason)).toHaveLength(2);
       expect(loadSessionEntry(target)?.pendingFinalDelivery).toBeUndefined();
       if (savedFinal !== "none") {
         expect(transcript).toContain("Saved reply (delivery unconfirmed)");
         expect(transcript).toContain("Retained answer");
+      }
+      if (channel) {
+        const sent = sendRecoveryNotice.mock.calls[0]?.[0];
+        assert(sent);
+        const local = records
+          .map(readTranscriptEventMessage)
+          .find((message) => message?.idempotencyKey === sent.idempotencyKey);
+        expect(local).toMatchObject({
+          content: [
+            { type: "text", text: sent.text },
+            { type: "text", text: "\nSaved reply (delivery unconfirmed):\nRetained answer" },
+          ],
+          openclawDeliveryMirror: { noticeId: sent.idempotencyKey, noticePart: 0 },
+        });
+        expect(sent.text).not.toContain("Retained answer");
+        expect(sent).toMatchObject({
+          generation: { ...target, sessionId: "failed-worker-session", lifecycleRevision: null },
+          provenance: {
+            kind: "recovery-notice",
+            noticeId: sent.idempotencyKey,
+            localNotice: { entryId: expect.any(String), rawSeq: expect.any(Number) },
+          },
+        });
+        expect(info).toHaveBeenCalledWith(
+          expect.stringContaining(
+            savedFinal === "channel-suppressed"
+              ? "did not send restart recovery tombstone notice"
+              : "sent restart recovery tombstone notice",
+          ),
+        );
       }
     });
   },

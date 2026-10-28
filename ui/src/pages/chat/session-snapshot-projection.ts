@@ -3,11 +3,12 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { removePairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import { projectChatMessageReactions } from "./chat-message-reactions-snapshot.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
+import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 
-export const CHAT_SNAPSHOT_PROJECTION_VERSION = 6;
+export const CHAT_SNAPSHOT_PROJECTION_VERSION = 9;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 
-export function createSnapshotRecord(
+export async function createSnapshotRecord(
   sessionKey: string,
   pending: { savedAt: number; snapshot: ChatSessionSnapshot },
 ) {
@@ -41,6 +42,15 @@ export function createSnapshotRecord(
         },
       };
     }
+    let historyChanged = false;
+    if (projected.messages.some((message) => readLiveTerminalRunId(message))) {
+      const { reconcileTerminalCanvasMessages } = await import("./chat-thread-canvas.ts");
+      const projectedMessages = reconcileTerminalCanvasMessages(projected.messages);
+      if (projectedMessages !== projected.messages) {
+        projected = { ...projected, messages: projectedMessages };
+        historyChanged = true;
+      }
+    }
     if (projected.messageReactions) {
       projected = {
         ...projected,
@@ -51,7 +61,6 @@ export function createSnapshotRecord(
       };
     }
     // Pairing credentials stay in the live projection, never the browser's disk cache.
-    let redacted = false;
     const serialized = JSON.stringify(projected, (_key, value: unknown) => {
       if (value === projected.messages) {
         return projected.messages.map((message) => {
@@ -64,12 +73,12 @@ export function createSnapshotRecord(
         });
       }
       const sanitized = removePairingQrContent(value);
-      redacted ||= sanitized !== value;
+      historyChanged ||= sanitized !== value;
       return sanitized;
     });
     snapshot = JSON.parse(serialized);
-    // A receipt cannot certify metadata changed by the disk privacy projection.
-    if (redacted) {
+    // A receipt cannot certify history changed by the disk display or privacy projection.
+    if (historyChanged) {
       delete snapshot.historyState;
     }
     weight = serialized.length;

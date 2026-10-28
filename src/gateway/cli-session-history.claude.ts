@@ -22,11 +22,6 @@ import {
   getCliSessionBinding,
   normalizeCliSessionReseedReceipt,
 } from "../config/sessions/cli-session-binding.js";
-import {
-  type InputProvenance,
-  readInterSessionPromptEnvelope,
-} from "../sessions/input-provenance.js";
-import { stripCliPromptDecorations } from "./cli-session-history.prompt-text.js";
 import { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
@@ -265,24 +260,6 @@ function isClaudeCliTaskNotification(
   );
 }
 
-// Read provenance through generated context, but preserve the raw content for
-// display and literal matching against local transcript rows.
-function readClaudeCliInterSessionProvenance(
-  content: string | unknown[],
-): InputProvenance | undefined {
-  const blockIndex =
-    typeof content === "string"
-      ? -1
-      : content.findIndex((item) => isRecord(item) && item.type === "text");
-  const candidate = blockIndex === -1 ? undefined : content[blockIndex];
-  const block = isRecord(candidate) ? candidate : undefined;
-  const text = typeof content === "string" ? content : block?.text;
-  if (typeof text !== "string") {
-    return undefined;
-  }
-  return readInterSessionPromptEnvelope(stripCliPromptDecorations(text))?.provenance;
-}
-
 export function resolveClaudeCliPromptTextCandidates(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
@@ -311,43 +288,6 @@ export function resolveClaudeCliPromptTextCandidates(
       ? [{ text: item.text, blockIndex }]
       : [],
   );
-}
-
-/**
- * Display copy of an imported user row that survived the history merge. The merge
- * matches on the original text first, so this must not run before it.
- */
-export function cleanClaudeCliImportedUserDisplay(message: unknown): unknown {
-  const meta = isRecord(message) ? message["__openclaw"] : undefined;
-  if (
-    !isRecord(message) ||
-    message.role !== "user" ||
-    message.display === false ||
-    !isRecord(meta) ||
-    meta.importedFrom !== CLAUDE_CLI_PROVIDER
-  ) {
-    return message;
-  }
-  const { content } = message;
-  if (typeof content === "string") {
-    return { ...message, content: stripCliPromptDecorations(content) };
-  }
-  if (!Array.isArray(content) || content.some((block) => isToolResultBlock(block))) {
-    return message;
-  }
-  // Generated prefixes belong to the beginning of the whole turn. Later text
-  // blocks may quote the same frame and must retain the sender's evidence.
-  const firstTextIndex = content.findIndex(
-    (block) => isRecord(block) && block.type === "text" && typeof block.text === "string",
-  );
-  return {
-    ...message,
-    content: content.map((block, index) =>
-      index === firstTextIndex && isRecord(block) && typeof block.text === "string"
-        ? Object.assign({}, block, { text: stripCliPromptDecorations(block.text) })
-        : block,
-    ),
-  };
 }
 
 function resolveClaudeCliInternalSourceTool(text: string): string | undefined {
@@ -482,9 +422,8 @@ export function parseClaudeCliHistoryEntry(
       : isClaudeCliVisibleHarnessContext(entry)
         ? "cli_harness_context"
         : internalSourceTool;
-    const provenance = sourceTool
-      ? { kind: "internal_system", sourceTool }
-      : readClaudeCliInterSessionProvenance(content);
+    // Forwarded and host inputs are synthetic meta rows, which never reach this branch.
+    const provenance = sourceTool ? { kind: "internal_system", sourceTool } : undefined;
     return attachOpenClawTranscriptMeta(
       {
         role: "user",

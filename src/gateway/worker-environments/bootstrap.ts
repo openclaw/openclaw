@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { PROCESS_NODE_VERSION_CHECK } from "../../../node-version.mjs";
+import {
+  PROCESS_NODE_VERSION_CHECK,
+  SUPPORTED_NODE_VERSION_RANGE,
+} from "../../../node-version.mjs";
 import {
   type WorkerAdmissionHandshake,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -585,7 +588,7 @@ function parsePreflight(
   }
   if (matchesCommandFailure(result, NODE_UNSUPPORTED_EXIT_CODE, NODE_UNSUPPORTED_MARKER)) {
     throw new Error(
-      "Worker bootstrap requires Node 24.22.1+ or 26.12.1+ with WAL-reset-safe SQLite on the leased host; install a supported Node runtime in the provider setup phase and retry",
+      `Worker bootstrap requires Node ${SUPPORTED_NODE_VERSION_RANGE.replace(" || ", ", or ")} with WAL-reset-safe SQLite on the leased host; install a supported Node runtime in the provider setup phase and retry`,
     );
   }
   if (!isSuccess(result)) {

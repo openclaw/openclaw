@@ -12,6 +12,8 @@ import {
   type AgentAssistantProjection,
   type AgentAssistantSourceReceipt,
 } from "../infra/agent-events.js";
+import { plainToolCallPreviewTextFilter } from "../shared/text/assistant-visible-text.js";
+import { createTextProjection, trimTextFilter } from "../shared/text/text-projection.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers/messaging-dedupe.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
@@ -46,6 +48,7 @@ type AssistantStreamScope = {
   pending?: boolean;
   emitted?: boolean;
   nextPartialReplyAt?: number;
+  preview?: ReturnType<typeof createTextProjection>;
 };
 
 const isStreamAppend = ({ data, finalMessage }: AssistantStreamDelivery) =>
@@ -89,7 +92,20 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       return;
     }
     scope.nextPartialReplyAt = now + 75;
-    const data = scope.delivery.data;
+    let data = scope.delivery.data;
+    const preview = (scope.preview ??= createTextProjection([
+      plainToolCallPreviewTextFilter,
+      trimTextFilter("both", { preserveCodeIndentation: true }),
+    ]));
+    const wasFiltered = preview.source !== preview.text;
+    const projected =
+      !data.replace && data.text.length === preview.source.length + data.delta.length
+        ? preview.append(data.delta, data.text)
+        : preview.replace(data.text);
+    if (wasFiltered || projected.text !== data.text) {
+      // Only channel callbacks consume this view; raw/ACP events keep their append contract.
+      data = { ...data, text: projected.text, delta: projected.text, replace: true };
+    }
     scope.pending = false;
     // Reserve before invocation: callbacks may synchronously enqueue text or open another scope.
     scope.active = true;

@@ -11,21 +11,16 @@ import {
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
-import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
-import type {
-  ModelFallbackAvailability,
-  ModelFallbackAttemptProvenance,
-} from "./model-fallback.types.js";
+import type { ModelFallbackAvailability } from "./model-fallback.types.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 
 type Workspace = { agentDir: string; workspaceDir: string };
-const enqueue: NonNullable<RunEmbeddedAgentParams["enqueue"]> = async (task) => await task();
 
 export function embeddedParams(
   { agentDir, workspaceDir, runId, sessionKey }: Workspace & { runId: string; sessionKey: string },
@@ -42,7 +37,6 @@ export function embeddedParams(
     prompt: "hello",
     authProfileIdSource: "auto" as const,
     timeoutMs: 5_000,
-    enqueue,
   };
 }
 
@@ -65,7 +59,6 @@ export function createEmbeddedFallbackEntryRunner({
       fallbacksOverride?: string[];
       modelFallbackAvailability?: ModelFallbackAvailability;
       onFallbackStep?: (step: ModelFallbackStepFields) => void;
-      onModelRoutingProvenance?: (value: ModelFallbackAttemptProvenance) => void;
     } = {},
   ) {
     const { agentDir, workspaceDir } = workspace;
@@ -106,7 +99,6 @@ export function createEmbeddedFallbackEntryRunner({
         sessionOverride: { kind: "preserve" },
         onFallbackStep,
         runCandidate: (provider, model, attemptOptions) => {
-          options.onModelRoutingProvenance?.(attemptOptions.modelRoutingProvenance);
           return runEmbeddedAgent({
             ...embeddedParams({ ...workspace, runId, sessionKey }, cfg, sessionId),
             preparedRunAdmission,

@@ -10,7 +10,7 @@ import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
-import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
+import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { projectQueuedDeliveryOptions } from "./delivery-queue-projection.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
@@ -73,6 +73,8 @@ export async function buildRecoveryDeliverParams(
     release: writer.release,
     cfg,
     ...projectQueuedDeliveryOptions(entry),
+    // The recovery owner holds the dispatch lease; this copy only pins confirmed history.
+    transcriptGeneration: entry.sessionGeneration,
     ...(entry.queuePolicy !== undefined ? { queuePolicy: entry.queuePolicy } : {}),
     ...(entry.requireUnknownSendReconciliation === true
       ? { requireUnknownSendReconciliation: true }
@@ -111,5 +113,5 @@ export async function buildRecoveryDeliverParams(
     skipQueue: true, // Prevent re-enqueueing during recovery.
     deferredDeliveryAdmissionPassed: true,
     deferCommitHooks: true,
-  } satisfies DeliverOutboundPayloadsParams & { release: () => void };
+  } satisfies InternalDeliverOutboundPayloadsParams & { release: () => void };
 }

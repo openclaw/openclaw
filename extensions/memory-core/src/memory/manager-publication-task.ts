@@ -101,7 +101,8 @@ export type MemoryPublicationOperations = {
   };
   "cache.read": {
     input: Omit<Parameters<typeof loadMemoryEmbeddingCache>[0], "db"> & {
-      rebuild?: MemoryRebuildEmbeddingQuery;
+      cacheEnabled?: boolean;
+      published?: MemoryRebuildEmbeddingQuery;
     };
     output: ReturnType<typeof loadMemoryEmbeddingCache>;
   };

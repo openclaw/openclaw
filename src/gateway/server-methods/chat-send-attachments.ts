@@ -268,6 +268,17 @@ export async function prepareChatSendAttachments(params: {
                   `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${unstageable.map((ref) => ref.path).join(", ")})`,
                 );
               }
+              if (stagingEntry?.pendingWorktree || stagingEntry?.pendingProjectGitUrl) {
+                // The pre-ACK copy validates staging in the current workspace. Deferred
+                // preparation will bind another one, so let reply staging use the managed
+                // originals there instead of certifying this interim copy as final.
+                return mediaPathRefs.map((ref) => ({
+                  path: ref.path,
+                  url: ref.mediaRef,
+                  contentType: ref.mimeType,
+                  fileName: ref.label,
+                }));
+              }
               const stagedMedia = stagingCtx.media ?? [];
               // Preserve request order while mixing sandbox-relative paths with managed
               // host paths used by pass-through or fallback PDFs.

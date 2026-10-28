@@ -18,7 +18,7 @@ export type WarmReloadFixtureOptions = {
   sessions?: number;
   admission?: Pick<
     Awaited<ReturnType<typeof startWarmReloadAdmission>>,
-    "origin" | "gatewayAuth" | "viewerEmail"
+    "origin" | "gatewayAuth" | "viewerEmail" | "peerSessions"
   >;
 };
 
@@ -334,6 +334,22 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
           { env },
         );
         await profileWrites.setCanonicalUserProfileAvatar(viewer.id, avatar, "image/png", { env });
+        for (const [index, peer] of options.admission.peerSessions.entries()) {
+          const profile = await profileWrites.ensureCanonicalUserProfileForEmail(peer.email, {
+            env,
+          });
+          await profileWrites.setCanonicalUserProfileDisplayName(
+            profile.id,
+            `Synthetic viewer ${index + 1}`,
+            { env },
+          );
+          await profileWrites.setCanonicalUserProfileAvatar(
+            profile.id,
+            png.createSolidPngBuffer(40, 40, { r: 55 + index * 60, g: 135, b: 185 - index * 40 }),
+            "image/png",
+            { env },
+          );
+        }
       }
       stateDb.runOpenClawStateWriteTransaction(
         (owner) => {
@@ -451,6 +467,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       noticeRowsPerRoute: 1,
       mockProvider: "QA loopback OpenAI Responses",
       admission: options.admission ? "signed-in" : "token",
+      otherViewers: options.admission?.peerSessions.length ?? 0,
       targets,
     };
     writeFileSync(

@@ -35,9 +35,7 @@ describe("summarizeToolGroup", () => {
       toolCallId: "refused",
       status: "failed",
     });
-    expect(summarizeToolGroup([...launches, refused])).toBe(
-      "1 other operation · 3 subagents · 1 failed",
-    );
+    expect(summarizeToolGroup([...launches, refused])).toBe("1 other operation · 3 subagents");
   });
 
   it("replaces running state with the same operation's outcome without counting suppressed siblings", () => {
@@ -47,10 +45,10 @@ describe("summarizeToolGroup", () => {
         prepared("tool:call", "Inspect", { toolCallId: "call", status: "failed" }),
         prepared("command:call", "Command", { toolCallId: "call", suppressChannelProgress: true }),
       ]),
-    ).toBe("1 other operation · 1 failed");
+    ).toBe("1 other operation");
   });
 
-  it("keeps failure, approval, skipped, and unknown outcomes while quiet work stays out", () => {
+  it("keeps approval and unknown outcomes but leaves failed and skipped steps to their rows", () => {
     expect(
       summarizeToolGroup([
         prepared("quiet", "Wait", { hideFromChannelProgress: true }),
@@ -60,7 +58,7 @@ describe("summarizeToolGroup", () => {
         prepared("unknown", "Outcome unknown", { status: undefined }),
         prepared("unpaired", "Run build", { status: undefined, unpairedCall: true }),
       ]),
-    ).toBe("5 other operations · 1 failed · 1 blocked · 1 skipped · 1 unknown");
+    ).toBe("5 other operations · 1 blocked · 1 unknown");
   });
 
   it("keeps the diagnostic disclosure label when all prepared work is quiet", () => {

@@ -10,6 +10,7 @@ import {
   getChatBranchesQueryState,
   loadChatBranches,
 } from "./chat-history-branches.ts";
+import { chatHistoryRequests } from "./chat-history-state.ts";
 import type { ChatMobileHost, MobileDetailsRoute } from "./chat-mobile-host.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -26,6 +27,7 @@ import {
 } from "./components/chat-session-workspace-state.ts";
 import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
+import { captureChatDetailsSnapshot } from "./session-message-cache.ts";
 import {
   sidebarActivePanel,
   sidebarMainPanel,
@@ -44,6 +46,7 @@ export type PaneDetailsActions = Pick<
   | "onOpenTaskProgressSettings"
   | "onClearSavedProgressCard"
   | "progressCardRefresh"
+  | "progressCardRefreshReserved"
 >;
 
 export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRender {
@@ -286,12 +289,22 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           }
         : undefined;
     const detailsProgress = this.detailsProgressCardPresentation;
+    const cached = captureChatDetailsSnapshot(state);
     const conversationMain =
       (sidebarMainPanel(sidebarLayout)?.slot ?? "conversation") === "conversation";
     const headerDetails: ChatDetailsViewProps | undefined = ownsSubagentsPanel
       ? {
           elements,
           chat: merge(paneChatProps, detailsActions, detailsOutputs, {
+            cachedDetails: cached?.details,
+            onDetailsSnapshot: cached?.write,
+            selectedSession: paneChatProps.transcriptMetadata
+              ? {
+                  ...selectedSession,
+                  ...paneChatProps.transcriptMetadata,
+                  sessionId: state.currentSessionId ?? undefined,
+                }
+              : selectedSession,
             environment,
             outputs: detailsOutputs.outputs
               ? {
@@ -330,7 +343,9 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
                     : detailsOutputs.outputs.dashboard,
                 }
               : undefined,
-            progressCard: detailsProgress?.card ?? null,
+            progressCard:
+              detailsProgress?.card ??
+              (this.detailsProgressCardInitialLoading ? cached?.snapshot.progressCard : null),
             progressCardIdentity: detailsProgress?.identity,
             progressCardLifetime: detailsProgress?.lifetime,
             progressCardInitialLoading: this.detailsProgressCardInitialLoading,
@@ -390,7 +405,9 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
           mobile: this.mergedChrome && !this.onBackToSubagents,
           nativePresentation: this.sessionPresentation,
           mobileHost,
-          contentPending: this.deferredSessionHydration !== null,
+          contentPending:
+            this.deferredSessionHydration !== null ||
+            chatHistoryRequests(state).initialSnapshotHydration?.titlePending === true,
           // Details reserves header-owned geometry during retained navigation previews.
           presentation:
             this.sessionPresentation === "desktop" ? headerPresentation : panePresentation,

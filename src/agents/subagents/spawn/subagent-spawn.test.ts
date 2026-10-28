@@ -220,6 +220,7 @@ describe("spawnSubagentDirect seam flow", () => {
       await schedulerWork.close();
     } finally {
       vi.unstubAllEnvs();
+      vi.useRealTimers();
     }
   });
 
@@ -614,32 +615,31 @@ describe("spawnSubagentDirect seam flow", () => {
   it.each([false, true])("reconciles ambiguous dispatch (terminal=%s)", async (terminal) => {
     const accepted = { runId: "accepted-ambig-run", status: "in_flight" };
     const dispatch = vi.fn().mockRejectedValueOnce(new Error("gateway timeout after 60000ms"));
+    // A forward wall-clock step between iterations must not exhaust the reconcile budget.
+    vi.useFakeTimers({ toFake: ["Date"] });
     if (!terminal) {
-      dispatch.mockResolvedValueOnce({ ...accepted, admissionPending: true });
+      dispatch.mockImplementationOnce(() => {
+        vi.setSystemTime(Date.now() + 10_000);
+        return Promise.resolve({ ...accepted, admissionPending: true });
+      });
     }
     dispatch.mockResolvedValue(terminal ? { runId: "stopped-run", status: "timeout" } : accepted);
     hoisted.callGatewayMock.mockImplementation(async ({ method }: { method?: string }) =>
-      method === "agent"
-        ? dispatch()
-        : terminal || method?.startsWith("sessions.")
-          ? { ok: true }
-          : {},
+      method === "agent" ? dispatch() : { ok: true },
     );
     const result = await spawn({ task: "ambiguous child" });
+    const terminalError = expect.stringContaining("no active subagent run (status: timeout)");
+    expect(result).toMatchObject(
+      terminal
+        ? { status: "error", error: terminalError }
+        : { status: "accepted", runId: accepted.runId, childSessionKey: expect.any(String) },
+    );
     if (terminal) {
-      expect(result).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("no active subagent run (status: timeout)"),
-      });
       expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
     } else {
       const requests = gatewayRequestRecords().filter((request) => request.method === "agent");
       expect(requests.map((request) => request.params)).toEqual(Array(3).fill(requests[0]?.params));
-      expect(result).toMatchObject({
-        status: "accepted",
-        runId: "accepted-ambig-run",
-        childSessionKey: expect.any(String),
-      });
+      expect(requests.slice(1).map((request) => request.timeoutMs)).toEqual([800, 800]);
     }
   });
 

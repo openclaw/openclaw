@@ -1,6 +1,6 @@
 /**
  * Sandbox run-start owner proof with real session/worktree storage, Git checkouts,
- * workspace reconciliation and skill delivery. Only the Docker executable is a
+ * workspace reconciliation and skill delivery. Only the container executable is a
  * synthetic process: --cli-delay-ms models engine latency without a daemon.
  *
  * node --import ./scripts/tsx.mjs scripts/perf/sandbox-setup-waits-measure.ts \
@@ -10,12 +10,16 @@
  * separate sampled-allocation pass. --iterations counts warm starts after one cold
  * creation. --expired-runtimes (default 32) exercises first-start pruning. Setup,
  * seeding, and cleanup are outside measurements. No forced GC. Requires Python 3.
+ * --backend podman uses a synthetic local rootless Podman engine (default: docker).
+ * After each setup sample, drain housekeeping separately and report its remaining
+ * duration/CPU plus cumulative subprocess counts, before resetting counters. Setup
+ * measurements include any housekeeping already running in that same window.
  * A production-owned skill snapshot is prepared before the measured starts.
  * --registry-iterations 2000 also compares the eliminated runtime-ID query with
  * a no-query loop on the same seeded state. This is deleted-work cost, not a
  * whole-setup speedup; use a separate --allocations run for allocation numbers.
  *
- * All state is synthetic and removed on exit. No Gateway, model turns, real Docker,
+ * All state is synthetic and removed on exit. No Gateway, model turns, real engine,
  * browser or credentials are used. This isolates setup awaits; it does not prove
  * whole-Gateway latency or production filesystem/daemon latency. Background
  * worktrees are real tiny Git checkouts, not production-size repositories.
@@ -34,6 +38,7 @@ import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 const { values } = parseArgs({
   options: {
     output: { type: "string" },
+    backend: { type: "string", default: "docker" },
     agents: { type: "string", default: "32" },
     worktrees: { type: "string", default: "320" },
     iterations: { type: "string", default: "5" },
@@ -59,6 +64,8 @@ const iterations = integer("iterations");
 const cliDelayMs = integer("cli-delay-ms", 0);
 const expiredRuntimes = integer("expired-runtimes", 0);
 const registryIterations = integer("registry-iterations", 0);
+const backend = values.backend;
+assert(backend === "docker" || backend === "podman", "--backend must be docker or podman");
 const sourceHashes = Object.fromEntries(
   await Promise.all(
     (
@@ -68,6 +75,7 @@ const sourceHashes = Object.fromEntries(
         ["docker", "../../src/agents/sandbox/docker.ts"],
         ["dockerBackend", "../../src/agents/sandbox/docker-backend.ts"],
         ["dockerPersistentTarget", "../../src/agents/sandbox/docker-persistent-target.ts"],
+        ["podmanRuntime", "../../src/agents/sandbox/podman-runtime.ts"],
         ["localWorkspace", "../../src/agents/sandbox/local-workspace.ts"],
         ["localWorkspaceQuiescence", "../../src/agents/sandbox/local-workspace-quiescence.ts"],
         ["prune", "../../src/agents/sandbox/prune.ts"],
@@ -89,6 +97,21 @@ const bin = path.join(fixture, "bin");
 const engines = path.join(fixture, "engines");
 const callsFile = path.join(fixture, "engine-calls");
 const gitTraceFile = path.join(fixture, "git-trace.jsonl");
+async function readSubprocessCounts() {
+  const calls = (await fs.readFile(callsFile, "utf8")).trim().split("\n").filter(Boolean);
+  const subprocesses = Object.fromEntries(
+    [...new Set(calls)].map((operation) => [
+      operation,
+      calls.filter((call) => call === operation).length,
+    ]),
+  );
+  const gitSubprocesses = (await fs.readFile(gitTraceFile, "utf8"))
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { event: string })
+    .filter((event) => event.event === "start").length;
+  return { subprocesses, gitSubprocesses, totalSubprocesses: calls.length + gitSubprocesses };
+}
 await fs.mkdir(bin);
 await fs.mkdir(engines);
 Object.assign(process.env, {
@@ -117,13 +140,17 @@ for (const name of [
   "DOCKER_TLS",
   "DOCKER_TLS_VERIFY",
   "DOCKER_CERT_PATH",
+  "CONTAINER_HOST",
+  "CONTAINER_CONNECTION",
+  "CONTAINER_SSHKEY",
 ]) {
   delete process.env[name];
 }
 await fs.writeFile(
-  path.join(bin, "docker"),
+  path.join(bin, backend),
   `#!/usr/bin/env python3
 import hashlib, json, os, pathlib, sys, time
+engine = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 if args[:1] == ['--host']: args = args[2:]
 op = args[0]
@@ -139,7 +166,7 @@ def read(name):
 def write(state):
     for key in ['name', 'id']: (root / state[key]).write_text(json.dumps(state))
 if op == 'context': print('{"Host":"unix:///synthetic-sandbox.sock"}')
-elif op == 'info': print('synthetic-daemon')
+elif op == 'info': print('true\\tfalse\\t\\t5.0.0' if engine == 'podman' else 'synthetic-daemon')
 elif op in ['image', 'ps']: pass
 elif op == 'create':
     name = args[args.index('--name') + 1]
@@ -153,7 +180,7 @@ elif op == 'inspect':
     if '.Mounts' in form: print('{"Mounts":[],"Tmpfs":{}}')
     elif form == '{{json .State}}': print(json.dumps(dict(Running=state['running'], Paused=state['paused'], Pid=123 if state['running'] else 0, StartedAt='2026-01-01T00:00:00Z')))
     else:
-        fields = {'{{.Id}}':state['id'], '{{.State.Running}}':str(state['running']).lower(), '{{.State.Paused}}':str(state['paused']).lower(), '{{.HostConfig.ReadonlyRootfs}}':'true', '{{ index .Config.Labels "openclaw.configHash" }}':state['configHash']}
+        fields = {'{{.Id}}':state['id'], '{{.State.Running}}':str(state['running'] and (engine != 'podman' or not state['paused'])).lower(), '{{.State.Paused}}':str(state['paused']).lower(), '{{.HostConfig.ReadonlyRootfs}}':'true', '{{ index .Config.Labels "openclaw.configHash" }}':state['configHash']}
         for key, value in fields.items(): form = form.replace(key, value)
         if '{{' in form: raise RuntimeError('Unsupported synthetic inspection')
         print(form)
@@ -178,6 +205,7 @@ const { insertRegistryWorktree } = await import("../../src/agents/worktrees/regi
 const { upsertSessionEntryCore } = await import("../../src/config/sessions/session-accessor.js");
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
 const { resolveSandboxContext } = await import("../../src/agents/sandbox/context.js");
+const { maybePruneSandboxes } = await import("../../src/agents/sandbox/prune.js");
 const { updateRegistry, readRegistry, readRegisteredSandboxRuntimeIds } =
   await import("../../src/agents/sandbox/registry.js");
 const { withDiagnosticsTimelineObserver } = await import("../../src/infra/diagnostics-timeline.js");
@@ -230,7 +258,7 @@ try {
         skipBootstrap: true,
         sandbox: {
           mode: "all",
-          backend: "docker",
+          backend,
           scope: "session",
           workspaceAccess: "none",
           prune: { idleHours: 24, maxAgeDays: 7 },
@@ -291,12 +319,15 @@ try {
     await fs.writeFile(path.join(engines, id), engineState);
     await updateRegistry({
       containerName: name,
-      backendId: "docker",
+      backendId: backend,
       runtimeLabel: name,
-      backendTarget: {
-        key: "docker:synthetic-daemon",
-        globalArgs: ["--host", "unix:///synthetic-sandbox.sock"],
-      },
+      backendTarget:
+        backend === "podman"
+          ? { key: "local", globalArgs: [] }
+          : {
+              key: "docker:synthetic-daemon",
+              globalArgs: ["--host", "unix:///synthetic-sandbox.sock"],
+            },
       sessionKey: `agent:synthetic-${index % agents}:dashboard:expired-${index}`,
       image: "synthetic",
       createdAtMs: Date.now() - 8 * 86400_000,
@@ -379,18 +410,31 @@ try {
     const profile = inspector
       ? (await inspector.post("HeapProfiler.stopSampling")).profile
       : undefined;
-    const calls = (await fs.readFile(callsFile, "utf8")).trim().split("\n").filter(Boolean);
-    const subprocesses = Object.fromEntries(
-      [...new Set(calls)].map((operation) => [
-        operation,
-        calls.filter((call) => call === operation).length,
-      ]),
-    );
-    const gitSubprocesses = (await fs.readFile(gitTraceFile, "utf8"))
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { event: string })
-      .filter((event) => event.event === "start").length;
+    const measuredSubprocesses = await readSubprocessCounts();
+    if (inspector) {
+      await inspector.post("HeapProfiler.startSampling", {
+        samplingInterval: 32768,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
+    }
+    const housekeepingCpuBefore = process.threadCpuUsage();
+    const housekeepingStarted = performance.now();
+    await maybePruneSandboxes(config);
+    const housekeepingElapsedMs = performance.now() - housekeepingStarted;
+    const housekeepingCpu = process.threadCpuUsage(housekeepingCpuBefore);
+    const housekeepingProfile = inspector
+      ? (await inspector.post("HeapProfiler.stopSampling")).profile
+      : undefined;
+    const afterHousekeeping = await readSubprocessCounts();
+    const housekeeping = {
+      elapsedMs: housekeepingElapsedMs,
+      mainThreadCpuMs: (housekeepingCpu.user + housekeepingCpu.system) / 1000,
+      sampledBytes: housekeepingProfile?.samples.reduce((sum, sample) => sum + sample.size, 0),
+      additionalSubprocesses:
+        afterHousekeeping.totalSubprocesses - measuredSubprocesses.totalSubprocesses,
+      ...afterHousekeeping,
+    };
     results.push({
       cohort: index === 0 ? "cold" : "warm",
       elapsedMs,
@@ -398,9 +442,8 @@ try {
       sampledBytes: profile?.samples.reduce((sum, sample) => sum + sample.size, 0),
       spans,
       workerRequests,
-      subprocesses,
-      gitSubprocesses,
-      totalSubprocesses: calls.length + gitSubprocesses,
+      ...measuredSubprocesses,
+      housekeeping,
       memoryBefore,
       memoryAfter,
       loadBefore,
@@ -410,7 +453,8 @@ try {
       JSON.stringify({
         cohort: index === 0 ? "cold" : "warm",
         elapsedMs,
-        subprocesses,
+        ...measuredSubprocesses,
+        housekeeping,
         workerRequests,
       }),
     );
@@ -420,7 +464,7 @@ try {
       (entry) => entry.containerName === measuredRuntimeId,
     );
     assert(runtime, "Expected the measured runtime in the registry");
-    const query = { backendId: "docker", scopeKey: runtime.sessionKey };
+    const query = { backendId: backend, scopeKey: runtime.sessionKey };
     assert.equal((await readRegisteredSandboxRuntimeIds(query)).length, 1);
     for (const arm of ["read", "removed"] as const) {
       if (inspector) {
@@ -464,7 +508,7 @@ try {
   }
   await fs.writeFile(
     output,
-    `${JSON.stringify({ sourceHashes, agents, worktrees, skillsPerAgent: 40, preparedSkillsSnapshot: true, expiredRuntimes, iterations, cliDelayMs, sampled: values.allocations, limitations: "Owner setup only; no Gateway transport/model turns. Small repositories; synthetic engine does not execute tools. Nested spans overlap. Worker totals include process-wide work during setup, including already-running requests completing in the window. registryQuery is the isolated eliminated-query cost, not whole-setup improvement.", results, registryQuery }, null, 2)}\n`,
+    `${JSON.stringify({ sourceHashes, backend, agents, worktrees, skillsPerAgent: 40, preparedSkillsSnapshot: true, expiredRuntimes, iterations, cliDelayMs, sampled: values.allocations, limitations: "Owner setup only; no Gateway transport/model turns. Small repositories; synthetic engine does not execute tools. Nested spans overlap. Worker totals include process-wide work during setup, including already-running requests completing in the window. Housekeeping drains after each setup sample; its counts are cumulative so work is not hidden or charged to the next sample. registryQuery is the isolated eliminated-query cost, not whole-setup improvement.", results, registryQuery }, null, 2)}\n`,
   );
   console.log(`Saved ${output}`);
 } finally {

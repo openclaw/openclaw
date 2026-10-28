@@ -1592,7 +1592,7 @@ describe("main-session-restart-recovery", () => {
     },
   );
 
-  it("releases recovered Telegram notice authority after a transport failure", async () => {
+  it("keeps a running recovery silent while preserving its original delivery route", async () => {
     const sessionsDir = await makeSessionsDir();
     const sessionKey = "agent:main:telegram:group:-100123:topic:99";
     await writeMainSession({
@@ -1606,37 +1606,17 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeCompletedToolTranscript(sessionsDir);
-    let currentAtSend: boolean | undefined;
-    sendRecoveryNotice.mockImplementationOnce(async (notice) => {
-      currentAtSend = notice.isCurrent?.({});
-      throw new Error("temporary transport failure");
-    });
+
     await expectRecovery({ started: 1 });
-    expect(currentAtSend).toBe(true);
-    expect(sendRecoveryNotice).toHaveBeenCalledOnce();
-    const notice = sendRecoveryNotice.mock.calls[0]?.[0];
-    expect(notice).toMatchObject({
+
+    expect(gatewayParams()).toMatchObject({
+      deliver: true,
       channel: "telegram",
       to: "telegram:-100123",
       accountId: "work",
-      threadId: 99,
-      text: expect.stringContaining("Recovery did not grant new permission"),
-      idempotencyKey: `main-session-restart-recovery:${String(gatewayParams().idempotencyKey)}:resumed-notice`,
+      threadId: "99",
     });
-    expect(notice?.isCurrent?.({})).toBe(false);
-    const current = loadSessionEntry({
-      sessionKey,
-      storePath: path.join(sessionsDir, "sessions.json"),
-    });
-    if (!current) {
-      throw new Error("Recovered session fixture is missing");
-    }
-    await writeStore(sessionsDir, {
-      [sessionKey]: { ...current, sessionId: "replacement-session" },
-    });
-    expect(notice?.isCurrent?.({})).toBe(false);
-    await writeStore(sessionsDir, { [sessionKey]: current });
-    expect(notice?.isCurrent?.({})).toBe(false);
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
     dispatchSettlement.resolve();
   });
 
@@ -2165,9 +2145,7 @@ describe("main-session-restart-recovery", () => {
     expect(callGateway).toHaveBeenCalledOnce();
     expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
     expect(gatewayParams().message).toContain(pendingPayload);
-    expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ idempotencyKey: expect.stringMatching(/:resumed-notice$/) }),
-    );
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
   });
 
   it("defers mixed deliveries while any exact queue owner is pending", async () => {
@@ -3475,7 +3453,7 @@ describe("main-session-restart-recovery", () => {
 
     await expectRecovery({ skipped: 1 });
     expect(sendRecoveryNotice).toHaveBeenCalledOnce();
-    expect(sendRecoveryNotice).toHaveBeenCalledWith({
+    expect(sendRecoveryNotice.mock.calls[0]?.[0]).toMatchObject({
       accountId: "work",
       channel: "discord",
       to: "discord:dm:main",
@@ -3846,6 +3824,7 @@ describe("main-session-restart-recovery", () => {
           });
           expect(dispatchAgent).toHaveBeenCalledTimes(attempt);
         }
+        expect(sendRecoveryNotice).not.toHaveBeenCalled();
         expect(commandErrors).toHaveLength(3);
         for (const error of commandErrors) {
           expect(error).toBeInstanceOf(GatewayDrainingError);
@@ -3862,9 +3841,15 @@ describe("main-session-restart-recovery", () => {
             text: expect.stringContaining("use Resume to continue in this session"),
           }),
         );
-        expect(sendRecoveryNotice).toHaveBeenCalledWith(
-          expect.objectContaining({ text: expect.stringContaining("/new or /reset") }),
+        expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            text: expect.stringContaining(
+              "/new or /reset to start a replacement session, then describe the unfinished work",
+            ),
+          }),
         );
+        await recover({ cfg: {}, gatewayRuntime });
+        expect(sendRecoveryNotice).toHaveBeenCalledOnce();
         expect(readEntry()).toMatchObject({
           status: "failed",
           mainRestartRecovery: { tombstone: expect.any(Object) },
@@ -4231,9 +4216,7 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ started: 1 });
     expect(callGateway).toHaveBeenCalledOnce();
     expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-    expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ idempotencyKey: expect.stringMatching(/:resumed-notice$/) }),
-    );
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
     expect(readEntry()?.status).toBeUndefined();
     expect(readEntry()).toMatchObject({ abortedLastRun: false });
   });
@@ -4384,9 +4367,7 @@ describe("main-session-restart-recovery", () => {
 
       expect(callGateway).toHaveBeenCalledOnce();
       expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
-      expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ idempotencyKey: expect.stringMatching(/:resumed-notice$/) }),
-      );
+      expect(sendRecoveryNotice).not.toHaveBeenCalled();
       expect(readEntry()?.status).toBeUndefined();
       expect(readEntry()).toMatchObject({ abortedLastRun: false });
     },
@@ -4447,9 +4428,7 @@ describe("main-session-restart-recovery", () => {
 
     await expectRecovery({ started: 1 });
     expect(callGateway).toHaveBeenCalledOnce();
-    expect(sendRecoveryNotice).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ idempotencyKey: expect.stringMatching(/:resumed-notice$/) }),
-    );
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
   });
 
   it("reconciles a provider error carrying a non-restart abort code", async () => {

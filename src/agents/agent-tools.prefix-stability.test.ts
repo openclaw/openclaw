@@ -62,7 +62,7 @@ function surface(tools: ReturnType<typeof createOpenClawCodingTools>) {
   );
 }
 
-async function webchatSession(clientKind: "browser" | "cli" = "browser") {
+async function webchatSession(clientKind: "browser" | "cli" | "acp" = "browser") {
   const sessionKey = "agent:main:dashboard:prefix-proof";
   const store = path.join(sessionDirs.make(), "sessions.json");
   const sessionConfig: OpenClawConfig = { ...config, session: { store } };
@@ -77,8 +77,11 @@ async function webchatSession(clientKind: "browser" | "cli" = "browser") {
       deriveSessionMetaPatch({ ctx, existing, sessionKey }),
     );
   const client = createSessionMutationTestClient();
-  if (clientKind === "cli") {
+  if (clientKind !== "browser") {
     client.connect.client = { ...client.connect.client, id: "cli", mode: "cli" };
+    if (clientKind === "acp") {
+      client.connect.caps = ["no-question-input"];
+    }
   } else {
     client.connect.caps = ["ui-commands", "inline-widgets"];
   }
@@ -107,7 +110,7 @@ async function webchatSession(clientKind: "browser" | "cli" = "browser") {
   return { sessionKey, operator, wake, update, callerContext };
 }
 
-it.each(["browser", "cli"] as const)(
+it.each(["browser", "cli", "acp"] as const)(
   "keeps the %s WebChat catalog across wakes and recovery",
   async (clientKind) => {
     const { sessionKey, operator, wake, update, callerContext } = await webchatSession(clientKind);
@@ -138,6 +141,7 @@ it.each(["browser", "cli"] as const)(
       () => render(operator),
     );
     expect(expected.names).toContain("sessions_create");
+    expect(expected.names.includes("ask_user")).toBe(clientKind !== "acp");
     expect(createOpenClawCodingTools(operator).some((tool) => tool.name === "screen")).toBe(
       clientKind === "browser",
     );
@@ -147,7 +151,6 @@ it.each(["browser", "cli"] as const)(
       InputProvenance: wake.inputProvenance,
     });
     const wakeSurface = render(wake);
-    expect(wakeSurface.names).toEqual(expected.names);
     expect(wakeSurface).toEqual(expected);
     const refused = await createOpenClawCodingTools(wake)
       .find((tool) => tool.name === "sessions_create")!
@@ -163,7 +166,9 @@ it.each(["browser", "cli"] as const)(
 
     // A new operator declaration replaces the old client's capabilities.
     await update({ ...callerContext, GatewayClientCaps: [] });
-    expect(createOpenClawCodingTools(operator).map((tool) => tool.name)).not.toContain("screen");
+    const refreshedNames = createOpenClawCodingTools(operator).map((tool) => tool.name);
+    expect(refreshedNames).not.toContain("screen");
+    expect(refreshedNames).toContain("ask_user");
   },
 );
 

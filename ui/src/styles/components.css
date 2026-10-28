@@ -613,10 +613,23 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   line-height: 1;
 }
 
+openclaw-toast-host[popover] {
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  pointer-events: none;
+}
+
 /* Passive notifications stay in the trailing top corner, away from the chat
  * composer and other bottom-docked controls. The host shows one toast at a time
  * (`show()` replaces the active one), so there is no stack to offset against. */
 .app-toast {
+  pointer-events: auto;
   position: fixed;
   right: calc(20px + var(--safe-area-right));
   top: calc(20px + var(--safe-area-top));
@@ -2260,7 +2273,6 @@ td.data-table-key-col {
   width: min(320px, calc(100vw - 24px));
   max-height: 320px;
   border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
 }
 
@@ -3021,6 +3033,8 @@ td.data-table-key-col {
   transition: transform 180ms ease-out;
 }
 
+/* Automation titles keep their final fade before overflow observation. */
+.chat-summary__automation-title,
 .hover-marquee--overflowing {
   mask-image: linear-gradient(
     var(--hover-marquee-fade-direction),

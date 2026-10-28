@@ -19,6 +19,7 @@ import {
 } from "../../daemon/systemd-service-files.js";
 import { systemdManagerVersionProbe } from "../../daemon/systemd-user-bus.test-support.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
+import * as ports from "../../infra/ports-probe.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
@@ -410,5 +411,68 @@ it.each([
     }
     expect(native.stop).not.toHaveBeenCalled();
     expect(native.install).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["owned", "foreign", "absent", "failed"] as const)(
+  "selects a startup executable only from an admitted service (%s)",
+  async (ownership) => {
+    const { home } = admissionHome("update-startup-runtime-");
+    mockProcessPlatform("darwin");
+    mockSystemAccountHome();
+    const root = path.join(home, "package");
+    const serviceRoot = ownership === "foreign" ? path.join(home, "foreign") : root;
+    await writePackageRoot(serviceRoot, "1.0.0");
+    let executable = path.join(home, "runtime", "bun");
+    vi.spyOn(ports, "probePortUsage").mockResolvedValue("free");
+    const command = {
+      programArguments: ["node", path.join(serviceRoot, "dist", "index.js"), "gateway"],
+    };
+    const service = createMockGatewayService({
+      isLoaded: async () => ownership !== "absent",
+      readCommand: async (_env, options) => {
+        options?.onEffectiveExecutable?.(executable);
+        if (ownership === "failed") {
+          throw new Error("native inspection failed");
+        }
+        return ownership === "absent" ? null : command;
+      },
+      readRuntime: async () => ({ status: "stopped", missingUnit: ownership === "absent" }),
+    });
+    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+    const onOwnedStartupRuntime = vi.fn();
+
+    const state = await maybeStopManagedServiceBeforeMutableUpdate({
+      root,
+      updateInstallKind: "git",
+      shouldRestart: false,
+      jsonMode: true,
+      phase: "inspect",
+      onOwnedStartupRuntime,
+    });
+
+    expect(state.serviceUpdateVerdict?.kind).toBe(
+      ownership === "failed" ? "unavailable" : ownership,
+    );
+    if (ownership === "owned") {
+      expect(onOwnedStartupRuntime).toHaveBeenCalledExactlyOnceWith(executable);
+      executable = path.join(home, "other-runtime", "node");
+      const observed = await gatewayService.readGatewayServiceState(service, { env: process.env });
+      const reinspection = await servicePlan.inspectManagedGatewayServiceBeforeUpdate({
+        root,
+        state: observed,
+      });
+      expect(observed.effectiveExecutable).toBe(executable);
+      expect(reinspection).toEqual(state.serviceUpdateVerdict);
+    } else {
+      expect(onOwnedStartupRuntime).not.toHaveBeenCalled();
+    }
+    expect(state).not.toHaveProperty("effectiveExecutable");
+    expect(state).not.toHaveProperty("gatewayStartupRuntime");
+    expect(command).toEqual({
+      programArguments: ["node", path.join(serviceRoot, "dist", "index.js"), "gateway"],
+    });
+    expect(service.stop).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
   },
 );

@@ -5,6 +5,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { resolveCurrentConversationByDelivery } from "../config/sessions/conversation-registry.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import type { SessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.types.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context-store.js";
 import { resolveStateDir } from "../config/state-dir.js";
@@ -48,6 +49,8 @@ export type ConfirmedVisibleMessageParams = {
   expectedGeneration?: { sessionKey?: string; sessionId: string; lifecycleRevision?: string };
   /** Background producer recorded on the history row, when there is one. */
   provenance?: BackgroundSessionResultProvenance;
+  /** Private captured history custody, independently of a live dispatch lease. */
+  generation?: SessionDeliveryGeneration;
   assertCurrent?: () => void;
   /** Fences new route-discovery I/O, not persistence of an accepted delivery. */
   assertDirectAdapterHandoff?: () => void;
@@ -71,8 +74,21 @@ export async function commitConfirmedVisibleMessage(
   if (params.stateDir !== undefined && resolveStateDir(process.env) !== params.stateDir) {
     return skipped("state root changed after the delivery began");
   }
-  const agentId = params.producer?.agentId ?? resolveDefaultAgentId(params.config);
-  const storePath = resolveSessionStorePathCore(params.config.session?.store, { agentId });
+  const recovery = params.provenance?.kind === "recovery-notice";
+  const captured = recovery ? params.generation : undefined;
+  if (
+    recovery &&
+    (!captured ||
+      captured.agentId !== params.producer?.agentId ||
+      captured.sessionKey !== params.producer?.policyKey ||
+      params.producer?.key)
+  ) {
+    return skipped("recovery notice is missing its captured conversation owner");
+  }
+  const agentId =
+    captured?.agentId ?? params.producer?.agentId ?? resolveDefaultAgentId(params.config);
+  const storePath =
+    captured?.storePath ?? resolveSessionStorePathCore(params.config.session?.store, { agentId });
   const toStoreKey = (requestKey: string) =>
     toAgentStoreSessionKey({ agentId, requestKey, mainKey: params.config.session?.mainKey });
   const producerKey = params.producer?.key ? toStoreKey(params.producer.key) : undefined;
@@ -85,15 +101,19 @@ export async function commitConfirmedVisibleMessage(
     return skipped();
   }
 
-  const resolved = await resolveConfirmedDestination({ params, agentId, storePath });
+  // A recovery intent keeps its captured destination even if the same session later changes address.
+  // Rediscovery could otherwise adopt a different conversation now using the old address.
+  const resolved = captured
+    ? { destination: { sessionKey: captured.sessionKey }, route: undefined }
+    : await resolveConfirmedDestination({ params, agentId, storePath });
   if ("skip" in resolved) {
     return skipped(resolved.skip);
   }
   const { destination, route } = resolved;
-  if (!belongsToAgent(params, destination, agentId)) {
+  if (!captured && !belongsToAgent(params, destination, agentId)) {
     return skipped("Conversation context skipped: the destination belongs to a different agent.");
   }
-  const destinationKey = toStoreKey(destination.sessionKey);
+  const destinationKey = captured?.sessionKey ?? toStoreKey(destination.sessionKey);
   if (
     producerKey === destinationKey ||
     (route && matchesProducer(route.to, route.threadId ?? params.threadId))
@@ -120,6 +140,7 @@ export async function commitConfirmedVisibleMessage(
     });
   }
   const entry = await readSessionEntryInWorker({
+    agentId,
     sessionKey: destinationKey,
     storePath,
     readConsistency: "latest",
@@ -130,21 +151,31 @@ export async function commitConfirmedVisibleMessage(
   // A caller-pinned generation applies only to the conversation it was pinned for.
   const expected = params.expectedGeneration;
   const generation =
-    expected && (!expected.sessionKey || toStoreKey(expected.sessionKey) === destinationKey)
+    captured ??
+    (expected && (!expected.sessionKey || toStoreKey(expected.sessionKey) === destinationKey)
       ? expected
-      : entry;
+      : entry);
   // The destination is another conversation, so the producer's write claim must not apply.
   return await runWithoutOwnedSessionTranscriptWrites(() =>
     commitBackgroundPayloadsToSession({
       agentId,
+      storePath,
       sessionKey: destinationKey,
       expectedGeneration: {
         sessionId: generation.sessionId,
-        lifecycleRevision: generation.lifecycleRevision,
+        lifecycleRevision: generation.lifecycleRevision ?? undefined,
       },
       payloads: [params.payload],
       idempotencyKey: `outbound-delivery:${params.deliveryId}:${params.payloadIndex}`,
       provenance: params.provenance,
+      acceptedDestination: recovery
+        ? {
+            channel: params.channel,
+            to: params.to,
+            accountId: params.accountId,
+            threadId: params.threadId,
+          }
+        : undefined,
       config: params.config,
       signal: params.signal,
       assertCurrent: params.assertCurrent,

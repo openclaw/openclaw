@@ -114,7 +114,7 @@ The saved sidebar also retains unread marks, activity and attention glyphs, pull
 
 Message reactions share the message footer. Desktop Chat Details lists automations after session information and task progress so arriving automation results keep those sections in place. The mobile composer reserves one activity row so arriving task and subagent status does not move the transcript.
 
-A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. While older messages load, **Show earlier** keeps keyboard focus and ignores repeated activation.
+A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen. A reader action checks up to three consecutive pages when entries are empty, overlapping, or hidden by display preferences; longer hidden intervals remain available through another action. Transient read failures retry within the existing one-minute history-recovery budget, honoring the server’s backoff. Permission denials are not automatically retried. The touch-friendly history control keeps keyboard focus during loading and ignores repeated activation. Failed reads show **Retry earlier messages** at that same boundary without removing the loaded conversation. While disconnected, the control shows **Waiting for connection…** instead of accepting a click that cannot load history.
 
 GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
 
@@ -359,16 +359,28 @@ Open group rename and **New session defaults** dialogs close when the Gateway
 reconnects or you switch connections. Reopen the group’s menu to make changes
 using the current connection.
 
-**Personal groups** organize only your sidebar, including when you are a guest.
-Use **New personal group** to name a group and select available sessions, or drag
-an existing session into a personal group. **Edit group** renames it and changes
-its members. Drag group headers to reorder them, or use **Move up** and **Move down**
-in the group menu. **Remove personal group** removes only that personal collection;
-it never deletes sessions. Pins and shared groups are independent.
+**Sections** organize only your sidebar, for solo users, members, and guests.
+They appear below **Pinned**, among the sidebar groups, marked with a stacked-layers
+icon; deliberately empty sections remain visible. Choose **New section** in
+**Filter & sort** even without selecting a session, or use a session's
+**Add to section** menu to add it to an existing section or create one with that
+session selected. Only your sidebar changes. Sessions stay in their groups.
 
-Personal groups do not grant access. Unavailable saved sessions remain hidden,
-and members outside the loaded session list resolve through the normal access-checked
-session lookup. Groups are scoped to your profile and Gateway. Connections with
+Creating a section takes two steps. First name it and choose where its sessions
+come from: **My sessions**, **Involving me**, **All sessions** (including
+teammates'), or one project. Then pick sessions from that list; the search button
+searches every session you can access, not only those loaded in the sidebar, and
+teammates' sessions show their owner. **Edit section** opens on the session list;
+**Back** returns to the name and source. Sessions inside a section follow the
+sidebar's **Sort by** selection. Drag an existing session into a section to add it. Drag section headers
+to reorder them, or use **Move up** and **Move down** in the section menu.
+**Remove section** removes only that personal section; it never deletes sessions.
+Pins and shared groups are independent, and **Move to group** still changes shared
+group membership.
+
+Sections do not grant access. Unavailable saved sessions remain hidden,
+and sessions outside the loaded session list resolve through the normal access-checked
+session lookup. Sections are scoped to your profile and Gateway. Connections with
 general Gateway write access sync them through personal preferences. Session-only,
 read-only, and profileless connections keep their edits in that browser, like personal pins.
 
@@ -410,6 +422,10 @@ use an explicit path to select the intended file.
 Opening a file collapses the file tree to make room for its preview. Use **Toggle
 file tree** to browse another file, or **Show in Files** to reveal the current file
 in its folder with the **All** filter.
+
+The **Review** file menu offers **Edit file** when the file reader confirms editing
+is available. Readable files keep **Open File** and their supported Markdown and
+source views when editing is unavailable; downloads remain available from the preview.
 
 If the **Files** panel shows a listing error, select **Retry** to load the current
 folder or search again. This keeps the session and query in place; access checks
@@ -510,19 +526,19 @@ An embedder that supplies linked Gateways adds them to the identity menu's **Gat
 
 If you paste a setup code from **Devices → Pair device → Copy setup code** into **Gateway secret**, the UI shows an inline hint before you connect. Paste that code into **Settings → Gateway** in the OpenClaw mobile app. For the Control UI, run `openclaw gateway auth-token --show` in an interactive terminal on the Gateway host and paste the shared token instead. If a connection with a setup code is rejected for a token or password mismatch, the login screen repeats this guidance.
 
-Local onboarding generates a Gateway secret in token mode by default, without a token/password picker, and preserves existing password mode. Use `--gateway-auth password` or `--gateway-password <value>` for explicit password setup; Tailscale Funnel requires password mode. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into **Gateway secret**.
+Local onboarding generates a Gateway secret in token mode by default, without a token/password picker, and preserves existing password mode. Use `--gateway-auth password` or `--gateway-password <value>` for explicit password setup; Tailscale Funnel requires password mode. If the Gateway starts in token mode without a configured token, it generates an ephemeral runtime token for that process instead. The runtime token is not written to config, so it cannot be recovered and a loopback browser without that token is rejected. Run `openclaw doctor --generate-gateway-token`, restart the Gateway, then run `openclaw gateway auth-token --show` in an interactive terminal and paste the output into **Gateway secret**. If Windows PowerShell reports that running scripts is disabled, start those commands through [npm's `openclaw.cmd`](/platforms/windows#powershell-execution-policy) instead of changing the execution policy.
 
 <a id="agents-home" />
 
-## Agents and Claws
+## Agents and Templates
 
 Use the agent selector to open an agent's chat or its settings gear to configure
 that agent. Per-agent settings remain at `/settings/agents/<id>`.
 
-Open **Claws** in **Pages**, or visit `/claws`, to discover official Claws.
-This page contains Claws discovery only. Enable **Claws** in **Settings → Labs**
+Open **Templates** in **Pages**, or visit `/templates`, to discover official Templates.
+This page contains Templates discovery only. Enable **Templates** in **Settings → Labs**
 to make it available; when disabled, both the Pages entry and direct visits to
-Claws discovery or details are unavailable. The former `/agents` overview is removed.
+Templates discovery or details are unavailable. The former `/agents` overview is removed.
 
 To browse sessions across agents, choose the **Show all** tile in the agent
 switcher. It appears with two or more agents and groups their own avatars: two

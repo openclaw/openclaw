@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.7",
+  "version": "2026.10.8",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "databaseEngines": [
@@ -15,8 +15,8 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 35,
-      "agent": 37
+      "state": 36,
+      "agent": 38
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -2516,7 +2516,7 @@
     "sqlite-vec": "0.1.9"
   },
   "engines": {
-    "node": ">=24.22.1 <25 || >=26.12.1"
+    "node": ">=24.16.0 <25 || >=26.1.0"
   },
   "packageManager": "pnpm@12.15.0+sha512.b3951d6d6ff4a9f13dc7cf56cd28d2b8eb37dbcc9c68e52e1e1191873ea9f82a017287ab50baadc5ccc494f036c67c0e47eb13608c2fa36f47711b61ea128e61"
 }

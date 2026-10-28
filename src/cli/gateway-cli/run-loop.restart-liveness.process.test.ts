@@ -13,11 +13,11 @@ const moduleUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
   JSON.stringify(resolveRuntimeWorkerUrl(entry).href);
 
 const childScript = `
-  import fs from "node:fs";
-  import fsPromises from "node:fs/promises";
+  import fs, { promises as fsPromises } from "node:fs";
   import http from "node:http";
   import { runGatewayLoop } from ${moduleUrl(gatewayDirectStopEntrypoints.runLoop)};
   import { setGatewayRestartPolicy } from ${moduleUrl(gatewayDirectStopEntrypoints.restartPolicy)};
+  import { PluginRuntimeCloseRetainedError } from ${JSON.stringify(new URL("../../plugins/runtime-close-error.ts", import.meta.url).href)};
   const [faultPath, closeFailure, logFile] = process.argv.slice(1);
   setGatewayRestartPolicy({ allowExternal: true });
   let starts = 0;
@@ -26,8 +26,7 @@ const childScript = `
     process.exitCode = await runGatewayLoop({
       ownsProcessLifecycle: true,
       start: async () => {
-        const attempt = ++starts;
-        process.stdout.write("start:" + attempt + "\\n");
+        process.stdout.write("start:" + ++starts + "\\n");
         if (fs.existsSync(faultPath)) {
           process.stdout.write("waiting:" + starts + "\\n");
           throw new Error("fixture startup refused");
@@ -37,7 +36,7 @@ const childScript = `
           server.once("error", reject);
           server.listen(0, "127.0.0.1", resolve);
         });
-        process.stdout.write("ready:" + attempt + "\\n");
+        process.stdout.write("ready:" + starts + "\\n");
         return {
           getTailscaleIngressEndpoint: () => undefined,
           startupSettled: Promise.resolve(),
@@ -51,7 +50,6 @@ const childScript = `
                 }
                 return openFile(...args);
               };
-              process.stdout.write("close:pending\\n");
               return new Promise(() => {});
             }
             await new Promise((resolve, reject) => {
@@ -59,7 +57,8 @@ const childScript = `
             });
             if (closeFailure) {
               const error = new TypeError("fixture close owner failed");
-              throw error;
+              if (closeFailure === "retained") setInterval(() => {}, 1000);
+              throw closeFailure === "retained" ? new PluginRuntimeCloseRetainedError(error) : error;
             }
           },
         };
@@ -74,12 +73,10 @@ const childScript = `
 
 function startFixture(initialFailure = false, closeFailure = "", executable = process.execPath) {
   const directory = fixtures.make("openclaw-restart-liveness-");
-  const home = path.join(directory, "home");
-  fs.mkdirSync(home);
-  const pendingClose = closeFailure === "pending";
-  const bin = path.join(directory, "bin");
+  const home = fs.mkdtempSync(path.join(directory, "home-"));
+  const pendingClose = closeFailure === "pending" || closeFailure === "retained";
+  const bin = pendingClose ? fs.mkdtempSync(path.join(directory, "bin-")) : "";
   if (pendingClose) {
-    fs.mkdirSync(bin);
     // This fixture owns a short native deadline, independent of the service policy.
     fs.writeFileSync(
       path.join(bin, "launchctl"),
@@ -131,15 +128,16 @@ async function expectRestartWaiting(fixture: ReturnType<typeof startFixture>, at
   await fixture.waitForOutput(`waiting:${attempt}`);
   // Only the parent observes an idle interval. A child timer or IPC channel
   // would hide the lost-process regression after its real listener closes.
-  const exited = fixture.closed.then((exit) => ({ exit }));
-  expect(await Promise.race([exited, delay(750).then(() => "waiting")]), fixture.output()).toBe(
+  expect(await Promise.race([fixture.closed, delay(750, "waiting")]), fixture.output()).toBe(
     "waiting",
   );
 }
 
-function readStabilityBundle(fixture: ReturnType<typeof startFixture>) {
+function readStabilityBundle(fixture: ReturnType<typeof startFixture>, reason?: string) {
   const directory = path.join(fixture.stateDir, "logs", "stability");
-  const files = fs.readdirSync(directory);
+  const files = fs
+    .readdirSync(directory)
+    .filter((file) => !reason || file.endsWith(`-${reason}.json`));
   expect(files).toHaveLength(1);
   return JSON.parse(fs.readFileSync(path.join(directory, files[0]!), "utf8"));
 }
@@ -160,33 +158,33 @@ describe("runGatewayLoop failed-restart process lifetime", { timeout: 60_000 }, 
     expect(fixture.output()).toContain("natural-exit");
   });
 
-  it.skipIf(process.platform !== "darwin")(
-    "retains the hard watchdog when shutdown and its log append never settle",
-    async () => {
-      const fixture = startFixture(false, "pending");
-      await fixture.waitForOutput("ready:1");
-      expect(fixture.child.kill("SIGTERM")).toBe(true);
-      await fixture.waitForOutput("close:pending");
-      expect(await fixture.closed, fixture.output()).toEqual([null, "SIGKILL"]);
-      expect(fixture.output()).not.toContain("natural-exit");
+  posixIt.each(
+    process.platform === "darwin"
+      ? ["pending", "rejected", "retained", "retained-stop"]
+      : ["rejected"],
+  )("terminates failed native cleanup (%s)", async (mode) => {
+    const pending = mode === "pending";
+    const stop = pending || mode === "retained-stop";
+    const retained = mode.startsWith("retained");
+    const fixture = startFixture(false, retained ? "retained" : mode);
+    await fixture.waitForOutput("ready:1");
+    expect(fixture.child.kill(stop ? "SIGTERM" : "SIGUSR2")).toBe(true);
+    const exited = await Promise.race([fixture.closed, delay(12_000, "still alive")]);
+    expect(exited, fixture.output()).toEqual(mode === "rejected" ? [1, null] : [null, "SIGKILL"]);
+    expect(fixture.output().includes("natural-exit")).toBe(mode === "rejected");
+    const reason = pending
+      ? "gateway.stop_shutdown_timeout"
+      : stop
+        ? "gateway.stop_close_failed"
+        : "gateway.restart_close_failed";
+    const bundle = readStabilityBundle(fixture, reason);
+    expect(bundle.reason).toBe(reason);
+    if (pending) {
       expect(fixture.output()).not.toContain("loop-returned:");
       expect(fixture.output()).toContain("append:pending");
-      expect(readStabilityBundle(fixture).reason).toBe("gateway.stop_shutdown_timeout");
-    },
-  );
-
-  posixIt("naturally exits nonzero when native close rejects", async () => {
-    const fixture = startFixture(false, "rejected");
-    const error = { name: "TypeError", message: "fixture close owner failed" };
-    await fixture.waitForOutput("ready:1");
-    expect(fixture.child.kill("SIGUSR2")).toBe(true);
-    expect(await fixture.closed, fixture.output()).toEqual([1, null]);
-    expect(fixture.output()).toContain("loop-returned:1");
-    expect(fixture.output()).toContain("natural-exit");
-    expect(fixture.output()).not.toContain("shutdown deadline reached");
-    const bundle = readStabilityBundle(fixture);
-    expect(bundle).toMatchObject({ reason: "gateway.restart_close_failed", error });
-    expect(bundle.evidence.shutdown.step).toBe("gateway-server-close");
+    } else {
+      expect(bundle.evidence.shutdown.step).toBe("gateway-server-close");
+    }
     expect(fixture.output()).not.toContain("start:2");
   });
 

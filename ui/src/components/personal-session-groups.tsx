@@ -1,18 +1,17 @@
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
-import { prefValuesEqual } from "../app/server-prefs-state.ts";
 import { registerSessionOrganizationSharedEnglish } from "../i18n/locales/en-session-organization-shared.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { readSessionDragData, sessionDragActive } from "../lib/sessions/drag.ts";
-import {
-  normalizePersonalSessionGroups,
-  type PersonalSessionGroup,
-} from "../lib/sessions/personal-groups.ts";
+import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
 import { showToast } from "../lib/toast.ts";
 import type { SidebarSessionListHost } from "./app-sidebar-session-render-types.ts";
 import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
-import { showPersonalSessionGroupDialog } from "./personal-session-group-dialog.tsx";
+import {
+  createPersonalSessionGroupActions,
+  personalSessionGroupCandidates,
+} from "./personal-session-group-actions.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Menu } from "./solid/menu.tsx";
 
@@ -37,74 +36,18 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
   const navigation = projectOwner(context.navigation, (owner) => owner.snapshot);
   const groups = createMemo(() => navigation.read().personalSessionGroups ?? []);
   const [dropTarget, setDropTarget] = createSignal<string | null>(null);
-  const write = (next: readonly PersonalSessionGroup[]): string | null => {
-    // The profile preference has a byte limit. Never silently truncate an authored layout.
-    if (!prefValuesEqual(normalizePersonalSessionGroups(next), next)) {
-      return t("sessionsView.personalGroupCapacity");
-    }
-    context.navigation.update({ personalSessionGroups: next });
-    return null;
-  };
   const resolve = (key: string) =>
     props.host.resolvePersonalGroupSession
       ? props.host.resolvePersonalGroupSession(key)
       : props.host.reconciledSidebarZone().sessionRows.get(key);
   const visibleRows = (group: PersonalSessionGroup) => props.host.personalGroupSessionRows(group);
-  const edit = async (id?: string) => {
-    const scope = context.sessions.captureConnectionScope();
-    if (!scope) {
-      return;
-    }
-    const current = () => context.sessions.isConnectionScopeCurrent(scope);
-    const controller = new AbortController();
-    const stop = context.gateway.subscribe(() => {
-      if (!current()) {
-        controller.abort();
-      }
-    });
-    try {
-      if (!current()) {
-        return;
-      }
-      const group = id ? groups().find((item) => item.id === id) : undefined;
-      if (id && !group) {
-        return;
-      }
-      const candidates = [...props.host.reconciledSidebarZone().sessionRows.values()].filter(
-        (row) => row.pinnable && !row.archived,
-      );
-      await showPersonalSessionGroupDialog({
-        group,
-        candidates,
-        signal: AbortSignal.any([controller.signal, lifetime.signal]),
-        submit: (value) => {
-          const saved = id ? groups().find((item) => item.id === id) : undefined;
-          if (!current() || (id && !saved)) {
-            return t("sessionsView.personalGroupUnavailable");
-          }
-          if (id && !prefValuesEqual(saved, group)) {
-            return t("sessionsView.personalGroupChanged");
-          }
-          // Retain unresolved saved references, but new membership must still resolve.
-          const previousKeys = new Set(group?.sessionKeys);
-          const next = {
-            ...value,
-            id: id ?? crypto.randomUUID(),
-            sessionKeys: value.sessionKeys.filter(
-              (key) => previousKeys.has(key) || resolve(key)?.pinnable,
-            ),
-          };
-          return write(
-            id ? groups().map((item) => (item.id === id ? next : item)) : [...groups(), next],
-          );
-        },
-      });
-    } catch {
-      showToast({ message: t("sessionsView.actionUnavailable") });
-    } finally {
-      stop();
-    }
-  };
+  // Every entry point lists the same loaded sessions; the sidebar only resolves existing members.
+  const { write, edit } = createPersonalSessionGroupActions(
+    context,
+    () => personalSessionGroupCandidates(context),
+    resolve,
+    lifetime.signal,
+  );
   const move = (id: string, offset: number) => {
     const next = [...groups()];
     const from = next.findIndex((group) => group.id === id);
@@ -146,134 +89,133 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
     props.host.sessionOrganizer.finishSessionDrag();
   };
   return (
-    <div class="sidebar-recent-sessions personal-session-groups">
-      <div class="sidebar-recent-sessions__head personal-session-groups__heading">
-        <span class="sidebar-session-group-status sidebar-recent-sessions__label-text">
-          {t("sessionsView.personalGroups")}
-        </span>
-        <button
-          type="button"
-          class="sidebar-session-toolbar__button"
-          aria-label={t("sessionsView.personalGroupNew")}
-          title={t("sessionsView.personalGroupNew")}
-          disabled={!props.host.connected || Boolean(props.host.sidebarSnapshot)}
-          onClick={() => void edit()}
-        >
-          <Icon name="plus" />
-        </button>
-      </div>
-      <For each={groups()} keyed={(group) => group.id}>
-        {(group, index) => (
-          <div
-            class={[
-              "sidebar-recent-sessions__group",
-              {
-                "sidebar-recent-sessions__group--session-drop": dropTarget() === group().id,
-              },
-            ]}
-            data-personal-session-group={group().id}
-            onDragOver={(event: DragEvent) => {
-              if (
-                sessionDragActive(event.dataTransfer) ||
-                event.dataTransfer?.types.includes(GROUP_DRAG_TYPE)
-              ) {
-                event.preventDefault();
-                event.stopPropagation();
-                if (event.dataTransfer) {
-                  event.dataTransfer.dropEffect = "move";
-                }
-                setDropTarget(group().id);
-              }
-            }}
-            onDragLeave={(event: DragEvent) => {
-              if (
-                !(
-                  event.relatedTarget instanceof Node &&
-                  event.currentTarget instanceof Node &&
-                  event.currentTarget.contains(event.relatedTarget)
-                )
-              ) {
-                setDropTarget(null);
-              }
-            }}
-            onDrop={(event: DragEvent) => drop(event, group().id)}
-          >
+    <Show when={groups().length > 0}>
+      {/* Sections sit among the sidebar groups; their icon, not a heading, marks them personal. */}
+      <div
+        class="sidebar-recent-sessions personal-session-groups"
+        role="group"
+        aria-label={t("sessionsView.personalGroups")}
+      >
+        <For each={groups()} keyed={(group) => group.id}>
+          {(group, index) => (
             <div
-              class="sidebar-recent-sessions__head sidebar-recent-sessions__head--draggable personal-session-groups__header"
-              draggable="true"
-              onDragStart={(event: DragEvent) => {
-                if (event.dataTransfer) {
-                  event.dataTransfer.setData(GROUP_DRAG_TYPE, group().id);
-                  event.dataTransfer.effectAllowed = "move";
-                }
-                event.stopPropagation();
-              }}
-              onDragEnd={() => setDropTarget(null)}
-            >
-              <button
-                type="button"
-                class="sidebar-session-group-toggle"
-                aria-expanded={
-                  props.host.collapsedPersonalSessionGroups.has(group().id) ? "false" : "true"
-                }
-                onClick={() => props.host.togglePersonalSessionGroup(group().id)}
-              >
-                <span class="sidebar-session-group-toggle__lead sidebar-session-group-toggle__icon">
-                  <Icon
-                    name={
-                      props.host.collapsedPersonalSessionGroups.has(group().id)
-                        ? "chevronRight"
-                        : "chevronDown"
-                    }
-                  />
-                </span>
-                <span class="sidebar-recent-sessions__label-text">{group().label}</span>
-              </button>
-              <Menu
-                id={`personal-group-${group().id}`}
-                label={t("sessionsView.personalGroupOptions", { group: group().label })}
-                trigger={<Icon name="moreHorizontal" />}
-                triggerClass="sidebar-session-toolbar__button"
-                panelClass="session-menu"
-                items={[
-                  { id: "edit", label: t("sessionsView.personalGroupEditMenu") },
-                  {
-                    id: "up",
-                    label: t("sessionsView.personalGroupMoveUp"),
-                    disabled: index() === 0,
-                  },
-                  {
-                    id: "down",
-                    label: t("sessionsView.personalGroupMoveDown"),
-                    disabled: index() === groups().length - 1,
-                  },
-                  { id: "remove", label: t("sessionsView.personalGroupRemove"), variant: "danger" },
-                ]}
-                onSelect={(item) => {
-                  if (item.id === "edit") {
-                    void edit(group().id);
-                  } else if (item.id === "remove") {
-                    write(groups().filter((candidate) => candidate.id !== group().id));
-                    showToast({ message: t("sessionsView.personalGroupRemoved") });
-                  } else {
-                    move(group().id, item.id === "up" ? -1 : 1);
+              class={[
+                "sidebar-recent-sessions__group",
+                {
+                  "sidebar-recent-sessions__group--session-drop": dropTarget() === group().id,
+                },
+              ]}
+              data-personal-session-group={group().id}
+              onDragOver={(event: DragEvent) => {
+                if (
+                  sessionDragActive(event.dataTransfer) ||
+                  event.dataTransfer?.types.includes(GROUP_DRAG_TYPE)
+                ) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (event.dataTransfer) {
+                    event.dataTransfer.dropEffect = "move";
                   }
+                  setDropTarget(group().id);
+                }
+              }}
+              onDragLeave={(event: DragEvent) => {
+                if (
+                  !(
+                    event.relatedTarget instanceof Node &&
+                    event.currentTarget instanceof Node &&
+                    event.currentTarget.contains(event.relatedTarget)
+                  )
+                ) {
+                  setDropTarget(null);
+                }
+              }}
+              onDrop={(event: DragEvent) => drop(event, group().id)}
+            >
+              <div
+                class="sidebar-recent-sessions__head sidebar-recent-sessions__head--draggable personal-session-groups__header"
+                draggable="true"
+                onDragStart={(event: DragEvent) => {
+                  if (event.dataTransfer) {
+                    event.dataTransfer.setData(GROUP_DRAG_TYPE, group().id);
+                    event.dataTransfer.effectAllowed = "move";
+                  }
+                  event.stopPropagation();
                 }}
-              />
-            </div>
-            <Show when={!props.host.collapsedPersonalSessionGroups.has(group().id)}>
-              <div role="list" aria-label={group().label} class="sidebar-recent-sessions__list">
-                <For each={visibleRows(group())} keyed={(row) => row.key}>
-                  {(row) => <SessionTree host={props.host} session={row()} />}
-                </For>
+                onDragEnd={() => setDropTarget(null)}
+              >
+                <button
+                  type="button"
+                  class="sidebar-session-group-toggle"
+                  aria-expanded={
+                    props.host.collapsedPersonalSessionGroups.has(group().id) ? "false" : "true"
+                  }
+                  onClick={() => props.host.togglePersonalSessionGroup(group().id)}
+                >
+                  <span class="sidebar-session-group-toggle__lead sidebar-session-group-toggle__icon">
+                    <Icon
+                      name={
+                        props.host.collapsedPersonalSessionGroups.has(group().id)
+                          ? "chevronRight"
+                          : "chevronDown"
+                      }
+                    />
+                  </span>
+                  <span class="personal-session-groups__icon" aria-hidden="true">
+                    <Icon name="layers" />
+                  </span>
+                  <span class="sidebar-recent-sessions__label-text">{group().label}</span>
+                </button>
+                <Menu
+                  id={`personal-group-${group().id}`}
+                  label={t("sessionsView.personalGroupOptions", { group: group().label })}
+                  trigger={<Icon name="moreHorizontal" />}
+                  triggerClass="sidebar-session-group-actions"
+                  panelClass="session-menu"
+                  items={[
+                    { id: "edit", label: t("sessionsView.personalGroupEditMenu") },
+                    {
+                      id: "up",
+                      label: t("sessionsView.personalGroupMoveUp"),
+                      disabled: index() === 0,
+                    },
+                    {
+                      id: "down",
+                      label: t("sessionsView.personalGroupMoveDown"),
+                      disabled: index() === groups().length - 1,
+                    },
+                    {
+                      id: "remove",
+                      label: t("sessionsView.personalGroupRemove"),
+                      variant: "danger",
+                    },
+                  ]}
+                  onSelect={(item) => {
+                    if (item.id === "edit") {
+                      void edit(group().id);
+                    } else if (item.id === "remove") {
+                      write(groups().filter((candidate) => candidate.id !== group().id));
+                      showToast({ message: t("sessionsView.personalGroupRemoved") });
+                    } else {
+                      move(group().id, item.id === "up" ? -1 : 1);
+                    }
+                  }}
+                />
               </div>
-              <Show when={visibleRows(group()).length === 0}>
-                <p class="sidebar-session-empty-hint">{t("sessionsView.personalGroupEmpty")}</p>
+              <Show when={!props.host.collapsedPersonalSessionGroups.has(group().id)}>
+                <div role="list" aria-label={group().label} class="sidebar-recent-sessions__list">
+                  <For each={visibleRows(group())} keyed={(row) => row.key}>
+                    {(row) => <SessionTree host={props.host} session={row()} />}
+                  </For>
+                </div>
+                <Show when={visibleRows(group()).length === 0}>
+                  <p class="sidebar-session-empty-hint">{t("sessionsView.personalGroupEmpty")}</p>
+                </Show>
               </Show>
-            </Show>
-          </div>
-        )}
-      </For>
-    </div>
+            </div>
+          )}
+        </For>
+      </div>
+    </Show>
   );
 }

@@ -259,6 +259,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-create-display-name.test.ts",
   "src/gateway/session-create-preparation.test.ts",
   "src/gateway/session-create-target.test.ts",
+  "src/gateway/session-database-retention.test.ts",
   "src/gateway/session-delivery-clock-jump.integration.test.ts",
   "src/gateway/session-groups.registration.test.ts",
   "src/gateway/session-groups.test.ts",
@@ -608,6 +609,7 @@ export const gatewayMethodsTestExclude = [
 export const gatewayServerIsolatedTestFiles = [
   // Real provider and subagent lifecycle registrations must survive the whole scenario.
   "src/gateway/gateway.prompt-cache.test.ts",
+  "src/gateway/server.recovery-notice-history.test.ts",
   // Native provider imports must not retain a previous file's retired shared-state owner.
   "src/gateway/setup-inference.first-signin.integration.test.ts",
   // Sibling threads can fork and retain listener sockets until exec on Linux.

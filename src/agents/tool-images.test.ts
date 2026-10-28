@@ -70,7 +70,7 @@ describe("tool image sanitizing", () => {
       const other = Object.freeze(solidImage(36, 24));
       const first = getImageBlock(await replay(block));
       expect(first).toEqual(original);
-      expect(await replay(other)).toEqual([other]);
+      expect(getImageBlock(await replay(other))).toBe(other);
       expect(await replay(block)).toEqual([original]);
       expect(await replay(other)).toEqual([other]);
       expect(await replay(first)).toEqual([original]);

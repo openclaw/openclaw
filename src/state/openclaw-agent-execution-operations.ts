@@ -368,7 +368,7 @@ async function loadAgentPendingInputOperations() {
     "session.pendingInputs.mutate": (
       input: Parameters<typeof pending.mutatePendingInput>[0],
       context,
-    ) => pending.mutatePendingInput(input, context, deferSqliteWorkerCommitReceipt),
+    ) => void pending.mutatePendingInput(input, context, deferSqliteWorkerCommitReceipt),
     "session.pendingInputs.interruptHistory": (
       input: Parameters<typeof history.interruptPendingInputHistoryInDatabase>[2],
       { open, options, admit },

@@ -207,7 +207,7 @@ export function createSessionTranscriptTurnKernel(
               continue;
             }
           }
-          if (!sessionTurnPredicateMatches(transactionDb, resolved, append.predicate)) {
+          if (!sessionTurnPredicateMatches(transactionDb, resolved, append, currentEntry)) {
             predicateSkipped = true;
             continue;
           }

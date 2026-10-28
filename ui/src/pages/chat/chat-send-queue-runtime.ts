@@ -74,8 +74,8 @@ export function settleQueuedChatSendFailure(
     reportFailure();
     return "failed";
   }
-  if (err instanceof GatewayProtocolRequestTimeoutError && err.requestSent) {
-    // Admission deduplicates recorded input. Reconnect can resend this exact key.
+  if (err instanceof GatewayProtocolRequestTimeoutError) {
+    // Keep the same key after refused or uncertain sends; admission deduplicates input.
     finishScopedChatSending(host, scope);
     // A live receipt or another pane can retire this row before the ACK deadline.
     // Missing custody is not a failed storage write, and must not resurrect it.
@@ -103,6 +103,13 @@ export function settleQueuedChatSendFailure(
       err.message === "gateway not connected";
     const retryDelayMs = retryableGatewayDelayMs(err);
     const safelyRejected = failedBeforeTransport || retryDelayMs !== null;
+    // A live receipt or another pane can retire this row while the request was
+    // in flight. Missing custody is not a failed delivery: never resurrect the
+    // row into the composer or report a storage failure for it.
+    if (!readQueuedMessageById(host, id)) {
+      finishScopedChatSending(host, scope);
+      return "pending";
+    }
     const rollbackAttempt = safelyRejected
       ? {
           sendAttempts: queued.sendAttempts,

@@ -66,9 +66,11 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // CLS reservation costs 266 B gzip over main while all measured reloads stay <=0.02.
-  // The campaign permits this measured win; retain only 64 B of build variance.
-  totalCssGzipBytes: 307_769,
+  // Lazy automation feed: 308,234 B CSS for 8.35% faster remote readiness,
+  // one fewer request and 9,859 fewer encoded bytes. Retain 64 B build variance.
+  // The lazily loaded Sections editor measures 308,462 B (#186229); Vyctor Brzezowski
+  // approved the increase on 2026-10-28. Retain 64 B build variance.
+  totalCssGzipBytes: 308_526,
   // Logs windowing adds 38 B raw / 11 B gzip for 17% lower first-render task CPU
   // and 42% lower filter task CPU at 4x. Measured raw total plus 64 B variance.
   totalCssRawBytes: 1_597_676,

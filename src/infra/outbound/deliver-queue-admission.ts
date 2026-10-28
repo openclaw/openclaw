@@ -69,7 +69,13 @@ export function restoreQueuedDeliveryCustody(
     );
   }
   const payloads = preparedOutboundPayloads(custody.preparedBatch);
-  return { ...params, ...custody, payloads, sessionGeneration: entry.sessionGeneration };
+  return {
+    ...params,
+    ...custody,
+    payloads,
+    sessionGeneration: entry.sessionGeneration,
+    transcriptGeneration: entry.sessionGeneration,
+  };
 }
 
 /** Stages producer-owned media and atomically admits one durable outbound intent. */

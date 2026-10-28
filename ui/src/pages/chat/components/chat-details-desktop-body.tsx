@@ -11,12 +11,9 @@ export function ChatDetailsDesktopBody(props: {
   let scroll!: HTMLDivElement;
   let content!: HTMLDivElement;
   const measure = () => {
-    // Overlay scrollbars reserve no width; classic scrollbars reserve both gutters.
-    const reserve = Math.max(0, (scroll.offsetWidth - scroll.clientWidth) / 2);
     const fadeTop = scroll.scrollTop > 1;
     const fadeBottom = scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop > 1;
     return () => {
-      scroll.style.setProperty("--details-scrollbar-reserve", `${reserve}px`);
       scroll.toggleAttribute("data-fade-top", fadeTop);
       scroll.toggleAttribute("data-fade-bottom", fadeBottom);
     };

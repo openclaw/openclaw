@@ -3,11 +3,14 @@ import { bindUserTurnInputActor } from "../../config/sessions/session-input-acto
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { assertSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import {
   acquireReplyOperationSessionActor,
   getReplyOperationSessionTarget,
 } from "../../sessions/session-controller.session-reader.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { FollowupRun } from "./queue/types.js";
 
 /** Acquire original input custody before maintenance or a provider can consume it. */
@@ -76,4 +79,46 @@ export async function prepareReplySourceAdmission(params: {
     await release?.();
     throw error;
   }
+}
+
+/** Acquire caller-owned custody before publishing a queued execution. */
+export async function enqueueReplySourceAdmission(params: {
+  options?: Pick<InternalGetReplyOptions, "turnAdoptionLifecycle" | "userTurnTranscriptRecorder">;
+  input: SessionControllerInput;
+  followupRun: FollowupRun;
+  runId: string;
+  assertCurrent: () => void;
+  enqueue: () => boolean;
+}): Promise<boolean> {
+  const { options, input, runId } = params;
+  const recorder =
+    options?.turnAdoptionLifecycle?.admission === "cancel-only"
+      ? options.userTurnTranscriptRecorder
+      : undefined;
+  const assertCurrent = () => {
+    input.abortSignal.throwIfAborted();
+    params.assertCurrent();
+    input.sourceAdapter?.authority?.assertCurrent();
+  };
+  let staged = false;
+  if (recorder && !recorder.getPendingInputMessage?.() && !recorder.hasPersisted()) {
+    // Gateway recorders own cleanup, but slash commands skip initial staging.
+    // Execution policy still resolves when the queued turn is admitted.
+    const accepted = await recorder.stageApproved?.({ runId, assertCurrent });
+    assertCurrent();
+    if (recorder.isPendingInputConsumed?.()) {
+      completeFollowupRunLifecycle(params.followupRun, "consumed");
+      return false;
+    }
+    if (accepted === false) {
+      throw new Error("Followup input could not acquire durable custody");
+    }
+    staged = accepted === true;
+  }
+  const enqueued = params.enqueue();
+  if (!enqueued && staged) {
+    recorder?.finishPendingInput?.("cancelled");
+    await recorder?.waitForPendingInputSettlement?.();
+  }
+  return enqueued;
 }

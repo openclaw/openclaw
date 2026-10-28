@@ -17,6 +17,7 @@ import {
   GitHubPublicationKnownFailure,
   GitHubPublicationRequesterUnavailableError,
   GitHubPublicationWorkspaceChangedError,
+  gitHubPublicationPushFailure,
   resolveGitHubPublicationFailure,
 } from "./github-publication-failure.js";
 import {
@@ -49,6 +50,7 @@ import { projectGitHubPublicationResult } from "./github-publication-receipt.js"
 import {
   reconcileGitHubPublication,
   prepareGitHubPublicationWorkspaceRecovery,
+  type GitHubPublicationRecoveryResult,
 } from "./github-publication-recovery.js";
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
 import {
@@ -65,7 +67,7 @@ type PublicationRow = GitHubPublicationExecutionRow;
 
 export async function executeGitHubPublication<Row extends PublicationRow>(params: {
   initial: Row;
-  recoveryResult?: SessionGitHubPublicationResult;
+  recoveryResult?: GitHubPublicationRecoveryResult;
   identity?: GitHubPublicationIdentityOwner;
   requester?: () => GitHubPublicationRequesterPolicyV2;
   target?: { pushRepository: string; repository: string; baseBranch: string };
@@ -592,9 +594,11 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       };
       remoteHead = await step(observeRemoteHead);
       if (remoteHead !== headCommit) {
-        throw new Error(
-          pushed.code === 0 ? "GitHub push verification failed." : "GitHub push was rejected.",
-        );
+        const login = identity.account.login;
+        throw gitHubPublicationPushFailure(pushed, remoteHead === expectedRemoteHead, {
+          login,
+          pushRepository,
+        });
       }
       await params.recordEffect?.("push", { headCommit });
     }

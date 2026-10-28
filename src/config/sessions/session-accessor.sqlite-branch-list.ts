@@ -12,7 +12,7 @@ import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite
 import type { SessionBranchListParams, SessionBranchListResult } from "./session-accessor.types.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
 const pendingBranchReads = new Map<string, Promise<SessionBranchSummaryReadResult>>();
@@ -57,7 +57,7 @@ export async function listSessionBranches(
     const options = toDatabaseOptions(resolved);
     const database = { agentId: options.agentId, path: resolveOpenClawAgentSqlitePath(options) };
     const writeToken = readSqliteDatabaseWriteTokenForPath(database.path);
-    const cached = readCachedSessionBranchSummaries(database.path, sourceKey);
+    const cached = readCachedSessionBranchSummaries(database.path, sourceKey, writeToken);
     if (writeToken !== undefined && cached?.writeToken === writeToken) {
       return { status: "ok", branches: cloneSessionBranchSummaries(cached.branches) };
     }

@@ -91,6 +91,10 @@ openclaw tui --local
 
 Esc or Ctrl+C closes a picker. In the session picker, the first press clears a nonempty filter. Press again to close it.
 
+Picker searches and [`openclaw resume`](/cli/resume) match canonically equivalent
+Unicode text, so composed and decomposed names can find the same entries.
+Session keys and selected model or agent values retain their original spelling.
+
 The model picker opens immediately, showing a checking state if no models are known yet.
 In Gateway mode, it reuses the selected agent's last known list while refreshing in the
 background. Catalog changes update an open picker without clearing its search or

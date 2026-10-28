@@ -6,8 +6,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetModelsJsonReadyCacheForTest } from "../agents/models-config-state.test-support.js";
 import { CUSTOM_PROXY_MODELS_CONFIG } from "../agents/models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { makeProvenancePlan, seedLegacyClawInstall } from "../claws/provenance.test-helpers.js";
-import { resolveClawToolPolicyConsent } from "../claws/tool-policy-runtime.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -16,6 +14,11 @@ import {
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  makeProvenancePlan,
+  seedLegacyTemplateInstall,
+} from "../templates/provenance.test-helpers.js";
+import { resolveTemplateToolPolicyConsent } from "../templates/tool-policy-runtime.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -51,7 +54,7 @@ async function fixture() {
     { schemaVersion: 1, agent: { id: "worker" } },
     { openClawProfile: { schemaVersion: 1, agent: { tools: { allow: ["read"] } } } },
   );
-  seedLegacyClawInstall(plan, { env: process.env });
+  seedLegacyTemplateInstall(plan, { env: process.env });
   const { id, ...agent } = plan.agent.config;
   const config = {
     ...CUSTOM_PROXY_MODELS_CONFIG,
@@ -67,7 +70,7 @@ async function fixture() {
 const readModels = async (dir: string) =>
   JSON.parse(await fs.readFile(path.join(dir, "models.json"), "utf8"));
 
-it("loads cold config and Claw consent without host provenance SQL", async () => {
+it("loads cold config and Template consent without host provenance SQL", async () => {
   const { agentDir } = await fixture();
   const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
   const contents = await withPluginCache(createPluginCache(), async () => {
@@ -79,7 +82,7 @@ it("loads cold config and Claw consent without host provenance SQL", async () =>
   });
   const tools = getRuntimeConfigSnapshot()?.agents?.entries?.worker?.tools;
   expect(
-    resolveClawToolPolicyConsent({
+    resolveTemplateToolPolicyConsent({
       agentTools: tools,
       agentId: "worker",
       hasAgentAllowlist: true,
@@ -87,7 +90,7 @@ it("loads cold config and Claw consent without host provenance SQL", async () =>
       profile: "full",
     }),
   ).toEqual({ frozen: true });
-  expect(prepare.mock.calls.filter(([sql]) => /from\s+"?claw_installs/i.test(sql))).toEqual([]);
+  expect(prepare.mock.calls.filter(([sql]) => /from\s+"?template_installs/i.test(sql))).toEqual([]);
 });
 
 it("keeps source secret markers when the same runtime is republished before continuation", async () => {

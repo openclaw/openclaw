@@ -9,7 +9,7 @@ src/agents/agent-bundle-mcp-manager.pending-disposal.test.ts	1
 src/agents/agent-tool-definition-adapter.test.ts	2
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts	3
 src/agents/auth-profiles/oauth-manager.lock-cancel.test.ts	1
-src/agents/embedded-agent-runner/compact.delegate-resources.test.ts	2
+src/agents/embedded-agent-runner/compact.delegate-resources.test.ts	1
 src/agents/embedded-agent-runner/compact.foreground-resources.test.ts	2
 src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts	1
 src/agents/embedded-agent-runner/run/attempt-client-tools.test.ts	3
@@ -80,7 +80,6 @@ src/plugins/openai-compatible-embedding-provider.test.ts	2
 src/plugins/provider-self-hosted-discovery.test.ts	8
 src/plugins/runtime/runtime-agent.ingress.integration.test.ts	1
 src/process/command-queue.capacity-groups.test.ts	1
-src/process/command-queue.publish-transaction.test.ts	3
 src/process/spawn-broker/command-startup.test.ts	1
 src/process/spawn-broker/startup.test.ts	1
 src/state/openclaw-database-preflight.lifecycle.test.ts	3

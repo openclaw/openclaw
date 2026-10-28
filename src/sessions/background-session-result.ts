@@ -4,6 +4,11 @@ import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
+  shouldHideAcceptedRecoveryNotice,
+  type RecoveryNoticeDestination,
+  type RecoveryNoticeProvenance,
+} from "../config/sessions/recovery-notice.js";
+import {
   persistSessionTranscriptTurn,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
@@ -24,16 +29,20 @@ import {
 } from "../shared/transcript-only-openclaw-assistant.js";
 import { captureSessionTarget, runSessionMutation } from "./session-controller.lifecycle.js";
 
-type BackgroundSessionResultCommit = { ok: true } | { ok: false; reason: string };
+type BackgroundSessionResultCommit =
+  | { ok: true; diagnostics?: string }
+  | { ok: false; reason: string };
 
 /** Identifies which background producer wrote a result row. */
 export type BackgroundSessionResultProvenance =
   | { kind: "cron"; jobId: string; runId: string }
-  | { kind: typeof SUBAGENT_COMPLETION_RESULT_KIND };
+  | { kind: typeof SUBAGENT_COMPLETION_RESULT_KIND }
+  | RecoveryNoticeProvenance;
 
 /** Appends a background result without waiting for the target conversation's active turn. */
 export async function commitBackgroundResultToSession(params: {
   agentId: string;
+  storePath?: string;
   sessionKey: string;
   /** Pins output to the conversation generation that admitted the background run. */
   expectedGeneration: { sessionId: string; lifecycleRevision: string | undefined };
@@ -42,6 +51,7 @@ export async function commitBackgroundResultToSession(params: {
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
   idempotencyKey: string;
   provenance?: BackgroundSessionResultProvenance;
+  acceptedDestination?: RecoveryNoticeDestination;
   config: OpenClawConfig;
   signal?: AbortSignal;
   /** Revalidate the producer after preparation and inside the transcript commit. */
@@ -54,9 +64,11 @@ export async function commitBackgroundResultToSession(params: {
     return { ok: false, reason: "background session result is missing required data" };
   }
 
-  const storePath = resolveSessionStorePathCore(params.config.session?.store, {
-    agentId: params.agentId,
-  });
+  const storePath =
+    params.storePath ??
+    resolveSessionStorePathCore(params.config.session?.store, {
+      agentId: params.agentId,
+    });
   const expectedSessionId = normalizeOptionalString(params.expectedGeneration.sessionId);
   if (!expectedSessionId) {
     return { ok: false, reason: "background session result has an invalid expected generation" };
@@ -104,19 +116,41 @@ export async function commitBackgroundResultToSession(params: {
           ) {
             return { ok: false, reason: `session rebound for sessionKey: ${sessionKey}` };
           }
-          const unavailable = resolveSessionWorkStartError(sessionKey, current, {
-            expectedSessionId,
-            purpose: "accepted-result-settlement",
-          });
-          if (unavailable) {
-            return { ok: false, reason: unavailable };
-          }
           const scope = {
             agentId: params.agentId,
             sessionKey,
             sessionId: expectedSessionId,
             storePath,
           };
+          const notice =
+            params.provenance?.kind === "recovery-notice" ? params.provenance : undefined;
+          const localNotice = notice?.localNotice;
+          let hideNotice = false;
+          if (notice && localNotice) {
+            if (!params.acceptedDestination) {
+              return { ok: false, reason: "accepted recovery notice destination is unavailable" };
+            }
+            const local = await findTranscriptEvent(scope, {
+              kind: "idempotency",
+              key: notice.noticeId,
+            });
+            hideNotice = shouldHideAcceptedRecoveryNotice({
+              sessionKey,
+              entry: current,
+              noticeId: notice.noticeId,
+              localMessage: local && readTranscriptEventMessage(local.event),
+              destination: params.acceptedDestination,
+              text,
+            });
+          } else {
+            const unavailable = resolveSessionWorkStartError(sessionKey, current, {
+              expectedSessionId,
+              purpose: "accepted-result-settlement",
+            });
+            if (unavailable) {
+              return { ok: false, reason: unavailable };
+            }
+          }
           // A retry owns the original committed payload, including its managed-media IDs.
           // Restaging media would conflict with the transcript's exact replay contract.
           const prior = await findTranscriptEvent(scope, {
@@ -134,6 +168,7 @@ export async function commitBackgroundResultToSession(params: {
           const message = {
             role: "assistant",
             content: [{ type: "text", text }],
+            ...(hideNotice ? { display: false } : {}),
             ...(displayContent ? { [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent } : {}),
             api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
             provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
@@ -168,16 +203,26 @@ export async function commitBackgroundResultToSession(params: {
                     }
                   : message,
                 idempotencyLookup: "scan",
-                ...(priorId
+                ...(priorId ? { eventId: priorId } : {}),
+                ...(notice && localNotice && params.acceptedDestination
                   ? {
-                      eventId: priorId,
                       predicate: {
-                        kind: "active-entry" as const,
-                        entryId: priorId,
-                        errorMessage: "background result no longer owns the active transcript",
+                        kind: "recovery-notice" as const,
+                        noticeId: notice.noticeId,
+                        anchor: localNotice,
+                        destination: params.acceptedDestination,
+                        priorEntryId: priorId,
                       },
                     }
-                  : {}),
+                  : priorId
+                    ? {
+                        predicate: {
+                          kind: "active-entry" as const,
+                          entryId: priorId,
+                          errorMessage: "background result no longer owns the active transcript",
+                        },
+                      }
+                    : {}),
               },
             ],
             touchSessionEntry: true,
@@ -190,7 +235,15 @@ export async function commitBackgroundResultToSession(params: {
           });
           const appended = committed.messages[0];
           return appended
-            ? { ok: true }
+            ? {
+                ok: true,
+                ...(localNotice && !hideNotice
+                  ? {
+                      diagnostics:
+                        "accepted recovery notice text changed; recorded its actual text as a visible row",
+                    }
+                  : {}),
+              }
             : {
                 ok: false,
                 reason: committed.rejectedReason ?? "background result was not committed",
