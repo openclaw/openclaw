@@ -9,6 +9,7 @@
  * Before restart, an owned offline writer leaves 16 MiB WAL per configured agent
  * (--wal-mib) using existing cache rows, then is killed without closing SQLite.
  * The first reconnect probes read RPCs immediately after hello, before readiness.
+ * Reconnecting clients request only operator.read; negotiated scopes are recorded.
  * Reports file sizes, read latency/errors, startup phases and durable replies.
  * Add --workboard to load the bundled plugin and probe its scoped cards list.
  * Add --resources to collect three fresh diagnostic memory samples after durable
@@ -352,6 +353,7 @@ function startClient(index: number, startedAt: number) {
     interruptedHandshakes: 0,
     transportCloses: 0,
     errors: [] as string[],
+    grantedScopes: [] as string[],
   };
   const client = new GatewayClient({
     url: instance.url,
@@ -359,13 +361,14 @@ function startClient(index: number, startedAt: number) {
     env: instance.env,
     clientName: "gateway-client",
     mode: "backend",
-    scopes: ["operator.admin", "operator.read", "operator.write"],
+    scopes: recovering ? ["operator.read"] : ["operator.admin", "operator.read", "operator.write"],
     deviceIdentity: loadOrCreateDeviceIdentity({
       path: instance.state.path("device", `client-${index}`, "client", "credentials.sqlite"),
     }),
     notifyOnStartupRetry: true,
-    onHelloOk: () => {
+    onHelloOk: (hello) => {
       if (!result.admittedAt) {
+        result.grantedScopes = hello.auth.scopes;
         result.admittedAt = Date.now();
         result.admissionMs = result.admittedAt - startedAt;
         if (recovering && !earlyReads) {
@@ -602,6 +605,14 @@ try {
     await until(
       () => reconnects.every(({ result }) => result.admittedAt > 0),
       "all reconnects admitted",
+    );
+    assert(
+      reconnects.every(
+        ({ result }) =>
+          result.grantedScopes.includes("operator.read") &&
+          !result.grantedScopes.includes("operator.admin"),
+      ),
+      "Reconnect proof requires non-admin read scopes",
     );
   } finally {
     clearInterval(observeSpawn);

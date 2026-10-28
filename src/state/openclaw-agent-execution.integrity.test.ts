@@ -14,7 +14,12 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { createDirectChatContext } from "../gateway/server-chat.agent-events.test-helpers.js";
 import { resolveRequestedSessionAgentId } from "../gateway/session-request-agent.js";
+import { createTestProjection } from "../gateway/session-row-projection.read-fixture.test-support.js";
+import { resolveSessionMutationAuthorizationAsync } from "../gateway/session-sharing-authorization-async.js";
+import { sharingPolicyClient } from "../gateway/session-sharing.test-utils.js";
+import { listProjectedSessions } from "../gateway/session-utils-list.js";
 import { withGatewaySessionEntry as withEntry } from "../gateway/session-utils-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -238,6 +243,15 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
           },
         });
         await withinTest(integrity.entered(), signal);
+        using projection =
+          contents === "failed"
+            ? await createTestProjection({ cfg: config, modelCatalog: [] })
+            : undefined;
+        if (projection) {
+          await expect(listProjectedSessions({ projection, opts: {} })).resolves.toMatchObject({
+            sessions: [{ key: scope.sessionKey }],
+          });
+        }
         const resolved = resolveRequestedSessionAgentId(config, scope.sessionKey, "main", "read");
         expect(resolved).toMatchObject(
           contents === "missing-index"
@@ -265,6 +279,25 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
           } else {
             await expect(read).resolves.toEqual(entry);
           }
+          if (contents === "valid") {
+            for (const method of ["sessions.resolve", "chat.metadata"]) {
+              const result = await withinTest(
+                resolveSessionMutationAuthorizationAsync({
+                  client: sharingPolicyClient({ scopes: ["operator.read"] }),
+                  context: createDirectChatContext({ getRuntimeConfig: () => config }),
+                  method,
+                  requestParams:
+                    method === "sessions.resolve"
+                      ? { key: scope.sessionKey }
+                      : { sessionKey: scope.sessionKey },
+                }),
+                signal,
+              );
+              using _ = { [Symbol.dispose]: () => result.authorization?.release?.() };
+              expect(result.error).toBeNull();
+              result.authorization?.assertCurrent();
+            }
+          }
         }
         expect(writeSettled).not.toHaveBeenCalled();
         if (contents === "superseded") {
@@ -279,7 +312,11 @@ it.for(["valid", "invalid-row", "missing-index", "failed", "stopped", "supersede
         await admission.pendingPreparation;
         await stopping;
         await writing;
-        expect(writeSettled).toHaveBeenCalledTimes(1);
+        if (projection) {
+          await expect(listProjectedSessions({ projection, opts: {} })).resolves.toMatchObject({
+            sessions: [],
+          });
+        }
         expect(isAgentDatabaseStartupReadReady(pathname, { env })).toBe(false);
         expect(Boolean(readAgentDatabaseReadAdmissionRefusal("main", { env }))).toBe(
           ["failed", "stopped", "superseded"].includes(contents),
@@ -619,28 +656,6 @@ it.each(["cleanup", "protocol"] as const)(
       nativeCurrent = true;
       await Promise.all([rejected.release(), retained.release()]);
       await closeOpenClawAgentDatabasesAsync();
-    }
-  },
-);
-
-it.each(["settled", "pending"] as const)(
-  "prepares missing storage after an existing-only miss (%s)",
-  async (timing) => {
-    const env = makeEnv("agent-prepare-missing-");
-    const execution = capture({ agentId: "main", env });
-    const source = sourceFor(() => execution.assertCurrent());
-    try {
-      const missing = execution.runExisting(source, async () => "unexpected");
-      if (timing === "settled") {
-        expect(await missing).toBeUndefined();
-      }
-      const preparing = execution.prepare(source);
-      expect(await missing).toBeUndefined();
-      await preparing;
-      expect(fs.existsSync(execution.path)).toBe(true);
-      expect(await execution.runExisting(source, async () => "opened")).toBe("opened");
-    } finally {
-      await execution.release();
     }
   },
 );

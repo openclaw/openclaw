@@ -342,6 +342,12 @@ export function publishPendingAgentDatabaseReadAdmission(
   return () => {
     if (readAdmissions.get(refusal) === admission) {
       readAdmissions.delete(refusal);
+      if (refusalsByState.get(key)?.refusals.has(refusal.agentId)) {
+        sessionChanges.invalidate({
+          all: true,
+          scope: { agentId: refusal.agentId, topology: true },
+        });
+      }
     }
   };
 }

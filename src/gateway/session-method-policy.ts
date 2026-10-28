@@ -160,9 +160,12 @@ export function isDirectSessionReadMethod(method: string): boolean {
   return DIRECT_SESSION_READ_METHODS.has(method);
 }
 
-/** Subscription registration reads session state without writing the agent database. */
+/** Read admission is separate from whether direct keys wholly bound authorization. */
 export function sessionMethodDatabaseAdmission(method: string): "read" | "write" {
-  return isDirectSessionReadMethod(method) || method === "sessions.messages.subscribe"
+  return isDirectSessionReadMethod(method) ||
+    method === "sessions.messages.subscribe" ||
+    method === "sessions.resolve" ||
+    method === "chat.metadata"
     ? "read"
     : "write";
 }

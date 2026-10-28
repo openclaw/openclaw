@@ -32,7 +32,11 @@ import {
   closeOpenClawAgentDatabasesForTest as closeAgentDbsForTest,
   openOpenClawAgentDatabase as openAgentDb,
 } from "./openclaw-agent-db.js";
-import { createNativeIntegrityGeneration as nativeGeneration } from "./openclaw-agent-execution-native.test-support.js";
+import {
+  createNativeIntegrityGeneration as nativeGeneration,
+  createNativeIntegritySource as sourceFor,
+} from "./openclaw-agent-execution-native.test-support.js";
+import { captureOpenClawAgentDatabaseExecution as capture } from "./openclaw-agent-execution.js";
 import {
   assertOpenClawDatabasesReady as assertDatabasesReady,
   preflightOpenClawDatabaseSchemas as preflightSchemas,
@@ -44,6 +48,28 @@ import { captureOpenClawStateWorkerContext as workerContext } from "./openclaw-s
 
 const tempDirs = createTempDirTracker();
 const makeEnv = () => ({ OPENCLAW_STATE_DIR: tempDirs.make("agent-admission-") });
+
+it.each(["settled", "pending"] as const)(
+  "prepares missing storage after an existing-only miss (%s)",
+  async (timing) => {
+    const env = makeEnv();
+    const execution = capture({ agentId: "main", env });
+    const source = sourceFor(() => execution.assertCurrent());
+    try {
+      const missing = execution.runExisting(source, async () => "unexpected");
+      if (timing === "settled") {
+        expect(await missing).toBeUndefined();
+      }
+      const preparing = execution.prepare(source);
+      expect(await missing).toBeUndefined();
+      await preparing;
+      expect(fs.existsSync(execution.path)).toBe(true);
+      expect(await execution.runExisting(source, async () => "opened")).toBe("opened");
+    } finally {
+      await execution.release();
+    }
+  },
+);
 
 it("reports exhausted lock admission without recommending database repair", () => {
   const refusal = inspectionRefusal({
