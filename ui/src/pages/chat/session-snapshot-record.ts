@@ -1,6 +1,5 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 import { removePairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import {
   MAX_CHAT_THUMBNAILS,
@@ -29,6 +28,7 @@ import {
   loadChatHistoryStateValidator,
   prewarmedHistoryStateValidator,
 } from "./session-snapshot-prewarm.ts";
+import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 
 const nonnegative = json.refine(json.number, (value) => value >= 0);
 const sessionKeySchema = json.refine(json.text, (value) => value.length > 0);
