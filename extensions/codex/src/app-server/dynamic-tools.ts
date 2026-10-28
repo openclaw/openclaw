@@ -82,16 +82,16 @@ import {
   applyCurrentMessageProvider,
   resolveCodexToolResultSourceReply,
 } from "./dynamic-tool-source-reply.js";
+import {
+  prepareCodexMessageMedia,
+  resolveConfirmedCodexMessageMedia,
+} from "./message-media-identity.js";
 import type {
   CodexDynamicToolCallParams,
   CodexDynamicToolFunctionSpec,
   CodexDynamicToolSpec,
 } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
-import {
-  prepareCodexRemoteWorkspaceMessageMedia,
-  resolveCodexMediaSourceUrls,
-} from "./remote-workspace-media.js";
 import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 type CodexDynamicToolHookContext = CodexDynamicToolHookContextBase & {
@@ -345,9 +345,7 @@ export function createCodexDynamicToolBridge(params: {
       const signal = options?.signal
         ? AbortSignal.any([params.signal, options.signal])
         : params.signal;
-      let preparedMessageMedia:
-        | Awaited<ReturnType<typeof prepareCodexRemoteWorkspaceMessageMedia>>
-        | undefined;
+      let preparedMessageMedia: Awaited<ReturnType<typeof prepareCodexMessageMedia>> | undefined;
       let messagingContext: Parameters<typeof extractMessagingToolSend>[2];
       let messagingFacts: {
         messagingDelivered: boolean;
@@ -378,7 +376,7 @@ export function createCodexDynamicToolBridge(params: {
         prepareArguments: (toolArgs, nativeArgumentsPrepared) => {
           const toolArgsRecord = nativeArgumentsPrepared ? toolArgs : args;
           if (toolName === "message" && isRecord(toolArgsRecord)) {
-            return prepareCodexRemoteWorkspaceMessageMedia({
+            return prepareCodexMessageMedia({
               args: toolArgsRecord,
               localWorkspaceRoot: params.hookContext?.workspaceDir,
               remoteWorkspaceRoot: params.hookContext?.remoteWorkspaceRoot,
@@ -596,7 +594,7 @@ export function createCodexDynamicToolBridge(params: {
             extractSourceReplyPayload: extractMessagingToolSourceReplyPayload,
             collectMessagingMediaUrls: collectAgentHarnessMessagingMediaUrls,
             resolveMessagingMediaSourceUrls: (mediaUrls) =>
-              resolveCodexMediaSourceUrls(mediaUrls, preparedMessageMedia?.sourcePathsByStagedPath),
+              resolveConfirmedCodexMessageMedia(telemetry, mediaUrls, preparedMessageMedia),
             toolName,
             args: executedArgs,
             result,

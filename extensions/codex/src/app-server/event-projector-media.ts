@@ -1,7 +1,3 @@
-import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -17,6 +13,11 @@ import {
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-store";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  digestMedia,
+  readConfirmedCodexMessageMediaDigests,
+  type MediaDigest,
+} from "./message-media-identity.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
@@ -28,28 +29,12 @@ type GeneratedImageResult = {
   source: "native" | "raw";
 };
 
-type MediaDigest = { bytes: number; sha256: string };
-
-function digestMedia(buffer: Buffer): MediaDigest {
-  return { bytes: buffer.length, sha256: createHash("sha256").update(buffer).digest("hex") };
-}
-
-function localMediaPath(sourceUrl: string): string | undefined {
-  if (sourceUrl.startsWith("file:")) {
-    try {
-      return fileURLToPath(sourceUrl);
-    } catch {
-      return undefined;
-    }
-  }
-  return path.isAbsolute(sourceUrl) ? sourceUrl : undefined;
-}
+const digestKey = (digest: MediaDigest) => `${digest.bytes}:${digest.sha256}`;
 
 export class CodexGeneratedMediaProjection {
   private readonly itemIds = new Set<string>();
   private readonly mediaByItemId = new Map<string, { mediaUrl?: string; savedPath?: string }>();
   private readonly digestByMediaUrl = new Map<string, MediaDigest>();
-  private readonly copiedSourceAliases = new Map<string, string>();
   private readonly gatewayMaterializedItemIds = new Set<string>();
   private readonly pendingMaterializationsByItemId = new Map<string, Promise<void>>();
 
@@ -223,51 +208,6 @@ export class CodexGeneratedMediaProjection {
     }
   }
 
-  /**
-   * A model can send a byte-identical copy of a generated image from another
-   * local path. Path aliases miss that copy, so confirmed sends are matched by
-   * size and content hash before delivery projection. Only same-size regular
-   * files are read; remote workspace paths are never resolved on this host.
-   */
-  async resolveCopiedMediaSources(
-    deliveries: Readonly<AgentHarnessToolResultTelemetry["confirmedMediaDeliveries"]> = [],
-  ): Promise<void> {
-    if (this.remote?.remoteWorkspaceRoot || this.digestByMediaUrl.size === 0) {
-      return;
-    }
-    const knownSources = new Set<string>();
-    for (const { mediaUrl, savedPath } of this.mediaByItemId.values()) {
-      for (const source of [mediaUrl, savedPath]) {
-        if (source) {
-          knownSources.add(normalizeMediaReferenceForComparison(source));
-        }
-      }
-    }
-    for (const sourceUrl of deliveries.flatMap((delivery) => delivery.sourceUrls)) {
-      const key = normalizeMediaReferenceForComparison(sourceUrl);
-      const filePath = localMediaPath(sourceUrl.trim());
-      if (knownSources.has(key) || this.copiedSourceAliases.has(key) || !filePath) {
-        continue;
-      }
-      try {
-        const stat = await fs.lstat(filePath);
-        const sameSize = [...this.digestByMediaUrl].filter(
-          ([, digest]) => digest.bytes === stat.size,
-        );
-        if (!stat.isFile() || sameSize.length === 0) {
-          continue;
-        }
-        const { sha256 } = digestMedia(await fs.readFile(filePath));
-        const match = sameSize.find(([, digest]) => digest.sha256 === sha256);
-        if (match) {
-          this.copiedSourceAliases.set(key, match[0]);
-        }
-      } catch {
-        // An unreadable or vanished copy keeps path-only matching.
-      }
-    }
-  }
-
   projectDelivery(params: {
     toolMediaUrls?: string[];
     messagingToolSentMediaUrls: string[];
@@ -288,8 +228,16 @@ export class CodexGeneratedMediaProjection {
         generatedUrlBySource.set(normalizeMediaReferenceForComparison(savedPath), mediaUrl);
       }
     }
-    for (const [source, mediaUrl] of this.copiedSourceAliases) {
-      generatedUrlBySource.set(source, mediaUrl);
+    // A model can send a byte-identical copy of a generated image from another
+    // local path. Match the bytes hashed when that confirmed send was prepared.
+    const generatedUrlByDigest = new Map(
+      [...this.digestByMediaUrl].map(([mediaUrl, digest]) => [digestKey(digest), mediaUrl]),
+    );
+    for (const [source, digest] of readConfirmedCodexMessageMediaDigests(params) ?? []) {
+      const generatedUrl = generatedUrlByDigest.get(digestKey(digest));
+      if (generatedUrl && !generatedUrlBySource.has(source)) {
+        generatedUrlBySource.set(source, generatedUrl);
+      }
     }
     const sentMediaUrls = new Set(params.messagingToolSentMediaUrls);
     const generatedUrlsByTarget = new Map<MessagingToolSend, Set<string>>();

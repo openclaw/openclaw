@@ -355,25 +355,27 @@ describe("CodexAppServerEventProjector media projection", () => {
     },
   );
 
-  it.each(["identical", "same-size-different"] as const)(
-    "matches a confirmed send of a copied generated image by content: %s",
+  it.each(["identical", "different", "overwritten-after-send"] as const)(
+    "matches a confirmed send of a copied generated image by its sent bytes: %s",
     async (copy) => {
       const params = await createParams();
-      const { projector, events } = await createProjection(params);
+      const { events } = await createProjection(params);
       await events.completed(codexImage("generated-copy"));
-      const bytes = Buffer.from(tinyPngBase64, "base64");
-      if (copy === "same-size-different") {
-        bytes.writeUInt8(bytes.readUInt8(bytes.length - 1) ^ 0xff, bytes.length - 1);
-      }
+      const generated = Buffer.from(tinyPngBase64, "base64");
+      const other = Buffer.from(generated);
+      other.writeUInt8(other.readUInt8(other.length - 1) ^ 0xff, other.length - 1);
       const copyPath = path.join(params.workspaceDir, "out", "copy.png");
       await fs.mkdir(path.dirname(copyPath), { recursive: true });
-      await fs.writeFile(copyPath, bytes);
+      await fs.writeFile(copyPath, copy === "identical" ? generated : other);
       const { bridge } = createMessageBridge(async () =>
         messageResult({ messageDelivery: receipt() }),
       );
       await sendMedia(bridge, copyPath, "chat-source");
+      if (copy === "overwritten-after-send") {
+        // Identity comes from the bytes that were sent, not the path's later contents.
+        await fs.writeFile(copyPath, generated);
+      }
       await events.complete();
-      await projector.prepareMediaDelivery(bridge.telemetry);
       const result = events.result(bridge.telemetry);
 
       const generatedUrl = result.toolMediaUrls?.[0];
