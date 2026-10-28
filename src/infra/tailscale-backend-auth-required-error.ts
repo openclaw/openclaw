@@ -1,0 +1,1 @@
+export const TAILSCALE_BACKEND_AUTH_REQUIRED_REASON = "gateway.tailscale_authentication_required";

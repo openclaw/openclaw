@@ -24,6 +24,7 @@ import {
 import { GATEWAY_CRASH_LOOP_RECOVERED_REASON as RECOVERED } from "./gateway-boot-lifecycle.kernel.js";
 import { gatewayBootOperations } from "./gateway-boot-lifecycle.worker.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { TAILSCALE_BACKEND_AUTH_REQUIRED_REASON } from "./tailscale-backend-auth-required-error.js";
 
 type GatewayBootLifecycleTestDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_boot_lifecycle">;
 type GatewayBootLifecycleOutcome = Parameters<typeof completeGatewayBootLifecycle>[1]["outcome"];
@@ -270,6 +271,56 @@ describe("gateway crash-loop breaker", () => {
       expect((await lifecycle.inspect(nowMs + 2_000)).tripped).toBe(false);
     },
   );
+
+  it("keeps a completed Tailscale authentication prerequisite visible without counting it as a crash", async () => {
+    const lifecycle = createLifecycleDb();
+    const nowMs = 1_000_000;
+    const prerequisiteBootId = await lifecycle.begin(nowMs - 3);
+    await lifecycle.complete(prerequisiteBootId.id, "startup_failed", nowMs - 2, {
+      startupReason: TAILSCALE_BACKEND_AUTH_REQUIRED_REASON,
+      reason: "gateway.tailscale_authentication_required: NeedsLogin",
+    });
+    for (const [startedAtMs, completedAtMs, reason] of [
+      [nowMs - 1, nowMs, "EADDRINUSE"],
+      [nowMs, nowMs + 1, "gateway startup cleanup failed"],
+    ] as const) {
+      const bootId = await lifecycle.begin(startedAtMs);
+      await lifecycle.complete(bootId.id, "startup_failed", completedAtMs, { reason });
+    }
+    expectDecision(await lifecycle.inspect(nowMs + 2), 2);
+    expect(readBootRows(lifecycle)).toContainEqual(
+      expect.objectContaining({
+        boot_id: prerequisiteBootId.id,
+        completed_at_ms: nowMs - 2,
+        outcome: "startup_failed",
+        startup_reason: TAILSCALE_BACKEND_AUTH_REQUIRED_REASON,
+        reason: "gateway.tailscale_authentication_required: NeedsLogin",
+      }),
+    );
+    const bootId = await lifecycle.begin(nowMs + 2);
+    await lifecycle.complete(bootId.id, "startup_failed", nowMs + 3, {
+      reason: "unknown startup error",
+    });
+    expectDecision(await lifecycle.inspect(nowMs + 4), 3);
+  });
+
+  it("keeps an unfinished boot in breaker accounting even when its startup reason is known", async () => {
+    const lifecycle = createLifecycleDb();
+    const nowMs = 1_000_000;
+    insertBootRows(lifecycle, [
+      bootRow("unfinished-auth-prerequisite", nowMs - 3, {
+        startupReason: TAILSCALE_BACKEND_AUTH_REQUIRED_REASON,
+      }),
+    ]);
+    for (const [startedAtMs, completedAtMs, reason] of [
+      [nowMs - 2, nowMs - 1, "EADDRINUSE"],
+      [nowMs - 1, nowMs, "gateway startup cleanup failed"],
+    ] as const) {
+      const bootId = await lifecycle.begin(startedAtMs);
+      await lifecycle.complete(bootId.id, "startup_failed", completedAtMs, { reason });
+    }
+    expectDecision(await lifecycle.inspect(nowMs + 1), 3);
+  });
 
   it.each([
     ["Kubernetes", { KUBERNETES_SERVICE_HOST: "10.96.0.1", KUBERNETES_SERVICE_PORT: "443" }],
