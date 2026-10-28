@@ -182,6 +182,21 @@ it("reuses packed row bytes across sibling changes without retaining another vie
   ]);
   expect(regrouped.sessions[1]?.sharedFacts).toEqual([0, 1]);
   expect(shareSidebarSessionRows([...viewerRows]).sessions[1]).toBe(viewer.sessions[1]);
+  shareSidebarSessionRows([...ownerRows]);
+  using movedStringify = vi.spyOn(JSON, "stringify");
+  const moved = shareSidebarSessionRows([
+    row("d", "D", "owner"),
+    row("e", "D", "owner"),
+    ...ownerRows,
+  ]);
+  expect(moved.sessions[2]?.sharedFacts).toEqual([1]);
+  expect(
+    movedStringify.mock.calls.filter(
+      ([value]) => value && typeof value === "object" && ["a", "b", "c"].includes(value.key),
+    ),
+  ).toHaveLength(0);
+  movedStringify.mockRestore();
+  expect(wire(moved)).toBe(JSON.stringify({ type: "res", id: "list", ok: true, payload: moved }));
   for (const payload of [first, viewer, changed, regrouped]) {
     const frame = { type: "res", id: "rows", ok: true, payload };
     expect(serializeGatewayFrame(frame).toString()).toBe(JSON.stringify(frame));

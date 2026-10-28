@@ -58,12 +58,13 @@ is named only after recorded recovery verifies it. Maintenance refusals
 remove the known database path before public diagnostic projection so recorded
 holder details survive redaction and truncation. Claim formats are unchanged.
 
-System-package ownership inspection treats missing package-manager executables as
-inapplicable without warning. Unavailable backend results are reused across update
-phases of one update run and command search path; other query failures warn once
-per run. The next update always probes again, including in a long-lived Gateway.
-Successful inventories stay fresh before installation effects to protect files
-claimed by a system package manager. This behavior requires the updated updater.
+If an agent database's state lock was removed or replaced, shutdown still releases
+its native worker and records the lost lock and current holder in a warning.
+It leaves the replacement lock and unowned lease records alone for recovery;
+shutdown never treats lost ownership as a clean checkpoint. Failed plugin cleanup
+keeps the Gateway's process-exit deadline active so a managed update can reach its
+existing stop-failure recovery instead of waiting indefinitely. These repairs must
+be present in the old Gateway being stopped, not only in the update candidate.
 
 When artifact-preserving SQLite inspection exhausts its stabilization attempts,
 update failures retain the final consistency reason code and attempt count in
@@ -887,6 +888,13 @@ path installs and links outside the plugin system's owned locations are left
 unchanged. If filesystem permissions prevent repair, startup reports the
 affected plugin and keeps it unavailable until the links can be repaired with
 `openclaw doctor --fix`.
+
+System-package ownership inspection treats missing package-manager executables as
+inapplicable without warning. Unavailable backend results are reused across update
+phases of one update run and command search path; other query failures warn once
+per run. The next update always probes again, including in a long-lived Gateway.
+Successful inventories stay fresh before installation effects to protect files
+claimed by a system package manager. This behavior requires the updated updater.
 
 Directory permission checks remain in the **installed updater**. Older updaters cannot gain new
 admission behavior from the candidate they have not staged yet. If upgrading
