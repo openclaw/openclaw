@@ -33,16 +33,15 @@ const envKeys = [
 
 const MODEL_ID = "only-in-main";
 const TOKEN = "pr58373-proof-token";
+const unexpectedRestart = () => {
+  throw new Error("Unexpected Gateway recovery restart during secondary catalog proof");
+};
 
 function saveProofAuth(agentDir: string, providerId: string, key: string) {
-  saveAuthProfileStore(
-    {
-      version: 1,
-      profiles: { [`${providerId}:proof`]: { type: "api_key", provider: providerId, key } },
-    },
-    agentDir,
-    { syncExternalCli: false },
-  );
+  const profiles = {
+    [`${providerId}:proof`]: { type: "api_key" as const, provider: providerId, key },
+  };
+  saveAuthProfileStore({ version: 1, profiles }, agentDir, { syncExternalCli: false });
 }
 
 describe("PR #58373 secondary catalog runtime proof", () => {
@@ -84,7 +83,6 @@ describe("PR #58373 secondary catalog runtime proof", () => {
           fs.mkdir(mainAgentDir, { recursive: true }),
           fs.mkdir(mainWorkspaceDir, { recursive: true }),
           fs.mkdir(bundledPluginsDir, { recursive: true }),
-          fs.mkdir(path.dirname(configPath), { recursive: true }),
         ]);
         for (const [key, value] of Object.entries({
           HOME: tempHome,
@@ -179,6 +177,7 @@ describe("PR #58373 secondary catalog runtime proof", () => {
           configPath,
           token: TOKEN,
           clientDisplayName: "pr58373-proof",
+          hotReloadRecovery: unexpectedRestart,
           scopes: ["operator.admin", "operator.read", "operator.write"],
         });
         await gateway.server.startupSettled;
@@ -205,6 +204,7 @@ describe("PR #58373 secondary catalog runtime proof", () => {
           configPath,
           token: TOKEN,
           clientDisplayName: "pr58373-proof-restarted",
+          hotReloadRecovery: unexpectedRestart,
           scopes: ["operator.admin", "operator.read", "operator.write"],
         });
         await gateway.server.startupSettled;
