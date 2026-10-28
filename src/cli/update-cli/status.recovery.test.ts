@@ -4,10 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
-import {
-  UPDATE_CAPTURE_PRIVACY_MARKER,
-  UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
-} from "../../infra/update-capture-privacy-marker.js";
+import * as marker from "../../infra/update-capture-privacy-marker.js";
 import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { updateStatusCommand as updateStatus } from "./status.js";
 // Prepare the lazy production graph during collection, not inside the first test timeout.
@@ -84,11 +81,13 @@ let configPath: string;
 const printed = () => mocks.log.mock.calls.flat().join("\n");
 const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
 const digest = (raw: string) => createHash("sha256").update(raw).digest("hex");
+const markerFile = marker.UPDATE_CAPTURE_PRIVACY_MARKER;
+const markCapture = (directory: string) =>
+  fs.writeFile(path.join(directory, markerFile), marker.UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT);
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  mocks.readRun.mockReset();
-  mocks.readRun.mockResolvedValue(undefined);
+  mocks.readRun.mockReset().mockResolvedValue(undefined);
   root = tempDirs.make("update-status-recovery-");
   stateDir = path.join(root, "state");
   configPath = path.join(stateDir, "openclaw.json");
@@ -133,10 +132,7 @@ async function capture(runId = firstId) {
   const directory = `${stateDir}.update-captures/${runId}`;
   const manifestPath = path.join(directory, "manifest.json");
   await fs.mkdir(directory, { recursive: true });
-  await fs.writeFile(
-    path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER),
-    UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
-  );
+  await markCapture(directory);
   const raw = JSON.stringify(manifest);
   await fs.writeFile(manifestPath, raw);
   return { manifest, directory, manifestPath, raw, manifestSha256: digest(raw) };
@@ -157,15 +153,8 @@ async function readBaseline(c: Capture) {
     assertCurrent: () => {},
   });
 }
-async function terminal(
-  c: Capture,
-  status: "committed" | "restored",
-  manifestSha256 = c.manifestSha256,
-) {
-  await writeJson(path.join(c.directory, "outcome.json"), {
-    status,
-    manifestSha256,
-  });
+async function terminal(c: Capture, status: "committed" | "restored", sha = c.manifestSha256) {
+  await writeJson(path.join(c.directory, "outcome.json"), { status, manifestSha256: sha });
 }
 async function run(c: Capture) {
   const { UpdateRunRecordSchema } = await import("../../infra/update-run-schema.js");
@@ -192,7 +181,7 @@ it("reports standalone Doctor captures as manual evidence", async () => {
   expect(output).not.toContain("no matching update run");
   expect(output).not.toContain("unresolved after a failed update");
   expect(await text(c.manifestPath)).toBe(c.raw);
-  expect(await fs.readdir(c.directory)).toEqual([UPDATE_CAPTURE_PRIVACY_MARKER, "manifest.json"]);
+  expect(await fs.readdir(c.directory)).toEqual([markerFile, "manifest.json"]);
 });
 it.each([
   ["partial", false],
@@ -202,10 +191,7 @@ it.each([
   await terminal(c, "committed");
   const directory = path.join(path.dirname(c.directory), secondId);
   await fs.mkdir(directory);
-  await fs.writeFile(
-    path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER),
-    UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
-  );
+  await markCapture(directory);
   const store = path.dirname(directory);
   for (const name of [".DS_Store", "._capture", "Thumbs.db", "desktop.ini", "operator-notes.txt"]) {
     await fs.writeFile(path.join(store, name), "unrelated metadata");
@@ -224,9 +210,7 @@ it.each([
     await fs.link(partialPath, path.join(directory, "manifest.json"));
   }
   const retained = new Map<string, Buffer>();
-  for (const name of (await listDirectoryTreeStrict(directory)).map(
-    (walkEntry) => walkEntry.relativePath,
-  )) {
+  for (const { relativePath: name } of await listDirectoryTreeStrict(directory)) {
     const pathname = path.join(directory, name);
     if ((await fs.lstat(pathname)).isFile()) {
       retained.set(name, await fs.readFile(pathname));
@@ -235,17 +219,10 @@ it.each([
   await updateStatus({ json });
   if (json) {
     expect(result()).not.toHaveProperty("recoverySetsError");
-    expect(result().recoverySets).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          runId: c.manifest.runId,
-          manifestPath: c.manifestPath,
-          status: "stale",
-        }),
-        expect.objectContaining({ directory, status: "incomplete" }),
-      ]),
-    );
-    expect(result().recoverySets).toHaveLength(2);
+    expect(result().recoverySets).toMatchObject([
+      { runId: c.manifest.runId, manifestPath: c.manifestPath, status: "stale" },
+      { directory, status: "incomplete" },
+    ]);
     const incomplete = result().recoverySets.find(
       (set: { status: string }) => set.status === "incomplete",
     );
@@ -436,7 +413,7 @@ it("validates forward resolution against retained generations without writing", 
   };
   mocks.readRun.mockResolvedValue(row);
   expect((await inspect()).recoverySets[0]).toMatchObject({ status: "forward-resolved" });
-  expect(await fs.readdir(c.directory)).toEqual([UPDATE_CAPTURE_PRIVACY_MARKER, "manifest.json"]);
+  expect(await fs.readdir(c.directory)).toEqual([markerFile, "manifest.json"]);
   const candidate = {
     ...c.manifest,
     generation: { kind: "candidate", baselineSha256: c.manifestSha256 },
