@@ -1041,9 +1041,20 @@ cleanup can finish it.
 Before applying, stop the Gateway for that same profile/state directory and wait
 for other SQLite maintenance commands to finish. Stop database readers too,
 including watchers that repeatedly run `openclaw sessions --all-agents --json`,
-and keep them stopped until cleanup exits. Read-only SQLite connections can
-create or change WAL/SHM sidecars, invalidating cleanup's destination check even
-when session content is unchanged. If cleanup reports `Recovery destination
+and keep them stopped until cleanup exits. Cleanup tolerates timestamp changes
+from read-only WAL/SHM bookkeeping, but still rejects replaced files, size changes,
+and changed database, WAL, or rollback-journal contents. A changed device number
+requires independent content evidence as well as the recorded inode. Cleanup can
+re-verify a closed destination against a producer-verified full original or an
+earlier verified destination fingerprint. A successful check restamps the device
+and records an optional `databaseIdentity.sha256` fingerprint in the existing
+manifest. Older manifests remain readable. Scoped backups and destinations with
+data-bearing WAL or rollback journals cannot supply this full-image proof.
+If the contents differ or proof is unavailable, cleanup retains the originals
+with `destination-verification-failed` and names the device change. Run
+`openclaw doctor --fix` to check current state; Doctor does not automatically
+re-certify an old backup's destination identity. Preserve those originals for
+manual verification. If cleanup reports `Recovery destination
 database changed; preview cleanup again.`, stop those readers, preview again,
 and retry. Manual cleanup requires exclusive offline state ownership and never stops
 or restarts a service itself. On owner or maintenance-lock contention, cleanup

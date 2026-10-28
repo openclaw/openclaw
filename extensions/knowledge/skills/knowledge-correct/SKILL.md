@@ -33,6 +33,11 @@ record exists or treat a retraction as evidence for its opposite.
   supported context, attribution, precise dates and evidence; remove or revise
   what the correction actually changes. The operation publishes the replacement
   and supersedes the old assertion together, with links in both directions.
+- **Replaced by a claim that already exists:** call `knowledge_supersede` with
+  the existing claim as `by` and the earlier claims' fences in `superseded`
+  instead of correcting, which would write a duplicate of the replacement. The
+  claims must share a linked page. Undo a mistaken supersession with the same
+  call and `undo: true`.
 - **Withdrawal without a replacement:** call `knowledge_withdraw` with the
   exact ID, revision/hash, reason and vault UUID. It accepts pages, claims and
   explicit relationships. An edge is identified by its own ID, not its endpoint

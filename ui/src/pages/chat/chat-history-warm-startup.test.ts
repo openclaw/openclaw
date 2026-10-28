@@ -50,6 +50,7 @@ import * as snapshotDatabase from "./session-snapshot-database.ts";
 import { publishSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
+import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-projection.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import "./chat-pane.tsx";
 
@@ -206,7 +207,7 @@ function shareConnection(
 
 function snapshotRecord(h: ReturnType<typeof mountPane>, snapshot: ChatSessionSnapshot) {
   return {
-    projectionVersion: 6,
+    projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
     savedAt: Date.now(),
     sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
     sessionId: snapshot.sessionId,
@@ -779,7 +780,7 @@ describe("first chat startup snapshot ordering", () => {
         commands: startupCommands(),
       };
       vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockResolvedValueOnce({
-        projectionVersion: 6,
+        projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
         savedAt: 0,
         sessionKey: cacheKey,
         sessionId: stored.sessionId,

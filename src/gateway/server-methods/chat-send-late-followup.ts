@@ -1,4 +1,4 @@
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type {
   QueuedFollowupReplyBatch,
   QueuedFollowupReplyDelivery,
@@ -80,7 +80,12 @@ export function createChatSendLateFollowupDisposition(params: {
           return recordDrop(batch, "origin-mismatch");
         }
         if (batch.completion.kind === "progress") {
-          progressPayloads.push(...batch.payloads);
+          // Queue acceptance is transient transport status, never part of the later answer.
+          progressPayloads.push(
+            ...batch.payloads.filter(
+              (payload) => getReplyPayloadMetadata(payload)?.queueAdmissionNotice !== "queued",
+            ),
+          );
           await params.deliver({
             ...batch,
             clientRunId: params.retainSourceIdentity === false ? batch.runId : params.runId,

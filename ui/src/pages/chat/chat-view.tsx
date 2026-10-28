@@ -22,7 +22,7 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { listDismissablePendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
 import { hasTerminalRunStatus, isChatRunWorking } from "./chat-run-working.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
-import { listSubagents } from "./chat-subagent-wait.ts";
+import { listSubagents, projectProgressCardRuntime } from "./chat-subagent-wait.ts";
 import { createChatViewFrame, type ChatProps, type ChatViewFrame } from "./chat-view-frame.ts";
 import {
   renderChatComposerNotices as ChatComposerNoticesView,
@@ -264,6 +264,12 @@ function ChatComposerView(input: ChatViewInput) {
               startedAt: input.props.selectedSession?.startedAt,
               endedAt: input.props.selectedSession?.endedAt,
               hasActiveRun: isChatRunWorking(input.props),
+              runtime: projectProgressCardRuntime(
+                input.props.selectedSession,
+                input.props,
+                card.updatedAt,
+                input.props.connected,
+              ),
               refresh: input.props.progressCardRefresh?.state,
               onOpen: destinations.onOpenProgress,
             }

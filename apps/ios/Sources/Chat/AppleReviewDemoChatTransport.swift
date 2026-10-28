@@ -106,7 +106,18 @@ struct LocalChatFixture {
         responsePrefix: "OpenClaw is connected to your gateway.",
         seedMessages: ProcessInfo.processInfo.arguments.contains("--openclaw-empty-chat-fixture")
             ? []
-            : ["Ready when you are. I can check a project, coordinate an agent, or prepare the next step."],
+            : [
+                "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
+                """
+                A small release workflow:
+
+                ```mermaid
+                flowchart TD
+                  Draft --> Review
+                  Review --> Ship
+                ```
+                """,
+            ],
         agents: [
             AgentSummary(
                 id: "main",

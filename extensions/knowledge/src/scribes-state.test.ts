@@ -13,7 +13,7 @@ import { detectSources, loadScribes, statusFromText, type ScribeJob } from "./sc
 
 const job = (overrides: Partial<ScribeJob> = {}): ScribeJob => ({
   id: "job-review",
-  declarationKey: "knowledge:scribe:unlinked-review",
+  declarationKey: "knowledge:scribe:claim-consolidation",
   enabled: true,
   configRevision: "rev-1",
   schedule: { kind: "cron", expr: "45 3 * * *", tz: "America/Los_Angeles" },
@@ -71,23 +71,25 @@ describe("scribes catalog", () => {
     expect(memory).toContain("`Scribe status: done — <one sentence with counts");
     expect(memory).not.toMatch(/Run message|automations tool/);
     const review = setupPrompt(
-      scribeSetup("unlinked-review", "ongoing", defaultOptions("unlinked-review"), "UTC"),
+      scribeSetup("claim-consolidation", "ongoing", defaultOptions("claim-consolidation"), "UTC"),
     );
     expect(review).toContain("- Runs weekly, Sundays at 3:45 AM UTC (cron `45 3 * * 0`).");
-    expect(review).toContain("The knowledge-unlinked-claims skill does the work on each run.");
+    expect(review).toContain("The knowledge-claim-consolidation skill does the work on each run.");
   });
 
   it("writes a repair prompt that keeps the automation's schedule and run message", () => {
-    const prompt = repairPrompt("unlinked-review", {
+    const prompt = repairPrompt("claim-consolidation", {
       schedule: { kind: "cron", expr: "45 3 * * *", tz: "UTC" },
       runMessage: "Edited run message",
     });
-    expect(prompt).toMatch(/^Repair the Knowledge scribe "Review unlinked claims"/);
+    expect(prompt).toMatch(/^Repair the Knowledge scribe "Knowledge Consolidation"/);
     expect(prompt).toContain("- Runs nightly at 3:45 AM UTC (cron `45 3 * * *`).");
     expect(prompt).toContain("leave it as it is and go to the last step");
     expect(prompt.endsWith("```text\nEdited run message\n```")).toBe(true);
     expect(
-      repairPrompt("unlinked-review", { schedule: { kind: "cron", expr: "5 1 * * 2", tz: "UTC" } }),
+      repairPrompt("claim-consolidation", {
+        schedule: { kind: "cron", expr: "5 1 * * 2", tz: "UTC" },
+      }),
     ).toContain("- Runs on cron `5 1 * * 2`, time zone UTC.");
   });
 
@@ -184,7 +186,7 @@ describe("scribes state", () => {
   });
 
   it("finds sessions by display name and jobs by declarationKey through Gateway reads", async () => {
-    const review = scribeById("unlinked-review")!,
+    const review = scribeById("claim-consolidation")!,
       memory = scribeById("memory")!;
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "cron.list") {
@@ -218,14 +220,14 @@ describe("scribes state", () => {
     });
     const snapshots = await loadScribes({ request } as never, "main");
     expect(snapshots.map((s) => [s.scribe.id, s.status, s.session?.key, s.job?.id])).toEqual([
-      ["unlinked-review", "on", "s-review", "job-review"],
+      ["claim-consolidation", "on", "s-review", "job-review"],
       ["conversations", "available", undefined, undefined],
       ["memory", "done", "s-memory", undefined],
     ]);
     expect(snapshots[2]!.result).toEqual({ state: "done", summary: "Saved 4" });
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
-      search: "Scribe · Review unlinked claims",
+      search: "Scribe · Knowledge Consolidation",
       archived: "all",
       limit: 20,
     });

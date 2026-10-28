@@ -2,6 +2,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { SessionLinkTarget } from "../../components/markdown-session-links.ts";
 import { sessionRowAttention } from "../../lib/session-attention.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import type { SessionProgressCardRuntime } from "../../lib/session-progress-runtime.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   isSessionKeyAddressable,
@@ -274,6 +275,53 @@ export function listSubagents(input: SubagentSession): ChatSubagentActivity[] {
         listed: isSubagentsPanelSession(row),
       };
     });
+}
+
+/** Project the existing child query without another status owner or history read. */
+export function projectProgressCardRuntime(
+  session: GatewaySessionRow | undefined,
+  roster: SubagentRoster,
+  updatedAt: number,
+  connected?: boolean,
+): SessionProgressCardRuntime {
+  let childError: string | undefined;
+  const children =
+    session && roster.subagentSessionsHydrated && !roster.subagentSessionsPending
+      ? { running: 0, queued: 0, waiting: 0, failed: 0, stopped: 0 }
+      : undefined;
+  if (session && children) {
+    for (const row of directChildren(session, roster)) {
+      if (row.status === "queued") {
+        children.queued++;
+      } else if (isSessionRunStateActive(row)) {
+        children.running++;
+      } else if (row.hasActiveSubagentRun) {
+        children.waiting++;
+      } else if (row.endedAt !== undefined && row.endedAt >= updatedAt) {
+        // A newer authored snapshot has already had a chance to reconcile this
+        // outcome. Never carry failures from an older task into a new card.
+        const outcome = endedWithoutFinishing(row);
+        if (outcome === "failed") {
+          children.failed++;
+          childError ??= row.lastRunError
+            ? `${resolveSessionDisplayName(row.key, row)}: ${row.lastRunError}`
+            : resolveSessionDisplayName(row.key, row);
+        } else if (outcome === "stopped") {
+          children.stopped++;
+        }
+      }
+    }
+  }
+  return {
+    known: Boolean(session),
+    connected,
+    hasActiveSubagentRun:
+      session?.hasActiveSubagentRun === true ||
+      Boolean(children && children.running + children.queued + children.waiting > 0),
+    lastRunError: session?.lastRunError,
+    childError,
+    children,
+  };
 }
 
 /**

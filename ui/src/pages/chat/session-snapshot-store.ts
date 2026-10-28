@@ -7,6 +7,10 @@ import {
 } from "../../lib/protocol-validators.generated/transcript.js";
 import { listen } from "../../lib/reactive/listener.ts";
 import * as json from "../../lib/snapshot-json.ts";
+import {
+  chatHeaderSharingSnapshotSchema,
+  chatHeaderViewersSnapshotSchema,
+} from "./chat-header-viewers-snapshot.ts";
 import { chatSessionStateSnapshotSchema } from "./chat-session-state-snapshot.ts";
 import {
   getSessionCacheValue,
@@ -86,6 +90,8 @@ const permissionModeSchema = json.enumeration(["read-only", "guarded", "workspac
 const snapshotSchema = json.object(
   {
     sessionState: json.optional(chatSessionStateSnapshotSchema),
+    headerViewers: json.optional(chatHeaderViewersSnapshotSchema),
+    headerSharing: json.optional(json.nullable(chatHeaderSharingSnapshotSchema)),
     composer: json.optional(
       json.nullable(
         json.object({
