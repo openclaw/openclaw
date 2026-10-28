@@ -244,9 +244,13 @@ const hits = await search({ query: "OpenClaw code mode" });
 ```
 
 Calling a native global or native catalog handle returns the normal tool's JSON `details`
-value directly. When a tool marks its result `isError: true` and its details carry no
+value directly. When a tool reports a failure through `isError: true` or its
+structured result (for example, `status: "failed"`), and its details carry no
 non-empty `message` or `error` string, the value includes the tool's text content
-as `message`, so guest code and the model can see why the call failed. MCP handles
+as `message`, so guest code and the model can see why the call failed. This includes
+native exec refusals and runtime failures. Successful results and ordinary completed
+commands with nonzero exit codes keep their existing values. Returned failures
+remain values; thrown tool errors remain catchable. MCP handles
 retain the native MCP result (`content`, optional `structuredContent`, and
 optional `isError`). Exact catalog ids and raw `{ tool, result }` envelopes are
 not guest-visible.

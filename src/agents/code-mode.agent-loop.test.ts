@@ -217,6 +217,79 @@ describe("Code Mode agent-loop error recovery", () => {
     }
   });
 
+  it("preserves native exec refusal diagnostics", async ({ onTestFinished }) => {
+    const state = await createOpenClawTestState({ label: "exec-cwd-recovery" });
+    const scopeKey = "agent-loop-cwd-recovery";
+    const closeScope = getProcessSupervisor().acquireScopeCleanup(scopeKey, {
+      processTree: "required-all",
+    });
+    onTestFinished(async () => {
+      await closeScope();
+      resetProcessRegistryForTests();
+      await state.cleanup();
+    });
+    await writeFile(join(state.workspaceDir, "input.txt"), "review-ready");
+    const shell = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      scopeKey,
+      cwd: state.workspaceDir,
+      notifyOnExit: false,
+    });
+    const execute = vi.spyOn(shell, "execute");
+    const command = `${JSON.stringify(globalThis.process.execPath)} -e "require('node:fs').appendFileSync('executions.txt', 'run\\n'); process.stdout.write(require('node:fs').readFileSync('input.txt', 'utf8'))"`;
+    const nonzeroCommand = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdout.write('ordinary-exit'); process.exit(7)"`;
+    const missingCwd = join(state.workspaceDir, "missing");
+    const { agent } = await runCodeModeAgent({
+      hiddenTools: [shell],
+      programs: [
+        `return await exec({ command: ${JSON.stringify(command)}, workdir: ${JSON.stringify(missingCwd)} });`,
+        `return await exec({ command: ${JSON.stringify(command)} });`,
+        `return await exec({ command: ${JSON.stringify(nonzeroCommand)} });`,
+      ],
+    });
+    const nativeFailure = await execute.mock.results[0]!.value;
+    expect(nativeFailure.content).toEqual([
+      { type: "text", text: expect.stringContaining("command was not executed") },
+    ]);
+    const results = agent.state.messages
+      .filter((message) => message.role === "toolResult")
+      .map(readToolResultDetails);
+    expect(results[0]).toMatchObject({
+      status: "completed",
+      output: [],
+      value: {
+        status: "failed",
+        failureKind: "runtime-error",
+        exitCode: null,
+        aggregated: "",
+        message: expect.stringContaining("command was not executed"),
+      },
+    });
+    expect(resultDetails({ details: results[0]?.value }).message).toContain(
+      "omit an explicit workdir to use the default cwd",
+    );
+    expect(results[1]).toMatchObject({
+      status: "completed",
+      value: { status: "completed", exitCode: 0, aggregated: "review-ready" },
+    });
+    expect(results[2]).toMatchObject({
+      status: "completed",
+      value: {
+        status: "completed",
+        exitCode: 7,
+        aggregated: "ordinary-exit\n\n(Command exited with code 7)",
+      },
+    });
+    for (const result of results.slice(1)) {
+      expect(resultDetails({ details: result?.value })).not.toHaveProperty("message");
+    }
+    expectRecovered(agent);
+    expectToolCalls(3, shell);
+    expect(await readFile(join(state.workspaceDir, "executions.txt"), "utf8")).toBe("run\n");
+  });
+
   it("recovers a wrong shell wait without relaunching", async ({ onTestFinished }) => {
     const state = await createOpenClawTestState({ label: "wrong-wait-recovery" });
     const scopeKey = "agent-loop-wrong-wait";
