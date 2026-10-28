@@ -20,6 +20,9 @@
       <a class="nav-link active" href="#overview"><span>▦</span> Tổng quan</a>
       <a class="nav-link" href="#orders"><span>▤</span> Đơn hàng</a>
       <a class="nav-link" href="#products"><span>▧</span> Sản phẩm</a>
+      <a class="nav-link" href="#inventory"><span>▣</span> Kho hàng</a>
+      <a class="nav-link" href="#customers"><span>♙</span> Khách hàng</a>
+      <a class="nav-link" href="#reports"><span>▥</span> Báo cáo</a>
       <div class="sidebar-note">
         <span class="note-icon">✦</span>
         <strong>Bản demo MVP</strong>
@@ -107,6 +110,27 @@
         </article>
       </section>
 
+
+      <section class="panel extra-panel" id="inventory">
+        <div class="panel-heading"><div><p class="eyebrow">KHO HÀNG</p><h2>Nhập và điều chỉnh tồn kho</h2></div></div>
+        <form id="stock-form" class="stack-form">
+          <label>Sản phẩm<select id="stock-product" required></select></label>
+          <div class="form-row"><label>Số lượng thay đổi<input id="stock-quantity" type="number" step="1" required placeholder="Nhập số dương để nhập kho"></label><label>Ghi chú<input id="stock-note" maxlength="100" placeholder="Lý do nhập/kiểm kê" required></label></div>
+          <button class="button button-secondary full-width" type="submit">Cập nhật tồn kho</button>
+        </form>
+        <div class="section-divider"></div><div class="product-list-heading"><strong>Lịch sử kho</strong></div>
+        <div class="table-wrap"><table><thead><tr><th>THỜI GIAN</th><th>SẢN PHẨM</th><th>THAY ĐỔI</th><th>GHI CHÚ</th></tr></thead><tbody id="stock-history-body"></tbody></table></div>
+      </section>
+      <section class="panel extra-panel" id="customers">
+        <div class="panel-heading"><div><p class="eyebrow">CHĂM SÓC KHÁCH HÀNG</p><h2>Khách hàng đã mua</h2></div><button class="button button-secondary" id="export-customers" type="button">↓ Xuất CSV</button></div>
+        <div class="toolbar"><label class="search-box"><span>⌕</span><input id="customer-search" type="search" placeholder="Tìm tên khách hàng..." aria-label="Tìm khách hàng"></label></div>
+        <div class="table-wrap"><table><thead><tr><th>KHÁCH HÀNG</th><th>SỐ ĐƠN</th><th>TỔNG CHI TIÊU</th></tr></thead><tbody id="customers-body"></tbody></table></div>
+      </section>
+      <section class="panel extra-panel" id="reports">
+        <div class="panel-heading"><div><p class="eyebrow">PHÂN TÍCH</p><h2>Báo cáo kinh doanh</h2></div><button class="button button-secondary" id="export-orders" type="button">↓ Xuất đơn hàng CSV</button></div>
+        <div class="stats-grid report-stats"><article class="stat-card"><div class="stat-heading"><span>Giá vốn hàng đã giao</span></div><div class="stat-value" id="report-cost">0 ₫</div></article><article class="stat-card"><div class="stat-heading"><span>Lợi nhuận gộp ước tính</span></div><div class="stat-value" id="report-profit">0 ₫</div></article><article class="stat-card"><div class="stat-heading"><span>Giá trị tồn kho theo giá vốn</span></div><div class="stat-value" id="report-stock">0 ₫</div></article></div>
+        <p class="muted">Báo cáo dùng dữ liệu demo trên trình duyệt. Lợi nhuận chưa trừ chi phí vận hành, thuế và các khoản phát sinh khác.</p>
+      </section>
       <footer class="app-footer"><span>ShopMini <span class="footer-dot">•</span> Dự án demo học tập</span><span>Chưa dùng cho dữ liệu kinh doanh thật</span></footer>
     </main>
   </div>
