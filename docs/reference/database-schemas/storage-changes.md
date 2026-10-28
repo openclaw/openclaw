@@ -187,7 +187,8 @@ blob without encoding or compressing it again.
 The read worker prepares the immutable tree before acceptance. The writer
 inserts new packs and stamps reused packs in bounded short transactions.
 Incremental edits prepare the edited directory pack and each ancestor pack;
-replacing a tree already present inserts no packs. A large flat directory
+this includes a surviving subtree promoted to a directory's root by deletion,
+even when its records are unchanged. Replacing a tree already present inserts no packs. A large flat directory
 rewrites its complete pack on an edit. Acceptance retains the
 existing revision, baseline, lease, and registry checks, then publishes the root,
 changed target fingerprint, and receipt together. Checkpoints retain the previous
