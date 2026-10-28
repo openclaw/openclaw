@@ -11,13 +11,14 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 
 export type SessionPendingInputWithdrawal = {
   sessionKey: string;
   sessionId: string;
-} & ({ runId: string } | { inputIds: readonly string[] });
+} & ({ runId: string } | { inputIds: readonly string[] } | { lifecycleGeneration: string });
 
 export type RetiredPendingInputDismissalOutcome =
   | { kind: "dismissed"; inputIds: string[]; runIds: string[]; missingIds: string[] }
@@ -52,7 +53,7 @@ export function discardSessionPendingInputInWorker(
       if (!hasSessionPendingInputsSchema(current.db)) {
         admit("transaction");
         return commitResult(
-          "runId" in input
+          !("inputIds" in input)
             ? false
             : {
                 kind: "dismissed",
@@ -63,6 +64,29 @@ export function discardSessionPendingInputInWorker(
         );
       }
       const db = getSessionKysely(current.db);
+      if ("lifecycleGeneration" in input) {
+        const entry = readSessionEntryRow(current, input.sessionKey, "list")?.entry;
+        const marked =
+          entry?.sessionId === input.sessionId
+            ? (entry.resumeAfterRestart?.queuedInputIds ?? [])
+            : [];
+        admit("transaction");
+        // A crash has no restart marker. Retain its text as a resendable failed send;
+        // current-lifecycle admissions and explicitly marked graceful input keep custody.
+        executeSqliteQuerySync(
+          current.db,
+          db
+            .updateTable("session_pending_inputs")
+            .set({ state: "cancelled" })
+            .where("session_key", "=", input.sessionKey)
+            .where("session_id", "=", input.sessionId)
+            .where("state", "=", "queued")
+            .where("consumed_event_id", "is", null)
+            .where("lifecycle_generation", "!=", input.lifecycleGeneration)
+            .$if(marked.length > 0, (query) => query.where("input_id", "not in", marked)),
+        );
+        return commitResult(true);
+      }
       const session = executeSqliteQueryTakeFirstSync(
         current.db,
         db

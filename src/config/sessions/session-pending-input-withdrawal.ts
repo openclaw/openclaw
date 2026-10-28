@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
@@ -24,7 +25,10 @@ import {
 } from "./session-worker-receipt.js";
 
 type WithdrawalScope = SessionAccessScope & { agentId: string; sessionId: string };
-type WithdrawalSelection = { runId: string } | { inputIds: readonly string[] };
+type WithdrawalSelection =
+  | { runId: string }
+  | { inputIds: readonly string[] }
+  | { lifecycleGeneration: string };
 
 class PendingInputOwnedError extends Error {
   constructor(readonly inputIds: string[]) {
@@ -41,12 +45,15 @@ function readWithdrawalResult(
     receipt.kind !== "session-pending-input-withdrawal" ||
     receipt.sessionKey !== input.sessionKey ||
     receipt.sessionId !== input.sessionId ||
-    ("runId" in input
-      ? receipt.runId !== input.runId || typeof receipt.outcome !== "boolean"
-      : !Array.isArray(receipt.inputIds) ||
-        receipt.inputIds.length !== input.inputIds.length ||
-        JSON.stringify(receipt.inputIds) !== JSON.stringify(input.inputIds) ||
-        !isRecord(receipt.outcome))
+    ("lifecycleGeneration" in input
+      ? receipt.lifecycleGeneration !== input.lifecycleGeneration ||
+        typeof receipt.outcome !== "boolean"
+      : "runId" in input
+        ? receipt.runId !== input.runId || typeof receipt.outcome !== "boolean"
+        : !Array.isArray(receipt.inputIds) ||
+          receipt.inputIds.length !== input.inputIds.length ||
+          JSON.stringify(receipt.inputIds) !== JSON.stringify(input.inputIds) ||
+          !isRecord(receipt.outcome))
   ) {
     return undefined;
   }
@@ -85,7 +92,7 @@ async function withdrawSessionPendingInputs(
     assertCurrent();
     const { options, identity, assertCurrent: assertSourceCurrent } = captured.resolve(resolved);
     if (!identity.key.startsWith("file:")) {
-      return "runId" in input
+      return !("inputIds" in input)
         ? false
         : { kind: "dismissed" as const, inputIds: [], runIds: [], missingIds: [...input.inputIds] };
     }
@@ -180,4 +187,16 @@ export async function dismissRetiredSessionPendingInputs(
     throw new Error("Retired input withdrawal returned a queued-input result");
   }
   return result;
+}
+
+/** Startup settlement never resumes input that lost its process owner. */
+export async function interruptOrphanedSessionPendingInputs(
+  scope: WithdrawalScope,
+  assertCurrent: () => void,
+): Promise<void> {
+  await withdrawSessionPendingInputs(
+    scope,
+    { lifecycleGeneration: getAgentEventLifecycleGeneration() },
+    assertCurrent,
+  );
 }

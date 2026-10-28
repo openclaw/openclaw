@@ -12,6 +12,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
+import { interruptOrphanedSessionPendingInputs } from "../config/sessions/session-pending-input-withdrawal.js";
 import {
   captureSessionStoreEnvironment,
   captureSessionStoreReadCandidates,
@@ -290,6 +291,15 @@ export async function resumeMarkedSessions(params: {
       continue;
     }
     for (const { sessionKey, entry: marked } of entries) {
+      try {
+        await interruptOrphanedSessionPendingInputs(
+          { ...target, sessionKey, sessionId: marked.sessionId },
+          () => signal.throwIfAborted(),
+        );
+      } catch (error) {
+        signal.throwIfAborted();
+        log.warn(`Skipped interrupted input settlement for ${sessionKey}: ${String(error)}`);
+      }
       if (!marked.resumeAfterRestart) {
         continue;
       }

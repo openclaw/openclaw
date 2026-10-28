@@ -13,8 +13,10 @@ import { stageSessionPendingInput } from "../config/sessions/session-accessor.pe
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import {
   captureSessionQueuedInputsForRestart,
+  listSessionPendingInputs,
   readSessionPendingInput,
 } from "../config/sessions/session-pending-input-history.js";
+import { readSessionPendingInputReceiptsInWorker } from "../config/sessions/session-pending-input-receipts.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -24,6 +26,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { getSessionControllerOperation } from "../sessions/session-controller.state.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -267,5 +270,65 @@ it("fails a captured browser-copilot send instead of running without its live bi
       send.mockRestore();
       receipt.finish("cancelled");
       await receipt.settled?.();
+    }
+  }));
+
+it("settles unmarked crash input once as resendable failed input without resuming it", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const target = { agentId: "main", sessionKey: "agent:main:crashed", sessionId: "crashed" };
+    replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const receipts = [];
+    for (const runId of ["crashed", "live"]) {
+      const receipt = await stageSessionPendingInput(target, {
+        runId,
+        assertCurrent() {},
+        message: { role: "user", content: runId, timestamp: 1, idempotencyKey: `${runId}:user` },
+      });
+      if (!receipt) {
+        throw new Error("Expected accepted input");
+      }
+      receipts.push(receipt);
+    }
+    const [crashed, live] = receipts;
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const dispatch = vi.spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess");
+    try {
+      crashed!.finish("interrupted");
+      await crashed!.settled?.();
+      database.db
+        .prepare(
+          "UPDATE session_pending_inputs SET state = 'queued', lifecycle_generation = 'previous-process' WHERE input_id = ?",
+        )
+        .run(crashed!.inputId);
+      const warn = vi.fn();
+      for (let boot = 0; boot < 2; boot++) {
+        await resumeMarkedSessions({
+          context: createContext(),
+          signal: new AbortController().signal,
+          log: { warn },
+        });
+        expect(
+          await readSessionPendingInputReceiptsInWorker(target, { runIds: ["crashed", "live"] }),
+        ).toEqual([
+          { runId: "crashed", state: "pending", cancelled: true },
+          { runId: "live", state: "pending" },
+        ]);
+        expect((await listSessionPendingInputs(target)).items).toMatchObject([
+          { runId: "crashed", state: "cancelled", message: { content: "crashed" } },
+          { runId: "live", state: "queued" },
+        ]);
+      }
+      expect(
+        database.db
+          .prepare("SELECT state FROM session_pending_inputs WHERE input_id = ?")
+          .get(crashed!.inputId),
+      ).toEqual({ state: "cancelled" });
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      dispatch.mockRestore();
+      live!.finish("cancelled");
+      await live!.settled?.();
     }
   }));

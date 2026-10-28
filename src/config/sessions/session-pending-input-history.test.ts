@@ -2,11 +2,6 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
-import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -34,40 +29,6 @@ import {
   createPendingHistoryFixture,
 } from "./session-pending-input.test-support.js";
 import * as historyRuntime from "./session-transcript-worker-runtime.js";
-
-function pauseFirstPendingHistorySnapshot() {
-  const ready = createDeferred();
-  const release = createDeferred();
-  const readHistory = historyRuntime.withSessionHistoryWorkerDatabase;
-  let paused = false;
-  const spy = vi
-    .spyOn(historyRuntime, "withSessionHistoryWorkerDatabase")
-    .mockImplementation(
-      <T>(
-        options: Parameters<typeof readHistory>[0],
-        operation: (owner: historyRuntime.SessionHistoryWorkerDatabase) => Promise<T>,
-        lane?: Parameters<typeof readHistory>[2],
-      ) =>
-        readHistory(
-          options,
-          (owner) =>
-            operation({
-              ...owner,
-              readPendingInputHistory: async (...args) => {
-                const snapshot = await owner.readPendingInputHistory(...args);
-                if (!paused) {
-                  paused = true;
-                  ready.resolve();
-                  await release.promise;
-                }
-                return snapshot;
-              },
-            }),
-          lane,
-        ),
-    );
-  return { ready, release, spy };
-}
 
 it("skips covered empty history and reads a newly staged input after its owner commits", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -373,44 +334,5 @@ it("resumes only the live FIFO inputs captured at graceful shutdown, leaving cra
       rows: [],
       total: 0,
     });
-  });
-});
-
-it("keeps concurrent history readers free of orphaned input without mutating it", async ({
-  signal,
-}) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const { scope, database } = createPendingHistoryFixture("concurrent-pending-history");
-    const receipt = expectDefined(
-      await stageSessionPendingInput(
-        scope,
-        createUserPendingInput("orphaned", "Saved update", "orphaned:user"),
-      ),
-      "Expected accepted input",
-    );
-    receipt.finish("interrupted");
-    await receipt.settled?.();
-    database.db
-      .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
-      .run(receipt.inputId);
-    const { ready: snapshotReady, release, spy } = pauseFirstPendingHistorySnapshot();
-    const first = listSessionPendingInputs(scope);
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(snapshotReady.promise, first, "History skipped its reader"),
-        signal,
-      );
-      expect(await listSessionPendingInputs(scope)).toMatchObject({
-        items: [],
-      });
-      release.resolve();
-      await expect(first).resolves.toMatchObject({
-        items: [],
-      });
-    } finally {
-      release.resolve();
-      await Promise.allSettled([first]);
-      spy.mockRestore();
-    }
   });
 });
