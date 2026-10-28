@@ -85,6 +85,7 @@ export const GATEWAY_EVENTS = [
   "portal.changed",
   "progressCard.changed",
   "mentions.changed",
+  "mentions.failed",
 ];
 
 export function canReadDetailedUpdateMetadata(role: string, scopes: readonly string[]): boolean {

@@ -242,7 +242,9 @@ export async function retireOwnedSessionSqliteRecovery(
   await assertRecoveryStateWriteAllowed(report.stateDir, params.env);
   const adoptions = new Map<RecoveryArtifactReference, MigrationArtifact>();
   const verification: MigrationArtifactVerification = new Map();
-  const assertDestinations = createRecoveryDestinationVerifier(report.stateDir);
+  const assertDestinations = createRecoveryDestinationVerifier(report.stateDir, () =>
+    authority.assertCurrent(),
+  );
   const originals = report.artifacts.filter(
     (item) =>
       item.kind !== "update-capture" &&
