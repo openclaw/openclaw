@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
@@ -948,36 +949,61 @@ suite.define(() => {
     ).toHaveCount(0);
   });
 
-  it("clears a selected draft mode when sharing policy becomes unavailable", async () => {
-    const page = await newPage();
-    const gateway = await installMockGateway(page, {
-      allowedSessionVisibilities: ["shared", "draft"],
-      hasMultipleSessionSharingIdentities: true,
-      methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
-    });
+  it.each([1200, 390])(
+    "preserves a pending Draft after creation is disabled at width %s",
+    async (width) => {
+      const page = await newPage(width);
+      const gateway = await installMockGateway(page, {
+        allowedSessionVisibilities: ["shared", "draft"],
+        hasMultipleSessionSharingIdentities: true,
+        featureMethods: ["sessions.create"],
+        methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
+      });
+      await page.goto(`${suite.server?.baseUrl ?? ""}new`);
+      const composer = page.locator(".new-session-page__composer");
+      const attachmentMenu = composer.getByRole("button", { name: "Add attachment" });
+      await attachmentMenu.click();
+      const draftToggle = composer.getByRole("menuitemcheckbox", { name: "Draft", exact: true });
+      await draftToggle.click();
+      await attachmentMenu.click();
+      await expectBrowser(attachmentMenu).toHaveAttribute("aria-expanded", "false");
+      const message = page.locator(".new-session-page__message");
+      await message.fill("Keep this private plan");
+      await composer.locator("input.agent-chat__file-input").setInputFiles({
+        name: "plan.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("Picnic checklist"),
+      });
+      await expectBrowser(composer.locator(".chat-attachment-file__name")).toHaveText("plan.txt");
+      await gateway.setSessionSharingPolicy({
+        allowedSessionVisibilities: ["shared"],
+        hasMultipleSessionSharingIdentities: true,
+      });
+      await replaceGatewayClient(page);
 
-    await page.goto(`${suite.server?.baseUrl ?? ""}new`);
-    const draftToggle = page.getByRole("switch", { name: "Draft", exact: true });
-    await page.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
-    await draftToggle.check();
-    await gateway.setSessionSharingPolicy({
-      allowedSessionVisibilities: ["shared"],
-      hasMultipleSessionSharingIdentities: false,
-    });
-    await replaceGatewayClient(page);
-    await expect
-      .poll(() => page.getByRole("button", { name: "Draft", exact: true }).count())
-      .toBe(0);
-
-    await gateway.setSessionSharingPolicy({
-      allowedSessionVisibilities: ["shared", "draft"],
-      hasMultipleSessionSharingIdentities: true,
-    });
-    await replaceGatewayClient(page);
-    await page.locator(".new-session-page__composer .agent-chat__composer-footer").hover();
-    await draftToggle.waitFor();
-    expect(await draftToggle.isChecked()).toBe(false);
-  });
+      const notice = page.locator(".agent-chat__composer-status-text").filter({
+        hasText: "Draft creation is disabled",
+      });
+      await expectBrowser(notice).toBeVisible();
+      await expectBrowser(message).toHaveValue("Keep this private plan");
+      await expectBrowser(composer.locator(".chat-attachment-file__name")).toHaveText("plan.txt");
+      await message.press("Enter");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await attachmentMenu.click();
+      await expectBrowser(draftToggle).toHaveAttribute("aria-checked", "true");
+      await draftToggle.click();
+      await attachmentMenu.click();
+      await expectBrowser(attachmentMenu).toHaveAttribute("aria-expanded", "false");
+      await expectBrowser(notice).toHaveCount(0);
+      await composer.getByRole("button", { name: "Start session", exact: true }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        message: "Keep this private plan",
+        attachments: [expect.objectContaining({ fileName: "plan.txt" })],
+      });
+      expect(create.params).not.toHaveProperty("visibility");
+    },
+  );
 
   it("aligns the sharing and Details icons in the session toolbar", async () => {
     const { page } = await openSession(ownerSessions("shared"), {
