@@ -1,5 +1,6 @@
 import type { ServerResponse } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -19,6 +20,7 @@ import { getFreePort } from "../test-utils/ports.js";
 import { buildControlUiSessionEntryUrl } from "./control-ui-session-entry-path.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
+import * as restartResume from "./session-restart-resume.js";
 import * as rowReads from "./session-row-database-facts.js";
 import * as projections from "./session-row-projection.js";
 import * as sessionLists from "./session-utils-list.js";
@@ -94,6 +96,8 @@ it("warms the recent page without gating startup and joins it before projection 
     createDeferred<Awaited<ReturnType<typeof sessionLists.listProjectedSessions>>>();
   const releaseFirstPage = createDeferred();
   const firstPageClosing = createDeferred();
+  const resumeEntered = createDeferred();
+  const releaseResume = createDeferred();
   const projectionDisposed = vi.fn();
   const requests = new AbortController();
   const earlyRequest = new AbortController();
@@ -110,6 +114,12 @@ it("warms the recent page without gating startup and joins it before projection 
   let entryRequest: Promise<Response> | undefined;
   let closing: Promise<void> | undefined;
   try {
+    const resumeMarkedSessions = restartResume.resumeMarkedSessions;
+    vi.spyOn(restartResume, "resumeMarkedSessions").mockImplementation(async (...args) => {
+      resumeEntered.resolve();
+      await releaseResume.promise;
+      return resumeMarkedSessions(...args);
+    });
     await state.writeText(
       "synthetic-ui/index.html",
       "<!doctype html><title>Startup fixture</title>",
@@ -235,6 +245,12 @@ it("warms the recent page without gating startup and joins it before projection 
     releaseEarlyRuntime.resolve();
     const server = await startup;
     await server.startupSettled;
+    await withinTest(resumeEntered.promise, signal);
+    const pendingResume = await read("/startupz");
+    expect(pendingResume.status).toBe(503);
+    expect(await pendingResume.json()).toMatchObject({ ok: false, status: "starting" });
+    releaseResume.resolve();
+    await waitForGatewayStartup(port);
     expect(startupFinished).toBe(true);
     const unauthorized = await fetch(`http://127.0.0.1:${port}${entryPath}`, {
       signal: requestSignal,
@@ -253,6 +269,7 @@ it("warms the recent page without gating startup and joins it before projection 
     releaseListening.resolve();
     releaseEarlyRuntime.resolve();
     releaseFirstPage.resolve();
+    releaseResume.resolve();
     requests.abort();
     const server = await startup?.catch(() => undefined);
     await (closing ?? server?.close());
