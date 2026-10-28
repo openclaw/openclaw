@@ -502,9 +502,11 @@ openclaw automations runs <job-id> --sort asc --offset 200 --limit 50
 Run-history filters are applied by the Gateway before paging. Use `--status`
 with `all`, `ok`, `error`, or `skipped`; use `--delivery-status` with
 `delivered`, `not-delivered`, `unknown`, or `not-requested`. `--query <text>`
-searches run summaries and errors. `--sort asc|desc` selects oldest-first or
-newest-first order, and `--offset <n>` advances through the result set using the
-page metadata returned by the previous command.
+searches run summaries and errors. Matching is case-insensitive and compares
+canonically equivalent Unicode forms as the same text without rewriting stored
+run history. `--sort asc|desc` selects oldest-first or newest-first order, and
+`--offset <n>` advances through the result set using the page metadata returned
+by the previous command.
 
 `openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
 
