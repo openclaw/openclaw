@@ -9,6 +9,7 @@ import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   readProviderJsonResponse,
+  resolveProviderOperationTimeoutMs,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
@@ -18,7 +19,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { remainingMonotonicMs } from "openclaw/plugin-sdk/time-runtime";
 import {
   normalizeVideoGenerationDuration,
   type GeneratedVideoAsset,
@@ -309,15 +309,14 @@ function resolveFalQueueRemainingMs(
   lastStatus: string,
   defaultTimeoutMs: number,
 ): number {
-  const defaultMs = resolvePositiveTimerTimeoutMs(defaultTimeoutMs, 1);
-  if (typeof deadline.deadlineAtMs !== "number") {
-    return defaultMs;
-  }
-  const remainingMs = remainingMonotonicMs(deadline.deadlineAtMs);
-  if (remainingMs <= 0) {
+  try {
+    return resolveProviderOperationTimeoutMs({
+      deadline,
+      defaultTimeoutMs: resolvePositiveTimerTimeoutMs(defaultTimeoutMs, 1),
+    });
+  } catch {
     throw new Error(`fal video generation did not finish in time (last status: ${lastStatus})`);
   }
-  return Math.max(1, Math.min(defaultMs, remainingMs));
 }
 
 function buildFalVideoModeCapabilities(models: readonly string[]) {

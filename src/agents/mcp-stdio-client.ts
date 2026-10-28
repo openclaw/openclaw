@@ -161,7 +161,11 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
       if (remainingMs <= 0) {
         throw errors.unavailable(`initialize timed out after ${startupTimeoutMs}ms`);
       }
-      return connectMcpClient({ client: protocol, transport, timeoutMs: remainingMs });
+      return connectMcpClient({
+        client: protocol,
+        transport,
+        timeoutMs: Math.max(1, Math.floor(remainingMs)),
+      });
     })
     .catch((error: unknown) => {
       fail(error instanceof Error ? error : errors.unavailable("proxy failed to start", error));

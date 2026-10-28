@@ -142,7 +142,7 @@ describe("provider operation deadlines", () => {
     const deadline = makeDeadline(MAX_TIMER_TIMEOUT_MS + 1_000_000);
 
     expect(deadline.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(deadline.deadlineAtMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(deadline.deadlineAtMs).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
     expect(
       resolveProviderOperationTimeoutMs({
         deadline: makeDeadline(undefined, "no deadline"),
@@ -161,12 +161,12 @@ describe("provider operation deadlines", () => {
     );
   });
 
-  it("keeps the deadline on the monotonic clock across wall-clock jumps", () => {
-    const deadline = makeDeadline(60_000);
-
+  it.each([false, true])("keeps admitted budgets monotonic (cloned=%s)", (cloned) => {
+    const created = makeDeadline(60_000);
+    const deadline = cloned ? structuredClone(created) : created;
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 120_000 })).toBe(60_000);
     vi.setSystemTime(1_000 - 100_000);
     expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 120_000 })).toBe(60_000);
-
     vi.setSystemTime(1_000 + 120_000);
     expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 120_000 })).toBe(60_000);
 
@@ -174,7 +174,7 @@ describe("provider operation deadlines", () => {
     expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 120_000 })).toBe(30_000);
   });
 
-  it("resolves a lazy total timeout once when the deadline starts", () => {
+  it("honors public epoch edits without resolving a lazy total timeout again", () => {
     const resolveTimeoutMs = vi.fn(() => 5_000);
 
     const deadline = createProviderOperationDeadline({
@@ -183,8 +183,8 @@ describe("provider operation deadlines", () => {
     });
     vi.advanceTimersByTime(3_250);
 
-    expect(resolveTimeoutMs).toHaveBeenCalledTimes(1);
-    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(1_750);
+    deadline.deadlineAtMs = 7_000;
+    expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(2_750);
     expect(resolveTimeoutMs).toHaveBeenCalledTimes(1);
   });
 
