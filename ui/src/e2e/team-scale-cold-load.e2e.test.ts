@@ -516,6 +516,8 @@ suite.define(() => {
         const media = ["/api/artifacts/download/", "/__openclaw__/assistant-media"].map((path) =>
           page.waitForResponse(
             (response) =>
+              response.request().method() === "GET" &&
+              response.status() === 200 &&
               response.url().includes(path) &&
               response.headers()["content-type"]?.startsWith("image/") === true,
           ),

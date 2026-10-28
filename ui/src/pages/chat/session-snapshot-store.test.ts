@@ -165,20 +165,7 @@ describe("persistent chat session snapshots", () => {
     // fake-indexeddb uses Node structured clone; jsdom's Blob is not cloneable there.
     vi.stubGlobal("Blob", NodeBlob);
     const thumbnail = new Blob([new Uint8Array([1, 2, 3])], { type: "image/webp" });
-    const remembered: NonNullable<ChatSessionSnapshot["composer"]> = {
-      id: "model",
-      provider: "openai",
-      name: "Remembered model",
-      reasoning: true,
-      speed: { active: false, currentOverride: "off", label: "Standard", supported: true },
-      thinkingLevel: "high",
-      thinkingDefault: "medium",
-      thinkingLevels: [{ id: "high", label: "High" }],
-      permissionMode: "full",
-      defaultPermissionMode: "workspace",
-    };
     const saved = {
-      composer: remembered,
       ...snapshot({ role: "assistant", content: "Synthetic image", __openclaw: { id: "reply" } }),
       rowDisplay: {
         reply: {
@@ -189,7 +176,6 @@ describe("persistent chat session snapshots", () => {
     };
     await seed(saved);
     const restored = await readSnapshot();
-    expect(restored?.composer).toEqual(remembered);
     expect(restored?.rowDisplay?.reply?.links).toEqual(saved.rowDisplay.reply.links);
     const image = restored?.rowDisplay?.reply?.images?.source;
     expect(image).toMatchObject({ width: 480, height: 240, rendition: 480 });

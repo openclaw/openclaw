@@ -1,5 +1,4 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
-import { detailsSnapshotSchema } from "./session-details-snapshot-schema.ts";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 import { removePairingQrContent } from "../../lib/chat/pairing-qr.ts";
@@ -24,6 +23,7 @@ import {
 } from "./chat-header-viewers-snapshot.ts";
 import { projectChatMessageReactions } from "./chat-message-reactions-snapshot.ts";
 import { chatSessionStateSnapshotSchema } from "./chat-session-state-snapshot.ts";
+import { detailsSnapshotSchema } from "./session-details-snapshot-schema.ts";
 import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
   loadChatHistoryStateValidator,
