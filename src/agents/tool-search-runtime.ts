@@ -620,8 +620,8 @@ function projectToolResultValue(result: AgentToolResult<unknown>): unknown {
   if (refusal?.kind === "gated") {
     return { ...(isRecord(details) ? details : {}), message: refusal.reason };
   }
-  // A returned failure can explain itself only in model-facing text; keep that reason.
-  if ((result.isError !== true && !isToolResultError(result)) || hasErrorMessage(details)) {
+  // An explicit error can explain itself only in model-facing text; keep that reason.
+  if (result.isError !== true || hasErrorMessage(details)) {
     return details;
   }
   const message = collectTextContentBlocks(result.content)
