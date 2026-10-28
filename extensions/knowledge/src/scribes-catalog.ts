@@ -1,17 +1,21 @@
 /** The scribes Knowledge can start, their options, and the readable prompts that start, run and repair them. */
 import type { IconName } from "./ui-icons.js";
 
-export type ScribeId = "claim-consolidation" | "conversations" | "memory";
+export type ScribeId = "claim-consolidation" | "conversations" | "granola" | "memory";
 export type ScribeMode = "once" | "ongoing";
 export type ConversationScope = "active" | "all";
 export type ConversationSince = "30d" | "90d" | "all" | "today";
 export type MemorySource = "memory-md" | "daily-notes" | "dreams";
+/** Granola meetings to learn from: the owner's own, or every meeting the account can read. */
+export type GranolaMeetings = "mine" | "all";
+export type GranolaSince = "7d" | "30d" | "today";
 export type ReviewSchedule = typeof REVIEW_WEEKLY_SCHEDULE | typeof REVIEW_NIGHTLY_SCHEDULE;
 
 /** Dialog choices for each scribe; the prompts spell them out as settings. */
 export type ScribeOptions = {
   "claim-consolidation": { schedule: ReviewSchedule };
   conversations: { scope: ConversationScope; since: ConversationSince; schedule?: string };
+  granola: { meetings: GranolaMeetings; since: GranolaSince; schedule?: string };
   memory: { sources: MemorySource[] };
 };
 
@@ -23,14 +27,19 @@ export type ScribeSetup<Id extends ScribeId = ScribeId> = {
   timezone: string;
 };
 
+/** A plugin a scribe needs: its id, display name and its Plugins page path. */
+export type ScribePlugin = { id: string; name: string; catalogPath: string };
+
 /** Static description of one scribe, shared by the list, detail and start dialog. */
 export type ScribeDefinition = {
   id: ScribeId;
   title: string;
   blurb: string;
-  skill: "knowledge-claim-consolidation" | "knowledge-ingest";
+  skill: "knowledge-claim-consolidation" | "knowledge-ingest" | "knowledge-meeting-ingest";
   icon: IconName;
-  tone: "blue" | "teal" | "amber";
+  tone: "blue" | "teal" | "green" | "amber";
+  /** Plugin whose tools the scribe reads its source through; the page checks it is connected. */
+  plugin?: ScribePlugin;
   modes: readonly ScribeMode[];
   /** Chip text for how often it runs. */
   cadence: string;
@@ -42,6 +51,8 @@ export type ScribeDefinition = {
 
 /** Schedule an ongoing conversations scribe uses: daily at 4:00 AM in the operator's timezone. */
 export const CONVERSATIONS_SCHEDULE = "0 4 * * *";
+/** Schedule an ongoing Granola scribe uses: weekdays at 10 AM, 2 PM and 6 PM. */
+export const GRANOLA_SCHEDULE = "0 10,14,18 * * 1-5";
 /** Default review schedule: Sundays at 3:45 AM in the operator's timezone. */
 export const REVIEW_WEEKLY_SCHEDULE = "45 3 * * 0";
 /** Nightly review schedule: 3:45 AM, after the default 3:30 AM maintenance relink. */
@@ -77,6 +88,21 @@ export const SCRIBES: readonly ScribeDefinition[] = [
     submitLabel: "Start",
   },
   {
+    id: "granola",
+    title: "Learn from Granola",
+    blurb:
+      "Turns your Granola meetings into meeting pages, keeps the people and projects in them up to date, and saves their decisions and commitments. Run it once, or keep it learning as new meetings finish.",
+    skill: "knowledge-meeting-ingest",
+    icon: "calendarClock",
+    tone: "green",
+    plugin: { id: "granola", name: "Granola", catalogPath: "openclaw/granola" },
+    modes: ["ongoing", "once"],
+    cadence: "Once or ongoing",
+    startLabel: "Set up…",
+    dialogTitle: "Learn from Granola",
+    submitLabel: "Start",
+  },
+  {
     id: "memory",
     title: "Learn from Memory",
     blurb:
@@ -106,11 +132,15 @@ export const scribeDeclarationKey = (id: ScribeId) => `knowledge:scribe:${id}`;
 export const setupIdempotencyKey = (id: ScribeId, sessionKey: string, attempt: string) =>
   `knowledge:scribe:${id}:${sessionKey}:${attempt}`;
 
-/** Default dialog choices: conservative (weekly review; active conversations, last 30 days). */
+/**
+ * Default dialog choices: conservative (weekly review; active conversations, last 30 days; the
+ * owner's Granola meetings, last 7 days).
+ */
 export function defaultOptions<Id extends ScribeId>(id: Id): ScribeOptions[Id] {
   const defaults: ScribeOptions = {
     "claim-consolidation": { schedule: REVIEW_WEEKLY_SCHEDULE },
     conversations: { scope: "active", since: "30d", schedule: CONVERSATIONS_SCHEDULE },
+    granola: { meetings: "mine", since: "7d", schedule: GRANOLA_SCHEDULE },
     memory: { sources: ["memory-md", "daily-notes"] },
   };
   return defaults[id];
@@ -134,12 +164,22 @@ const SCHEDULE_WORDS: Record<string, string> = {
   [REVIEW_WEEKLY_SCHEDULE]: "weekly, Sundays at 3:45 AM",
   [REVIEW_NIGHTLY_SCHEDULE]: "nightly at 3:45 AM",
   [CONVERSATIONS_SCHEDULE]: "daily at 4:00 AM",
+  [GRANOLA_SCHEDULE]: "weekdays at 10:00 AM, 2:00 PM and 6:00 PM",
 };
 const SINCE_WORDS: Record<ConversationSince, string> = {
   "30d": "from the last 30 days",
   "90d": "from the last 90 days",
   all: "from any time",
   today: "from today on (new conversations only)",
+};
+const GRANOLA_SINCE_WORDS: Record<GranolaSince, string> = {
+  "7d": "from the last 7 days",
+  "30d": "from the last 30 days",
+  today: "from today on (new meetings only)",
+};
+const GRANOLA_MEETING_WORDS: Record<GranolaMeetings, string> = {
+  mine: "the owner's (recorded by them or with them invited)",
+  all: "every meeting the Granola account can read, including notes others shared",
 };
 const MEMORY_WORDS: Record<MemorySource, string> = {
   "memory-md": "MEMORY.md",
@@ -159,12 +199,17 @@ function scheduleLine(expr: string, timezone: string) {
 const listWords = (items: string[]) =>
   items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : (items[0] ?? "none");
 
-// The settings a scribe's work reads: conversations and Memory files. Schedules are separate.
+// The settings a scribe's work reads: conversations, Granola meetings and Memory files.
+// Schedules are separate.
 function workSettings(setup: ScribeSetup) {
   const { options } = setup;
   if ("scope" in options) {
     const which = options.scope === "all" ? "active and archived" : "active only";
     return [`Conversations: ${which}, ${SINCE_WORDS[options.since] ?? options.since}.`];
+  }
+  if ("meetings" in options) {
+    const since = GRANOLA_SINCE_WORDS[options.since] ?? options.since;
+    return [`Granola meetings: ${GRANOLA_MEETING_WORDS[options.meetings]}, ${since}.`];
   }
   if ("sources" in options) {
     return [`Memory files: ${listWords(options.sources.map((source) => MEMORY_WORDS[source]))}.`];
@@ -178,6 +223,8 @@ const PURPOSE: Record<ScribeId, string> = {
     "This scribe consolidates Knowledge claims that name no page: it files each one on the right page, creates pages for subjects that deserve one, supersedes status snapshots by their outcome, and folds the outcomes into page State.",
   conversations:
     "This scribe reads the owner's conversations and saves the decisions, preferences, commitments and lessons in them to Knowledge.",
+  granola:
+    "This scribe reads the owner's Granola meetings through the Granola plugin and turns each one into a meeting page, updated people and project pages, and the decisions and commitments in it.",
   memory:
     "This scribe brings what Memory already knows into Knowledge. Memory itself is left as it is.",
 };
@@ -188,6 +235,8 @@ const WORK: Record<ScribeId, string> = {
     'Follow the "Scribe runs" section of the knowledge-claim-consolidation skill: consolidate every claim that names no page until none is left to decide.',
   conversations:
     'Follow "Learn from conversations" in the "Scribe runs" section of the knowledge-ingest skill, for the conversations in the settings.',
+  granola:
+    'Follow "Learn from Granola" in the "Scribe runs" section of the knowledge-meeting-ingest skill, for the Granola meetings in the settings.',
   memory:
     'Follow "Learn from Memory" in the "Scribe runs" section of the knowledge-ingest skill, for the Memory files in the settings. Never change Memory files.',
 };
@@ -196,6 +245,8 @@ const WORK: Record<ScribeId, string> = {
 const COUNTS: Record<ScribeId, string> = {
   "claim-consolidation": "claims examined, linked, superseded, withdrawn and left",
   conversations: "conversations learned and skipped, claims and pages written",
+  granola:
+    "meetings ingested, already in Knowledge, skipped and left for later, pages and claims written",
   memory: "files read, items saved, already known and skipped",
 };
 

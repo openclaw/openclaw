@@ -27,6 +27,8 @@ function fixture(world: {
   history?: Record<string, unknown[]>;
   runs?: unknown[];
   canWrite?: boolean;
+  /** plugins.inspect answer for the Granola plugin; absent reads as not installed. */
+  granola?: { installed: boolean; enabled: boolean; authorized?: boolean };
 }) {
   // HTMLDialogElement is incomplete in jsdom.
   Object.assign(HTMLDialogElement.prototype, {
@@ -77,6 +79,22 @@ function fixture(world: {
         return { files: [{ name: "MEMORY.md", missing: false, size: 8192 }] };
       case "cron.run":
         return { ok: true, enqueued: true, runId: "run-1" };
+      case "plugins.inspect": {
+        const plugin = world.granola ?? { installed: false, enabled: false };
+        return {
+          plugin,
+          ...(plugin.installed && plugin.enabled
+            ? {
+                mcpAuth: [
+                  {
+                    serverName: "granola",
+                    state: plugin.authorized ? "authorized" : "requires-authorization",
+                  },
+                ],
+              }
+            : {}),
+        };
+      }
       default:
         return { ok: true };
     }
@@ -84,7 +102,7 @@ function fixture(world: {
   const create = vi.fn(async () => "agent:main:dock:new");
   const open = vi.fn();
   const connection = { connected: true, canRead: true, canWrite: world.canWrite ?? true };
-  const host = { request, connection, sessions: { create, open } };
+  const host = { request, connection, sessions: { create, open }, basePath: "" };
   const load = vi.fn(async () => true);
   const scribesTab = document.createElement("button");
   const ui = {
@@ -137,12 +155,78 @@ it("lists On and Available scribes with honest detection and a tab count", async
   const view = await render();
   expect([...view.querySelectorAll(".knowledge-eyebrow")].map((n) => n.textContent)).toEqual([
     "On · 1",
-    "Available · 2",
+    "Available · 3",
   ]);
   expect(view.textContent).toContain("148 active · 1,204 archived conversations on Main");
   expect(view.textContent).toContain("Found Memory on Main · MEMORY.md 8 KB");
   expect(view.querySelector(".scribe-chip-on")?.textContent).toBe("On");
   expect(scribesTab.textContent).toBe("Scribes1");
+});
+
+it("asks for the Granola plugin before the Granola scribe can start", async () => {
+  const { render } = fixture({});
+  const view = await render();
+  const row = buttonNamed(view, "Install Granola…").closest(".scribe-row")!;
+  expect(row.textContent).toContain("Needs the Granola plugin, which is not installed");
+  expect(buttonNamed(row, "Set up…").disabled).toBe(true);
+
+  const signIn = await fixture({ granola: { installed: true, enabled: true } }).render();
+  const signInRow = buttonNamed(signIn, "Connect Granola…").closest(".scribe-row")!;
+  expect(signInRow.textContent).toContain("not connected to your Granola account");
+  expect(buttonNamed(signInRow, "Set up…").disabled).toBe(true);
+});
+
+it("starts the Granola scribe once the plugin is connected", async () => {
+  const { render, page, calls, load } = fixture({
+    granola: { installed: true, enabled: true, authorized: true },
+  });
+  const view = await render();
+  const row = [...view.querySelectorAll(".scribe-row")].find((node) =>
+    node.textContent?.includes("Learn from Granola"),
+  )!;
+  expect(row.textContent).toContain("Granola connected");
+  const setUp = buttonNamed(row, "Set up…");
+  expect(setUp.disabled).toBe(false);
+  setUp.click();
+  const dialog = page.querySelector("dialog")!;
+  expect(dialog.textContent).toContain("Granola connected. The scribe reads your meetings");
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  expect(dialog.querySelector("textarea")!.value).toBe(
+    setupPrompt(scribeSetup("granola", "ongoing", defaultOptions("granola"), timezone)),
+  );
+  buttonNamed(dialog, "Start").click();
+  await vi.waitFor(() => expect(load).toHaveBeenCalled());
+  expect(calls.find(([method]) => method === "chat.send")![1]!.message).toContain(
+    'Follow "Learn from Granola"',
+  );
+});
+
+it("shows an On Granola scribe's weekday schedule and a disconnected plugin in its detail", async () => {
+  const { render, ui } = fixture({
+    sessions: {
+      "Scribe · Learn from Granola": {
+        key: "s-granola",
+        displayName: "Scribe · Learn from Granola",
+      },
+    },
+    jobs: [
+      {
+        ...reviewJob,
+        id: "job-granola",
+        declarationKey: "knowledge:scribe:granola",
+        sessionTarget: "session:s-granola",
+        schedule: { kind: "cron", expr: "0 10,14,18 * * 1-5" },
+      },
+    ],
+    granola: { installed: true, enabled: true },
+  });
+  ui.s.scribe = "granola";
+  const view = await render();
+  expect(view.textContent).toMatch(/ScheduleWeekdays, 10:00\sAM, 2:00\sPM and 6:00\sPM/);
+  expect(view.textContent).toContain(
+    "SourceGranola plugin installed, not connected to your Granola account",
+  );
+  expect(buttonNamed(view, "Connect Granola…")).toBeTruthy();
 });
 
 it("starts a conversations scribe: creates its titled conversation and sends the prompt shown", async () => {
