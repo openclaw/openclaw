@@ -5,6 +5,7 @@ import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
 import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normalization-core/string-coerce";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { admitProviderRateLimitStream } from "../../llm/provider-rate-limit-stream.js";
+import type { ModelRequestHeaders } from "../../llm/types.js";
 import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import type { StreamFn } from "../runtime/index.js";
@@ -75,7 +76,7 @@ type EmbeddedAgentStreamParams = EmbeddedStreamRuntimeOwner & {
   signal?: AbortSignal;
   model: EmbeddedRunAttemptParams["model"];
   resolvedApiKey?: string;
-  requestHeaders?: Record<string, string>;
+  requestHeaders?: ModelRequestHeaders;
   transportAuthAvailable?: boolean;
   authProfileId?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
@@ -227,7 +228,7 @@ function wrapEmbeddedAgentStreamFn(
   inner: StreamFn,
   params: {
     runSignal: AbortSignal | undefined;
-    requestHeaders?: Record<string, string>;
+    requestHeaders?: ModelRequestHeaders;
     authProfileId?: string;
     sessionId?: string;
     promptCacheKey?: string;

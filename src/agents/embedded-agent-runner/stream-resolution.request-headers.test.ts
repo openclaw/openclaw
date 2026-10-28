@@ -50,14 +50,18 @@ describe("embedded stream request headers", () => {
       currentStreamFn: customStreamFn,
       sessionId: "secondary-session",
       model,
-      requestHeaders: { "X-Tenant": "ops", "X-Request-Owner": "registry" },
+      requestHeaders: {
+        "X-Tenant": "ops",
+        "X-Request-Owner": "registry",
+        "X-Remove-Default": null,
+      },
     });
 
     expect(strategy).toBe("session-custom");
     await expect(
       streamFn(model, {} as never, { headers: { "X-Request-Owner": "caller" } }),
     ).resolves.toMatchObject({
-      headers: { "X-Tenant": "ops", "X-Request-Owner": "caller" },
+      headers: { "X-Tenant": "ops", "X-Request-Owner": "caller", "X-Remove-Default": null },
     });
     expect(customStreamFn).toHaveBeenCalledTimes(1);
   });

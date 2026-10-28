@@ -34,9 +34,19 @@ const envKeys = [
 const MODEL_ID = "only-in-main";
 const TOKEN = "pr58373-proof-token";
 
+function saveProofAuth(agentDir: string, providerId: string, key: string) {
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles: { [`${providerId}:proof`]: { type: "api_key", provider: providerId, key } },
+    },
+    agentDir,
+    { syncExternalCli: false },
+  );
+}
+
 describe("PR #58373 secondary catalog runtime proof", () => {
   let tempHome: string | undefined;
-
   afterEach(async () => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
@@ -61,7 +71,6 @@ describe("PR #58373 secondary catalog runtime proof", () => {
         modelRoute: string | undefined;
         url: string;
       }> = [];
-
       try {
         tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pr58373-proof-"));
         const stateDir = path.join(tempHome, ".openclaw");
@@ -93,7 +102,6 @@ describe("PR #58373 secondary catalog runtime proof", () => {
         })) {
           setTestEnvValue(key, value);
         }
-
         providerServer = createServer((request, response) => {
           providerRequests.push({
             authorization: request.headers.authorization,
@@ -148,24 +156,13 @@ describe("PR #58373 secondary catalog runtime proof", () => {
           .replace('"providers": {', '"providers": {\n    // Supported catalog comment.')
           .replace('"X-Model-Route": "model-route"', '"X-Model-Route": "model-route",');
         await fs.writeFile(path.join(mainAgentDir, "models.json"), `${mainCatalog}\n`);
-        saveAuthProfileStore(
-          {
-            version: 1,
-            profiles: {
-              [`${provider.providerId}:proof`]: {
-                type: "api_key",
-                provider: provider.providerId,
-                key: "system-agent-auth-key",
-              },
-            },
-          },
-          mainAgentDir,
-          { syncExternalCli: false },
-        );
+        saveProofAuth(mainAgentDir, provider.providerId, "system-agent-auth-key");
 
         const cfg = {
           agents: {
+            ownership: "explicit",
             defaults: {
+              systemAgent: { agentId: "main" },
               workspace: mainWorkspaceDir,
               skipBootstrap: true,
               model: { primary: provider.modelRef },
@@ -173,7 +170,7 @@ describe("PR #58373 secondary catalog runtime proof", () => {
                 [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
               },
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           gateway: { auth: { mode: "token", token: TOKEN } },
         };
@@ -185,7 +182,6 @@ describe("PR #58373 secondary catalog runtime proof", () => {
           scopes: ["operator.admin", "operator.read", "operator.write"],
         });
         await gateway.server.startupSettled;
-
         await expect(
           gateway.client.request("agents.create", {
             name: "ops",
@@ -200,22 +196,8 @@ describe("PR #58373 secondary catalog runtime proof", () => {
           code: "ENOENT",
         });
         const saveSecondaryAuth = (key: string) =>
-          saveAuthProfileStore(
-            {
-              version: 1,
-              profiles: {
-                [`${provider.providerId}:proof`]: {
-                  type: "api_key",
-                  provider: provider.providerId,
-                  key,
-                },
-              },
-            },
-            secondaryAgentDir,
-            { syncExternalCli: false },
-          );
+          saveProofAuth(secondaryAgentDir, provider.providerId, key);
         saveSecondaryAuth("secondary-account-b");
-
         await disconnectGatewayClient(gateway.client);
         await gateway.server.close();
         gateway = await startGatewayWithClient({
@@ -226,7 +208,6 @@ describe("PR #58373 secondary catalog runtime proof", () => {
           scopes: ["operator.admin", "operator.read", "operator.write"],
         });
         await gateway.server.startupSettled;
-
         const runSecondaryTurn = async (runId: string) => {
           const accepted = await gateway?.client.request<{ runId?: string; status?: string }>(
             "agent",
@@ -243,31 +224,22 @@ describe("PR #58373 secondary catalog runtime proof", () => {
         await expect(runSecondaryTurn("pr58373-secondary-account-b")).resolves.toMatchObject({
           status: "ok",
         });
-        expect(providerRequests).toEqual([
-          {
-            authorization: "Bearer secondary-account-b",
-            catalogRoute: "provider-route",
-            cookie: undefined,
-            method: "POST",
-            modelRoute: "model-route",
-            url: "/v1/responses",
-          },
-        ]);
-
-        saveSecondaryAuth("secondary-account-c");
-        await expect(runSecondaryTurn("pr58373-secondary-account-c")).resolves.toMatchObject({
-          status: "ok",
-        });
-        expect(providerRequests[1]).toEqual({
-          authorization: "Bearer secondary-account-c",
+        const expectedRequest = (key: string) => ({
+          authorization: `Bearer ${key}`,
           catalogRoute: "provider-route",
           cookie: undefined,
           method: "POST",
           modelRoute: "model-route",
           url: "/v1/responses",
         });
-        expect(providerRequests).toHaveLength(2);
+        expect(providerRequests).toEqual([expectedRequest("secondary-account-b")]);
 
+        saveSecondaryAuth("secondary-account-c");
+        await expect(runSecondaryTurn("pr58373-secondary-account-c")).resolves.toMatchObject({
+          status: "ok",
+        });
+        expect(providerRequests[1]).toEqual(expectedRequest("secondary-account-c"));
+        expect(providerRequests).toHaveLength(2);
         // Removing only the local profile would still allow shared-store authentication.
         // This custom provider has no configured or environment-backed credential source.
         for (const agentDir of [mainAgentDir, secondaryAgentDir]) {

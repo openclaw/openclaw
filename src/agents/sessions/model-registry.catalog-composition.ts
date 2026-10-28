@@ -24,7 +24,7 @@ export interface ProviderRequestConfig {
 function sanitizeFallbackRequestHeaders(
   headers: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
-  const sanitized = sanitizeModelHeaders(headers, { stripSecretRefMarkers: true });
+  const sanitized = sanitizeModelHeaders(headers);
   if (!sanitized) {
     return undefined;
   }
