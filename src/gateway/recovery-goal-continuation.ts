@@ -25,7 +25,10 @@ import {
   isTrustedMessageActionTurnIngress,
   mintMessageActionTurnCapability,
 } from "./message-action-turn-capability.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import {
+  bindGatewayOperatorContinuationAuthority,
+  captureGatewayOperatorRunAuthority,
+} from "./operator-run-authority.js";
 import type {
   OperatorRecoveryTarget,
   RestoredGatewayOperatorAuthority,
@@ -108,8 +111,13 @@ export async function prepareRecoveryGoalContinuation(params: {
     params.assertCurrent();
     releaseParent = params.parentSource?.retain?.();
     const policy = captured.authority;
+    // Only this same-session reply receives the parent's committed compaction fact.
+    const replyPolicy = Object.assign(composeSessionSourceAssertion([policy.assertCurrent]), {
+      onSessionCompactionCommitted:
+        params.operator.authority.assertCurrent.onSessionCompactionCommitted,
+    });
     const assertCurrent = composeSessionSourceAssertion(
-      [policy.assertCurrent, params.parentSource],
+      [replyPolicy, params.parentSource],
       (assertSources) => {
         params.assertGatewayCurrent();
         if (getAgentEventLifecycleGeneration() !== generation) {
@@ -161,6 +169,8 @@ export async function prepareRecoveryGoalContinuation(params: {
         return policy.modelPolicy;
       },
     });
+    // Children retain policy, not this reply's parent-specific compaction notification.
+    bindGatewayOperatorContinuationAuthority(authority, policy);
     const client = createSyntheticPluginRuntimeClient({
       authenticatedUserProfile: params.operator.authenticatedUserProfile,
       operatorRoleActor: { kind: "operator", profileId: authority.profileId },

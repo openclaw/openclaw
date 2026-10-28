@@ -376,9 +376,6 @@ async function restoreGatewayOperatorSnapshot(params: {
       ...live,
       signal: signal.signal,
       recoverySnapshot: snapshot,
-      assertCurrent: Object.assign(() => live.assertCurrent(), {
-        onSessionCompactionCommitted: notifyCompaction,
-      }),
       retain: retainPolicy,
       get modelPolicy() {
         return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);

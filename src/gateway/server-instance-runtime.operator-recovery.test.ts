@@ -35,13 +35,8 @@ import type { createAgentTurnService } from "./agent-turn/agent-turn-service.js"
 import type { AgentTurnPrincipal } from "./agent-turn/types.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
-import { registerReplyRecoveryPolicyHandoffCase } from "./operator-run-recovery-reply-handoff.test-support.js";
 import type { OperatorRecoveryTarget } from "./operator-run-recovery.js";
-import {
-  createOperatorRecoveryFixture,
-  pairedOperator,
-  recoveryFixture,
-} from "./operator-run-recovery.test-support.js";
+import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
 import { authorizeGatewayMethod } from "./server-methods/method-authorization.js";
@@ -248,12 +243,6 @@ function markRecovery(
 }
 
 describe("typed restart recovery operator admission", () => {
-  registerReplyRecoveryPolicyHandoffCase((run) =>
-    withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
-      const profile = ensureProfileForEmail("reply-handoff@example.test");
-      await run(await recoveryFixture(stateDir, profile.id, { device: pairedOperator() }));
-    }),
-  );
   it.each([false, true])(
     "retains an internal operator source across repeated restarts (revoked=%s)",
     (revoked) =>
