@@ -325,7 +325,6 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
             replyDispatchRun = options;
             if (activeRunAbort.markExecutionStarted()) {
               admission.armOperatorRunCancellation();
-              params.onExecutionStarted?.();
             }
             // A bound runtime can start on a different transcript than the source chat.
             agentRunStarted = true;

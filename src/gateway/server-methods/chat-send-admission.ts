@@ -96,6 +96,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   const {
     rawSessionKey,
     clientRunId,
+    cfg,
     storePath,
     entry,
     sessionKey,
@@ -115,8 +116,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     }
   };
   const cachedMeta = { cached: true, runId: clientRunId };
-  const { chatSendTraceAttributes, originatingRoute, queuePolicy } =
-    prepareChatSendAdmissionContext(params);
+  const { chatSendTraceAttributes, originatingRoute } = prepareChatSendAdmissionContext(params);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const pendingAttemptId = randomUUID();
   const reservation = createPendingChatSendReservationAccess({
@@ -210,9 +210,13 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     incarnation: admittedSessionId,
   });
   const admittedRunAbort = registerChatAbortController({
-    sourceInput: params.controllerInput,
     target: sessionTarget,
-    policy: queuePolicy,
+    policy: resolveQueueSettings({
+      cfg,
+      channel: originatingRoute.originatingChannel,
+      sessionEntry: entry,
+      inlineMode: p.queueMode,
+    }),
     authority: { assertCurrent: () => assertSourceAuthority?.() },
     runId: clientRunId,
     sessionId: admittedSessionId,

@@ -15,14 +15,9 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
-  captureOperatorToolGatewayContinuationContext,
-  withOperatorToolGatewayAuthority,
-} from "./server-plugin-in-process-authority.js";
-import {
   createContext,
   createOperatorClient,
 } from "./server-plugin-in-process-dispatch.test-support.js";
-import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 export function recoveryFixture(
   stateDir: string,
@@ -38,17 +33,15 @@ export function recoveryFixture(
   });
 }
 
-export function pairedOperator(
-  overrides: { deviceId?: string; token?: string } = {},
-): PairedDevice {
+export function pairedOperator(): PairedDevice {
   return {
-    deviceId: overrides.deviceId ?? "recovery-device",
+    deviceId: "recovery-device",
     publicKey: "fixture-public-key",
     roles: ["operator"],
     approvedScopes: ["operator.admin"],
     tokens: {
       operator: {
-        token: overrides.token ?? "fixture-device-token",
+        token: "fixture-device-token",
         role: "operator",
         scopes: ["operator.admin"],
         createdAtMs: 1,
@@ -75,7 +68,6 @@ export async function createOperatorRecoveryFixture(params: {
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
-  storePath?: string;
   parentSessionKey?: string | null;
   scopes?: string[];
   device?: PairedDevice;
@@ -196,70 +188,4 @@ export async function createOperatorRecoveryFixture(params: {
     },
     restore: () => restoreGatewayOperatorSource({ snapshot, target, context, assertCurrent }),
   };
-}
-
-export function compactRecoverySession(
-  target: SessionTranscriptRuntimeTarget,
-  assertActive: SessionSourceAssertion,
-  sessionId: string,
-) {
-  const entry = expectDefined(loadSessionEntry(target), "compacting session");
-  return acceptCompactionSuccessor({
-    currentTarget: target,
-    expectedEntry: { lifecycleRevision: undefined, activeWriterRunId: undefined, ...entry },
-    assertActive,
-    result: {
-      ok: true,
-      compacted: true,
-      result: { sessionId, tokensBefore: 120, tokensAfter: 42 },
-    },
-  });
-}
-
-/** Use the actual accepted-child capture and writer-owned compaction boundary. */
-export async function compactRecoveryChild(
-  fixture: { context: GatewayRequestContext; target: SessionTranscriptRuntimeTarget },
-  authority: AdmittedRunOperatorAuthority,
-  beforeCompaction: () => void = () => {},
-) {
-  const source = { operatorRunAuthority: authority, scopes: ["operator.write"] };
-  const client = createSyntheticPluginRuntimeClient({
-    operatorRoleActor: { kind: "operator", profileId: authority.profileId },
-    ...source,
-  });
-  const child = expectDefined(
-    await withPluginRuntimeGatewayRequestScope(
-      { client, context: fixture.context, isWebchatConnect: () => false },
-      () =>
-        withOperatorToolGatewayAuthority(
-          source,
-          async () => await captureOperatorToolGatewayContinuationContext(),
-        ),
-    ),
-    "accepted child authority",
-  );
-  try {
-    beforeCompaction();
-    const target = {
-      ...fixture.target,
-      sessionKey: "agent:main:subagent:recovered-child",
-      sessionId: "child-before-compaction",
-    };
-    await replaceSessionEntry(target, {
-      sessionId: target.sessionId,
-      lifecycleRevision: "child-lifecycle",
-      updatedAt: 1,
-    });
-    const operatorAuthority = expectDefined(child.operatorAuthority, "child policy");
-    const compacted = await compactRecoverySession(
-      target,
-      operatorAuthority.assertCurrent,
-      "child-after-compaction",
-    );
-    target.sessionId = compacted.entry.sessionId;
-    return { ...child, operatorAuthority, target };
-  } catch (error) {
-    child.release();
-    throw error;
-  }
 }

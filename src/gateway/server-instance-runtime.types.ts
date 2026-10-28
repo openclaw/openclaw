@@ -40,8 +40,6 @@ export type GatewayInstanceAgentDispatchOptions = {
   /** Keep runtime error payloads (timeouts, provider failures) out of the delivered reply. */
   internalDeliverySuppressErrors?: boolean;
   onAccepted?: (payload: unknown) => void;
-  /** The reserved recovery input committed into the ordinary reply owner atomically. */
-  onRecoveryInputTransferred?: () => void;
   onStartOwner?: (owner: AgentTurnStartOwner) => void;
   onExecutionStarted?: () => void;
   onSignalAbort?: () => Promise<void> | void;

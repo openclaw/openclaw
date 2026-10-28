@@ -192,13 +192,6 @@ export function createGatewayInstanceRuntime(
       }
       const releaseOperatorAuthority = operatorAuthority?.retain?.();
       let delegatedToolPolicyHandoffId: string | undefined;
-      let goalContinuation: RecoveryGoalContinuation | undefined;
-      const executionSource = restored?.parentSource
-        ? composeSessionSourceAssertion([
-            dispatchOptions.executionSource,
-            restored.parentSource.source,
-          ])
-        : dispatchOptions.executionSource;
       try {
         delegatedToolPolicyHandoffId = dispatchOptions.delegatedToolPolicyHandoff
           ? registerSubagentCompletionToolHandoff(dispatchOptions.delegatedToolPolicyHandoff)
@@ -268,7 +261,6 @@ export function createGatewayInstanceRuntime(
         });
       } finally {
         cancelSubagentCompletionToolHandoff(delegatedToolPolicyHandoffId);
-        goalContinuation?.release();
         releaseOperatorAuthority?.();
       }
     },

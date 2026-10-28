@@ -116,7 +116,6 @@ export async function handleChatSendWithStorage(
     lifecycleGeneration,
     messageInjectionTarget,
   } = admission;
-  options?.onSourceAdmitted?.(admission.sourceRef);
   const phase = diagnostics.scope("attachments");
   const preparedAttachments = await prepareChatSendAttachments({
     ...setup,
@@ -375,7 +374,6 @@ export async function handleChatSendWithStorage(
         // Only committed input custody can outlive the originating tool, while
         // the retained operator, destination and Gateway authority stay live.
         assertAcceptedInputCurrent = pendingAdmission.assertAdmittedCurrent;
-        options.onInputCommitted?.();
       }
       admission.bindAcceptedInputAuthority(pendingAdmission.assertAdmittedCurrent);
       approvedInput = userTurnRecorder.getPendingInputMessage?.();
@@ -589,8 +587,6 @@ export async function handleChatSendWithStorage(
       client,
       context,
       toolsAllow: options?.toolsAllow,
-      continuationPolicy: options?.continuationPolicy,
-      onExecutionStarted: options?.onExecutionStarted,
       prepareAssistantTranscriptMessage: options?.prepareAssistantTranscriptMessage,
       skillLibrary: {
         sessionKey,
