@@ -148,13 +148,13 @@ afterEach(async () => {
 
 describe("createOAuthManager", () => {
   it("persists manager-admitted Anthropic refresh through the built-in fallback", async () => {
-    await withOAuthAgentDirs("oauth-manager-anthropic-", async ({ agentDir }) => {
+    await withOAuthAgentDirs("oauth-manager-anthropic-", async ({ mainAgentDir }) => {
       const profileId = "anthropic:default";
       const credential = oauth("stale-access", "stale-refresh", {
         provider: "anthropic",
         expires: Date.now() + 4 * 60_000,
       });
-      saveCredential(profileId, credential, agentDir);
+      saveCredential(profileId, credential, mainAgentDir);
       vi.spyOn(
         providerRuntime,
         "resolveProviderOAuthRefreshCapabilityWithPlugin",
@@ -174,7 +174,7 @@ describe("createOAuthManager", () => {
           ),
         );
 
-      const result = await resolve(createOAuthManager(), profileId, credential, agentDir, {
+      const result = await resolve(createOAuthManager(), profileId, credential, mainAgentDir, {
         forceRefresh: true,
       });
 
@@ -183,7 +183,7 @@ describe("createOAuthManager", () => {
         access: "rotated-access",
         refresh: "rotated-refresh",
       });
-      expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toMatchObject(
+      expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toMatchObject(
         result?.credential,
       );
     });
