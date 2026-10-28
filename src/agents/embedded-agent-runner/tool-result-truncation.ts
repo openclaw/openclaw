@@ -35,7 +35,7 @@ import {
   getToolResultHistoryTextBudget,
   getToolResultTextBudget,
   isToolResultTextBlock,
-  readPreparedToolResultTextChars,
+  prepareToolResultTextChars,
   sliceToolResultTextTailToBudget,
   sliceToolResultTextToBudget,
 } from "./tool-result-text-budget.js";
@@ -480,8 +480,7 @@ export function truncateToolResultMessage(
 
   const blockTextChars = content.map((block) =>
     isToolResultTextBlock(block)
-      ? (readPreparedToolResultTextChars(block, block.text, budgetOptions.minimumRawWeight ?? 1) ??
-        estimateToolResultTextChars(block.text, budgetOptions))
+      ? prepareToolResultTextChars(block, block.text, budgetOptions.minimumRawWeight ?? 1)
       : 0,
   );
   const totalTextChars = blockTextChars.reduce((sum, chars) => sum + chars, 0);

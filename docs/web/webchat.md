@@ -117,6 +117,8 @@ produce partial captions. An explicit Talk transcription provider, matching
 `agents.defaults.voiceModel`, or Voice Call streaming configuration keeps the
 streaming path. Dictation is unavailable when none of the configured file
 providers or CLI commands can run.
+The microphone menu's Dictation **Configure** action opens Talk settings without
+changing the default chat model.
 Loopback and private-network endpoints use the existing provider opt-in:
 `models.providers.<id>.request.allowPrivateNetwork: true`.
 

@@ -1,4 +1,4 @@
-import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { DEFAULT_MODEL_ALIASES } from "../../config/defaults.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -37,7 +37,7 @@ export async function modelsAliasesListCommand(
   }
   if (opts.plain) {
     for (const [alias, target] of aliasEntries) {
-      writeRuntimeStdout(runtime, `${sanitizeTerminalText(alias)} ${sanitizeTerminalText(target)}`);
+      writeRuntimeStdout(runtime, terminalText`${alias} ${target}`);
     }
     return;
   }
@@ -48,7 +48,7 @@ export async function modelsAliasesListCommand(
     return;
   }
   for (const [alias, target] of aliasEntries) {
-    runtime.log(`- ${sanitizeTerminalText(alias)} -> ${sanitizeTerminalText(target)}`);
+    runtime.log(terminalText`- ${alias} -> ${target}`);
   }
 }
 
@@ -90,10 +90,10 @@ export async function modelsAliasesAddCommand(
   );
 
   if (warning) {
-    runtime.error?.(warning);
+    runtime.error?.(terminalText`${warning}`);
   }
   logConfigUpdated(runtime);
-  runtime.log(`Alias ${alias} -> ${target}`);
+  runtime.log(terminalText`Alias ${alias} -> ${target}`);
 }
 
 export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: RuntimeEnv) {

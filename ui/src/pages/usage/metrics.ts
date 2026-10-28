@@ -140,17 +140,24 @@ function buildUsageCostWindows(
   }
 
   const rangeDays = rangeEndDay - rangeStartDay + 1;
-  return [rangeDays, ...[1, 7, 30, 90].filter((days) => days < rangeDays)].map((days) => {
-    const startDay = rangeEndDay - days + 1;
-    const totals = createEmptyCostUsageTotals();
-    for (const entry of daily) {
-      const day = parseIsoDayIndex(entry.date);
-      if (day !== null && day >= startDay && day <= rangeEndDay) {
-        addCostUsageTotals(totals, entry);
+  const windows = [rangeDays, ...[1, 7, 30, 90].filter((days) => days < rangeDays)].map((days) => ({
+    days,
+    endDate: rangeEndDate,
+    totals: createEmptyCostUsageTotals(),
+  }));
+  for (const entry of daily) {
+    const day = parseIsoDayIndex(entry.date);
+    if (day === null || day < rangeStartDay || day > rangeEndDay) {
+      continue;
+    }
+    const daysAgo = rangeEndDay - day;
+    for (const window of windows) {
+      if (daysAgo < window.days) {
+        addCostUsageTotals(window.totals, entry);
       }
     }
-    return { days, endDate: rangeEndDate, totals };
-  });
+  }
+  return windows;
 }
 
 type UsageInsightStats = {

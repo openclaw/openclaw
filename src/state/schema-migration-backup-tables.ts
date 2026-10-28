@@ -37,6 +37,8 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     // PostgreSQL-only exact-path index; SQLite advances metadata only.
     36: [],
     37: ["session_transcript_cold_archive_chunks"],
+    // PostgreSQL-only full-text token split; SQLite advances metadata only.
+    38: [],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [

@@ -15,6 +15,7 @@ import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.t
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import type { ChatHeaderSharingSnapshot } from "../chat-header-viewers-snapshot.ts";
 import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
@@ -23,6 +24,47 @@ import {
 } from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+function SharingTrigger(props: {
+  visibility: Exclude<ChatHeaderSharingSnapshot, "public">;
+  published: boolean;
+}) {
+  return (
+    <>
+      <span class="chat-pane__sharing-trigger-state">
+        <Show
+          when={props.published}
+          fallback={<ChatSessionSharingModeIcon visibility={props.visibility} external />}
+        >
+          <Icon name="globe" />
+        </Show>
+        <Show when={props.published || props.visibility !== "shared"}>
+          <span>
+            {t(
+              props.published
+                ? "chat.sessionSharing.publicIndicator"
+                : VISIBILITY_LABEL_KEYS[props.visibility],
+            )}
+          </span>
+        </Show>
+      </span>
+      <Icon name="chevronDown" class="chat-pane__sharing-chevron" />
+    </>
+  );
+}
+
+export function ChatSessionSharingPlaceholder(props: { display: ChatHeaderSharingSnapshot }) {
+  return (
+    <div class="chat-pane__sharing-menu chat-pane__sharing-menu--desktop" aria-hidden="true" inert>
+      <span class="btn chat-pane__sharing-trigger">
+        <SharingTrigger
+          visibility={props.display === "public" ? "shared" : props.display}
+          published={props.display === "public"}
+        />
+      </span>
+    </div>
+  );
+}
 
 const Content = lazy(() => import("./chat-session-sharing-content.tsx"), {
   export: "ChatSessionSharingContent",
@@ -120,7 +162,8 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
   const visibility = () => props.session?.visibility ?? "shared";
   const owner = () => props.state?.result?.owner ?? props.session?.owner?.actor;
   const canManage = () => props.session && canManageChatSessionSharing(props.session);
-  const published = () => Boolean(props.state?.result?.publicShare);
+  const published = () =>
+    props.state?.result ? Boolean(props.state.result.publicShare) : props.cachedPublished === true;
   return (
     <Show when={props.session}>
       <Show
@@ -188,28 +231,7 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
                     visibility: t(VISIBILITY_LABEL_KEYS[visibility()]),
                   })),
           }}
-          trigger={
-            <>
-              <span class="chat-pane__sharing-trigger-state">
-                <Show
-                  when={published()}
-                  fallback={<ChatSessionSharingModeIcon visibility={visibility()} external />}
-                >
-                  <Icon name="globe" />
-                </Show>
-                <Show when={published() || visibility() !== "shared"}>
-                  <span>
-                    {t(
-                      published()
-                        ? "chat.sessionSharing.publicIndicator"
-                        : VISIBILITY_LABEL_KEYS[visibility()],
-                    )}
-                  </span>
-                </Show>
-              </span>
-              <Icon name="chevronDown" class="chat-pane__sharing-chevron" />
-            </>
-          }
+          trigger={<SharingTrigger visibility={visibility()} published={published()} />}
           items={items}
           onBeforeShow={() => {
             openingFocus = menu?.overlay.surface.ownerDocument.activeElement;

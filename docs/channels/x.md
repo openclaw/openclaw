@@ -238,10 +238,10 @@ The page also shows this account's estimated X API spend for today and the
 current billing cycle against its limits. Select **Refresh** to update the
 read-only totals. The same spend snapshot is included in `x.allowlist.list`.
 
-A locally linked installation uses the [Custom plugin UI setting](/plugins/feature-plugins#enable-custom-plugin-ui).
-Enable **Settings → Labs → Custom plugin UI**, then use the Control UI served by
-the Gateway over HTTPS or trusted loopback. Bundled installations do not need
-that setting.
+A locally linked installation can use native UI by default once the plugin is
+enabled. Open the Control UI served by the Gateway over HTTPS or trusted
+loopback. An existing advanced native UI opt-out still applies to separately
+installed plugins; see [Custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui).
 
 The Gateway methods `x.allowlist.list`, `x.allowlist.add`, and
 `x.allowlist.remove` require `operator.admin`. Authorize senders by numeric ID,
@@ -503,7 +503,10 @@ keep-alives and intentionally ignored event types do not count toward this
 warning. It includes the event type and top-level keys, without post content.
 The next parseable mention event clears the warning.
 
-In `auto` mode, any subscription setup failure switches to polling. In `stream`
+Stopping or reloading an account cancels subscription setup and event reception
+cleanly, without reporting caller cancellation as a transport failure.
+
+In `auto` mode, subscription setup failures switch to polling. In `stream`
 mode, subscription HTTP `403` switches to polling; other setup errors stop the
 event source. A stream HTTP `401` or `403` switches either mode to polling. The
 channel status `message` includes the failed endpoint, HTTP status, and first X

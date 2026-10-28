@@ -58,8 +58,8 @@ export function captureNamespacedStateLeaseProcessOwner(): NamespacedStateLeaseP
   if (namespace === null) {
     try {
       const boot = createManagedHandoffBootIdentityReader(process.env)();
-      const pidNamespace = process.platform === "linux" ? readlinkSync("/proc/self/ns/pid") : null;
-      if (boot.identity && (process.platform !== "linux" || pidNamespace)) {
+      const pidNamespace = boot.platform === "linux" ? readlinkSync("/proc/self/ns/pid") : null;
+      if (boot.identity && (boot.platform !== "linux" || pidNamespace)) {
         namespace = JSON.stringify([
           boot.platform,
           boot.identity,

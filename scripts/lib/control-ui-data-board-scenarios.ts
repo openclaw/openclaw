@@ -5,14 +5,14 @@ import type {
   SessionWorkspaceListResult,
 } from "../../ui/src/api/types.ts";
 import { openChatSidePanelType } from "../../ui/src/e2e/chat-side-panel.test-support.ts";
-import { openSidebarPages } from "../../ui/src/e2e/sidebar-customization.test-support.ts";
 import type { BoardSnapshot } from "../../ui/src/lib/board/types.ts";
 import {
   controlUiSessionPath,
   type MockGatewayControls,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import { openInteractionPanel } from "./control-ui-interaction-navigation.ts";
+import { navigation, openInteractionPanel } from "./control-ui-interaction-navigation.ts";
 import type {
+  InteractionEvidence,
   InteractionFixtureOverrides,
   InteractionSandbox,
   InteractionScenario,
@@ -26,6 +26,7 @@ const directoryCount = 20;
 const filesPerDirectory = 250;
 const boardHost = ".chat-pane-cache__pane--active openclaw-board-view";
 const workspaceHost = ".workspace-desktop";
+const mobileWorkspaceHost = ".chat-workspace-mobile";
 const workspaceRoot = "/synthetic/data-pages";
 const galleryHost = "openclaw-dashboards-page";
 
@@ -91,6 +92,15 @@ function createDataBoardFixture(_sandbox?: InteractionSandbox): InteractionFixtu
   };
 }
 
+function galleryPreviewSnapshot(sample: BoardSnapshot, key: string): BoardSnapshot {
+  return {
+    ...sample,
+    sessionKey: key,
+    tabs: sample.tabs.slice(0, 1),
+    widgets: sample.widgets.slice(0, 1),
+  };
+}
+
 function createGalleryFixture(): InteractionFixtureOverrides {
   const sample = boardSnapshot();
   return {
@@ -113,12 +123,7 @@ function createGalleryFixture(): InteractionFixtureOverrides {
       "board.get": {
         cases: Array.from({ length: galleryCount }, (_, index) => ({
           match: { sessionKey: `agent:main:data-gallery-${index}` },
-          response: {
-            ...sample,
-            sessionKey: `agent:main:data-gallery-${index}`,
-            tabs: sample.tabs.slice(0, 1),
-            widgets: sample.widgets.slice(0, 1),
-          },
+          response: galleryPreviewSnapshot(sample, `agent:main:data-gallery-${index}`),
         })),
       },
     },
@@ -265,6 +270,14 @@ async function waitForBoard(page: Page, tab = 0) {
   await settle(page);
 }
 
+async function boardReportCounts(page: Page) {
+  return page.locator(boardHost).evaluate((host) => ({
+    mountedReports: host.querySelectorAll("openclaw-report-widget").length,
+    widgetCells: host.querySelectorAll("openclaw-board-widget-cell").length,
+    scrollHeight: host.scrollHeight,
+  }));
+}
+
 async function prepareBoard(page: Page) {
   await openInteractionPanel(page);
   await waitForBoard(page);
@@ -273,17 +286,69 @@ async function prepareBoard(page: Page) {
 async function prepareGallery(page: Page) {
   await page.locator(`${galleryHost} [data-dashboard-session]`).first().waitFor();
   await page.waitForFunction(
-    ({ selector, count }) =>
-      document.querySelectorAll(`${selector} [data-dashboard-session]`).length === count,
+    ({ selector, count }) => {
+      const host = document.querySelector(selector);
+      const represented = host?.querySelector(".dashboards-grid > [aria-setsize]");
+      return (
+        Number(represented?.getAttribute("aria-setsize")) === count ||
+        host?.querySelectorAll("[data-dashboard-session]").length === count
+      );
+    },
     { selector: galleryHost, count: galleryCount },
   );
   await settle(page);
 }
 
+async function galleryPresentationCounts(page: Page) {
+  return page.locator(galleryHost).evaluate((host) => {
+    const cards = host.querySelectorAll("[data-dashboard-session]").length;
+    const represented = host.querySelector(".dashboards-grid > [aria-setsize]");
+    return {
+      cards,
+      links: host.querySelectorAll("[data-dashboard-session] a.dashboard-card__main").length,
+      titles: host.querySelectorAll("[data-dashboard-session] h2").length,
+      representedCards: represented ? Number(represented.getAttribute("aria-setsize")) : cards,
+      windowed: represented !== null && cards < Number(represented.getAttribute("aria-setsize")),
+    };
+  });
+}
+
+async function initialGalleryPreviews(page: Page, gateway: MockGatewayControls) {
+  await gateway.waitForRequest("board.get", {
+    match: { sessionKey: "agent:main:data-gallery-0" },
+  });
+  await settle(page);
+  const previewWindow = await page.locator(galleryHost).evaluate((host) => {
+    const cards = Array.from(host.querySelectorAll("[data-dashboard-session]"));
+    // Allow the preview's 200px margin and the grid's two overscan tracks.
+    const margin = 200 + 2 * Math.max(...cards.map((card) => card.getBoundingClientRect().height));
+    return cards
+      .filter((card) => {
+        const bounds = card.getBoundingClientRect();
+        return bounds.bottom >= -margin && bounds.top <= innerHeight + margin;
+      })
+      .map((card) => card.getAttribute("data-dashboard-session"));
+  });
+  const requestedBoardIds = (await gateway.getRequests("board.get")).flatMap(({ params }) =>
+    isRecord(params) &&
+    typeof params.sessionKey === "string" &&
+    params.sessionKey.startsWith("agent:main:data-gallery-")
+      ? [params.sessionKey]
+      : [],
+  );
+  if (
+    requestedBoardIds.length > previewWindow.length ||
+    requestedBoardIds.some((key) => !previewWindow.includes(key))
+  ) {
+    throw new Error("Initial gallery previews fetched outside the viewport and overscan window");
+  }
+  return { requestedBoardIds, initialPreviewWindow: previewWindow.length };
+}
+
 async function prepareWorkspace(page: Page) {
   await openChatSidePanelType(page, "Files");
   await page
-    .locator(workspaceHost)
+    .locator((await mobileWorkspace(page)) ? mobileWorkspaceHost : workspaceHost)
     .getByRole("button", { name: directoryPath(0), exact: true })
     .waitFor();
   await settle(page);
@@ -291,17 +356,53 @@ async function prepareWorkspace(page: Page) {
 
 async function settleWorkspace(page: Page) {
   await settle(page);
-  await page.locator(workspaceHost).evaluate(async (element) => {
-    await Promise.allSettled(
-      element.getAnimations({ subtree: true }).map((animation) => animation.finished),
-    );
-  });
+  await page
+    .locator((await mobileWorkspace(page)) ? mobileWorkspaceHost : workspaceHost)
+    .evaluate(async (element) => {
+      await Promise.allSettled(
+        element.getAnimations({ subtree: true }).map((animation) => animation.finished),
+      );
+    });
   await settle(page);
+}
+
+async function mobileWorkspace(page: Page) {
+  // The Files panel can still be mounting after its layout-menu action resolves.
+  return page.locator(".chat-pane-cache__pane--active .agent-chat__header--mobile").isVisible();
+}
+
+async function openMobileWorkspaceFolder(page: Page, index: number) {
+  const folder = directoryPath(index);
+  const workspace = page.locator(mobileWorkspaceHost);
+  await workspace.getByRole("button", { name: folder, exact: true }).click();
+  await workspace.getByRole("button", { name: `${folder}/module-249.ts`, exact: true }).waitFor();
+  await workspace.locator('.chat-workspace-mobile__scroll[aria-busy="false"]').waitFor();
+  await settleWorkspace(page);
+}
+
+async function returnToMobileWorkspaceRoot(page: Page) {
+  const workspace = page.locator(mobileWorkspaceHost);
+  await workspace.locator(".chat-workspace-mobile__back").click();
+  await workspace.getByRole("button", { name: directoryPath(0), exact: true }).waitFor();
+  await settleWorkspace(page);
+}
+
+async function prepareWorkspaceLastFolder(page: Page, gateway: MockGatewayControls) {
+  await expandWorkspace(page, gateway);
+  if (await mobileWorkspace(page)) {
+    await openMobileWorkspaceFolder(page, directoryCount - 1);
+  }
 }
 
 async function expandWorkspace(page: Page, gateway: MockGatewayControls) {
   await prepareWorkspace(page);
+  const mobile = await mobileWorkspace(page);
   for (let index = 0; index < directoryCount; index++) {
+    if (mobile) {
+      await openMobileWorkspaceFolder(page, index);
+      await returnToMobileWorkspaceRoot(page);
+      continue;
+    }
     const path = directoryPath(index);
     // Keyboard setup skips disclosure animation; measured expansion still clicks.
     await page.locator(workspaceHost).getByRole("button", { name: path, exact: true }).focus();
@@ -338,7 +439,7 @@ function workspaceInitialScenario(roundTripMs: 0 | 100): InteractionScenario {
     expected:
       "Opening Files reads one root listing; desktop shows its 20 folders and mobile shows touched files.",
     fixtureOverrides: createWorkspaceFixture,
-    rowSelector: ".workspace-desktop__row",
+    rowSelector: ".workspace-desktop__row, .chat-workspace-mobile__row",
     createRequestHandlers: roundTripMs
       ? () => ({
           "sessions.files.list": async (params: unknown) => {
@@ -420,9 +521,10 @@ function workspaceSearchScenario(roundTripMs: 0 | 100): InteractionScenario {
     id: roundTripMs ? "data-workspace-search-100ms" : "data-workspace-search",
     dataPage: "workspace",
     route: controlUiSessionPath(sessionKey),
-    expected: "Searching a 5,000-file loaded tree presents the 20 authoritative matching results.",
+    expected:
+      "Searching 5,000 previously read files presents the 20 authoritative matching results on either Files surface.",
     fixtureOverrides: createWorkspaceFixture,
-    rowSelector: ".workspace-desktop__row",
+    rowSelector: ".workspace-desktop__row, .chat-workspace-mobile__row",
     prepare: expandWorkspace,
     createRequestHandlers: roundTripMs
       ? () => ({
@@ -444,19 +546,22 @@ function workspaceSearchScenario(roundTripMs: 0 | 100): InteractionScenario {
         })
       : undefined,
     run: async (page, gateway) => {
-      await page
-        .locator(workspaceHost)
-        .getByRole("button", { name: "Search files", exact: true })
-        .click();
-      await page.locator(workspaceHost).getByRole("searchbox").fill("module-249");
+      const mobile = await mobileWorkspace(page);
+      const host = mobile ? mobileWorkspaceHost : workspaceHost;
+      if (!mobile) {
+        await page.locator(host).getByRole("button", { name: "Search files", exact: true }).click();
+      }
+      await page.locator(host).getByRole("searchbox").fill("module-249");
       await gateway.waitForRequest("sessions.files.list", {
         match: { sessionKey, search: "module-249" },
       });
       await page.waitForFunction(
-        ({ selector, expectedPaths }) => {
+        ({ selector, expectedPaths, mobile: isMobile }) => {
           const paths = Array.from(
             document.querySelectorAll(
-              `${selector} .workspace-desktop__results .workspace-desktop__row`,
+              isMobile
+                ? `${selector} .chat-workspace-mobile__row`
+                : `${selector} .workspace-desktop__results .workspace-desktop__row`,
             ),
             (row) => row.getAttribute("aria-label"),
           );
@@ -466,7 +571,8 @@ function workspaceSearchScenario(roundTripMs: 0 | 100): InteractionScenario {
           );
         },
         {
-          selector: workspaceHost,
+          selector: host,
+          mobile,
           expectedPaths: Array.from(
             { length: directoryCount },
             (_, index) => `${directoryPath(index)}/module-249.ts`,
@@ -478,22 +584,174 @@ function workspaceSearchScenario(roundTripMs: 0 | 100): InteractionScenario {
   };
 }
 
-export const dataBoardScenarios: readonly InteractionScenario[] = [
-  {
-    id: "data-dashboards-first-render",
-    dataPage: "dashboards",
-    route: "/new",
-    expected: "Opening Dashboards presents 1,000 cards with only nearby previews active.",
-    fixtureOverrides: createGalleryFixture,
-    rowSelector: "[data-dashboard-session]",
-    prepare: async (page) => {
-      await openSidebarPages(page);
+function galleryRpcLatencyScenario(
+  scenario: InteractionScenario,
+  action: "first-render" | "scroll",
+): InteractionScenario {
+  const firstRender = action === "first-render";
+  let measuring = false;
+  let delayedGalleryLists = 0;
+  let delayedPreviews = 0;
+  return {
+    ...scenario,
+    id: `${scenario.id}-100ms`,
+    explicitOnly: true,
+    expected: `${scenario.expected} Measured Gallery RPC responses are delayed by 100ms.`,
+    createRequestHandlers: (defaults) => {
+      // The harness installs fresh handlers for each serial observation, before setup.
+      measuring = false;
+      delayedGalleryLists = 0;
+      delayedPreviews = 0;
+      const sample = boardSnapshot();
+      return {
+        ...(firstRender
+          ? {
+              "sessions.list": async (params: unknown) => {
+                if (
+                  measuring &&
+                  isRecord(params) &&
+                  params.source === "dashboard" &&
+                  params.rowMode === "dashboard" &&
+                  params.hasBoard === true &&
+                  params.archived === "all"
+                ) {
+                  await new Promise<void>((resolve) => {
+                    setTimeout(resolve, 100);
+                  });
+                  delayedGalleryLists += 1;
+                }
+                return defaults["sessions.list"]!(params);
+              },
+            }
+          : {}),
+        "board.get": async (params: unknown) => {
+          if (
+            !isRecord(params) ||
+            typeof params.sessionKey !== "string" ||
+            !/^agent:main:data-gallery-\d+$/.test(params.sessionKey)
+          ) {
+            throw new Error("Expected a Gallery preview request");
+          }
+          // Setup previews resolve normally; only reads issued during the action wait.
+          if (measuring) {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 100);
+            });
+            delayedPreviews += 1;
+          }
+          return galleryPreviewSnapshot(sample, params.sessionKey);
+        },
+      };
     },
-    run: async (page) => {
-      await page.getByRole("link", { name: "Dashboards", exact: true }).click();
-      await prepareGallery(page);
+    prepare: async (page, gateway) => {
+      await scenario.prepare(page, gateway);
+      // Pages has a separate active-only catalog under the same source.
+      if (
+        firstRender &&
+        (
+          await gateway.getRequests("sessions.list", {
+            source: "dashboard",
+            rowMode: "dashboard",
+            hasBoard: true,
+            archived: "all",
+          })
+        ).length > 0
+      ) {
+        throw new Error("Gallery list was fetched before the measured navigation");
+      }
     },
+    run: async (page, gateway) => {
+      measuring = true;
+      const evidence = await scenario.run(page, gateway);
+      if ((firstRender && delayedGalleryLists === 0) || delayedPreviews === 0) {
+        throw new Error("Expected measured Gallery RPC response delays");
+      }
+      return { ...evidence, delayedGalleryLists, delayedPreviews };
+    },
+  };
+}
+
+const galleryFirstRenderScenario: InteractionScenario = {
+  id: "data-dashboards-first-render",
+  dataPage: "dashboards",
+  route: "/new",
+  expected: "Opening Dashboards represents 1,000 cards with only nearby previews active.",
+  fixtureOverrides: createGalleryFixture,
+  rowSelector: "[data-dashboard-session]",
+  prepare: async (page) => {
+    await navigation(page, "pages");
   },
+  run: async (page, gateway) => {
+    await page.getByRole("link", { name: "Dashboards", exact: true }).click();
+    await prepareGallery(page);
+    const initialPreviews = await initialGalleryPreviews(page, gateway);
+    // Request receipt alone would finish before the preview response is rendered.
+    await page
+      .locator('[data-dashboard-session="agent:main:data-gallery-0"] openclaw-report-widget svg')
+      .waitFor();
+    await settle(page);
+    return {
+      ...(await galleryPresentationCounts(page)),
+      initialPreviewReads: initialPreviews.requestedBoardIds.length,
+      initialPreviewWindow: initialPreviews.initialPreviewWindow,
+    };
+  },
+};
+
+const galleryScrollScenario: InteractionScenario = {
+  id: "data-dashboards-scroll",
+  dataPage: "dashboards",
+  route: "/dashboards",
+  expected: "Scrolling reveals the final gallery row and records its preview reads.",
+  fixtureOverrides: createGalleryFixture,
+  prepare: prepareGallery,
+  run: async (page, gateway) => {
+    const finalId = `data-gallery-${galleryCount - 1}`;
+    const finalKey = `agent:main:${finalId}`;
+    const initialPreviews = await initialGalleryPreviews(page, gateway);
+    if (initialPreviews.requestedBoardIds.includes(finalKey)) {
+      throw new Error("The offscreen final dashboard fetched its preview before scrolling");
+    }
+    const finalCard = page.locator(`[data-dashboard-session="${finalKey}"]`);
+    const href = await finalCard.locator("a.dashboard-card__main").getAttribute("href");
+    if (href !== `/dashboard/main/${finalId}`) {
+      throw new Error(`Final dashboard has an incorrect native URL: ${href}`);
+    }
+    await finalCard.scrollIntoViewIfNeeded();
+    await gateway.waitForRequest("board.get", {
+      after: 0,
+      match: { sessionKey: finalKey },
+    });
+    await settle(page);
+    await finalCard.scrollIntoViewIfNeeded();
+    await finalCard.locator(".dashboard-card__author").filter({ hasText: "By Author 9" }).waitFor();
+    await finalCard.locator("openclaw-report-widget svg").waitFor();
+    await page.waitForFunction(() => {
+      const card = document.querySelector('[data-dashboard-session="agent:main:data-gallery-999"]');
+      const viewport = card?.closest(".content");
+      if (!card || !viewport) {
+        return false;
+      }
+      const bounds = card.getBoundingClientRect();
+      const visible = viewport.getBoundingClientRect();
+      return bounds.top < visible.bottom && bounds.bottom > visible.top;
+    });
+    const counts = await galleryPresentationCounts(page);
+    if (counts.windowed && counts.cards > 100) {
+      throw new Error("Scrolling mounted an unbounded gallery window");
+    }
+    return {
+      ...counts,
+      initialPreviewReads: initialPreviews.requestedBoardIds.length,
+      initialPreviewWindow: initialPreviews.initialPreviewWindow,
+      previewReads: (await gateway.getRequests("board.get")).length,
+    };
+  },
+};
+
+export const dataBoardScenarios: readonly InteractionScenario[] = [
+  galleryFirstRenderScenario,
+  galleryRpcLatencyScenario(galleryFirstRenderScenario, "first-render"),
   {
     id: "data-board-first-render",
     dataPage: "board",
@@ -506,7 +764,11 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     },
     run: async (page) => {
       await prepareBoard(page);
-      return { visibleWidgets: widgetsPerTab, totalWidgets: tabCount * widgetsPerTab };
+      return {
+        visibleWidgets: widgetsPerTab,
+        totalWidgets: tabCount * widgetsPerTab,
+        ...(await boardReportCounts(page)),
+      };
     },
   },
   {
@@ -520,7 +782,27 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     run: async (page) => {
       await page.locator(`${boardHost} [data-board-tab-id="data-1"]`).click();
       await waitForBoard(page, 1);
-      return { visitedWidgets: widgetsPerTab * 2 };
+      return { visitedWidgets: widgetsPerTab * 2, ...(await boardReportCounts(page)) };
+    },
+  },
+  {
+    id: "data-board-tab-return",
+    dataPage: "board",
+    route: controlUiSessionPath(sessionKey),
+    expected: "Returning to a visited tab preserves its already rendered report bodies.",
+    fixtureOverrides: createDataBoardFixture,
+    rowSelector: "openclaw-report-widget",
+    prepare: async (page) => {
+      await prepareBoard(page);
+      await page.locator(`${boardHost} [data-board-tab-id="data-1"]`).click();
+      await waitForBoard(page, 1);
+      await page.locator(`${boardHost} [data-board-tab-id="data-0"]`).click();
+      await waitForBoard(page);
+    },
+    run: async (page) => {
+      await page.locator(`${boardHost} [data-board-tab-id="data-1"]`).click();
+      await waitForBoard(page, 1);
+      return boardReportCounts(page);
     },
   },
   {
@@ -551,7 +833,13 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     expected: "Scrolling the 250-widget board preserves its mounted reports.",
     fixtureOverrides: createDataBoardFixture,
     prepare: prepareBoard,
-    run: (page) => scrollSurface(page, boardHost),
+    run: async (page) => {
+      const scroll = await scrollSurface(page, boardHost);
+      await page
+        .locator(`${boardHost} [data-widget-name="data-widget-249"] openclaw-report-widget svg`)
+        .waitFor();
+      return { ...scroll, ...(await boardReportCounts(page)) };
+    },
   },
   {
     id: "data-dashboards-search",
@@ -574,7 +862,7 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     id: "data-dashboards-sort",
     dataPage: "dashboards",
     route: "/dashboards",
-    expected: "Sorting all 1,000 dashboards preserves their count and title order.",
+    expected: "Sorting all 1,000 dashboards preserves their represented count and title order.",
     fixtureOverrides: createGalleryFixture,
     rowSelector: "[data-dashboard-session]",
     prepare: prepareGallery,
@@ -587,33 +875,22 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
             ?.getAttribute("data-dashboard-session") === "agent:main:data-gallery-999",
       );
       await settle(page);
+      const counts = await galleryPresentationCounts(page);
+      if (counts.representedCards !== galleryCount || (counts.windowed && counts.cards > 100)) {
+        throw new Error("Sorting lost dashboard results or mounted an unbounded gallery window");
+      }
+      return counts;
     },
   },
-  {
-    id: "data-dashboards-scroll",
-    dataPage: "dashboards",
-    route: "/dashboards",
-    expected: "Scrolling reveals the final gallery row and records its preview reads.",
-    fixtureOverrides: createGalleryFixture,
-    prepare: prepareGallery,
-    run: async (page, gateway) => {
-      await page
-        .locator('[data-dashboard-session="agent:main:data-gallery-999"]')
-        .scrollIntoViewIfNeeded();
-      await gateway.waitForRequest("board.get", {
-        match: { sessionKey: "agent:main:data-gallery-999" },
-      });
-      await settle(page);
-      return { previewReads: (await gateway.getRequests("board.get")).length };
-    },
-  },
+  galleryScrollScenario,
+  galleryRpcLatencyScenario(galleryScrollScenario, "scroll"),
   {
     id: "data-dashboards-responsive-navigation",
     dataPage: "dashboards",
     diagnostic: "Multi-viewport correctness and capture; not a timing comparison.",
     route: "/dashboards",
     expected:
-      "All 1,000 titles and links remain native, the final card reveals its content on focus, and 3/2/1-column layouts fit the viewport.",
+      "All 1,000 results remain represented, mounted links stay native, the final card retains focus after scrolling, and 3/2/1-column layouts fit the viewport.",
     fixtureOverrides: createGalleryFixture,
     prepare: prepareGallery,
     run: async (page) => {
@@ -627,13 +904,40 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
         throw new Error("Final dashboard link is missing before scrolling");
       }
       const viewport = page.viewportSize()!;
+      let maxMountedCards = 0;
+      let windowedAtAllWidths = true;
       try {
+        await finalLink.focus();
+        await settle(page);
         for (const [width, columns] of [
           [1280, 3],
           [900, 2],
           [520, 1],
         ] as const) {
           await page.setViewportSize({ width, height: viewport.height });
+          await settle(page);
+          if (
+            !(await finalLink.evaluate(
+              (link, original) => link === original && document.activeElement === original,
+              originalLink,
+            ))
+          ) {
+            throw new Error(`Resizing lost the focused final dashboard at ${width}px`);
+          }
+          await page
+            .locator('[data-dashboard-session="agent:main:data-gallery-0"] a.dashboard-card__main')
+            .focus();
+          for (let index = 1; index <= 15; index += 1) {
+            await page.keyboard.press("Tab");
+            const focusedKey = await page.evaluate(() =>
+              document.activeElement
+                ?.closest("[data-dashboard-session]")
+                ?.getAttribute("data-dashboard-session"),
+            );
+            if (focusedKey !== `agent:main:data-gallery-${index}`) {
+              throw new Error(`Native Tab skipped dashboard ${index} at ${width}px`);
+            }
+          }
           await finalCard.scrollIntoViewIfNeeded();
           await finalLink.focus();
           await finalCard
@@ -677,20 +981,68 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
                 );
               }
             }, columns);
-          const counts = await page.locator(galleryHost).evaluate((host) => ({
-            cards: host.querySelectorAll("[data-dashboard-session]").length,
-            links: host.querySelectorAll("[data-dashboard-session] a.dashboard-card__main").length,
-            titles: host.querySelectorAll("[data-dashboard-session] h2").length,
-          }));
-          if (Object.values(counts).some((count) => count !== galleryCount)) {
-            throw new Error(`Gallery lost native cards, titles or links at ${width}px`);
+          const counts = await galleryPresentationCounts(page);
+          maxMountedCards = Math.max(maxMountedCards, counts.cards);
+          windowedAtAllWidths &&= counts.windowed;
+          if (
+            counts.representedCards !== galleryCount ||
+            counts.cards !== counts.links ||
+            counts.cards !== counts.titles ||
+            (counts.windowed && counts.cards > 100)
+          ) {
+            throw new Error(
+              `Gallery lost results, native titles/links, or bounded rendering at ${width}px`,
+            );
           }
         }
-        return { cards: galleryCount, responsiveLayouts: 3, retainedFinalLink: true };
+        return {
+          cards: galleryCount,
+          responsiveLayouts: 3,
+          retainedFinalLink: true,
+          focusRetainedThroughResize: true,
+          maxMountedCards,
+          windowedAtAllWidths,
+        };
       } finally {
         await page.setViewportSize(viewport);
         await originalLink.dispose();
       }
+    },
+  },
+  {
+    id: "data-dashboards-native-navigation",
+    dataPage: "dashboards",
+    diagnostic: "Native link activation and destination rendering; not a timing comparison.",
+    route: "/dashboards",
+    expected: "Enter on the final native dashboard link opens its route and saved report.",
+    fixtureOverrides: createGalleryFixture,
+    prepare: prepareGallery,
+    run: async (page) => {
+      const link = page.locator(
+        '[data-dashboard-session="agent:main:data-gallery-999"] a.dashboard-card__main',
+      );
+      await link.scrollIntoViewIfNeeded();
+      await link.focus();
+      await page.keyboard.press("Enter");
+      await page.waitForURL((url) => url.pathname === "/dashboard/main/data-gallery-999");
+      await page.locator(galleryHost).waitFor({ state: "hidden" });
+      const report = page.locator(
+        '.board-session-surface:visible [data-widget-name="data-widget-0"] openclaw-report-widget',
+      );
+      await report.locator("svg").waitFor({ state: "visible" });
+      await report.getByText("Throughput 0", { exact: true }).waitFor({ state: "visible" });
+      await page.waitForFunction(() => {
+        const widget = document.querySelector(
+          '.board-session-surface:not([hidden]) [data-widget-name="data-widget-0"] openclaw-report-widget',
+        );
+        const values = widget?.querySelectorAll(".board-report__values dd");
+        return (
+          values?.length === 12 &&
+          values[0]?.textContent === "10" &&
+          values[11]?.textContent === "87"
+        );
+      });
+      return { activatedFinalLink: true, renderedDestinationReport: true };
     },
   },
   workspaceInitialScenario(0),
@@ -699,11 +1051,15 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     id: "data-workspace-expand",
     dataPage: "workspace",
     route: controlUiSessionPath(sessionKey),
-    expected: "Expanding the last folder in a 5,000-file loaded tree presents its 250 children.",
+    expected:
+      "Expanding the last desktop folder or entering the last mobile folder presents all 250 children after 5,000 files were read.",
     fixtureOverrides: createWorkspaceFixture,
-    rowSelector: ".workspace-desktop__row",
+    rowSelector: ".workspace-desktop__row, .chat-workspace-mobile__row",
     prepare: async (page, gateway) => {
       await expandWorkspace(page, gateway);
+      if (await mobileWorkspace(page)) {
+        return;
+      }
       await page
         .locator(workspaceHost)
         .getByRole("button", { name: directoryPath(19), exact: true })
@@ -721,6 +1077,16 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
       await settleWorkspace(page);
     },
     run: async (page) => {
+      if (await mobileWorkspace(page)) {
+        await openMobileWorkspaceFolder(page, 19);
+        const count = await page
+          .locator(`${mobileWorkspaceHost} .chat-workspace-mobile__row`)
+          .count();
+        if (count !== filesPerDirectory) {
+          throw new Error(`Expected 250 mobile folder files, got ${count}`);
+        }
+        return;
+      }
       await page
         .locator(workspaceHost)
         .getByRole("button", { name: directoryPath(19), exact: true })
@@ -738,10 +1104,29 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     id: "data-workspace-scroll",
     dataPage: "workspace",
     route: controlUiSessionPath(sessionKey),
-    expected: "The 5,000-file expanded tree scrolls within the Files panel.",
+    expected:
+      "Files scrolls to the final child: desktop across 5,000 mounted files, mobile within the last 250-file folder.",
     fixtureOverrides: createWorkspaceFixture,
-    prepare: expandWorkspace,
+    prepare: prepareWorkspaceLastFolder,
     run: async (page) => {
+      if (await mobileWorkspace(page)) {
+        const scroller = `${mobileWorkspaceHost} .chat-workspace-mobile__scroll`;
+        const scroll = await scrollSurface(page, scroller);
+        await page.waitForFunction(
+          ({ selector, path }) => {
+            const port = document.querySelector(selector);
+            const row = port?.querySelector(`[aria-label="${path}"]`);
+            if (!port || !row) {
+              return false;
+            }
+            const frame = port.getBoundingClientRect(),
+              bounds = row.getBoundingClientRect();
+            return bounds.height > 0 && bounds.top < frame.bottom && bounds.bottom > frame.top;
+          },
+          { selector: scroller, path: `${directoryPath(19)}/module-249.ts` },
+        );
+        return { ...scroll, lastFileVisible: true, mobileFolderFiles: filesPerDirectory };
+      }
       const scroll = await scrollSurface(
         page,
         `${workspaceHost} .workspace-desktop__project-scroll`,
@@ -766,11 +1151,43 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     id: "data-workspace-filter",
     dataPage: "workspace",
     route: controlUiSessionPath(sessionKey),
-    expected: "Filtering 5,000 files to Changed retains only modified files and their folders.",
+    expected:
+      "Changed retains desktop modified files and folders; mobile retains exactly the 60 touched modified files.",
     fixtureOverrides: createWorkspaceFixture,
-    rowSelector: ".workspace-desktop__row",
+    rowSelector: ".workspace-desktop__row, .chat-workspace-mobile__row",
     prepare: expandWorkspace,
-    run: async (page) => {
+    run: async (page): Promise<InteractionEvidence> => {
+      if (await mobileWorkspace(page)) {
+        const workspace = page.locator(mobileWorkspaceHost);
+        await workspace
+          .locator(".chat-workspace-mobile__filters")
+          .getByRole("button", { name: "Changed", exact: true })
+          .click();
+        await page.waitForFunction(
+          ({ selector, expected }) => {
+            const rows = Array.from(
+              document.querySelectorAll(`${selector} .chat-workspace-mobile__row`),
+            );
+            const paths = rows.map((row) => row.getAttribute("aria-label"));
+            return (
+              paths.length === expected.length && expected.every((path) => paths.includes(path))
+            );
+          },
+          {
+            selector: mobileWorkspaceHost,
+            expected: Array.from({ length: directoryCount }, (_, index) =>
+              [0, 2, 4].map(
+                (file) => `${directoryPath(index)}/module-${String(file).padStart(3, "0")}.ts`,
+              ),
+            ).flat(),
+          },
+        );
+        return {
+          expectedChangedFiles: directoryCount * 3,
+          mountedChangedFiles: directoryCount * 3,
+          mobileTouchedFiles: true,
+        };
+      }
       await page
         .locator(workspaceHost)
         .getByRole("button", { name: "Filter files: All", exact: true })
@@ -849,9 +1266,53 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     diagnostic:
       "Selection, keyboard and hidden-tree lifecycle proof; excluded from timing comparisons.",
     fixtureOverrides: createWorkspaceNavigationFixture,
-    prepare: expandWorkspace,
+    prepare: prepareWorkspaceLastFolder,
     run: async (page, gateway) => {
       const path = `${directoryPath(19)}/module-249.ts`;
+      if (await mobileWorkspace(page)) {
+        const workspace = page.locator(mobileWorkspaceHost);
+        const scroller = workspace.locator(".chat-workspace-mobile__scroll");
+        const last = workspace.getByRole("button", { name: path, exact: true });
+        await last.scrollIntoViewIfNeeded();
+        await last.focus();
+        await page.keyboard.press("Shift+Tab");
+        await page.waitForFunction(
+          (expected) => document.activeElement?.getAttribute("aria-label") === expected,
+          `${directoryPath(19)}/module-248.ts`,
+        );
+        await page.keyboard.press("Tab");
+        await page.waitForFunction(
+          (expected) => document.activeElement?.getAttribute("aria-label") === expected,
+          path,
+        );
+        const request = { sessionKey, path: `${workspaceRoot}/${path}` };
+        const after = (await gateway.getRequests("sessions.files.get", request)).length;
+        const scrollBefore = await scroller.evaluate((element) => element.scrollTop);
+        await page.keyboard.press("Enter");
+        await gateway.waitForRequest("sessions.files.get", { after, match: request });
+        await page
+          .getByText("// Synthetic workspace navigation proof.", { exact: false })
+          .waitFor();
+        await page
+          .locator(".sidebar-file-mobile__rail:visible")
+          .getByRole("button", { name: "Files", exact: true })
+          .first()
+          .click();
+        await last.waitFor();
+        await page.waitForFunction(
+          ({ selector, top }) =>
+            Math.abs((document.querySelector(selector)?.scrollTop ?? -1) - top) <= 1,
+          { selector: `${mobileWorkspaceHost} .chat-workspace-mobile__scroll`, top: scrollBefore },
+        );
+        return {
+          ...(await assertWorkspacePopulation(gateway)),
+          scrollBefore,
+          scrollAfter: await scroller.evaluate((element) => element.scrollTop),
+          nativeNeighborNavigation: true,
+          readerReturnedToFolder: true,
+          mobileFolder: true,
+        };
+      }
       const previous = `${directoryPath(19)}/module-248.ts`;
       const scroller = page.locator(`${workspaceHost} .workspace-desktop__project-scroll`);
       const last = scroller.getByRole("button", { name: path, exact: true });

@@ -237,26 +237,31 @@ describe("chat pane assistant identity snapshots", () => {
     }
   });
 
-  it.each([false, true])(
-    "resets a session identity only on connection replacement (%s)",
-    (replace) => {
-      const client = createGatewayBrowserClientFixture();
-      const { pane, state } = createTestChatPane({
-        client,
-        sessions: createSessionCapabilityFixture(),
-      });
-      state.client = client;
-      state.connected = true;
+  it.each([
+    { replace: false, bootstrapAgentId: "main", expected: "Session Agent" },
+    { replace: true, bootstrapAgentId: "main", expected: "" },
+    { replace: true, bootstrapAgentId: null, expected: "Gateway-wide" },
+  ])(
+    "resets session identity on replacement=$replace with bootstrap owner $bootstrapAgentId",
+    ({ replace, bootstrapAgentId, expected }) => {
+      const { pane, state } = createTestChatPane();
+      const client = state.client;
+      pane.context.config.current.assistantIdentity = {
+        ...pane.context.config.current.assistantIdentity,
+        agentId: bootstrapAgentId,
+        name: "Gateway-wide",
+      };
       state.assistantName = "Session Agent";
-
-      pane.applyGatewaySnapshot({
-        ...pane.context.gateway.snapshot,
-        client: replace ? createGatewayBrowserClientFixture() : client,
-        phase: replace ? "reconnecting" : pane.context.gateway.snapshot.phase,
-      });
-      expect(state.assistantName).toBe(
-        replace ? pane.context.config.current.assistantIdentity.name : "Session Agent",
-      );
+      state.assistantAvatar = "⚓";
+      const nextClient = replace ? createGatewayBrowserClientFixture() : client;
+      for (const phase of ["reconnecting", "connected"] as const) {
+        pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, client: nextClient, phase });
+        // Only an unscoped name remains a fallback across Gateways.
+        expect(state).toMatchObject({
+          assistantName: expected,
+          assistantAvatar: replace ? null : "⚓",
+        });
+      }
     },
   );
 });
@@ -641,17 +646,11 @@ function createForkPane(forkAtMessage: ForkFixture) {
     client: {} as GatewayBrowserClient,
     sessions: { forkAtMessage } as unknown as SessionCapability,
   });
-  const navigate = vi.fn();
-  return { ...fixture, navigate };
-}
-
-function createRetainedForkPane(forkAtMessage: ForkFixture) {
-  const fixture = createForkPane(forkAtMessage);
   fixture.pane.sessionKey = fixture.state.sessionKey;
   onTestFinished(() => {
     fixture.pane.presented = false;
   });
-  return fixture;
+  return { ...fixture, navigate: vi.fn() };
 }
 
 describe("chat pane message cuts", () => {
@@ -683,90 +682,69 @@ describe("chat pane message cuts", () => {
     });
   });
 
-  it("keeps a newer global agent selection when a message fork finishes late", async () => {
-    const forked = createDeferred<{ sessionKey: string; editorText?: string }>();
-    const { pane, state, navigate } = createForkPane(vi.fn(() => forked.promise));
-    pane.onPaneSessionChange = navigate;
-    state.sessionKey = "global";
-    state.assistantAgentId = "main";
-
-    const pending = pane.forkFromMessage("user-entry");
-    state.assistantAgentId = "work";
-    forked.resolve({ sessionKey: "agent:main:forked", editorText: "edit me" });
-
-    await pending;
-    expect(navigate).not.toHaveBeenCalled();
-    expect(state.sessionKey).toBe("global");
-    expect(state.assistantAgentId).toBe("work");
-  });
-
-  it("does not navigate to a fork that finishes after a same-client reconnect", async () => {
-    const forked = createDeferred<{ sessionKey: string; editorText?: string }>();
-    const { pane, state, navigate } = createForkPane(vi.fn(() => forked.promise));
-    pane.onPaneSessionChange = navigate;
-
-    const pending = pane.forkFromMessage("user-entry");
-    pane.connectionGeneration += 1;
-    state.connectionEpoch = pane.connectionGeneration;
-    forked.resolve({ sessionKey: "agent:main:forked", editorText: "stale draft" });
-
-    await pending;
-    expect(navigate).not.toHaveBeenCalled();
-    expect(consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked")).toBeNull();
-  });
-
-  it("does not navigate or seed a draft after leaving and returning to the retained source", async () => {
-    const forked = createDeferred<{ sessionKey: string; editorText: string }>();
-    const { pane, state, navigate } = createRetainedForkPane(vi.fn(() => forked.promise));
-    pane.onPaneSessionChange = navigate;
-    const pending = pane.forkFromMessage("user-entry");
-    // A -> B -> A retains A's component, session key, and connection.
-    pane.presented = false;
-    pane.presented = true;
-    state.chatMessage = "newer source draft";
-    forked.resolve({ sessionKey: "agent:main:forked-after-return", editorText: "stale draft" });
-
-    await pending;
-    expect(navigate).not.toHaveBeenCalled();
-    expect(
-      consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked-after-return"),
-    ).toBeNull();
-    expect(state.sessionKey).toBe("agent:main:current");
-    expect(state.chatMessage).toBe("newer source draft");
-  });
-
-  it.each([
-    { presentation: "hidden", returnToSource: false },
-    { presentation: "shown again", returnToSource: true },
-  ])(
-    "does not paint a stale fork error in a retained source that is $presentation",
-    async ({ returnToSource }) => {
-      const forked = createDeferred<never>();
-      const { pane, state } = createRetainedForkPane(vi.fn(() => forked.promise));
+  it.each(["agent selection", "reconnect", "retained return"])(
+    "rejects a late fork after a newer %s",
+    async (change) => {
+      const forked = createDeferred<{ sessionKey: string; editorText: string }>();
+      const forkAtMessage = vi.fn(() => forked.promise);
+      const { pane, state, navigate } = createForkPane(forkAtMessage);
+      pane.onPaneSessionChange = navigate;
+      state.assistantAgentId = "main";
+      if (change === "agent selection") {
+        state.sessionKey = "global";
+      }
       const pending = pane.forkFromMessage("user-entry");
-      pane.presented = false;
-      if (returnToSource) {
+      expect(forkAtMessage).toHaveBeenCalledOnce();
+      if (change === "agent selection") {
+        state.assistantAgentId = "work";
+      } else if (change === "reconnect") {
+        state.connectionEpoch = ++pane.connectionGeneration;
+      } else {
+        // A -> B -> A retains A's component, session key, and connection.
+        pane.presented = false;
         pane.presented = true;
       }
-      forked.reject(new Error("stale fork failed"));
-
+      state.chatMessage = "newer source draft";
+      forked.resolve({ sessionKey: "agent:main:forked", editorText: "stale draft" });
       await pending;
-      expect(state.lastError).toBeNull();
-      expect(state.chatError).toBeNull();
+      expect(navigate).not.toHaveBeenCalled();
+      expect(consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked")).toBeNull();
+      expect(state).toMatchObject({
+        sessionKey: change === "agent selection" ? "global" : "agent:main:current",
+        assistantAgentId: change === "agent selection" ? "work" : "main",
+        chatMessage: "newer source draft",
+      });
     },
   );
 
-  it("shows a current fork error after the retained source is presented again", async () => {
-    const { pane, state } = createRetainedForkPane(
-      vi.fn().mockRejectedValue(new Error("current fork failed")),
-    );
-    pane.presented = false;
-    pane.presented = true;
-    await pane.forkFromMessage("user-entry");
-
-    expect(state).toMatchObject({
-      lastError: "current fork failed",
-      chatError: "current fork failed",
-    });
-  });
+  it.each([
+    { presentation: "hidden", stale: true, returnToSource: false },
+    { presentation: "shown again", stale: true, returnToSource: true },
+    { presentation: "shown before request", stale: false, returnToSource: true },
+  ])(
+    "publishes only a current fork error when $presentation",
+    async ({ stale, returnToSource }) => {
+      const forked = createDeferred<never>();
+      const { pane, state } = createForkPane(vi.fn(() => forked.promise));
+      const leaveAndReturn = () => {
+        pane.presented = false;
+        if (returnToSource) {
+          pane.presented = true;
+        }
+      };
+      if (!stale) {
+        leaveAndReturn();
+      }
+      const pending = pane.forkFromMessage("user-entry");
+      if (stale) {
+        leaveAndReturn();
+      }
+      forked.reject(new Error("fork failed"));
+      await pending;
+      expect(state).toMatchObject({
+        lastError: stale ? null : "fork failed",
+        chatError: stale ? null : "fork failed",
+      });
+    },
+  );
 });

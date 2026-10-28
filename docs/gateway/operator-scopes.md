@@ -208,6 +208,18 @@ ceiling. A committed change still retires the previous access if returning the
 result fails. An authorized self-downgrade receives its response before its
 connection closes.
 
+The Control UI distinguishes a role ceiling from limited browser pairing. When
+the authenticated role does not allow administrator access, its limited-access
+notice explains that device approval cannot grant it and does not offer
+**Request admin**. Ask a Gateway administrator to change the role if more access
+is needed, then reconnect. A role that permits administrator access can still
+request an upgrade for a pairing-limited browser; approval and RPC authorization
+continue to check the current role.
+
+The optional `hello-ok.auth.roleAllowsAdmin` field reports this ceiling for
+presentation. Clients can ignore it; it does not grant access or change RPC
+authorization.
+
 Use `gateway.roles.assignments.byGithubLogin` to declare assignments before a
 person's first login or share the same mapping across Gateways. Keys are GitHub
 logins, matched case-insensitively after trimming; malformed logins and duplicate
@@ -286,6 +298,44 @@ Discovery does not grant or revoke access to existing sessions: the role's
 separate session-read policy still governs which sessions the caller can read.
 The Control UI waits for a live agent roster after loading or reconnecting, so
 an older browser roster cannot restore agents excluded by the current role.
+
+### Access program grants
+
+For role-governed people, Standard Access needs no additional grant. Blue and Red
+each require an explicit entry in the role's `accessPrograms.cyber` list:
+
+```json5 validate=false
+// Inside gateway.roles.definitions.maintainer
+accessPrograms: { cyber: ["daybreak_blue", "daybreak_red"] },
+```
+
+Omitting the field or setting `cyber: []` permits neither Blue nor Red. Granting
+Red does not grant Blue, or vice versa. The person's effective role supplies these
+grants through the same explicit assignment, GitHub mapping, and default-role
+rules described above; there is no separate per-person Access assignment.
+
+These grants are independent of `modelPolicy`: an unrestricted model list, model
+wildcards, the old Daybreak model aliases, or `operator.admin` do not grant Access
+to a named role. The selected model still needs model permission. The exact
+provider account and runtime must also advertise the program; provider metadata
+is capability evidence, never an RBAC grant. Catalog choices show only the
+intersection, and direct mutations and execution enforce it server-side.
+
+With live reload enabled, changing these grants retires the role's existing
+source authority. Queued, retained, and recovered work cannot reuse a removed
+grant, and restoring it does not revive revoked authority. New admission is
+required. An unset-selection cyber fallback can retry with Blue only when both
+the role and provider permit Blue; an explicit Standard selection never escalates.
+
+Existing roles are not automatically granted Blue or Red during upgrade.
+Administrators must explicitly add the intended grants. System/shared-secret
+use and deployments without `gateway.roles` keep their existing non-RBAC
+behavior and provider capability checks. This is not a bypass available to a
+role-governed person.
+
+Native runtimes must support exact host-owned dispatch enforcement when a named role restricts either models or Access programs. An unrestricted model list alone does not disable Access enforcement. Incompatible runtimes fail before inference.
+
+### Model policy
 
 Set a role's optional `modelPolicy` to limit the models used by its requests:
 

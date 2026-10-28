@@ -28,7 +28,18 @@ describe("standalone build interface", () => {
   it.each<[string[], string, string[], Record<string, unknown>]>([
     [[], "jit", [], {}],
     [["--bytecode"], "bytecode", ["--bytecode"], {}],
-    [["--compile-aot"], "aot", ["--aot"], {}],
+    [
+      ["--compile-aot"],
+      "aot",
+      ["--aot", "--aot-allow-code-from-disk"],
+      { aotCompileOptions: { allowCodeFromDisk: true } },
+    ],
+    [
+      ["--aot-source"],
+      "aot",
+      ["--aot", "--aot-allow-code-from-disk"],
+      { source: true, aotCompileOptions: { allowCodeFromDisk: true } },
+    ],
     [
       ["--plugins", "codex, slack,codex", "--bytecode"],
       "bytecode",
@@ -38,8 +49,8 @@ describe("standalone build interface", () => {
     [
       ["--compile-aot", "--support-output", "support"],
       "aot",
-      ["--aot"],
-      { supportOutputDirectory: "support" },
+      ["--aot", "--aot-allow-code-from-disk"],
+      { supportOutputDirectory: "support", aotCompileOptions: { allowCodeFromDisk: true } },
     ],
   ])("parses standalone options %j", (flags, mode, compileFlags, extra) => {
     expect(parse(...flags)).toEqual({ outputDirectory: "out", mode, compileFlags, ...extra });
@@ -93,8 +104,8 @@ describe("standalone build interface", () => {
       expect(parseStandaloneArguments(["out", ...flags])).toEqual({
         outputDirectory: "out",
         mode: "aot",
-        compileFlags: ["--aot", "--aot-log-type-mismatches"],
-        aotCompileOptions: { aotLogTypeMismatches: true },
+        compileFlags: ["--aot", "--aot-log-type-mismatches", "--aot-allow-code-from-disk"],
+        aotCompileOptions: { aotLogTypeMismatches: true, allowCodeFromDisk: true },
       });
     }
     expect(() => parseStandaloneArguments(["out", "--aot-log-type-mismatches"])).toThrow(
@@ -113,8 +124,8 @@ describe("standalone build interface", () => {
       outputDirectory: "out",
       mode: "aot",
       source: true,
-      compileFlags: ["--aot", "--aot-log-type-mismatches"],
-      aotCompileOptions: { aotLogTypeMismatches: true },
+      compileFlags: ["--aot", "--aot-log-type-mismatches", "--aot-allow-code-from-disk"],
+      aotCompileOptions: { aotLogTypeMismatches: true, allowCodeFromDisk: true },
     });
     expect(() => parseStandaloneArguments(["out", "--compile-aot", "--aot-source"])).toThrow(
       "at most one",
@@ -147,6 +158,7 @@ describe("standalone build interface", () => {
           "--trim",
           "--no-compile-function-source",
           "--disallow-code-generation-from-strings=strict",
+          "--aot-allow-code-from-disk",
         ],
         aotCompileOptions: {
           trim: { locales: ["en", "de"] },
@@ -179,7 +191,12 @@ describe("standalone build interface", () => {
         parse("--aot-disable", "flow-results", mode, "--aot-disable=pass:PlaceTypeTests"),
       ).toMatchObject({
         mode: "aot",
-        compileFlags: ["--aot", "--aot-disable=flow-results", "--aot-disable=pass:PlaceTypeTests"],
+        compileFlags: [
+          "--aot",
+          "--aot-disable=flow-results",
+          "--aot-disable=pass:PlaceTypeTests",
+          "--aot-allow-code-from-disk",
+        ],
         aotCompileOptions: { aotDisable: ["flow-results", "pass:PlaceTypeTests"] },
       });
     },

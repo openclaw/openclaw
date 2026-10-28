@@ -54,6 +54,7 @@ backup and its matching build, not just reinstalling the older package.
 | 35      | Native PostgreSQL ordering for predicate-proven non-null partial-index keys; metadata-only SQLite advance ([#183443](https://github.com/openclaw/openclaw/pull/183443))                                                                                | `Unreleased` |
 | 36      | Indexed PostgreSQL exact-path memory candidates with unchanged ranking; metadata-only SQLite advance                                                                                                                                                   | `Unreleased` |
 | 37      | Ordered cold transcript archive chunks with a 64 MiB uncompressed bound per file                                                                                                                                                                       | `Unreleased` |
+| 38      | PostgreSQL full-text search splits punctuation-joined tokens like SQLite FTS5 ([#183547](https://github.com/openclaw/openclaw/pull/183547)); metadata-only SQLite advance                                                                              | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -73,6 +74,16 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### Agent schema 38
+
+Schema 38 makes PostgreSQL full-text search split punctuation-joined words the
+way SQLite FTS5 does, so `server.py` matches `server` and `py`. The migration
+turns each stored `openclaw_search` generated column into a plain column kept by
+a `<table>_search_sync` trigger, then reparses existing rows once for the
+transcript index and every persisted search extension. SQLite advances schema
+metadata only. Rollback requires restoring the verified pre-upgrade backup with
+its matching build.
 
 ### Agent schema 37
 

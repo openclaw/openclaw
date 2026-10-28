@@ -5,6 +5,7 @@
   "name": "Knowledge",
   "description": "Evidence-backed knowledge, inspectable in OpenClaw.",
   "version": "0.1.0",
+  "reload": { "turnHandover": true },
   "configSchema": {
     "type": "object",
     "properties": {
@@ -60,18 +61,15 @@
             "minLength": 1,
             "maxLength": 100,
             "description": "IANA time zone for the schedule. Default: the Gateway host's time zone."
-          },
-          "reviewJobId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "Automation run after each maintenance pass that leaves private claims reachable from no page. Its agent turn follows the knowledge-unlinked-claims skill. When unset, maintenance runs the automation with declaration key knowledge:scribe:unlinked-review. Disable the automation to pause the review."
           }
         },
         "additionalProperties": false
       }
     },
     "additionalProperties": false
+  },
+  "doctorContract": {
+    "configRepair": true
   },
   "activation": {
     "onStartup": true
@@ -119,6 +117,7 @@
       "knowledge_save_page",
       "knowledge_source_check",
       "knowledge_status",
+      "knowledge_supersede",
       "knowledge_timeline",
       "knowledge_unmerge",
       "knowledge_verify",
@@ -158,6 +157,7 @@
     "knowledge_save_page": { "profiles": ["coding"] },
     "knowledge_source_check": { "profiles": ["coding"] },
     "knowledge_status": { "profiles": ["coding"] },
+    "knowledge_supersede": { "profiles": ["coding"] },
     "knowledge_timeline": { "profiles": ["coding"] },
     "knowledge_unmerge": { "profiles": ["coding"] },
     "knowledge_verify": { "profiles": ["coding"] },

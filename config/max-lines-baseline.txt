@@ -258,7 +258,6 @@ src/config/mutate.test.ts
 src/config/mutate.ts
 src/config/sessions/session-accessor.conformance.test.ts
 src/config/sessions/session-accessor.test.ts
-src/config/sessions/transcript.test.ts
 src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts
 src/cron/isolated-agent/run.test-harness.ts
 src/daemon/systemd.test.ts
@@ -297,7 +296,6 @@ src/gateway/server-methods/agent.media-and-routing.test-utils.ts
 src/gateway/server-methods/agent.reset-and-identity.test-utils.ts
 src/gateway/server-methods/agent.sessions-and-models.test-utils.ts
 src/gateway/server-methods/agents-mutate.test.ts
-src/gateway/server-methods/approval-shared.test.ts
 src/gateway/server-methods/chat.directive-tags.test.ts
 src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.validation.test.ts

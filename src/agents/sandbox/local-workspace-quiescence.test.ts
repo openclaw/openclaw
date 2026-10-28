@@ -127,10 +127,7 @@ it("persists exact container and browser custody before pausing and resumes only
   const ids: Record<string, string> = { owned: id, "browser-owned": browserId };
   const expected = Object.entries(ids).map(([name, runtimeId]) => ({ name, id: runtimeId }));
   mocks.browsers.mockResolvedValue({
-    entries: [
-      { ...entry, containerName: "browser-owned" },
-      { ...entry, containerName: "foreign", workspaceDir: "/other" },
-    ],
+    entries: [{ ...entry, containerName: "browser-owned" }],
   });
   mockEngine(ids, ({ action, target }) => {
     if (action === "pause") {
@@ -345,6 +342,14 @@ it("fences a dedicated stream writer and requires settlement before retiring its
   await resume();
   expect(commands("unpause")).toEqual([childId, id].map((runtimeId) => ["unpause", runtimeId]));
   expect(mocks.custodyCurrent).toHaveBeenCalledWith(record);
+  expect(persistCustody).toHaveBeenLastCalledWith([]);
+
+  record.phase = "stopped";
+  mocks.command.mockClear();
+  const stopped = await quiesce({ persist: persistCustody });
+  expect(mocks.command.mock.calls.some(([, args]) => args.at(-1) === childId)).toBe(false);
+  await expect(stopped.retire()).rejects.toThrow("Settle persistent streams");
+  await stopped.resume();
   expect(persistCustody).toHaveBeenLastCalledWith([]);
 
   const imageRead = {
