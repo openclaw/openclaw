@@ -1,5 +1,6 @@
-# Preserve 502 net lines of Sections regression coverage (#186229): two-step
-# editor scoping, Gateway search, ordering, guest flow and session-menu entry.
-# Current main contributes 6,310,802 lines; this candidate adds exactly 502.
-# Admit the measured 6,311,304 total without extra future allowance.
-6311304
+# Preserve 30 lines of update-repair regression coverage (#187044): repair must
+# select the authored database engines before it reads shared state, or a
+# PostgreSQL state anchor is opened as SQLite and refused.
+# Current main contributes 6,311,372 lines; this candidate adds exactly 30.
+# Admit the measured 6,311,402 total without extra future allowance.
+6311402

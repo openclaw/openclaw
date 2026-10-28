@@ -76,7 +76,10 @@ vi.mock("../daemon-cli/restart-health-probe.js", () => ({
   waitForGatewayHttpReadiness: mocks.readiness,
 }));
 vi.mock("./update-command-finalize.js", () => ({ updateFinalizeCommand: mocks.finalize }));
-vi.mock("./update-command.js", () => ({ withUpdateDatabaseEngine: mocks.withEngine }));
+vi.mock("./update-command.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command.js")>()),
+  withUpdateDatabaseEngine: mocks.withEngine,
+}));
 vi.mock("../../infra/update-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-check.js")>()),
   resolveNpmChannelTag: mocks.resolveChannel,
