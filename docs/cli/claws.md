@@ -247,6 +247,8 @@ agent or workspace is never overwritten. If Add fails, inspect the specific
 error and retry after resolving it; newly created resources are cleaned up
 where safe, while resources that existed before Add are left alone.
 
+<a id="remove-an-installed-claw" />
+
 ## Remove the agent
 
 Deleting an agent added from a Claw is the same as deleting any other agent:
