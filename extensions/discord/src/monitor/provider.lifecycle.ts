@@ -4,6 +4,7 @@ import { asDateTimestampMs, parseStrictPositiveInteger } from "openclaw/plugin-s
 import { danger, logVerbose, sleepWithAbort, warn } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import { isFatalGatewayCloseCode } from "../internal/gateway-close-codes.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
 import { setDiscordTranscriptsVoiceManager } from "../voice/transcripts-source.js";
@@ -211,7 +212,7 @@ export async function runDiscordGatewayLifecycle(params: {
       // The READY budget is consumed by setTimeout polls on the monotonic clock;
       // the deadline must live there too, or a wall-clock step (NTP correction,
       // VM resume) inflates or shrinks the wait past its configured bound.
-      const deadlineAt = performance.now() + gatewayReadyTimeoutMs;
+      const deadlineAt = monotonicNow() + gatewayReadyTimeoutMs;
       for (;;) {
         if (abortSignal?.aborted) {
           return "stopped";
@@ -224,7 +225,7 @@ export async function runDiscordGatewayLifecycle(params: {
           pushStatus(createDiscordReadyStatusPatch(at));
           return "ready";
         }
-        if (performance.now() >= deadlineAt) {
+        if (monotonicNow() >= deadlineAt) {
           return "timeout";
         }
         await new Promise<void>((resolve) => {

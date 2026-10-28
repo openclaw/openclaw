@@ -1,3 +1,4 @@
+import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -312,8 +313,8 @@ async function terminateChromeForRetry(proc: ChildProcess, userDataDir: string):
 }
 
 async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  const deadline = monotonicNow() + timeoutMs;
+  while (monotonicNow() < deadline) {
     if (!isPidAlive(pid)) {
       return true;
     }
@@ -851,8 +852,8 @@ async function launchOpenClawChromeLocked(
     const { pid: bootstrapPid, proc: bootstrap, releaseAbort } = await spawnOnce();
     let bootstrapError: Error | undefined;
     try {
-      const deadline = Date.now() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
-      while (Date.now() < deadline) {
+      const deadline = monotonicNow() + CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS;
+      while (monotonicNow() < deadline) {
         signal?.throwIfAborted();
         if (fs.existsSync(localStatePath) && fs.existsSync(preferencesPath)) {
           break;
@@ -908,11 +909,11 @@ async function launchOpenClawChromeLocked(
       proc = spawned.proc;
       releaseSpawnAbort = spawned.releaseAbort;
       const hasExited = () => spawned.proc.exitCode != null || spawned.proc.signalCode != null;
-      const readyDeadline = Date.now() + resolved.localLaunchTimeoutMs;
+      const readyDeadline = monotonicNow() + resolved.localLaunchTimeoutMs;
       let launchHttpReachable = false;
       // Full CDP WebSocket readiness is handled by the caller's
       // waitForCdpReadyAfterLaunch() budget; launch only owns process discovery.
-      while (Date.now() < readyDeadline) {
+      while (monotonicNow() < readyDeadline) {
         signal?.throwIfAborted();
         if (hasExited()) {
           break;

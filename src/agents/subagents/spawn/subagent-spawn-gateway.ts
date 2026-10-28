@@ -1,5 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import { monotonicNow } from "../../../shared/monotonic-time.js";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
@@ -268,9 +269,9 @@ async function reconcileSubagentAgentDispatch(
     // processes), so anchor it to the monotonic clock. A wall-clock step (NTP sync)
     // between iterations must not stretch the Gateway RPC timeout or the delay, nor
     // prematurely kill a healthy reconciliation by shrinking remainingMs below zero.
-    const deadline = performance.now() + SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS;
+    const deadline = monotonicNow() + SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS;
     while (true) {
-      const remainingMs = deadline - performance.now();
+      const remainingMs = deadline - monotonicNow();
       if (remainingMs <= 0) {
         throw error;
       }
@@ -293,7 +294,7 @@ async function reconcileSubagentAgentDispatch(
         );
       }
       await delay(
-        Math.min(SUBAGENT_AGENT_RECONCILE_INTERVAL_MS, Math.max(0, deadline - performance.now())),
+        Math.min(SUBAGENT_AGENT_RECONCILE_INTERVAL_MS, Math.max(0, deadline - monotonicNow())),
       );
     }
   }

@@ -1,3 +1,4 @@
+import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import {
   asMeetingBrowserTabs,
   callMeetingBrowserProxyOnNode,
@@ -232,8 +233,8 @@ export async function createMeetWithBrowserProxyOnNode(params: {
   }
   const notes = new Set<string>();
   let lastError: unknown;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() <= deadline) {
+  const deadline = monotonicNow() + timeoutMs;
+  while (monotonicNow() <= deadline) {
     try {
       const evaluated = await callBrowser({
         method: "POST",

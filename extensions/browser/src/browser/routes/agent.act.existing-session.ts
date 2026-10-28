@@ -1,5 +1,6 @@
 /** Existing-session action waits, navigation verification, and deadline ownership. */
 import { setTimeout as sleep } from "node:timers/promises";
+import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import { EXISTING_SESSION_NAVIGATION_RECHECK_DELAYS_MS } from "../act-policy.js";
 import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
@@ -27,15 +28,15 @@ export function createExistingSessionDeadline(
     : controller.signal;
   const error =
     typeof label === "string" ? new Error(`${label} timed out after ${timeoutMs}ms`) : label;
-  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineAt = monotonicNow() + timeoutMs;
   const timer = setTimeout(() => controller.abort(error), timeoutMs);
   timer.unref?.();
   return {
     signal,
-    remainingMs: () => Math.max(0, deadlineAt - Date.now()),
+    remainingMs: () => Math.max(0, deadlineAt - monotonicNow()),
     throwIfAborted: () => {
       // A busy event loop must not turn a late completion into a successful action.
-      if (Date.now() >= deadlineAt && !signal.aborted) {
+      if (monotonicNow() >= deadlineAt && !signal.aborted) {
         controller.abort(error);
       }
       signal.throwIfAborted();

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
+import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import {
   assertCurrentNativeHostLaunchContext,
   assertExpectedNativeHostProfile,
@@ -188,7 +189,7 @@ export async function installChromeExtensionBootstrap(params: {
     );
   }
   const waitMs = normalizeExtensionInstallWaitMs(params.waitMs);
-  const deadline = Date.now() + waitMs;
+  const deadline = monotonicNow() + waitMs;
   let discovery = await discoverChromeExtensionIds({
     approvedDirs: approvedPaths,
     storeExtensionId: FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID,
@@ -197,14 +198,14 @@ export async function installChromeExtensionBootstrap(params: {
   while (
     discovery.discovered.length === 0 &&
     discovery.storeDiscovered.length === 0 &&
-    Date.now() < deadline
+    monotonicNow() < deadline
   ) {
     if (!announcedWait) {
       params.onProgress?.("Waiting for Chrome to verify the OpenClaw extension…");
       announcedWait = true;
     }
     params.signal?.throwIfAborted();
-    await sleep(Math.min(500, Math.max(1, deadline - Date.now())));
+    await sleep(Math.min(500, Math.max(1, deadline - monotonicNow())));
     params.signal?.throwIfAborted();
     discovery = await discoverChromeExtensionIds({
       approvedDirs: approvedPaths,

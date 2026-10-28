@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
@@ -60,7 +61,7 @@ export class NodeHostStatsCheckpoints {
     checkpoint.sample = {
       stats: sample,
       nextCheckpointAtMs:
-        performance.now() + Math.max(0, sample.updatedAtMs + HOST_STATS_CHECKPOINT_MS - Date.now()),
+        monotonicNow() + Math.max(0, sample.updatedAtMs + HOST_STATS_CHECKPOINT_MS - Date.now()),
     };
   }
 
@@ -134,14 +135,14 @@ export class NodeHostStatsCheckpoints {
               !checkpoint.pending &&
               !checkpoint.failed &&
               node.hostStats !== checkpoint.saved &&
-              (checkpoint.savedAtMonotonicMs ?? 0) <= performance.now()
+              (checkpoint.savedAtMonotonicMs ?? 0) <= monotonicNow()
             ) {
               this.persist(node, checkpoint);
             }
           }
           this.schedule();
         },
-        Math.max(0, deadline - performance.now()),
+        Math.max(0, deadline - monotonicNow()),
       );
       this.timer.unref();
     });

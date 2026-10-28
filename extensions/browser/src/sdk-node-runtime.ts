@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { monotonicNow, racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 
 const requestBudget = new AsyncLocalStorage<{ pause: () => () => void }>();
 
@@ -33,7 +33,7 @@ export async function withTimeout<T>(
   const error = new Error(`${label ?? "request"} timed out`);
   const timeout = createDeferred<never>();
   let remaining = resolved;
-  let startedAt = performance.now();
+  let startedAt = monotonicNow();
   let paused = 0;
   let finished = false;
   const expire = () => {
@@ -42,7 +42,7 @@ export async function withTimeout<T>(
     controller.abort(error);
   };
   const arm = () => {
-    startedAt = performance.now();
+    startedAt = monotonicNow();
     const timer = setTimeout(expire, remaining);
     timer.unref?.();
     return timer;
@@ -59,7 +59,7 @@ export async function withTimeout<T>(
           const resumeParent = parentBudget?.pause();
           if (paused++ === 0) {
             clearTimeout(timer);
-            remaining = Math.max(1, remaining - (performance.now() - startedAt));
+            remaining = Math.max(1, remaining - (monotonicNow() - startedAt));
           }
           return () => {
             if (--paused === 0 && !finished) {

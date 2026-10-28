@@ -28,6 +28,7 @@ import { normalizeMainKey } from "../../routing/session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
@@ -134,7 +135,7 @@ async function wakeMediaGenerationTaskCompletionWithRetry(params: {
   wake: () => Promise<MediaGenerationCompletionWakeOutcome>;
   beforeRetry?: () => void;
 }): Promise<MediaGenerationCompletionWakeOutcome> {
-  const deadline = performance.now() + MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS;
+  const deadline = monotonicNow() + MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS;
   let outcome = await params.wake();
   let retryIndex = 0;
   let queueOwnsCompletion = false;
@@ -143,7 +144,7 @@ async function wakeMediaGenerationTaskCompletionWithRetry(params: {
       queueOwnsCompletion = true;
       updateMediaGenerationOperation(params.handle.runId, { completionDelivery: "queued" });
     }
-    const remainingMs = deadline - performance.now();
+    const remainingMs = deadline - monotonicNow();
     if (!queueOwnsCompletion && remainingMs <= 0) {
       throw new Error("media completion did not settle before the handoff deadline");
     }

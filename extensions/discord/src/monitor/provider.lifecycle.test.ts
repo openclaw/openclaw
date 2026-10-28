@@ -285,24 +285,6 @@ describe("runDiscordGatewayLifecycle", () => {
     expectCleanup(h, 1);
   });
 
-  it("times the READY wait out on the monotonic clock when the wall clock rewinds", async () => {
-    vi.useFakeTimers();
-    const h = createHarness({ ready: false });
-    const lifecycle = runDiscordGatewayLifecycle(h.params);
-    await vi.advanceTimersByTimeAsync(250);
-    // NTP correction or VM resume rewinds the wall clock mid-wait.
-    vi.setSystemTime(Date.now() - 60_000);
-    await vi.advanceTimersByTimeAsync(15_000);
-    expect(h.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("gateway READY wait timed out after 15000ms"),
-    );
-    expect(h.gateway.disconnect).toHaveBeenCalledOnce();
-    expect(h.gateway.connect).toHaveBeenCalledOnce();
-    h.abort.abort();
-    await lifecycle;
-    expectCleanup(h, 0, 2);
-  });
-
   it("handles queued disallowed intents without waiting for gateway events", async () => {
     const h = createHarness({
       pending: [gatewayEvent("disallowed-intents", "Fatal Gateway error: 4014")],

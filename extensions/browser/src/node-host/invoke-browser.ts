@@ -1,5 +1,6 @@
 import fsPromises from "node:fs/promises";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
+import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import {
   asNullableRecord,
   normalizeStringEntries,
@@ -332,7 +333,7 @@ export async function runBrowserProxyCommand(
   assertCurrent();
 
   const timeoutMs = resolveBrowserProxyTimeoutMs(params.timeoutMs);
-  const deadlineAt = performance.now() + timeoutMs;
+  const deadlineAt = monotonicNow() + timeoutMs;
   const timeoutDetails = {
     method,
     path,
@@ -410,7 +411,7 @@ export async function runBrowserProxyCommand(
     await discardStagedBrowserProxyUpload(stagedUpload);
     throw error;
   }
-  const remainingTimeoutMs = deadlineAt - performance.now();
+  const remainingTimeoutMs = deadlineAt - monotonicNow();
   if (remainingTimeoutMs <= 0) {
     await discardStagedBrowserProxyUpload(stagedUpload);
     throw new Error(formatBrowserProxyTimeoutMessage({ ...timeoutDetails, status: null }));

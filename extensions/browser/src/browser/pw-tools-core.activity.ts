@@ -1,4 +1,5 @@
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { monotonicNow } from "openclaw/plugin-sdk/time-runtime";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS, DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type {
   BrowserConsoleMessage,
@@ -21,7 +22,7 @@ export async function getPageTextViaPlaywright(opts: {
     DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   );
   const timeout = DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
-  const deadline = Date.now() + timeout;
+  const deadline = monotonicNow() + timeout;
   const controller = new AbortController();
   const signal = opts.signal
     ? AbortSignal.any([opts.signal, controller.signal])
@@ -43,7 +44,7 @@ export async function getPageTextViaPlaywright(opts: {
       }
     }
     // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- This action reads rendered text, not hidden DOM text.
-    return await locator.innerText({ timeout: Math.max(1, deadline - Date.now()), signal });
+    return await locator.innerText({ timeout: Math.max(1, deadline - monotonicNow()), signal });
   };
   const text = await withTimeout(awaitActionWithAbort(read(), signal), timeout, {
     createError: () => {

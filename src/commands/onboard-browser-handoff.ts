@@ -13,6 +13,7 @@ import type { SystemPresence } from "../infra/system-presence.js";
 import { sleep } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import {
   hasVerifiedControlUiLoopbackAlias,
   issueControlUiBrowserHandoff,
@@ -263,9 +264,9 @@ export async function runBrowserHatchHandoff(params: {
   }
 
   const baselineClientKeys = new Set(baseline);
-  const deadline = Date.now() + (opened ? GUI_HANDOFF_TIMEOUT_MS : HEADLESS_HANDOFF_TIMEOUT_MS);
+  const deadline = monotonicNow() + (opened ? GUI_HANDOFF_TIMEOUT_MS : HEADLESS_HANDOFF_TIMEOUT_MS);
   while (true) {
-    const beforeProbeMs = deadline - Date.now();
+    const beforeProbeMs = deadline - monotonicNow();
     if (beforeProbeMs <= 0) {
       return false;
     }
@@ -279,7 +280,7 @@ export async function runBrowserHatchHandoff(params: {
     if (result.some((key) => !baselineClientKeys.has(key))) {
       break;
     }
-    const remainingMs = deadline - Date.now();
+    const remainingMs = deadline - monotonicNow();
     if (remainingMs <= 0) {
       return false;
     }

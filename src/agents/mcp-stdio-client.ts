@@ -8,6 +8,7 @@ import {
 } from "@modelcontextprotocol/client";
 import { ResultSchema } from "@modelcontextprotocol/core";
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import {
   appendCapturedOutput,
   createCapturedOutputBuffers,
@@ -150,13 +151,13 @@ export function createMcpStdioClient(params: McpStdioClientParams): McpStdioClie
     appendCapturedOutput(stderr, chunk, MAX_STDERR_BYTES, "tail");
   };
   transport.stderr.on("data", onStderr);
-  const startupDeadline = Date.now() + startupTimeoutMs;
+  const startupDeadline = monotonicNow() + startupTimeoutMs;
   const startup = import("./mcp-client-lifecycle.js")
     .then(({ connectMcpClient }) => {
       if (stopped || failure) {
         throw failure ?? errors.unavailable("proxy is stopping");
       }
-      const remainingMs = startupDeadline - Date.now();
+      const remainingMs = startupDeadline - monotonicNow();
       if (remainingMs <= 0) {
         throw errors.unavailable(`initialize timed out after ${startupTimeoutMs}ms`);
       }

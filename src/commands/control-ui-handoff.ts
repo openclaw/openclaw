@@ -21,6 +21,7 @@ import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { inspectGatewayTlsCertificate } from "../infra/tls/gateway.js";
 import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { sleep } from "../utils.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 
 const CONTROL_UI_DOCUMENT_REQUEST_TIMEOUT_MS = 2_000;
 const CONTROL_UI_DOCUMENT_ERROR_MAX_BYTES = 2_048;
@@ -169,7 +170,7 @@ export async function waitForControlUiDocument(params: {
   waitForPending?: boolean;
   onPending?: () => void;
 }): Promise<ControlUiDocumentReadiness> {
-  const deadline = Date.now() + (params.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS);
+  const deadline = monotonicNow() + (params.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS);
   let tlsFingerprint: string | undefined;
   let tlsConnect: Record<string, unknown> | undefined;
 
@@ -218,7 +219,7 @@ export async function waitForControlUiDocument(params: {
       },
     });
   while (true) {
-    const remainingMs = deadline - Date.now();
+    const remainingMs = deadline - monotonicNow();
     if (remainingMs <= 0) {
       return lastTransientError
         ? {
@@ -244,7 +245,7 @@ export async function waitForControlUiDocument(params: {
             // diagnostic; a failed request or body must preserve the HEAD result.
             const diagnostic = await requestDocument(
               "GET",
-              Math.max(1, deadline - Date.now()),
+              Math.max(1, deadline - monotonicNow()),
             ).catch(() => undefined);
             if (diagnostic) {
               try {
@@ -301,6 +302,6 @@ export async function waitForControlUiDocument(params: {
       pendingReported = true;
       params.onPending?.();
     }
-    await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - Date.now())));
+    await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - monotonicNow())));
   }
 }

@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import type {
   GatewaySuspendPrepareResult,
   GatewaySuspendResumeResult,
@@ -51,14 +52,14 @@ export async function runGatewaySuspend(
   // The wait window is consumed by sleeps on the monotonic clock; the
   // deadline must live there too, or a wall-clock step (NTP correction, VM
   // resume) keeps issuing prepares past the operator-advertised --wait.
-  const deadlineMs = waitMs === undefined ? undefined : performance.now() + waitMs;
+  const deadlineMs = waitMs === undefined ? undefined : monotonicNow() + waitMs;
   const maxAttempts = waitMs === undefined ? 1 : Math.ceil(waitMs / MIN_SUSPEND_POLL_DELAY_MS) + 1;
   let latest: GatewaySuspendPrepareResult | undefined;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     // A sleep can overshoot the deadline; never issue a prepare that could
     // suspend the Gateway after the operator's advertised --wait window.
-    if (attempt > 0 && deadlineMs !== undefined && performance.now() >= deadlineMs) {
+    if (attempt > 0 && deadlineMs !== undefined && monotonicNow() >= deadlineMs) {
       break;
     }
     latest = (await deps.callGateway("gateway.suspend.prepare", options.rpcOpts, {
@@ -90,7 +91,7 @@ export async function runGatewaySuspend(
       break;
     }
 
-    const remainingMs = deadlineMs - performance.now();
+    const remainingMs = deadlineMs - monotonicNow();
     if (remainingMs <= 0) {
       break;
     }

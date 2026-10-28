@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import type {
   ProviderRequestCapability,
@@ -125,7 +126,7 @@ export function createProviderOperationDeadline(params: {
     return { label: params.label };
   }
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
-  const deadlineAtMs = performance.now() + resolvedTimeoutMs;
+  const deadlineAtMs = monotonicNow() + resolvedTimeoutMs;
   return {
     deadlineAtMs,
     label: params.label,
@@ -143,7 +144,7 @@ export function resolveProviderOperationTimeoutMs(params: {
   if (typeof deadlineAtMs !== "number") {
     return defaultTimeoutMs;
   }
-  const remainingMs = deadlineAtMs - performance.now();
+  const remainingMs = deadlineAtMs - monotonicNow();
   if (remainingMs <= 0) {
     throw createProviderOperationTimeoutError(params.deadline);
   }
@@ -183,7 +184,7 @@ export async function waitProviderOperationPollInterval(params: {
   const pollIntervalMs = resolveTimerTimeoutMs(params.pollIntervalMs, 1);
   const deadlineAtMs = params.deadline.deadlineAtMs;
   const remainingMs =
-    typeof deadlineAtMs === "number" ? deadlineAtMs - performance.now() : pollIntervalMs;
+    typeof deadlineAtMs === "number" ? deadlineAtMs - monotonicNow() : pollIntervalMs;
   if (remainingMs <= 0) {
     throw createProviderOperationTimeoutError(params.deadline);
   }

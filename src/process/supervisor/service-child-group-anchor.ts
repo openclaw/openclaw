@@ -10,7 +10,7 @@ import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import { serializeBrokerError } from "../spawn-broker/protocol.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
-import { monotonicDeadline } from "./monotonic-deadline.js";
+import { monotonicNow, monotonicDeadlineAfter, remainingMonotonicMs } from "../../shared/monotonic-time.js";
 import {
   hasLiveOwnedProcessGroupMembers,
   killOwnedProcessGroupMembers,
@@ -128,7 +128,7 @@ export function runServiceChildGroupAnchor(): void {
   const closeAuthority = async (
     reason: Extract<ServiceChildAnchorMessage, { type: "closing" }>["reason"],
     hardKill: boolean,
-    deadline = performance.now() + GRACEFUL_CANCEL_TIMEOUT_MS,
+    deadline = monotonicNow() + GRACEFUL_CANCEL_TIMEOUT_MS,
   ) => {
     if (!start || state === "closed") {
       return;
@@ -151,7 +151,7 @@ export function runServiceChildGroupAnchor(): void {
       });
       const acknowledged = await Promise.race([
         retirementReady.promise,
-        delay(Math.max(0, deadline - performance.now())).then(() => false),
+        delay(Math.max(0, deadline - monotonicNow())).then(() => false),
       ]);
       finish(acknowledged ? 0 : 1);
       return;
@@ -167,7 +167,7 @@ export function runServiceChildGroupAnchor(): void {
     // crossing cancellation cannot destroy the host's unread closing receipt.
     const requiresAcknowledgement = start.acknowledgeClosing === true;
     closingSequence = requiresAcknowledgement ? sequence + 1 : undefined;
-    const remainingMs = deadline - performance.now();
+    const remainingMs = deadline - monotonicNow();
     if (remainingMs > 0) {
       void send({ type: "closing", reason }).then(
         () => {
@@ -183,7 +183,7 @@ export function runServiceChildGroupAnchor(): void {
     if (
       remainingMs <= 0 ||
       !(await Promise.race([retirementReady.promise, delay(remainingMs).then(() => false)])) ||
-      performance.now() >= deadline ||
+      monotonicNow() >= deadline ||
       hardKill
     ) {
       process.kill(0, "SIGKILL");
@@ -244,7 +244,7 @@ export function runServiceChildGroupAnchor(): void {
       await reportStartupFailure("command startup cancelled before spawn", true);
       return;
     }
-    const { deadline, remaining } = monotonicDeadline(GRACEFUL_CANCEL_TIMEOUT_MS);
+    const deadline = monotonicDeadlineAfter(GRACEFUL_CANCEL_TIMEOUT_MS);
     const termGraceDone = delay(GRACEFUL_CANCEL_TIMEOUT_MS);
     if (!start.ownedWorker && !forceCleanup && rootExit && pendingOutput.size > 0) {
       // Preserve inherited diagnostics after root exit within the same cleanup budget.
@@ -252,7 +252,7 @@ export function runServiceChildGroupAnchor(): void {
     }
     if (subreaper) {
       try {
-        while (!subreaper.drain(forceCleanup || remaining() <= 0 ? "SIGKILL" : "SIGTERM")) {
+        while (!subreaper.drain(forceCleanup || remainingMonotonicMs(deadline) <= 0 ? "SIGKILL" : "SIGTERM")) {
           // Yield so the runtime can consume its one direct root. Adopted children stay
           // with the native wait owner even after the caller gives up waiting.
           await delay(10, true);
@@ -368,7 +368,7 @@ export function runServiceChildGroupAnchor(): void {
       if (forceCleanup || !rootExit || pendingOutput.size > 0 || !lineageClosed) {
         break;
       }
-      const remainingMs = remaining();
+      const remainingMs = Math.max(0, remainingMonotonicMs(deadline));
       if (remainingMs <= 0) {
         break;
       }
@@ -378,7 +378,7 @@ export function runServiceChildGroupAnchor(): void {
         await closeAuthority(reason, false, deadline);
         return;
       }
-      const nextObservationMs = Math.min(100, remaining());
+      const nextObservationMs = Math.min(100, Math.max(0, remainingMonotonicMs(deadline)));
       if (nextObservationMs <= 0) {
         break;
       }
