@@ -2,6 +2,7 @@ import { isUtf8 } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
@@ -130,6 +131,7 @@ type RootMemoryMigrationResult = {
   legacyPath: string;
   mergedLegacy: boolean;
   archivedLegacyPath?: string;
+  canonicalBackupPath?: string;
   skipReason?: string;
 };
 
@@ -239,18 +241,47 @@ async function migrateLegacyRootMemoryFile(
       archivedLegacyPath,
     };
   }
+  let canonicalBackupPath: string | undefined;
   if (canonicalText !== legacyText) {
     const merged = `${canonicalText.trimEnd()}\n${buildMergedLegacyRootMemorySection({
       legacyText,
       archivedLegacyPath: shortenHomePath(archivedLegacyPath),
     })}`;
-    await fs.promises.writeFile(detection.canonicalPath, merged, "utf-8");
+    // The pre-merge canonical bytes exist nowhere else (only the legacy file was
+    // archived), so copy them beside that archive before touching the live file,
+    // and publish through an atomic replace: a failed publication must never
+    // tear the only durable memory file. The permission-error copy fallback
+    // stays disabled — its unlink-then-recreate path is exactly the tear this
+    // write must not perform — and the workspace's own mode is passed back so
+    // publication never widens it.
+    canonicalBackupPath = path.join(
+      path.dirname(archivedLegacyPath),
+      `${CANONICAL_ROOT_MEMORY_FILENAME}.pre-merge`,
+    );
+    await fs.promises.copyFile(detection.canonicalPath, canonicalBackupPath);
+    // Publication must address the workspace through its real directory:
+    // configured workspace aliases are supported inputs (detection keeps the
+    // alias), but the atomic writer rejects symlinked parents by design. The
+    // final-file symlink rejection is unaffected — earlier bounded reads
+    // already verified the canonical file itself as a regular file.
+    const publicationDir = await fs.promises.realpath(detection.workspaceDir);
+    await replaceFileAtomic({
+      filePath: path.join(publicationDir, CANONICAL_ROOT_MEMORY_FILENAME),
+      content: merged,
+      dirMode: (await fs.promises.stat(publicationDir)).mode & 0o7777,
+      preserveExistingMode: true,
+      tempPrefix: CANONICAL_ROOT_MEMORY_FILENAME,
+      syncTempFile: true,
+      syncParentDir: true,
+      throwOnCleanupError: true,
+    });
   }
   return {
     ...unchanged,
     changed: true,
     mergedLegacy: canonicalText !== legacyText,
     archivedLegacyPath,
+    ...(canonicalBackupPath ? { canonicalBackupPath } : {}),
   };
 }
 
@@ -329,6 +360,7 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       `${prefix}Workspace memory root merged:`,
       `- current: ${migration.canonicalPath}`,
       migration.archivedLegacyPath ? `- backup: ${migration.archivedLegacyPath}` : null,
+      migration.canonicalBackupPath ? `- pre-merge backup: ${migration.canonicalBackupPath}` : null,
       migration.mergedLegacy ? `- merged legacy content from: ${migration.legacyPath}` : null,
       `- removed legacy file: ${migration.legacyPath}`,
     ].filter(Boolean);
