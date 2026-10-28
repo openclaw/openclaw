@@ -20,6 +20,9 @@ Two additional guardrails are configured under `tools.loopDetection`:
 
 1. **Loop detection** (`enabled`) - disabled by default. Watches the rolling
    tool-call history for repeated patterns and unknown-tool retries.
+   The rolling window contains agent-run calls, not operator polling through
+   Gateway `tools.invoke` or HTTP `/tools/invoke`. Operator calls still pass
+   through their normal authorization, tool policy, and hooks.
 2. **Post-compaction guard** - enabled whenever
    `enabled` is not explicitly `false`. Arms after every compaction-retry and
    aborts the run if the agent repeats the same `(tool, args, result)` triple

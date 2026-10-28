@@ -550,7 +550,10 @@ async function dispatchChannelTurnWithDeliveryOwner(
           const custody = await createDirectPendingFinalCustody(effectivePayload, params.storePath);
           releaseCustody = custody?.release;
           await custody?.onPlatformSendDispatch();
-          result = await operation.deliver(effectiveValue, toCoreManagedDeliveryInfo(info));
+          result = await operation.deliver(
+            effectiveValue,
+            toCoreManagedDeliveryInfo(info, effectivePayload),
+          );
         }
       }
     } catch (error: unknown) {

@@ -62,6 +62,11 @@ Actual compaction or reset starts a new prompt series. Permission changes still
 apply immediately through execution gates and in-history instruction updates;
 they do not require replacing the earlier system prompt.
 
+CLI continuations retain the conversation's recorded presentation capabilities,
+including Control UI formatting, without borrowing its delivery route or authority.
+Scheduled turns inside an existing conversation retain its full automations
+definition; job-scoped execution still rejects actions outside the current job.
+
 Restart and scheduled-turn orphan recovery use the same bounded model-history
 selection as session startup. Transcript-only metadata does not replace that
 history with a shorter navigation window or remove its earlier provider inputs.
@@ -113,6 +118,11 @@ Unmarked spawn-profile and attachment additions keep their existing system place
 Configured instructions outside the marked conversation section remain in the
 system prompt. Skill, tool, memory, and configuration refreshes retain their
 existing update behavior.
+
+Returned `sessions_send` results carry their success, truncation, and failure
+guidance beside the receiving turn, including recovered deliveries. These
+instructions keep their wording without changing the earlier system prefix.
+Unrelated caller-supplied system instructions retain their existing placement.
 
 ## Keep replayed tool results stable
 

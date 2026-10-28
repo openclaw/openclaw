@@ -6,7 +6,10 @@ import { format } from "oxfmt";
 import * as ts from "typescript/ast";
 import { inspectDatabaseWorkerBoundaries } from "./lib/database-worker-compat.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
+import {
+  createNativeTypeScriptParser,
+  reportNativeTypeScriptPhase,
+} from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 
 const defaultRoot = path.resolve(import.meta.dirname, "..");
@@ -3921,13 +3924,19 @@ export function loadInventorySources(root = defaultRoot, ref = "", staged = fals
     : new Map(sourceFiles.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
 }
 
+/** @param {{ observer?: import("./lib/native-typescript.mts").NativeTypeScriptObserver }} [options] */
 export function inventory(
   root = defaultRoot,
   ref = "",
   staged = false,
   texts = loadInventorySources(root, ref, staged),
+  options = {},
 ) {
-  using parser = createNativeTypeScriptParser({ cwd: root });
+  const { observer } = options;
+  using parser = createNativeTypeScriptParser({
+    cwd: root,
+    observer: observer && ((phase, facts) => observer(`syntax.${phase}`, facts)),
+  });
   const pattern = new RegExp([...primitives.keys()].join("|"));
   const compatibility = inspectDatabaseWorkerBoundaries(
     root,
@@ -3936,6 +3945,7 @@ export function inventory(
     classifyKnownEntry,
     // Historical snapshots supply counts; only current-source diagnostics are consumed below.
     !ref,
+    observer && ((phase, facts) => observer(`semantic.${phase}`, facts)),
   );
   if (!ref && compatibility.violations.length > 0) {
     throw new Error(
@@ -3944,16 +3954,18 @@ export function inventory(
     );
   }
   const files = [...texts.keys()].filter((file) => pattern.test(texts.get(file)));
+  reportNativeTypeScriptPhase(observer, "syntax.inputs", { files: files.length });
   const sources = parser.parseSourceFiles(
     files.map((fileName) => ({ fileName, text: texts.get(fileName) })),
   );
   const invalidSource = parser.getSyntacticDiagnostics()[0];
+  parser.checkpoint?.("diagnostics");
   if (invalidSource) {
     throw new Error(
       `Cannot inventory invalid syntax in ${path.relative(root, invalidSource.fileName ?? root)}`,
     );
   }
-  return files
+  const rows = files
     .flatMap((file, index) => {
       const calls = findCalls(sources[index]);
       /** @type {Map<string, {
@@ -4013,6 +4025,8 @@ export function inventory(
         a.owner.localeCompare(b.owner, "en") ||
         a.file.localeCompare(b.file, "en"),
     );
+  parser.checkpoint?.("walk-classify");
+  return rows;
 }
 
 function totals(rows) {

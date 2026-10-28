@@ -35,6 +35,7 @@ export async function prepareMemoryFlushAttempt(params: {
   runtimePolicySessionKey?: string;
   storePath?: string;
   preflightAdmission?: UserTurnTranscriptAdmissionReceipt;
+  recoveryContextTokenBudget?: number;
   flushRunId: string;
   resolution: MemoryFlushPlanForRunResolution;
   abortSignal?: AbortSignal;
@@ -164,7 +165,12 @@ export async function prepareMemoryFlushAttempt(params: {
       systemPrompt,
       selection,
       preparedRunAdmission,
-      memorySession,
+      memorySession: {
+        ...memorySession,
+        ...(params.recoveryContextTokenBudget !== undefined
+          ? { disableCompactionRecovery: true as const }
+          : {}),
+      },
       memoryAudience: delegated?.audience,
       memoryFlushTools,
       maintenanceRun,

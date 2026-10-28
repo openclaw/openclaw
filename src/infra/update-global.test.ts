@@ -4,6 +4,7 @@ import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import * as exec from "../process/exec.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -219,6 +220,62 @@ describe("update global helpers", () => {
 
     const explicitEnv = await createGlobalInstallEnv({ COREPACK_ENABLE_DOWNLOAD_PROMPT: "1" });
     expect(explicitEnv?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("1");
+  });
+
+  it("probes package-manager roots with the same non-interactive policy", async () => {
+    const base = dirs.make("openclaw-update-probe-policy-");
+    const binDir = path.join(base, "bin");
+    const globalRoot = path.join(base, "global", "node_modules");
+    const captureFile = path.join(base, "probe.json");
+    await fs.mkdir(path.join(globalRoot, "openclaw"), { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    // A launcher that needs Corepack's download confirmation exits when the
+    // probe does not suppress the prompt, matching the reported stall.
+    const probeScript = path.join(base, "corepack-pnpm-probe.cjs");
+    await fs.writeFile(
+      probeScript,
+      `const fs = require("node:fs");
+const prompt = process.env.COREPACK_ENABLE_DOWNLOAD_PROMPT ?? null;
+fs.writeFileSync(${JSON.stringify(captureFile)}, JSON.stringify({ prompt }));
+if (prompt !== "0") {
+  console.error("corepack download confirmation cannot be answered");
+  process.exit(3);
+}
+console.log(${JSON.stringify(globalRoot)});
+`,
+    );
+    const executable = process.platform === "win32" ? ".cmd" : "";
+    await fs.writeFile(
+      path.join(binDir, `pnpm${executable}`),
+      process.platform === "win32"
+        ? `@echo off\r\n"${process.execPath}" "${probeScript}" %*\r\n`
+        : `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} ${quoteCliArg(probeScript)} "$@"\n`,
+      { mode: 0o755 },
+    );
+    await fs.writeFile(
+      path.join(binDir, `npm${executable}`),
+      process.platform === "win32" ? "@echo off\r\nexit /b 1\r\n" : "#!/bin/sh\nexit 1\n",
+      { mode: 0o755 },
+    );
+
+    envSnapshot = captureEnv(["COREPACK_ENABLE_DOWNLOAD_PROMPT", "PATH"]);
+    delete process.env.COREPACK_ENABLE_DOWNLOAD_PROMPT;
+    process.env.PATH = [binDir, process.env.PATH ?? ""].join(path.delimiter);
+    const runCommand: CommandRunner = vi.fn(exec.runCommandWithTimeout);
+
+    await expect(detectGlobalInstallManagerByPresence(runCommand, 10_000)).resolves.toBe("pnpm");
+
+    const probes = vi.mocked(runCommand).mock.calls;
+    expect(probes.map(([argv]) => argv)).toEqual([
+      ["npm", "root", "-g"],
+      ["pnpm", "root", "-g"],
+    ]);
+    for (const [, options] of probes) {
+      expect(options.env).toMatchObject({ COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" });
+      // Corepack prompts only on a TTY; a probe must never wait for terminal input.
+      expect(options.input).toBe("");
+    }
+    await expect(fs.readFile(captureFile, "utf8")).resolves.toBe('{"prompt":"0"}');
   });
 
   it("sets the package launcher under Bun", async () => {
