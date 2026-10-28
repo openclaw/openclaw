@@ -5,6 +5,7 @@ import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { createSnapshotManager } from "./channel-health-monitor.test-support.js";
 import type { HealthSummary } from "./health/types.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
@@ -15,6 +16,7 @@ export function createGatewayMaintenanceStateForTest(params?: {
   healthSummary?: HealthSummary;
   healthVersion?: number;
   presenceVersion?: number;
+  restartRunningChannels?: (shouldContinue: () => boolean) => Promise<boolean>;
 }) {
   const config: OpenClawConfig = {};
   const chatRunState = createChatRunState();
@@ -34,7 +36,10 @@ export function createGatewayMaintenanceStateForTest(params?: {
     refreshGatewayHealthSnapshot: async () =>
       params?.healthSummary ?? ({ ok: true } as HealthSummary),
     logHealth: { info: () => {}, error: () => {} },
-    restartRunningChannels: async () => true,
+    channelManager: createSnapshotManager(
+      { discord: { default: { running: true } } },
+      { captureAccountRestart: () => params?.restartRunningChannels ?? (async () => true) },
+    ),
     activeWorkInspectors: {},
     refreshPresence: () => {},
     resetEventLoopHealth: () => {},

@@ -24,6 +24,7 @@ import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skel
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
+import { PluginNativeUiDisclosure } from "./native-ui-disclosure.tsx";
 import {
   renderPluginAuthor,
   PluginCardSummary,
@@ -679,6 +680,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
         />
       </CatalogDiscoverySearch>
       <CategoryChips {...props} />
+      <PluginNativeUiDisclosure variant="install" />
       {props.remoteError ? renderError(props.remoteError, props.onRetry, true) : undefined}
       <div
         class="plugin-catalog-results__body"
