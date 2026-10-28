@@ -388,6 +388,41 @@ describe("CodexAppServerEventProjector media projection", () => {
     },
   );
 
+  it("keeps each confirmed copy digest bound to its own destination", async () => {
+    const params = await createParams();
+    const { events } = await createProjection(params);
+    await events.completed(codexImage("generated-copy"));
+    const generated = Buffer.from(tinyPngBase64, "base64");
+    const other = Buffer.from(generated);
+    other.writeUInt8(other.readUInt8(other.length - 1) ^ 0xff, other.length - 1);
+    const copyPath = path.join(params.workspaceDir, "out", "copy.png");
+    await fs.mkdir(path.dirname(copyPath), { recursive: true });
+    const { bridge } = createMessageBridge(async () =>
+      messageResult({ messageDelivery: receipt() }),
+    );
+    // Same path, two sends: chat-source receives D, then chat-other receives G.
+    await fs.writeFile(copyPath, other);
+    await sendMedia(bridge, copyPath, "chat-source");
+    await fs.writeFile(copyPath, generated);
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "send-media-other",
+      namespace: null,
+      tool: "message",
+      arguments: { action: "send", mediaUrl: copyPath, provider: "telegram", to: "chat-other" },
+    });
+    await events.complete();
+    const result = events.result(bridge.telemetry);
+
+    const generatedUrl = result.toolMediaUrls?.[0];
+    const mediaByTarget = Object.fromEntries(
+      (result.messagingToolSentTargets ?? []).map((target) => [target.to, target.mediaUrls]),
+    );
+    expect(mediaByTarget["chat-source"]).not.toContain(generatedUrl);
+    expect(mediaByTarget["chat-other"]).toContain(generatedUrl);
+  });
+
   it("keeps correct local image delivery evidence for a partial saved-path send", async () => {
     const params = await createParams();
     const { events } = await createProjection(params);

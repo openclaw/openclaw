@@ -72,32 +72,23 @@ export async function prepareCodexMessageMedia(
     : { ...prepared, digestsBySource: await digestLocalMessageMedia(prepared.args, params.signal) };
 }
 
-const confirmedDigestsByTelemetry = new WeakMap<object, Map<string, MediaDigest>>();
+/** Immutable content identity, carried in each confirmed delivery's own source URLs. */
+export function mediaDigestAlias(digest: MediaDigest): string {
+  return `codex-media-sha256:${digest.bytes}:${digest.sha256}`;
+}
 
 /**
- * Maps confirmed message() media to its source URLs and keeps the send-time
- * digests of exactly those sources with the tool telemetry that confirmed them.
+ * Maps confirmed message() media to its source URLs plus the content alias of the
+ * bytes hashed when that send was prepared, so each receipt keeps its own identity.
  */
 export function resolveConfirmedCodexMessageMedia(
-  telemetry: object,
   mediaUrls: readonly string[],
   prepared: PreparedMessageMedia | undefined,
 ): string[] {
   const sourceUrls = resolveCodexMediaSourceUrls(mediaUrls, prepared?.sourcePathsByStagedPath);
-  for (const sourceUrl of sourceUrls) {
-    const key = normalizeMediaReferenceForComparison(sourceUrl);
-    const digest = prepared?.digestsBySource?.get(key);
-    if (digest) {
-      const confirmed = confirmedDigestsByTelemetry.get(telemetry) ?? new Map();
-      confirmed.set(key, digest);
-      confirmedDigestsByTelemetry.set(telemetry, confirmed);
-    }
-  }
-  return sourceUrls;
-}
-
-export function readConfirmedCodexMessageMediaDigests(
-  telemetry: object,
-): ReadonlyMap<string, MediaDigest> | undefined {
-  return confirmedDigestsByTelemetry.get(telemetry);
+  const aliases = sourceUrls.flatMap((sourceUrl) => {
+    const digest = prepared?.digestsBySource?.get(normalizeMediaReferenceForComparison(sourceUrl));
+    return digest ? [mediaDigestAlias(digest)] : [];
+  });
+  return [...new Set([...sourceUrls, ...aliases])];
 }

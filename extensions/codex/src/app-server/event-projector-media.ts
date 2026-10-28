@@ -13,11 +13,7 @@ import {
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-store";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  digestMedia,
-  readConfirmedCodexMessageMediaDigests,
-  type MediaDigest,
-} from "./message-media-identity.js";
+import { digestMedia, mediaDigestAlias, type MediaDigest } from "./message-media-identity.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
@@ -28,8 +24,6 @@ type GeneratedImageResult = {
   revisedPrompt?: string;
   source: "native" | "raw";
 };
-
-const digestKey = (digest: MediaDigest) => `${digest.bytes}:${digest.sha256}`;
 
 export class CodexGeneratedMediaProjection {
   private readonly itemIds = new Set<string>();
@@ -229,15 +223,12 @@ export class CodexGeneratedMediaProjection {
       }
     }
     // A model can send a byte-identical copy of a generated image from another
-    // local path. Match the bytes hashed when that confirmed send was prepared.
-    const generatedUrlByDigest = new Map(
-      [...this.digestByMediaUrl].map(([mediaUrl, digest]) => [digestKey(digest), mediaUrl]),
-    );
-    for (const [source, digest] of readConfirmedCodexMessageMediaDigests(params) ?? []) {
-      const generatedUrl = generatedUrlByDigest.get(digestKey(digest));
-      if (generatedUrl && !generatedUrlBySource.has(source)) {
-        generatedUrlBySource.set(source, generatedUrl);
-      }
+    // local path. Each confirmed send carries the content alias of the bytes it sent.
+    for (const [mediaUrl, digest] of this.digestByMediaUrl) {
+      generatedUrlBySource.set(
+        normalizeMediaReferenceForComparison(mediaDigestAlias(digest)),
+        mediaUrl,
+      );
     }
     const sentMediaUrls = new Set(params.messagingToolSentMediaUrls);
     const generatedUrlsByTarget = new Map<MessagingToolSend, Set<string>>();
