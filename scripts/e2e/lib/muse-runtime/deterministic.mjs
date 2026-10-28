@@ -57,6 +57,20 @@ try {
   assert.equal(methods("session/start").length, 2);
   assert.notEqual(methods("turn/start").at(-1).params.sessionId, sessionId);
   console.log("PASS session reset creates fresh native session");
+  // A write-only operator run can ask for review and must receive its own verdict.
+  const writer = await harness.connect(["operator.read", "operator.write"]);
+  try {
+    const written = await harness.turn("fixture:approval", {
+      via: writer,
+      key: "agent:main:writer-approval",
+      decision: "allow-once",
+    });
+    assert.equal(written.approvals.length, 1);
+    assert.equal(methods("approval/decide").at(-1).params.choiceId, "server-allow-id");
+  } finally {
+    writer.stop();
+  }
+  console.log("PASS write-only operator run receives its native approval verdict");
   await harness.stop();
   harness.config.tools.exec.security = "allowlist";
   harness.saveConfig();

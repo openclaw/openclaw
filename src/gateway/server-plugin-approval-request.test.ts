@@ -1,14 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type TestContext } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import {
   withPluginRuntimeGatewayRequestScope,
   withPluginRuntimePluginScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { withInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
+import { createPluginApprovalHandlers } from "./server-methods/plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import {
@@ -151,6 +154,90 @@ describe("trusted plugin approval requests", () => {
       await expect(f.scoped(request, unrelatedReader)).rejects.toThrow(missingScope);
       roleScopes = ["operator.read"];
       await expect(request()).rejects.toThrow(/Your operator role changed/);
+    }));
+
+  it("lets a retained write-only run await its own approval verdict", (testContext: TestContext) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+        approvalKind: "plugin",
+        validateAgentRuntimeDelegatedAuthority: () => true,
+      });
+      const handlers = createPluginApprovalHandlers(manager);
+      const context = createContext([
+        [
+          "plugin.approval.request",
+          "operator.approvals",
+          "plugin-approval",
+          handlers["plugin.approval.request"]!,
+        ],
+        [
+          "plugin.approval.waitDecision",
+          "operator.approvals",
+          "plugin-approval",
+          handlers["plugin.approval.waitDecision"]!,
+        ],
+      ]);
+      const caller = createOperatorClient({
+        profileName: "write-only-run",
+        scopes: ["operator.write"],
+      });
+      const otherRun = {
+        ...hookIdentity,
+        operationalRunInstance: { instanceId: "instance-2", runId: "run-2" },
+      };
+      const cfg = () => writerConfig();
+      Object.assign(context, {
+        getRuntimeConfig: cfg,
+        getCommittedRuntimeConfig: cfg,
+        broadcast: vi.fn(),
+        hasExecApprovalClients: () => true,
+        validateAgentRuntimeApprovalAuthority: (candidate: unknown) =>
+          candidate === hookIdentity || candidate === otherRun,
+      });
+      const authority = createAdmittedRunOperatorAuthority({
+        profileId: caller.authenticatedUserProfile!.profileId,
+        scopes: ["operator.write"],
+        assertCurrent: () => undefined,
+        readCurrentRoleFacts: () => ({ assignedRole: "writer" }),
+      });
+      const dispatch = (
+        method: string,
+        params: Record<string, unknown>,
+        identity: typeof otherRun = hookIdentity,
+      ) =>
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            operatorAuthority: authority,
+            gatewayContextResolver: () => context,
+          },
+          () =>
+            dispatchGatewayMethodInProcess<{ id: string; decision?: string }>(
+              method,
+              params,
+              withInProcessAgentRuntimeIdentity(
+                {
+                  forceSyntheticClient: true,
+                  allowHostPluginApprovalRequest: true,
+                  syntheticScopes: ["operator.approvals"],
+                  syntheticScopeMode: "minimum" as const,
+                  resolveGatewayContext: () => context,
+                },
+                identity,
+              ),
+            ),
+        );
+      const { id } = await dispatch("plugin.approval.request", {
+        ...requestParams,
+        twoPhase: true,
+      });
+      await expect(dispatch("plugin.approval.waitDecision", { id }, otherRun)).rejects.toThrow(
+        /expired or not found/,
+      );
+      const wait = dispatch("plugin.approval.waitDecision", { id });
+      await vi.waitFor(async () => expect(await manager.resolve(id, "allow-once")).toBe(true));
+      await expect(wait).resolves.toMatchObject({ id, decision: "allow-once" });
     }));
 
   it("does not offer the bridge to a read-only caller", () =>
