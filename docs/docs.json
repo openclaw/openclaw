@@ -1464,6 +1464,7 @@
                     "group": "Self-hosted and local",
                     "pages": [
                       "install/ansible",
+                      "install/docker-sandboxes",
                       "install/docker-vm-runtime",
                       "install/kubernetes",
                       "install/macos-vm",
