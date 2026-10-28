@@ -112,6 +112,10 @@ export async function continueSessionQueuedInputs(
                 originatingTo: message["__openclaw"]?.chatSendDelivery?.originatingTo,
                 originatingAccountId: message["__openclaw"]?.chatSendDelivery?.originatingAccountId,
                 originatingThreadId: message["__openclaw"]?.chatSendDelivery?.originatingThreadId,
+                thinking: message["__openclaw"]?.chatSendRuntime?.thinking,
+                fastMode: message["__openclaw"]?.chatSendRuntime?.fastMode,
+                fastAutoOnSeconds: message["__openclaw"]?.chatSendRuntime?.fastAutoOnSeconds,
+                timeoutMs: message["__openclaw"]?.chatSendRuntime?.timeoutMs,
                 replyToId: normalizeOptionalString(message["__openclaw"]?.replyToId),
                 message:
                   extractTextFromChatContent(message.content, { joinWith: "\n" }) ||

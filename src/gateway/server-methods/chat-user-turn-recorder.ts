@@ -275,6 +275,7 @@ export function createGatewayChatUserTurnController(params: {
         delete metadata.chatRequestIdentity;
         delete metadata.suppressCommandInterpretation;
         delete metadata.chatSendDelivery;
+        delete metadata.chatSendRuntime;
         delete metadata.modelSelection;
         const visibleHumanInput =
           !params.client?.internal?.syntheticClient &&
@@ -299,6 +300,19 @@ export function createGatewayChatUserTurnController(params: {
                     originatingTo: request.p.originatingTo,
                     originatingAccountId: request.p.originatingAccountId,
                     originatingThreadId: request.p.originatingThreadId,
+                  },
+                }
+              : {}),
+            ...(request.p.thinking !== undefined ||
+            request.p.fastMode !== undefined ||
+            request.p.fastAutoOnSeconds !== undefined ||
+            request.p.timeoutMs !== undefined
+              ? {
+                  chatSendRuntime: {
+                    thinking: request.p.thinking,
+                    fastMode: request.p.fastMode,
+                    fastAutoOnSeconds: request.p.fastAutoOnSeconds,
+                    timeoutMs: request.p.timeoutMs,
                   },
                 }
               : {}),

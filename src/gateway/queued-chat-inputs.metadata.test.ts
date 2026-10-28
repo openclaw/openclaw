@@ -92,7 +92,7 @@ async function retireOriginalInputs(fixture: Fixture) {
   };
 }
 
-it("readmits accepted delivery and reply intent with the sender's current role", async () => {
+it("readmits accepted delivery, reply, and runtime intent with the sender's current role", async () => {
   const created = await createFixture();
   const { profile } = created;
   await using fixture = created.fixture;
@@ -107,6 +107,10 @@ it("readmits accepted delivery and reply intent with the sender's current role",
     originatingAccountId: "queued-account",
     originatingThreadId: "queued-thread",
     replyToId: "quoted-answer",
+    thinking: "high",
+    fastMode: "auto",
+    fastAutoOnSeconds: 7,
+    timeoutMs: 90_000,
   });
   expectStarted(await fixture.send());
   const second = { ...fixture.params, idempotencyKey: "queued-after-demotion" };
@@ -143,6 +147,12 @@ it("readmits accepted delivery and reply intent with the sender's current role",
     ExplicitDeliverRoute: true,
     ReplyToId: "quoted-answer",
     ReplyToBody: "The selected earlier answer.",
+  });
+  expect(dispatched[0]?.replyOptions).toMatchObject({
+    thinkingLevelOverride: "high",
+    fastModeOverride: "auto",
+    fastModeAutoOnSecondsOverride: 7,
+    timeoutOverrideMs: 90_000,
   });
   setUserProfileRole(profile.id, "writer");
   await continueSessionQueuedInputs(fixture.context, retained.target, {

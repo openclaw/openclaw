@@ -1,4 +1,5 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
@@ -59,6 +60,12 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
       originatingTo?: string;
       originatingAccountId?: string;
       originatingThreadId?: string;
+    };
+    chatSendRuntime?: {
+      thinking?: string;
+      fastMode?: FastMode;
+      fastAutoOnSeconds?: number;
+      timeoutMs?: number;
     };
     requesterOrigin?: RequesterOrigin;
   };
