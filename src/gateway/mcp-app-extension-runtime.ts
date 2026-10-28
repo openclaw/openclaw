@@ -254,11 +254,11 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
     };
     current();
     const projected = buildBundleMcpToolsFromCatalog({ catalog, includeAppOnlyInventory: true });
-    const names = new Map(
+    const projectedTools = new Map(
       projected.flatMap((tool) => {
         const mcp = getPluginToolMeta(tool)?.mcp;
         return mcp?.operation === "tool"
-          ? [[JSON.stringify([mcp.serverName, mcp.toolName]), tool.name] as const]
+          ? [[JSON.stringify([mcp.serverName, mcp.toolName]), tool] as const]
           : [];
       }),
     );
@@ -283,9 +283,9 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
       ) {
         throw new Error("MCP App tool is denied by server policy");
       }
-      const name = names.get(JSON.stringify([tool.serverName, tool.toolName]));
+      const projectedTool = projectedTools.get(JSON.stringify([tool.serverName, tool.toolName]));
       if (
-        !name ||
+        !projectedTool ||
         live.entry.toolOverrides?.mcpServers?.[tool.serverName] === false ||
         live.entry.toolOverrides?.mcpToolsDeny?.[tool.serverName]?.includes(tool.toolName)
       ) {
@@ -296,7 +296,9 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
         client: options.client,
         current: live,
         readPreparedSessionEntry: (source) => projection.sharingTarget(source)?.entry,
-        toolName: name,
+        toolName: projectedTool.name,
+        // Bundle MCP ownership (not the server name) is what plugin-scoped policy entries match.
+        toolMeta: getPluginToolMeta(projectedTool),
         assertNativeRuntimeCurrent: runtime.assertOwnerCurrent,
       });
       return (
