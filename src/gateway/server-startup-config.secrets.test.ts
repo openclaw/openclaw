@@ -1063,4 +1063,4 @@ it("uses the activation env when publishing persisted startup auth", async () =>
       }
     },
   );
-}); /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+});

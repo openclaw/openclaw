@@ -582,7 +582,7 @@ describe("Code Mode model matrix artifacts", () => {
               ? {
                   gateway: {
                     modelAccounting: await readMatrixModelAccounting({
-                      file: path.join(repoRoot, "absent-model-timeline.jsonl"),
+                      file: path.join(params.outputDir, "absent-model-timeline.jsonl"),
                       joined: false,
                       foregroundRunIds: [],
                     }),
@@ -616,6 +616,7 @@ describe("Code Mode model matrix artifacts", () => {
                       taskReceipts: "task-receipts.json",
                       interviewReceipts: "interview-receipts.json",
                       log: "gateway.log",
+                      modelTimeline: "absent-model-timeline.jsonl",
                     },
                   },
                 }
