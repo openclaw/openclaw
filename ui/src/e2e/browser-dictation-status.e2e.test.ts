@@ -400,6 +400,6 @@ suite.define(() => {
       await captureFullPage(page, "microphone-picker-capability-gating-full");
       await picker.locator('[data-chat-talk-capability="dictation"]').focus();
       await page.keyboard.press("Enter");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/talk");
     }));
 });

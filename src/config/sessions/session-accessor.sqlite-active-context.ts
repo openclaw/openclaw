@@ -25,15 +25,11 @@ import {
   resolveTranscriptBoundaryWindow,
 } from "./session-accessor.sqlite-reset-window.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
-import {
-  DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
-  DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
-  MAX_VISIBLE_MESSAGE_MAX_BYTES,
-  MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
-  normalizeVisibleMessageLimit,
-} from "./session-accessor.sqlite-visible-cursor.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
-import { selectBoundedContextRows } from "./session-bounded-context-selection.js";
+import {
+  normalizeBoundedContextLimits,
+  selectBoundedContextRows,
+} from "./session-bounded-context-selection.js";
 import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import type { SessionTranscriptContextSelection } from "./session-history-read.types.js";
@@ -254,23 +250,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
     ) => void;
   },
 ): SessionTranscriptBoundedActiveContext {
-  const limits =
-    "compaction" in options
-      ? undefined
-      : {
-          maxBytes: normalizeVisibleMessageLimit(
-            options.maxBytes,
-            DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
-            MAX_VISIBLE_MESSAGE_MAX_BYTES,
-            "maxBytes",
-          ),
-          maxEvents: normalizeVisibleMessageLimit(
-            options.maxEvents,
-            DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
-            MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
-            "maxEvents",
-          ),
-        };
+  const limits = normalizeBoundedContextLimits(options);
   const read = (projection: CurrentTranscriptProjection): SessionTranscriptBoundedActiveContext => {
     const fence = options.ignoreReadFence
       ? undefined

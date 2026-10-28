@@ -2,6 +2,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 
 type WaitForTransportReadyParams = {
   label: string;
@@ -16,7 +17,7 @@ type WaitForTransportReadyParams = {
 
 /** Polls until ready, timed out, or aborted, with bounded logging through the runtime sink. */
 export async function waitForTransportReady(params: WaitForTransportReadyParams): Promise<void> {
-  const started = Date.now();
+  const started = monotonicNow();
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 0, 0);
   const deadline = started + timeoutMs;
   const logAfterMs = resolveTimerTimeoutMs(params.logAfterMs, timeoutMs, 0);
@@ -41,7 +42,7 @@ export async function waitForTransportReady(params: WaitForTransportReadyParams)
     }
     lastError = res.error ?? null;
 
-    const now = Date.now();
+    const now = monotonicNow();
     if (now >= deadline) {
       break;
     }

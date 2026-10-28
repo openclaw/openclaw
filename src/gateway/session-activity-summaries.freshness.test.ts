@@ -102,17 +102,29 @@ it("keeps committed recap progress across stale requests and summarizes new acti
   changed.mockClear();
   const sourceReads = vi.spyOn(summarySource, "readActivitySummarySource");
   expect((await ensure(requestedEntry)).text).toBe(recap);
+  const notify = async (reasons: Array<"archive" | "unarchive">) => {
+    const work = new AsyncWorkScope();
+    work.run(() => {
+      for (const reason of reasons) {
+        service.handleLifecycle({ sessionKey: target.key, agentId: target.agentId, reason });
+      }
+    });
+    await work.drain();
+  };
+  await notify(["archive", "unarchive", "archive"]);
   expect(complete).toHaveBeenCalledTimes(1);
   expect(changed).not.toHaveBeenCalled();
   expect(sourceReads).not.toHaveBeenCalled();
 
   await messages(1, 1);
-  await ensure(requestedEntry);
+  await notify(["archive", "unarchive", "archive"]);
   expectPrompt(2, recap, ["assistant: Outcome 1"]);
-  expect(sourceReads).toHaveBeenCalledTimes(1);
-  await ensure(requestedEntry);
-  expect(complete).toHaveBeenCalledTimes(2);
+  expect(view()?.state).toBe("current");
   expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });
+  const completedSourceReads = sourceReads.mock.calls.length;
+  await ensure(requestedEntry);
+  expect(sourceReads).toHaveBeenCalledTimes(completedSourceReads);
+  expect(complete).toHaveBeenCalledTimes(2);
 });
 
 it("invalidates cached projection after an offline branch change without changing activity ordering", async () => {

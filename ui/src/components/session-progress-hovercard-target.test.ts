@@ -29,10 +29,10 @@ function matchPointer(tag: string, className: string, pointerType = "") {
   host.addEventListener("pointerover", (event) => {
     matched = sessionProgressHoverTargetFromEvent(event);
   });
-  candidate.dispatchEvent(
-    new PointerEvent("pointerover", { bubbles: true, composed: true, pointerType }),
-  );
-  return matched;
+  candidate
+    .appendChild(document.createElement("span"))
+    .dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true, pointerType }));
+  return { matched, candidate };
 }
 
 afterEach(async () => {
@@ -45,31 +45,17 @@ afterEach(async () => {
 
 describe("sessionProgressHoverTargetFromEvent", () => {
   it.each([
-    ["a chat link", "a", "markdown-session-link"],
-    ["a sidebar row", "div", "sidebar-recent-session"],
-  ])("matches %s", (_label, tagName, className) => {
-    const host = document.body.appendChild(document.createElement("div"));
-    const target = host.appendChild(document.createElement(tagName));
-    target.className = className;
-    target.dataset.sessionKey = "agent:main:other-session";
-    const child = target.appendChild(document.createElement("span"));
-    let matched: HTMLElement | null = null;
-    host.addEventListener("pointerover", (event) => {
-      matched = sessionProgressHoverTargetFromEvent(event);
-    });
-
-    child.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
-
-    expect(matched).toBe(target);
-  });
-
-  it("ignores unrelated data carriers", () => {
-    expect(matchPointer("button", "custom-session-control")).toBeNull();
-  });
-
-  it("ignores touch pointer events", () => {
-    expect(matchPointer("div", "sidebar-recent-session", "touch")).toBeNull();
-  });
+    ["a chat link", "a", "markdown-session-link", "", true],
+    ["a sidebar row", "div", "sidebar-recent-session", "", true],
+    ["unrelated data", "button", "custom-session-control", "", false],
+    ["touch input", "div", "sidebar-recent-session", "touch", false],
+  ] as const)(
+    "matches nested targets only for supported input: %s",
+    (_label, tag, className, pointer, accepts) => {
+      const { matched, candidate } = matchPointer(tag, className, pointer);
+      expect(matched).toBe(accepts ? candidate : null);
+    },
+  );
 });
 
 describe("session progress hovercard ownership", () => {
@@ -108,14 +94,16 @@ describe("session progress hovercard ownership", () => {
       expect(portal?.textContent).toContain("research progress");
       harness.emitPullRequestStatus("ready");
       flush();
-      expect(portal?.querySelector('[role="status"]')).toBeNull();
+      expect(portal?.querySelector('.session-hovercard__more[role="status"]')).toBeNull();
 
       harness.emitPullRequestStatus(status);
       flush();
-      expect(portal?.querySelector('[role="status"]')?.textContent?.trim()).toBe(warning);
+      expect(
+        portal?.querySelector('.session-hovercard__more[role="status"]')?.textContent?.trim(),
+      ).toBe(warning);
       harness.emitPullRequestStatus("ready");
       flush();
-      expect(portal?.querySelector('[role="status"]')).toBeNull();
+      expect(portal?.querySelector('.session-hovercard__more[role="status"]')).toBeNull();
       expect(getPortal()).toBe(portal);
     },
   );

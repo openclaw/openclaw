@@ -10,6 +10,10 @@ import {
 } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
+import {
+  pluginCatalogIdFromRouteSuffix,
+  pluginCatalogRouteSuffix,
+} from "../../packages/plugin-package-contract/src/catalog-route.ts";
 import { DEFAULT_AGENT_PANEL, isAgentsPanel, type AgentsPanel } from "./lib/agents/panels.ts";
 import type { BoardFace } from "./lib/board/settings.ts";
 import { takeGraphemes } from "./lib/graphemes.ts";
@@ -340,12 +344,12 @@ export function pathForPluginCatalogEntry(id: string, basePath = ""): string {
   if (!isPluginCatalogId(id)) {
     throw new Error("Invalid plugin catalog id for a route path.");
   }
-  return `${pathForRoute("plugins", basePath)}/${id}`;
+  return `${pathForRoute("plugins", basePath)}/${pluginCatalogRouteSuffix(id)}`;
 }
 
 export function pluginCatalogIdFromPath(pathname: string, basePath = ""): string | null {
   const id = routePathSuffix(pathname, "plugins", basePath);
-  return id && isPluginCatalogId(id) ? id : null;
+  return id ? pluginCatalogIdFromRouteSuffix(id) : null;
 }
 
 export function pathForClawCatalogEntry(packageName: string, basePath = ""): string {

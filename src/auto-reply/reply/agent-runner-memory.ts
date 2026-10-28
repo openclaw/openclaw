@@ -8,6 +8,7 @@ import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-comp
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { MemoryFlushToolsUnavailableError } from "../../agents/agent-tools.memory-flush.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { readCompactionTranscriptBytes } from "../../agents/compaction-transcript-bytes.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -81,6 +82,7 @@ import {
   type MemoryFlushPlanForRunResolution,
 } from "./memory-flush-plan.js";
 import {
+  TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS,
   estimatePromptTokensForMemoryFlush,
   hasAlreadyFlushedForCurrentCompaction,
   resolveCompactionThreshold,
@@ -88,6 +90,7 @@ import {
   resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
+  shouldReadMemoryFlushTranscript,
 } from "./memory-flush.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
@@ -104,9 +107,6 @@ const embeddedAgentRuntimeLoader = createLazyImportLoader(
 const memoryFlushPreparationLoader = createLazyImportLoader(
   () => import("./memory-flush-prepare.js"),
 );
-
-// Leave room for large assistant outputs when checking near-threshold usage.
-const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 
 /** Compacts session context before a reply or after a completed direct command. */
 export async function runSessionCompactionIfNeeded(params: {
@@ -176,13 +176,14 @@ export async function runSessionCompactionIfNeeded(params: {
     sessionKey: compactionSessionKey,
     storePath: compactionStorePath,
   };
-  const readTranscriptSize = (sessionId: string) =>
-    readSessionLogSnapshot({
-      ...compactionTarget,
-      sessionId,
-      includeByteSize: true,
-      includeUsage: false,
-      abortSignal: params.abortSignal,
+  const readTranscriptSize = async (sessionId: string, rawBytes?: number) =>
+    readCompactionTranscriptBytes({
+      target: { ...compactionTarget, sessionId },
+      rawBytes,
+      runtime: params.followupRun.run,
+      maxBytes: maxActiveTranscriptBytes,
+      contextTokenBudget: contextWindowTokens,
+      signal: params.abortSignal,
     });
 
   const contextWindowTokens = resolveFollowupContextTokens(runtimeParams, runtimeId);
@@ -227,13 +228,10 @@ export async function runSessionCompactionIfNeeded(params: {
           sessionId: entry.sessionId,
           contextWindowTokens,
         });
-  const transcriptSizeSnapshot =
-    shouldCheckActiveTranscriptBytes && transcriptUsageTokens?.transcriptByteSize === undefined
-      ? await readTranscriptSize(entry.sessionId)
-      : undefined;
+  const activeTranscriptBytes = shouldCheckActiveTranscriptBytes
+    ? await readTranscriptSize(entry.sessionId, transcriptUsageTokens?.transcriptByteSize)
+    : undefined;
   assertActive();
-  const activeTranscriptBytes =
-    transcriptUsageTokens?.transcriptByteSize ?? transcriptSizeSnapshot?.byteSize;
   const exceedsTranscriptByteThreshold =
     activeTranscriptBytes !== undefined &&
     maxActiveTranscriptBytes !== undefined &&
@@ -326,7 +324,7 @@ export async function runSessionCompactionIfNeeded(params: {
     amount = 1,
   ) => {
     const postCompactionBytes = exceedsTranscriptByteThreshold
-      ? (await readTranscriptSize(acceptedEntry.sessionId)).byteSize
+      ? await readTranscriptSize(acceptedEntry.sessionId)
       : undefined;
     assertActive();
     const transcriptByteCompactionLatch =
@@ -583,7 +581,10 @@ export async function runMemoryFlushIfNeeded(
   const flushRunId = crypto.randomUUID();
   let flushRunRegistered = false;
   const recordFailure = (error: unknown) => recordMemoryFlushFailure(error, params, entry);
-  const contextWindowTokens = resolveFollowupContextTokens(runtimeParams, runtimeId);
+  const contextWindowTokens = Math.min(
+    resolveFollowupContextTokens(runtimeParams, runtimeId),
+    params.recoveryContextTokenBudget ?? Number.POSITIVE_INFINITY,
+  );
   let memoryFlushResolution: MemoryFlushPlanForRunResolution | null;
   try {
     memoryFlushResolution = resolveMemoryFlushPlanForRun({ cfg: params.cfg, contextWindowTokens });
@@ -602,7 +603,6 @@ export async function runMemoryFlushIfNeeded(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
   const persistedPromptTokens = resolveFreshSessionTotalTokens(entry);
-  const hasFreshPersistedPromptTokens = persistedPromptTokens !== undefined;
 
   // The soft margin belongs only to early flushing, leaving room before blocking compaction.
   const flushThreshold = Math.max(
@@ -613,21 +613,9 @@ export async function runMemoryFlushIfNeeded(
     }) - Math.max(0, Math.floor(memoryFlushPlan.softThresholdTokens)),
   );
 
-  // When totals are stale/unknown, derive prompt + last output from transcript so memory
-  // flush can still be evaluated against projected next-input size.
-  //
-  // When totals are fresh, only read the transcript when we're close enough to the
-  // threshold that missing the last output tokens could flip the decision.
-  const shouldReadTranscriptForOutput =
-    entry &&
-    hasFreshPersistedPromptTokens &&
-    promptTokenEstimate !== undefined &&
-    flushThreshold > 0 &&
-    persistedPromptTokens + promptTokenEstimate >=
-      flushThreshold - TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS;
-
   const shouldReadTranscript = Boolean(
-    entry && (!hasFreshPersistedPromptTokens || shouldReadTranscriptForOutput),
+    entry &&
+    shouldReadMemoryFlushTranscript({ persistedPromptTokens, promptTokenEstimate, flushThreshold }),
   );
 
   const forceFlushTranscriptBytes = memoryFlushPlan.forceFlushTranscriptBytes;
@@ -714,6 +702,9 @@ export async function runMemoryFlushIfNeeded(
   const tokenCountForFlush = asPositiveFiniteNumber(projectedTokenCount);
 
   const shouldFlushMemory =
+    (params.recoveryContextTokenBudget !== undefined &&
+      entry != null &&
+      !hasAlreadyFlushedForCurrentCompaction(entry)) ||
     shouldRunMemoryFlush({
       entry,
       tokenCount: tokenCountForFlush,

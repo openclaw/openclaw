@@ -294,6 +294,9 @@ function createSessionProgressHovercard(
             boardFace: sidebarRow.boardFace,
             hasAutomation: sidebarRow.hasAutomation,
             hasActiveRun: sidebarRow.hasActiveRun,
+            gatewayHasActiveRun: sidebarRow.gatewayHasActiveRun,
+            hasActiveSubagentRun: sidebarRow.hasActiveSubagentRun,
+            lastRunError: sidebarRow.lastRunError,
             channelAvatarUrl: sidebarRow.channelAvatarUrl,
             channelPresentation: sidebarRow.channelPresentation,
             lastMessagePreview: sidebarRow.lastMessagePreview,
@@ -327,6 +330,7 @@ function createSessionProgressHovercard(
     const currentContext = applicationContext();
     const input: SessionHovercardInput = {
       row: sidebarRow,
+      connected: gateway?.snapshot.phase === "connected",
       selfUserId: currentContext?.gateway.snapshot.selfUser?.id,
       avatarAuth: resolveControlUiAvatarAuth({
         hello: gateway?.snapshot.hello,

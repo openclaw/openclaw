@@ -17,8 +17,6 @@
 
 /* The mobile drawer keeps management actions in its always-reachable menu. */
 .shell--mobile-nav .sidebar-recent-session {
-  padding-right: calc(4px + var(--sidebar-session-state-reserve, 0px));
-
   &.session-row-host {
     --session-row-actions-reserve: 48px;
   }

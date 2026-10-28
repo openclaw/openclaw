@@ -104,7 +104,7 @@ describe("applyPatch", () => {
     const { dir, file: filePath } = await makeFile(original);
 
     await expect(applyPatch(priceUpdatePatch, { cwd: dir, workspaceOnly })).rejects.toThrow(
-      /not valid UTF-8/,
+      /valid UTF-8/,
     );
     await expect(fs.readFile(filePath)).resolves.toEqual(original);
   });

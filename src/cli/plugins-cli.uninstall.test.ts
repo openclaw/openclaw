@@ -241,7 +241,9 @@ it("rejects an ambiguous display name before planning or mutating installed plug
   ]);
   await expect(uninstall("calendar", "--force")).rejects.toThrow("__exit__:1");
 
-  expect(cli.runtimeErrors.at(-1)).toContain('Plugin uninstall target "calendar" is ambiguous');
+  expect(cli.runtimeErrors.at(-1)).toContain(
+    'Plugin uninstall target "calendar" is ambiguous; matches: calendar-one, calendar-two. Use an exact plugin id.',
+  );
 
   expectNoCalls(
     cli.promptYesNoMock,

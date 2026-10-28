@@ -273,6 +273,7 @@ const { values } = parseArgs({
     "warm-reload": { type: "boolean", default: false },
     "row-facts": { type: "boolean", default: false },
     "pane-chrome-probe": { type: "boolean", default: false },
+    "archived-session": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -798,6 +799,7 @@ const fixture = createControlUiTeamScaleFixture({
   largeSnapshot: values["large-snapshot"],
   rowFacts: values["row-facts"],
   offRosterSession: values["off-roster-route"],
+  archivedSession: values["archived-session"],
   transcriptMessages,
   dashboardWidgetFontUrl: dashboardFont
     ? `http://127.0.0.1:${address.port}${dashboardFontPath}`
@@ -1742,25 +1744,55 @@ try {
       persistColdLoadWarmState,
       warmInput,
     );
-    warmStates.push(warmStorage);
-    snapshotSaves.push(snapshotSave);
-    for (let index = 1; index < bundleSlots.length; index++) {
-      await restoreColdLoadWarmState(page, warmStorage, warmStates[index - 1]);
-      const reloadUrl = page.url();
-      await selectComparisonBundle(index, page);
-      await page.goto(reloadUrl, { waitUntil: "domcontentloaded" });
-      await settle("chat");
-      if (viewportName === "mobile") {
-        await navigationDrawerToggle(page).click();
-        await page.locator(".shell--nav-drawer-open").waitFor();
+    const passes = values["warm-reload"] ? 2 : 1;
+    for (let index = 0; index < bundleSlots.length; index++) {
+      let storage = warmStorage;
+      if (!values["warm-reload"] && index === 0) {
+        warmStates.push(storage);
+        snapshotSaves.push(snapshotSave);
+        continue;
       }
-      await expandSidebar();
-      const { storage, ...saved } = await page.evaluate(persistColdLoadWarmState, warmInput);
-      warmStates.push(storage);
-      snapshotSaves.push(saved);
-      if (viewportName === "mobile") {
-        await page.keyboard.press("Escape");
-        await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+      const primes: typeof snapshotSaves = [];
+      // Every arm starts from the same seed, then reloads its own projection before freezing it.
+      for (let pass = 0; pass < passes; pass++) {
+        await restoreColdLoadWarmState(page, storage, pass === 0 ? warmStates.at(-1) : storage);
+        const reloadUrl = page.url();
+        await selectComparisonBundle(index, page);
+        await page.goto(reloadUrl, { waitUntil: "domcontentloaded" });
+        await settle("chat");
+        if (viewportName === "mobile") {
+          await navigationDrawerToggle(page).click();
+          await page.locator(".shell--nav-drawer-open").waitFor();
+        }
+        await expandSidebar();
+        const { storage: captured, ...saved } = await page.evaluate(
+          persistColdLoadWarmState,
+          warmInput,
+        );
+        storage = captured;
+        primes.push(saved);
+        if (pass === passes - 1) {
+          if (values["warm-reload"]) {
+            const warmReload = await page.evaluate(() =>
+              Reflect.get(window, "__warmReload")?.read(),
+            );
+            if (typeof warmReload?.milestones?.cacheRead !== "number") {
+              throw new Error(
+                "Warm comparison seed requires a cached transcript read in every arm",
+              );
+            }
+            await writeFile(
+              path.join(artifactDir, `warm-prime-${index}.json`),
+              JSON.stringify({ primes, warmReload, snapshots: storage.records.snapshots }),
+            );
+          }
+          warmStates.push(storage);
+          snapshotSaves.push(saved);
+        }
+        if (viewportName === "mobile") {
+          await page.keyboard.press("Escape");
+          await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+        }
       }
     }
     await restoreColdLoadWarmState(page, warmStorage, warmStates.at(-1));

@@ -450,15 +450,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               onPartialReply: draftStream
                 ? (payload) => draftController.onPartialReply(payload.text ?? "")
                 : undefined,
-              onBlockReplyQueued: draftStream
-                ? (payload, context) => {
-                    if (payload.isCompactionNotice === true) {
-                      return false;
-                    }
-                    draftController.queueDraftBlockBoundary(payload, context);
-                    return false;
-                  }
-                : undefined,
               // Reset draft boundary bookkeeping on assistant message
               // boundaries so post-tool blocks stream from a fresh
               // cumulative payload (payload.text resets upstream).

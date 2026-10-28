@@ -1,18 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { locationParams, readLocation } from "./page-location.js";
 import {
-  repairMessage,
+  defaultOptions,
+  repairPrompt,
   scribeById,
   scribeLabel,
   scribeSetup,
   setupIdempotencyKey,
-  setupMessage,
+  setupPrompt,
 } from "./scribes-catalog.js";
-import { detectSources, loadScribes, type ScribeJob } from "./scribes-state.js";
+import { detectSources, loadScribes, statusFromText, type ScribeJob } from "./scribes-state.js";
 
 const job = (overrides: Partial<ScribeJob> = {}): ScribeJob => ({
   id: "job-review",
-  declarationKey: "knowledge:scribe:unlinked-review",
+  declarationKey: "knowledge:scribe:claim-consolidation",
   enabled: true,
   configRevision: "rev-1",
   schedule: { kind: "cron", expr: "45 3 * * *", tz: "America/Los_Angeles" },
@@ -29,46 +30,82 @@ describe("scribes catalog", () => {
     );
   });
 
-  it("emits exactly the shared setup format: fixed text plus options JSON", () => {
+  it("writes an ongoing setup prompt as settings, numbered steps and its run message", () => {
     const setup = scribeSetup(
       "conversations",
       "ongoing",
       { scope: "all", since: "90d", schedule: "0 4 * * *" },
-      "main",
       "America/Los_Angeles",
     );
-    expect(setupMessage(setup)).toBe(
+    const prompt = setupPrompt(setup);
+    expect(prompt).toMatch(
+      /^Set up the Knowledge scribe "Learn from conversations" in this conversation\./,
+    );
+    expect(prompt).toContain(
       [
-        "Knowledge scribe setup: conversations",
-        'Follow the "Scribe setup" section of the knowledge-ingest skill with these options.',
-        "```json",
-        '{"scribe":"conversations","mode":"ongoing","options":{"scope":"all","since":"90d","schedule":"0 4 * * *"},"timezone":"America/Los_Angeles","agentId":"main"}',
-        "```",
+        "Settings:",
+        "- Runs daily at 4:00 AM America/Los_Angeles (cron `0 4 * * *`).",
+        "- Conversations: active and archived, from the last 90 days.",
       ].join("\n"),
     );
-    expect(repairMessage(setup).split("\n")[0]).toBe("Knowledge scribe repair: conversations");
+    expect(prompt).toContain("declaration key `knowledge:scribe:conversations`");
+    expect(prompt).toContain("Don't start a run from this turn");
+    expect(prompt).toContain("`Scribe status: on — <one sentence: the automation");
+    const runMessage = prompt.match(/Run message:\n\n```text\n([\s\S]+)\n```$/)?.[1] ?? "";
+    expect(runMessage).toMatch(
+      /archived, from the last 90 days\.[\s\S]*"Learn from conversations"/,
+    );
+    expect(runMessage).toContain("This run can't change automations");
+    expect(runMessage).not.toContain("With the automations tool");
+    expect(prompt, "no JSON in the prompt").not.toMatch(/[{}]|```json|SCRIBE_RESULT/);
   });
 
-  it("drops the schedule for a once conversations scribe and keeps memory sources", () => {
-    expect(
-      scribeSetup(
-        "conversations",
-        "once",
-        { scope: "active", since: "30d", schedule: "0 4 * * *" },
-        "main",
-        "UTC",
-      ).options,
-    ).toEqual({ scope: "active", since: "30d" });
-    expect(
-      setupMessage(
-        scribeSetup("memory", "once", { sources: ["memory-md", "dreams"] }, "main", "UTC"),
-      ),
-    ).toContain(
-      '{"scribe":"memory","mode":"once","options":{"sources":["memory-md","dreams"]},"timezone":"UTC","agentId":"main"}',
+  it("writes a once prompt that does the work in this turn, and defaults the review to weekly", () => {
+    const once = scribeSetup("conversations", "once", defaultOptions("conversations"), "UTC");
+    expect(once.options).toEqual({ scope: "active", since: "30d" });
+    const memory = setupPrompt(
+      scribeSetup("memory", "once", { sources: ["memory-md", "dreams"] }, "UTC"),
     );
-    expect(setupMessage(scribeSetup("unlinked-review", "ongoing", {}, "main", "UTC"))).toContain(
-      'Follow the "Scribe setup" section of the knowledge-unlinked-claims skill',
+    expect(memory).toContain("- Runs once, now, in this turn. Nothing is scheduled.");
+    expect(memory).toContain("- Memory files: MEMORY.md and the Dreaming diary (DREAMS.md).");
+    expect(memory).toContain("`Scribe status: done — <one sentence with counts");
+    expect(memory).not.toMatch(/Run message|automations tool/);
+    const review = setupPrompt(
+      scribeSetup("claim-consolidation", "ongoing", defaultOptions("claim-consolidation"), "UTC"),
     );
+    expect(review).toContain("- Runs weekly, Sundays at 3:45 AM UTC (cron `45 3 * * 0`).");
+    expect(review).toContain("The knowledge-claim-consolidation skill does the work on each run.");
+  });
+
+  it("writes a repair prompt that keeps the automation's schedule and run message", () => {
+    const prompt = repairPrompt("claim-consolidation", {
+      schedule: { kind: "cron", expr: "45 3 * * *", tz: "UTC" },
+      runMessage: "Edited run message",
+    });
+    expect(prompt).toMatch(/^Repair the Knowledge scribe "Knowledge Consolidation"/);
+    expect(prompt).toContain("- Runs nightly at 3:45 AM UTC (cron `45 3 * * *`).");
+    expect(prompt).toContain("leave it as it is and go to the last step");
+    expect(prompt.endsWith("```text\nEdited run message\n```")).toBe(true);
+    expect(
+      repairPrompt("claim-consolidation", {
+        schedule: { kind: "cron", expr: "5 1 * * 2", tz: "UTC" },
+      }),
+    ).toContain("- Runs on cron `5 1 * * 2`, time zone UTC.");
+  });
+
+  it("reads a status line tolerantly", () => {
+    const cases: [string, string?, string?][] = [
+      ["Filed.\nScribe status: on — 9 filed, 2 left", "on", "9 filed, 2 left"],
+      ["**Scribe status:** Done – 12 saved", "done", "12 saved"],
+      ["`Scribe status: failed - not writable`", "failed", "not writable"],
+      ["_Scribe status: on — next run America/Los_Angeles_", "on", "next run America/Los_Angeles"],
+      ["scribe status: on", "on", ""],
+      ["Scribe status: maybe — x"],
+      ["All done."],
+    ];
+    for (const [text, state, summary] of cases) {
+      expect(statusFromText(text), text).toEqual(state ? { state, summary } : undefined);
+    }
   });
 });
 
@@ -97,75 +134,32 @@ describe("scribes state", () => {
     return snapshots.find((snapshot) => snapshot.scribe.id === "conversations")!;
   }
   const session = { key: "agent:main:dock:1", displayName: "Scribe · Learn from conversations" };
-  const result = (state: string) =>
-    assistant(
-      `SCRIBE_RESULT {"scribe":"conversations","state":"${state}","jobId":null,"summary":"x"}`,
-    );
+  const result = (state: string) => assistant(`Scribe status: ${state} — x`);
+  const start = user("Set up the Knowledge scribe, as edited by hand.");
 
-  it("reads the newest valid SCRIBE_RESULT line from assistant messages", async () => {
+  it("reads the newest status line from assistant messages", async () => {
     const snapshot = await conversationsScribe({
       session,
       messages: [
-        assistant(
-          'SCRIBE_RESULT {"scribe":"conversations","state":"on","jobId":null,"summary":"old"}',
-        ),
-        user(
-          'SCRIBE_RESULT {"scribe":"conversations","state":"failed","jobId":null,"summary":"quoted"}',
-        ),
-        assistant(
-          'Read 12 conversations.\nSCRIBE_RESULT {"scribe":"conversations","state":"done","jobId":null,"summary":"12 saved"}',
-        ),
-        assistant("SCRIBE_RESULT {not json}"),
+        assistant("Scribe status: on — old"),
+        user("Scribe status: failed — quoted"),
+        assistant("Read 12 conversations.\n**Scribe status:** done — 12 saved"),
+        assistant("No status here."),
       ],
     });
-    expect(snapshot.result).toEqual({
-      scribe: "conversations",
-      state: "done",
-      jobId: null,
-      summary: "12 saved",
-    });
+    expect(snapshot.result).toEqual({ state: "done", summary: "12 saved" });
     expect(
       (await conversationsScribe({ session, messages: [assistant("none")] })).result,
     ).toBeUndefined();
   });
 
-  it("recovers the options of the latest setup message", async () => {
-    const setup = scribeSetup(
-      "conversations",
-      "once",
-      { scope: "all", since: "all" },
-      "main",
-      "UTC",
-    );
-    const snapshot = await conversationsScribe({
-      session,
-      messages: [user(setupMessage(setup)), assistant("ok")],
-    });
-    expect(snapshot.setup).toEqual(setup);
-    const edited = await conversationsScribe({
-      session,
-      messages: [user("Knowledge scribe setup: nope\nx\n```json\n{}\n```")],
-    });
-    expect(edited.setup).toBeUndefined();
-  });
-
   it("derives Available, Starting, On, Paused, Failing, Done and Needs reauthorization", async () => {
     const archived = { ...session, archived: true };
-    const setup = scribeSetup(
-      "conversations",
-      "ongoing",
-      { scope: "active", since: "30d", schedule: "0 4 * * *" },
-      "main",
-      "UTC",
-    );
     const cases: [Parameters<typeof conversationsScribe>[0], string][] = [
       [{}, "available"],
       [{ session }, "available"],
-      [{ session, messages: [user(setupMessage(setup))] }, "starting"],
-      [
-        { session: { ...session, status: "interrupted" }, messages: [user(setupMessage(setup))] },
-        "failing",
-      ],
+      [{ session, messages: [start] }, "starting"],
+      [{ session: { ...session, status: "interrupted" }, messages: [start] }, "failing"],
       [{ session, job: job() }, "on"],
       [{ session, job: job({ enabled: false }) }, "paused"],
       [{ session, job: job(), messages: [result("failed")] }, "failing"],
@@ -184,7 +178,7 @@ describe("scribes state", () => {
       [{ session: archived, job: job() }, "reauth"],
       [{ job: job() }, "reauth"],
       [{ session: archived }, "available"],
-      [{ session, messages: [result("on"), user(setupMessage(setup))] }, "starting"],
+      [{ session, messages: [result("on"), start] }, "starting"],
     ];
     for (const [world, status] of cases) {
       expect((await conversationsScribe(world)).status, JSON.stringify(world)).toBe(status);
@@ -192,7 +186,7 @@ describe("scribes state", () => {
   });
 
   it("finds sessions by display name and jobs by declarationKey through Gateway reads", async () => {
-    const review = scribeById("unlinked-review")!,
+    const review = scribeById("claim-consolidation")!,
       memory = scribeById("memory")!;
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "cron.list") {
@@ -216,14 +210,8 @@ describe("scribes state", () => {
         return params?.sessionKey === "s-memory"
           ? {
               messages: [
-                user(
-                  setupMessage(
-                    scribeSetup("memory", "once", { sources: ["memory-md"] }, "main", "UTC"),
-                  ),
-                ),
-                assistant(
-                  'SCRIBE_RESULT {"scribe":"memory","state":"done","jobId":null,"summary":"Saved 4"}',
-                ),
+                user(setupPrompt(scribeSetup("memory", "once", { sources: ["memory-md"] }, "UTC"))),
+                assistant("Saved what Memory knew.\nScribe status: done — Saved 4"),
               ],
             }
           : { messages: [] };
@@ -232,14 +220,14 @@ describe("scribes state", () => {
     });
     const snapshots = await loadScribes({ request } as never, "main");
     expect(snapshots.map((s) => [s.scribe.id, s.status, s.session?.key, s.job?.id])).toEqual([
-      ["unlinked-review", "on", "s-review", "job-review"],
+      ["claim-consolidation", "on", "s-review", "job-review"],
       ["conversations", "available", undefined, undefined],
       ["memory", "done", "s-memory", undefined],
     ]);
-    expect(snapshots[2]!.setup?.options).toEqual({ sources: ["memory-md"] });
+    expect(snapshots[2]!.result).toEqual({ state: "done", summary: "Saved 4" });
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
-      search: "Scribe · Review unlinked claims",
+      search: "Scribe · Knowledge Consolidation",
       archived: "all",
       limit: 20,
     });

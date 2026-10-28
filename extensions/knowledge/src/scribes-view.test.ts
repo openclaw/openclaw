@@ -2,13 +2,13 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import type { Page } from "./page-context.js";
-import { repairMessage, scribeSetup, setupMessage } from "./scribes-catalog.js";
+import { defaultOptions, repairPrompt, scribeSetup, setupPrompt } from "./scribes-catalog.js";
 import { scribes } from "./scribes-view.js";
 
 type Call = [string, Record<string, unknown> | undefined];
 const reviewJob = {
   id: "job-review",
-  declarationKey: "knowledge:scribe:unlinked-review",
+  declarationKey: "knowledge:scribe:claim-consolidation",
   enabled: true,
   configRevision: "rev-7",
   schedule: { kind: "cron", expr: "45 3 * * 0" },
@@ -62,8 +62,7 @@ function fixture(world: {
             {
               ts: 1_793_000_000_000,
               status: "ok",
-              summary:
-                'Filed claims.\nSCRIBE_RESULT {"scribe":"unlinked-review","state":"on","jobId":"job-review","summary":"9 filed · 2 pages created"}',
+              summary: "Filed claims.\nScribe status: on — 9 filed · 2 pages created",
               model: "anthropic/claude",
             },
           ],
@@ -103,6 +102,18 @@ function fixture(world: {
   };
   return { ui, calls, request, create, open, load, render, page, scribesTab };
 }
+const reviewSetup = scribeSetup(
+  "claim-consolidation",
+  "ongoing",
+  { schedule: "45 3 * * 0" },
+  "America/Los_Angeles",
+);
+const reviewSession = {
+  "Scribe · Knowledge Consolidation": {
+    key: "s-review",
+    displayName: "Scribe · Knowledge Consolidation",
+  },
+};
 const buttonNamed = (root: ParentNode, text: string) =>
   [...root.querySelectorAll("button")].find((b) => b.textContent === text)!;
 const flush = () =>
@@ -114,12 +125,7 @@ afterEach(() => document.body.replaceChildren());
 
 it("lists On and Available scribes with honest detection and a tab count", async () => {
   const { render, scribesTab } = fixture({
-    sessions: {
-      "Scribe · Review unlinked claims": {
-        key: "s-review",
-        displayName: "Scribe · Review unlinked claims",
-      },
-    },
+    sessions: reviewSession,
     jobs: [reviewJob],
   });
   const view = await render();
@@ -133,7 +139,7 @@ it("lists On and Available scribes with honest detection and a tab count", async
   expect(scribesTab.textContent).toBe("Scribes1");
 });
 
-it("starts a conversations scribe: creates its titled conversation and sends the setup message", async () => {
+it("starts a conversations scribe: creates its titled conversation and sends the prompt shown", async () => {
   const { render, create, calls, ui, load, page } = fixture({});
   const view = await render();
   buttonNamed(view, "Set up…").click();
@@ -145,6 +151,13 @@ it("starts a conversations scribe: creates its titled conversation and sends the
   select.value = "90d";
   select.dispatchEvent(new Event("change"));
   expect(dialog.textContent).toContain("Nothing is scheduled.");
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const expected = setupPrompt(
+    scribeSetup("conversations", "once", { scope: "all", since: "90d" }, timezone),
+  );
+  expect(dialog.querySelector(".scribe-prompt summary")?.textContent).toBe("Prompt");
+  expect(dialog.querySelector("textarea")!.value).toBe(expected);
+  expect(dialog.textContent).toContain("Generated from your choices.");
   buttonNamed(dialog, "Start").click();
   await vi.waitFor(() => expect(load).toHaveBeenCalled());
   expect(create).toHaveBeenCalledWith({
@@ -153,19 +166,70 @@ it("starts a conversations scribe: creates its titled conversation and sends the
     surface: "plugin-dock",
   });
   const send = calls.find(([method]) => method === "chat.send")![1]!;
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   expect(send).toEqual({
     sessionKey: "agent:main:dock:new",
     agentId: "main",
-    message: setupMessage(
-      scribeSetup("conversations", "once", { scope: "all", since: "90d" }, "main", timezone),
-    ),
+    message: expected,
     idempotencyKey: expect.stringMatching(
       /^knowledge:scribe:conversations:agent:main:dock:new:[0-9a-f-]{36}$/,
     ),
   });
   expect(ui.s.scribe).toBe("conversations");
   expect(page.querySelector("dialog")).toBeNull();
+});
+
+it.each([
+  ["weekly by default", undefined, "45 3 * * 0"],
+  ["nightly when chosen", "#scribe-review-nightly", "45 3 * * *"],
+] as const)("starts the review scribe %s", async (_name, pick, schedule) => {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const { render, calls, page } = fixture({});
+  const view = await render();
+  buttonNamed(view, "Turn on…").click();
+  const dialog = page.querySelector("dialog")!;
+  expect(dialog.querySelector("legend")?.textContent).toBe("How often");
+  expect((dialog.querySelector("#scribe-review-weekly") as HTMLInputElement).checked).toBe(true);
+  expect(dialog.textContent).toContain("Sundays at 3:45 AM.");
+  expect(dialog.textContent).toContain("Each run is an agent turn over every unlinked claim");
+  if (pick) {
+    (dialog.querySelector(pick) as HTMLInputElement).click();
+  }
+  buttonNamed(dialog, "Turn on").click();
+  await vi.waitFor(() => expect(calls.some(([method]) => method === "chat.send")).toBe(true));
+  const send = calls.find(([method]) => method === "chat.send")![1]!;
+  expect(send.message).toBe(
+    setupPrompt(scribeSetup("claim-consolidation", "ongoing", { schedule }, timezone)),
+  );
+  expect(String(send.message)).toContain(`(cron \`${schedule}\`)`);
+});
+
+it("sends a hand-edited prompt and stops regenerating it until asked", async () => {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const { render, calls, page } = fixture({});
+  const view = await render();
+  buttonNamed(view, "Turn on…").click();
+  const dialog = page.querySelector("dialog")!;
+  const text = dialog.querySelector("textarea")!;
+  const edited = text.value.replace("cron `45 3 * * 0`", "cron `15 2 * * 1`");
+  text.value = edited;
+  text.dispatchEvent(new Event("input"));
+  expect(dialog.textContent).toContain("Edited by hand.");
+  (dialog.querySelector("#scribe-review-nightly") as HTMLInputElement).click();
+  expect(text.value, "a choice no longer overwrites the edit").toBe(edited);
+  buttonNamed(dialog, "Use generated prompt").click();
+  expect(text.value).toBe(
+    setupPrompt(
+      scribeSetup("claim-consolidation", "ongoing", { schedule: "45 3 * * *" }, timezone),
+    ),
+  );
+  text.value = "  ";
+  text.dispatchEvent(new Event("input"));
+  expect(buttonNamed(dialog, "Turn on").disabled, "an empty prompt can't start").toBe(true);
+  text.value = edited;
+  text.dispatchEvent(new Event("input"));
+  buttonNamed(dialog, "Turn on").click();
+  await vi.waitFor(() => expect(calls.some(([method]) => method === "chat.send")).toBe(true));
+  expect(calls.find(([method]) => method === "chat.send")![1]!.message).toBe(edited);
 });
 
 it("restarts a turned-off scribe in its existing conversation with a fresh attempt key", async () => {
@@ -176,8 +240,7 @@ it("restarts a turned-off scribe in its existing conversation with a fresh attem
       "s-conv": [
         {
           role: "assistant",
-          content:
-            'SCRIBE_RESULT {"scribe":"conversations","state":"on","jobId":"j1","summary":"On"}',
+          content: "Scribe status: on — On",
         },
       ],
     },
@@ -271,15 +334,10 @@ it("disables starting without write access", async () => {
 
 it("runs, pauses, turns off and opens an On scribe from its detail", async () => {
   const { render, ui, calls, open, load, page } = fixture({
-    sessions: {
-      "Scribe · Review unlinked claims": {
-        key: "s-review",
-        displayName: "Scribe · Review unlinked claims",
-      },
-    },
+    sessions: reviewSession,
     jobs: [reviewJob],
   });
-  ui.s.scribe = "unlinked-review";
+  ui.s.scribe = "claim-consolidation";
   const view = await render();
   expect(view.textContent).toContain("1 recent run, all succeeded");
   expect(view.querySelector(".scribe-run span")?.textContent).toBe("9 filed · 2 pages created");
@@ -310,12 +368,7 @@ it("runs, pauses, turns off and opens an On scribe from its detail", async () =>
 
 it("reports a skipped run that could not complete as failed", async () => {
   const { render, ui } = fixture({
-    sessions: {
-      "Scribe · Review unlinked claims": {
-        key: "s-review",
-        displayName: "Scribe · Review unlinked claims",
-      },
-    },
+    sessions: reviewSession,
     jobs: [reviewJob],
     runs: [
       {
@@ -326,7 +379,7 @@ it("reports a skipped run that could not complete as failed", async () => {
       },
     ],
   });
-  ui.s.scribe = "unlinked-review";
+  ui.s.scribe = "claim-consolidation";
   const view = await render();
   expect(view.textContent).toContain("1 of 1 recent run failed");
   expect(view.querySelector(".scribe-run")?.textContent).toContain(
@@ -335,19 +388,19 @@ it("reports a skipped run that could not complete as failed", async () => {
   expect(view.querySelector(".scribe-run .scribe-chip-warn")?.textContent).toBe("Failing");
 });
 
-it("repairs a scribe whose conversation was archived", async () => {
+it("repairs a scribe whose conversation was archived, keeping its run message", async () => {
   const { render, ui, calls } = fixture({
     sessions: {
-      "Scribe · Review unlinked claims": {
+      "Scribe · Knowledge Consolidation": {
         key: "s-review",
         sessionId: "sid-review",
-        displayName: "Scribe · Review unlinked claims",
+        displayName: "Scribe · Knowledge Consolidation",
         archived: true,
       },
     },
-    jobs: [reviewJob],
+    jobs: [{ ...reviewJob, payload: { kind: "agentTurn", message: "Edited run message" } }],
   });
-  ui.s.scribe = "unlinked-review";
+  ui.s.scribe = "claim-consolidation";
   const view = await render();
   expect(view.querySelector(".scribe-chip-warn")?.textContent).toBe("Needs reauthorization");
   expect(buttonNamed(view, "Run now")).toBeUndefined();
@@ -358,14 +411,19 @@ it("repairs a scribe whose conversation was archived", async () => {
     { key: "s-review", agentId: "main", archived: false, expectedSessionId: "sid-review" },
   ]);
   const send = calls.at(-1)![1]!;
-  expect(String(send.message)).toMatch(/^Knowledge scribe repair: unlinked-review\n/);
-  expect(String(send.idempotencyKey)).toMatch(/^knowledge:scribe:unlinked-review:repair:/);
+  expect(send.message).toBe(
+    repairPrompt("claim-consolidation", {
+      schedule: reviewJob.schedule,
+      runMessage: "Edited run message",
+    }),
+  );
+  expect(String(send.idempotencyKey)).toMatch(/^knowledge:scribe:claim-consolidation:repair:/);
 });
 
 const userText = (content: string) => ({ role: "user", content });
-const resultLine = (id: string, state: string, jobId: string | null, summary: string) => ({
+const statusLine = (state: string, summary: string) => ({
   role: "assistant",
-  content: `Done.\nSCRIBE_RESULT ${JSON.stringify({ scribe: id, state, jobId, summary })}`,
+  content: `Done.\nScribe status: ${state} — ${summary}`,
 });
 
 it("forces an ongoing scribe's first run once after its setup turn reports on", async () => {
@@ -374,7 +432,6 @@ it("forces an ongoing scribe's first run once after its setup turn reports on", 
     "conversations",
     "ongoing",
     { scope: "active", since: "30d", schedule: "0 4 * * *" },
-    "main",
     "America/Los_Angeles",
   );
   const job = {
@@ -388,10 +445,7 @@ it("forces an ongoing scribe's first run once after its setup turn reports on", 
     sessions: { [label]: { key: "s-conv", displayName: label } },
     jobs: [job],
     history: {
-      "s-conv": [
-        userText(setupMessage(setup)),
-        resultLine("conversations", "on", "job-first", "Scheduled daily at 4:00"),
-      ],
+      "s-conv": [userText(setupPrompt(setup)), statusLine("on", "Scheduled daily at 4:00")],
     },
     runs: [],
   });
@@ -405,20 +459,16 @@ it("forces an ongoing scribe's first run once after its setup turn reports on", 
 });
 
 it("tries the first run again on the next load when forcing it failed", async () => {
-  const label = "Scribe · Review unlinked claims";
-  const setup = scribeSetup("unlinked-review", "ongoing", {}, "main", "America/Los_Angeles");
+  const setup = reviewSetup;
   const { render, ui, calls, request } = fixture({
-    sessions: { [label]: { key: "s-review", displayName: label } },
+    sessions: reviewSession,
     jobs: [{ ...reviewJob, id: "job-retry-first", state: {} }],
     history: {
-      "s-review": [
-        userText(setupMessage(setup)),
-        resultLine("unlinked-review", "on", "job-retry-first", "On"),
-      ],
+      "s-review": [userText(setupPrompt(setup)), statusLine("on", "On")],
     },
     runs: [],
   });
-  ui.s.scribe = "unlinked-review";
+  ui.s.scribe = "claim-consolidation";
   // The first cron.run answers without admitting a run, the second is rejected, the third runs.
   const answer = request.getMockImplementation()!;
   let attempts = 0;
@@ -433,6 +483,7 @@ it("tries the first run again on the next load when forcing it failed", async ()
     return answer(method, params);
   });
   const view = await render();
+  expect(view.textContent).toMatch(/ScheduleWeekly on Sunday, 3:45\sAM/);
   expect(view.textContent).not.toContain("First run");
   expect(ui.announce).toHaveBeenCalledWith(
     expect.stringContaining(
@@ -447,78 +498,72 @@ it("tries the first run again on the next load when forcing it failed", async ()
 });
 
 it("does not force a run after a repair, or for a job that already ran", async () => {
-  const label = "Scribe · Review unlinked claims";
-  const setup = scribeSetup("unlinked-review", "ongoing", {}, "main", "America/Los_Angeles");
+  const setup = reviewSetup;
   const fresh = { ...reviewJob, id: "job-repaired", state: {} };
   const { render, calls } = fixture({
-    sessions: { [label]: { key: "s-review", displayName: label } },
+    sessions: reviewSession,
     jobs: [fresh],
     history: {
       "s-review": [
-        userText(repairMessage(setup)),
-        resultLine("unlinked-review", "on", "job-repaired", "Recreated"),
+        userText(repairPrompt("claim-consolidation", { schedule: reviewJob.schedule })),
+        statusLine("on", "Recreated"),
       ],
     },
   });
   await render();
   expect(calls.some(([method]) => method === "cron.run")).toBe(false);
   const ran = fixture({
-    sessions: { [label]: { key: "s-review", displayName: label } },
+    sessions: reviewSession,
     jobs: [reviewJob],
     history: {
-      "s-review": [
-        userText(setupMessage(setup)),
-        resultLine("unlinked-review", "on", "job-review", "On"),
-      ],
+      "s-review": [userText(setupPrompt(setup)), statusLine("on", "On")],
     },
   });
   await ran.render();
   expect(ran.calls.some(([method]) => method === "cron.run")).toBe(false);
 });
 
-it("retries a failed one-time scribe by sending its setup again with a new attempt", async () => {
+it("starts a failed one-time scribe again from the start dialog with a new attempt", async () => {
   const label = "Scribe · Learn from Memory";
   const setup = scribeSetup(
     "memory",
     "once",
     { sources: ["memory-md", "dreams"] },
-    "main",
     "America/Los_Angeles",
   );
-  const { render, ui, calls, create } = fixture({
+  const { render, ui, calls, create, page } = fixture({
     sessions: { [label]: { key: "s-mem", displayName: label } },
     history: {
-      "s-mem": [
-        userText(setupMessage(setup)),
-        resultLine("memory", "failed", null, "Store was not writable"),
-      ],
+      "s-mem": [userText(setupPrompt(setup)), statusLine("failed", "Store was not writable")],
     },
   });
   ui.s.scribe = "memory";
   const view = await render();
   expect(view.querySelector(".scribe-chip-warn")?.textContent).toBe("Failing");
   expect(buttonNamed(view, "Repair")).toBeUndefined();
-  buttonNamed(view, "Retry").click();
+  buttonNamed(view, "Start again…").click();
+  buttonNamed(page.querySelector("dialog")!, "Start import").click();
   await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("chat.send"));
   expect(create).not.toHaveBeenCalled();
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   expect(calls.at(-1)![1]).toEqual({
     sessionKey: "s-mem",
     agentId: "main",
-    message: setupMessage(setup),
+    message: setupPrompt(scribeSetup("memory", "once", defaultOptions("memory"), timezone)),
     idempotencyKey: expect.stringMatching(/^knowledge:scribe:memory:s-mem:[0-9a-f-]{36}$/),
   });
 });
 
 it("recovers a conversation whose setup never arrived or whose setup turn stopped", async () => {
   const memoryLabel = "Scribe · Learn from Memory";
-  const reviewLabel = "Scribe · Review unlinked claims";
-  const setup = scribeSetup("memory", "once", { sources: ["memory-md"] }, "main", "UTC");
+  const reviewLabel = "Scribe · Knowledge Consolidation";
+  const setup = scribeSetup("memory", "once", { sources: ["memory-md"] }, "UTC");
   const { render, ui, calls, create, page } = fixture({
     sessions: {
       [reviewLabel]: { key: "s-review-empty", displayName: reviewLabel },
       [memoryLabel]: { key: "s-mem-stopped", displayName: memoryLabel, status: "interrupted" },
     },
-    history: { "s-mem-stopped": [userText(setupMessage(setup))] },
+    history: { "s-mem-stopped": [userText(setupPrompt(setup))] },
   });
   const view = await render();
   // The review conversation never got its setup: it is startable again, in the same conversation.
@@ -527,22 +572,22 @@ it("recovers a conversation whose setup never arrived or whose setup turn stoppe
   await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("chat.send"));
   expect(create).not.toHaveBeenCalled();
   expect(calls.at(-1)![1]!.sessionKey).toBe("s-review-empty");
-  // The memory setup turn stopped without an answer: it shows Failing with Retry.
+  // The memory start turn stopped without an answer: it shows Failing and can start again.
   ui.s.scribe = "memory";
   const detail = await render();
   expect(detail.querySelector(".scribe-chip-warn")?.textContent).toBe("Failing");
-  buttonNamed(detail, "Retry").click();
+  expect(buttonNamed(detail, "Repair")).toBeUndefined();
+  buttonNamed(detail, "Start again…").click();
+  buttonNamed(page.querySelector("dialog")!, "Start import").click();
   await vi.waitFor(() => expect(calls.at(-1)![1]!.sessionKey).toBe("s-mem-stopped"));
-  expect(calls.at(-1)![1]!.message).toBe(setupMessage(setup));
 });
 
 it("shows a Run now the scheduler refused instead of reporting it running", async () => {
-  const label = "Scribe · Review unlinked claims";
   const { render, ui, request, load } = fixture({
-    sessions: { [label]: { key: "s-review", displayName: label } },
+    sessions: reviewSession,
     jobs: [reviewJob],
   });
-  ui.s.scribe = "unlinked-review";
+  ui.s.scribe = "claim-consolidation";
   const view = await render();
   const answer = request.getMockImplementation()!;
   request.mockImplementation(async (method: string, params?: Record<string, unknown>) =>
@@ -554,6 +599,6 @@ it("shows a Run now the scheduler refused instead of reporting it running", asyn
       "the automation lost its owner",
     ),
   );
-  expect(ui.announce).not.toHaveBeenCalledWith("Review unlinked claims is running.");
+  expect(ui.announce).not.toHaveBeenCalledWith("Knowledge Consolidation is running.");
   expect(load).not.toHaveBeenCalled();
 });

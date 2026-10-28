@@ -7,11 +7,9 @@ import { SYNTHETIC_BASE_URL } from "./models.js";
 import { buildSyntheticProvider } from "./provider-catalog.js";
 
 const fetchGuard = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => ({
-    allowedHostnames: [new URL(baseUrl).hostname],
-  }),
 }));
 
 const endpoint = "https://api.synthetic.new/openai/v1/models";

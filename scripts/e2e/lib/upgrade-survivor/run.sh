@@ -12,6 +12,7 @@ source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/e2e/lib/upgrade-survivor/plugin-dependency-fixtures.sh
 source scripts/e2e/lib/upgrade-survivor/backup-rollback.sh
 source scripts/e2e/lib/upgrade-survivor/legacy-operator-plugin-policy.sh
+source scripts/e2e/lib/upgrade-survivor/native-plugin-ui.sh
 source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 source scripts/e2e/lib/upgrade-survivor/paths.sh
 
@@ -367,6 +368,8 @@ const summary = {
   nativeAssignmentEligibility: readArtifact("native-assignment-eligibility.json"),
   nativeAssignments: readArtifact("native-assignment-proof.json", "legacy-operator-state"),
   pluginPolicy: readArtifact("webhooks-only-policy/result.json", "legacy-operator-state"),
+  nativePluginUi: readArtifact("native-ui-candidate-proof.json", "legacy-operator-state"),
+  nativePluginUiOptOut: readArtifact("native-ui-opt-out/native-ui-candidate-proof.json", "legacy-operator-state"),
   timings: {
     startupSeconds: numberOrNull(process.env.SUMMARY_START_SECONDS),
     updateRestartSeconds: numberOrNull(process.env.SUMMARY_UPDATE_RESTART_SECONDS),
@@ -820,6 +823,10 @@ NODE
     registry_args+=("openclaw" "$candidate_version" "$candidate_tarball")
   fi
 
+  if native_plugin_ui_upgrade_enabled; then
+    registry_args+=("openclaw-survivor-native-ui" "1.0.0" "$ARTIFACT_ROOT/native-ui-fixture.tgz")
+  fi
+
   if configured_plugin_installs_enabled; then
     mkdir -p "$package_dir"
     FIXTURE_PACKAGE_DIR="$package_dir" FIXTURE_PACKAGE_VERSION="$candidate_version" \
@@ -944,7 +951,7 @@ rm_rf_retry() {
 }
 
 reset_run_state() {
-  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$STATE_HOME_ROOT" "$RUNTIME_ROOT/backup-rollback" "$RUNTIME_ROOT/webhooks-only-policy"
+  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$STATE_HOME_ROOT" "$RUNTIME_ROOT/backup-rollback" "$RUNTIME_ROOT/webhooks-only-policy" "$RUNTIME_ROOT/native-ui-fixture" "$RUNTIME_ROOT/native-ui-opt-out"
   rm -f "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_DAEMON_LOG"
   mkdir -p "$npm_config_prefix" "$npm_config_cache" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
 }
@@ -1078,6 +1085,7 @@ seed_legacy_operator_gateway() {
   start_gateway
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed-legacy-operator-gateway
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs legacy-operator-turn baseline
+  probe_native_plugin_ui_upgrade baseline
   stop_gateway
 }
 
@@ -2744,8 +2752,10 @@ phase prepare-update-restart-probe prepare_update_restart_probe
 phase bootstrap-mobile-pairing bootstrap_mobile_pairing
 phase seed-state seed_state
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase pack-native-plugin-ui-fixture pack_native_plugin_ui_fixture
   phase configure-baseline-plugin-registry configure_plugin_registry baseline
   phase install-companion-plugin install_companion_plugins
+  phase prepare-native-plugin-ui-upgrade prepare_native_plugin_ui_upgrade
   phase seed-legacy-operator-gateway seed_legacy_operator_gateway
   if [ "$native_assignment_enabled" = "1" ]; then
     phase configure-native-assignment-fixture start_native_assignment_fixture
@@ -2930,6 +2940,7 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase legacy-operator-agent-turn node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     legacy-operator-turn candidate
   phase legacy-operator-plugin assert_prepublish_plugin_install
+  phase native-plugin-ui-upgrade probe_native_plugin_ui_upgrade candidate
   if [ "$native_assignment_enabled" = "1" ]; then
     phase verify-native-assignment-recovery node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs live "$candidate_version"
   fi
@@ -2999,6 +3010,9 @@ if [ "$LIVE_ENABLED" = "1" ]; then
 fi
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase verify-backup-rollback verify_backup_rollback
+  if native_plugin_ui_upgrade_enabled; then
+    phase verify-native-plugin-ui-opt-out native_plugin_ui_opt_out verify
+  fi
   if [ "$baseline_version" = "2026.9.2" ]; then
     phase verify-sole-plugin-policy legacy_operator_plugin_policy verify
   fi

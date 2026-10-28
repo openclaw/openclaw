@@ -300,24 +300,76 @@ it.each([
   expect(existsSync(join(repoDir, ".local", "gh-called"))).toBe(false);
 });
 
-it("keeps the PR push URL process-local and reports a missing branch", () => {
-  const { repoDir } = makeRetryRepo();
+it("observes the exact PR branch without changing shared remotes and reports proved absence", () => {
+  const f = createPublisher();
+  f.git("push", "-q", "origin", `${f.candidate}:refs/heads/nested/refs/heads/topic`);
   const result = runGatesBash(
     [
-      "resolve_head_push_url() { printf '%s\\n' https://github.com/contributor/repo.git; }",
-      "pr_git() { touch .local/git-called; return 99; }",
+      `resolve_head_push_url() { printf '%s\\n' '${f.remote}'; }`,
+      'pr_git() { printf "%s\\n" "$*" >> .local/git-calls; command git "$@"; }',
       "setup_prhead_remote",
-      'test "$PRHEAD_REMOTE_URL" = https://github.com/contributor/repo.git',
-      "test ! -e .local/git-called",
-      "if remote_error=$(resolve_prhead_remote_sha topic 2>&1); then exit 97; fi",
-      'test "$remote_error" = "Remote branch refs/heads/topic not found on prhead"',
-      "test -e .local/git-called",
+      `test "$PRHEAD_REMOTE_URL" = '${f.remote}'`,
+      "test ! -e .local/git-calls",
+      "resolve_prhead_remote_sha topic",
+      `test "$PRHEAD_REMOTE_SHA" = '${f.source}'`,
+      "if resolve_prhead_remote_sha missing; then exit 97; else status=$?; fi",
+      'test "$status" -eq 2',
+      'test -z "$PRHEAD_REMOTE_SHA"',
+      "if command git config --get remote.prhead.url; then exit 98; fi",
     ].join("\n"),
-    { cwd: repoDir, sourcePush: true },
+    { cwd: f.repoDir, env: f.env, sourcePush: true },
   );
 
   expect(result.status, result.stderr).toBe(0);
+  expect(result.stderr).toContain("Remote branch refs/heads/missing not found on prhead");
+  expect(f.read("git-calls").trim().split("\n")).toEqual([
+    `ls-remote --exit-code --heads ${f.remote} refs/heads/topic`,
+    `ls-remote --exit-code --heads ${f.remote} refs/heads/missing`,
+  ]);
 });
+
+it.each([false, true])(
+  "stops conditional publication after failed advertisement (partial=%s)",
+  (partial) => {
+    const f = createPublisher();
+    const prep = f.read("prep.md");
+    const gates = f.read("gates.env");
+    const result = runPublisher(
+      f,
+      [
+        `PRHEAD_REMOTE_SHA='${f.candidate}'`,
+        `if push_prep_head_to_pr_branch 4242 topic '${f.candidate}' '${f.source}'; then exit 97; else status=$?; fi`,
+        'test -z "$PRHEAD_REMOTE_SHA"',
+        'exit "$status"',
+      ].join("\n"),
+      [
+        "pr_git() {",
+        '  if [ "$1" = ls-remote ]; then',
+        ...(partial ? [`    printf '%s\\t%s\\n' '${f.candidate}' refs/heads/topic`] : []),
+        "    echo fixture-transport-diagnostic >&2",
+        "    return 99",
+        "  fi",
+        '  command git "$@"',
+        "}",
+        "revalidate_pr_publication() { touch .local/continued-publication; return 98; }",
+        "push_prep_head_once() { touch .local/continued-publication; return 98; }",
+      ],
+    );
+
+    expect(result.status, result.stdout + result.stderr).toBe(99);
+    expect(result.stderr).toContain("fixture-transport-diagnostic");
+    expect(result.stderr).toContain(
+      "Unable to inspect remote branch refs/heads/topic (git ls-remote exited 99)",
+    );
+    expect(result.stderr).not.toContain("not found");
+    expect(f.exists("continued-publication")).toBe(false);
+    expect(f.exists("push-result.env")).toBe(false);
+    expect(f.read("prep.md")).toBe(prep);
+    expect(f.read("gates.env")).toBe(gates);
+    expect(f.read("events")).toBe("");
+    expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.source);
+  },
+);
 
 it.each([true, false])("selects fork publication transport for signed=%s fixups", (signed) => {
   const { repoDir } = makeRetryRepo();

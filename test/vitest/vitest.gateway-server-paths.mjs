@@ -232,6 +232,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-worker-placement-session-target.test.ts",
   "src/gateway/server-worker-placement-session-target.worktree.test.ts",
   "src/gateway/server-worker-placement-startup-maintenance.test.ts",
+  // The supervised Gateway fixture also owns native state/port-claim lifecycle.
+  "src/gateway/server.corporate-sandbox-effects.product.test.ts",
   "src/gateway/server.sessions.create-worktree-spawn.test.ts",
   "src/gateway/server.sessions.create.projects.test.ts",
   "src/gateway/server/skill-library-read.test.ts",
@@ -259,6 +261,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-create-display-name.test.ts",
   "src/gateway/session-create-preparation.test.ts",
   "src/gateway/session-create-target.test.ts",
+  "src/gateway/session-database-retention.test.ts",
   "src/gateway/session-delivery-clock-jump.integration.test.ts",
   "src/gateway/session-groups.registration.test.ts",
   "src/gateway/session-groups.test.ts",

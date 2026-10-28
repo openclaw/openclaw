@@ -1,5 +1,15 @@
 /**
- * Synthetic cold-usage refresh proof through the production host and worker entry.
+ * Synthetic cold-usage refresh and transcript reads through production async owners.
+ * Transcript comparison: prepare with --reader all --metadata 10000, then measure fresh
+ * copies with --reader match|latest|presence|hydration|all --iterations 128. Each reader
+ * is optional; the default usage refresh is unchanged. Use --iterations equal to
+ * --sessions for cold first reads, and a separate pass with more iterations for repeat
+ * reads (baseline becomes hot, candidate may decompress again). Report both costs.
+ * Acceptance: exact outputs and zero read-triggered restores, lower first-read CPU
+ * and allocation; report repeated-read CPU/latency/max overhead explicitly. No tail
+ * gate below 1,000 p99 samples. Defaults seed about 128 MiB of decoded event content.
+ * Metadata-only rows are synthetic sidebar shape, not included in timed reads.
+ * Query plans describe indexed access; they do not measure SQLite rows scanned.
  * Prepare once, then copy the CLOSED fixture to a fresh directory for every arm:
  *   node --import ./scripts/tsx.mjs scripts/perf/session-cost-usage-cold-read.ts \
  *     --prepare --state-dir "$PWD/.local/usage-fixture" --sessions 128 --events 64 --body-kib 16
@@ -42,6 +52,9 @@ const { values } = parseArgs({
     prepare: { type: "boolean" },
     "state-dir": { type: "string" },
     sessions: { type: "string", default: "128" },
+    metadata: { type: "string", default: "128" },
+    iterations: { type: "string", default: "128" },
+    reader: { type: "string", default: "usage" },
     events: { type: "string", default: "64" },
     "body-kib": { type: "string", default: "16" },
     allocation: { type: "boolean" },
@@ -61,7 +74,13 @@ const config: OpenClawConfig = {
   agents: { entries: { main: { workspace: path.join(root, "workspace") } } },
   session: { store: options.path },
 };
-type Fixture = { sessions: number; events: number; bodyKiB: number };
+type Fixture = {
+  sessions: number;
+  events: number;
+  bodyKiB: number;
+  metadata: number;
+  transcriptHeaders: boolean;
+};
 const fixturePath = path.join(root, "fixture.json");
 const positive = (value: string) => {
   const n = Number(value);
@@ -96,6 +115,8 @@ async function prepare() {
   writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
   const fixture: Fixture = {
     sessions: positive(values.sessions),
+    metadata: positive(values.metadata),
+    transcriptHeaders: values.reader !== "usage",
     events: positive(values.events),
     bodyKiB: positive(values["body-kib"]),
   };
@@ -115,6 +136,17 @@ async function prepare() {
       { kind: "header", version: 1, sessionId: id, generation },
     ];
     let rawBytes = -1;
+    if (fixture.transcriptHeaders) {
+      const event_json = JSON.stringify({
+        type: "session",
+        id,
+        version: 3,
+        timestamp: new Date(stamp).toISOString(),
+        cwd: "/synthetic",
+      });
+      records.push({ kind: "event", row: { seq: 0, event_json, created_at: stamp } });
+      rawBytes = Buffer.byteLength(event_json);
+    }
     for (let seq = 1; seq <= fixture.events; seq++) {
       const timestamp = stamp + (seq % 2) * 86_400_000;
       const event = {
@@ -210,7 +242,7 @@ async function prepare() {
           generation,
           archive_name: `${hash}.jsonl.zst`,
           archive_sha256: hash,
-          event_count: fixture.events,
+          event_count: fixture.events + Number(fixture.transcriptHeaders),
           raw_bytes: rawBytes,
           archive_bytes: bytes.length,
           last_seq: fixture.events,
@@ -221,6 +253,16 @@ async function prepare() {
       );
     }, options);
   }
+  const { writeSessionEntry } =
+    await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
+  agent.runOpenClawAgentWriteTransaction((database) => {
+    for (let index = fixture.sessions; index < fixture.metadata; index++) {
+      writeSessionEntry(database, `agent:main:metadata-${index}`, {
+        sessionId: `metadata-${index}`,
+        updatedAt: stamp,
+      });
+    }
+  }, options);
   writeFileSync(fixturePath, JSON.stringify(fixture));
   console.log(JSON.stringify({ prepared: root, ...fixture }));
 }
@@ -380,6 +422,38 @@ async function measure() {
   // Resolve pricing before the measured refresh, as the UI ordinarily does.
   const prepared = prepareUsageCostWorker(requests);
   const fingerprint = await resolveUsageCostPricingFingerprint(config, prepared.agentDir);
+  const reader = values.reader;
+  assert(["usage", "all", "match", "latest", "presence", "hydration"].includes(reader));
+  const iterations = reader === "usage" ? fixture.sessions : positive(values.iterations);
+  if (reader === "all" || reader === "hydration") {
+    assert(fixture.transcriptHeaders, "Prepare the fixture with --reader all");
+  }
+  const readOwners =
+    reader === "usage"
+      ? undefined
+      : await Promise.all([
+          import("../../src/config/sessions/session-transcript-match.js"),
+          import("../../src/config/sessions/session-transcript-assistant-read.js"),
+          import("../../src/config/sessions/session-transcript-message-presence.js"),
+          import("../../src/config/sessions/session-transcript-events.js"),
+        ]);
+  const queryPlans =
+    reader === "usage"
+      ? undefined
+      : {
+          coldMarker: database.db
+            .prepare(
+              "EXPLAIN QUERY PLAN SELECT * FROM session_transcript_cold_archives WHERE session_id = ?",
+            )
+            .all(sessionId(0)),
+          hotEvents: database.db
+            .prepare(
+              "EXPLAIN QUERY PLAN SELECT seq FROM transcript_events WHERE session_id = ? ORDER BY seq",
+            )
+            .all(sessionId(0)),
+        };
+  const latencies: number[] = [];
+  let reads = 0;
   const reservations: {
     operation: string;
     writerExecutionMs: number;
@@ -431,7 +505,45 @@ async function measure() {
   const started = performance.now();
   let result: Awaited<ReturnType<typeof refreshCostUsageCacheForAgent>>;
   try {
-    result = await refreshCostUsageCacheForAgent(requests);
+    if (!readOwners) {
+      result = await refreshCostUsageCacheForAgent(requests);
+    } else {
+      result = "refreshed";
+      const [match, assistant, presence, events] = readOwners;
+      for (let iteration = 0; iteration < iterations; iteration++) {
+        const id = sessionId(iteration % fixture.sessions);
+        const scope = {
+          agentId: "main",
+          storePath: options.path,
+          sessionId: id,
+          sessionKey: `agent:main:${id}`,
+        };
+        const begin = performance.now();
+        if (reader === "all" || reader === "match") {
+          const value = await match.findTranscriptEvent(scope, { kind: "latest" });
+          assert.equal((value?.event as { id?: string })?.id, `event-${fixture.events}`);
+          reads++;
+        }
+        if (reader === "all" || reader === "latest") {
+          const value = await assistant.readLatestTranscriptAssistantTextAsync(scope);
+          assert.equal(value?.id, `event-${fixture.events}`);
+          assert(value?.text.startsWith("synthetic payload "));
+          reads++;
+        }
+        if (reader === "all" || reader === "presence") {
+          assert.equal(await presence.hasSessionTranscriptMessage(scope), true);
+          reads++;
+        }
+        if (reader === "all" || reader === "hydration") {
+          const value = await events.loadSessionTranscriptEvents(scope);
+          assert.equal(value.length, fixture.events + 1);
+          assert.equal((value[0] as { id?: string }).id, id);
+          assert.equal((value.at(-1) as { id?: string })?.id, `event-${fixture.events}`);
+          reads++;
+        }
+        latencies.push(performance.now() - begin);
+      }
+    }
   } finally {
     clearInterval(sample);
     diagnostics.unsubscribe(observe);
@@ -456,48 +568,52 @@ async function measure() {
   observer.disconnect();
   assert.equal(result, "refreshed");
   const after = counts();
-  const report = await runUsageCostWorker(prepared, {
-    kind: "sessions",
-    pricingFingerprint: fingerprint,
-    sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
-    dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
-  });
-  assert.equal(report.kind, "sessions");
-  if (report.kind !== "sessions") {
-    throw new Error("Unexpected report");
+  let verified: unknown[] = [];
+  if (reader === "usage") {
+    const report = await runUsageCostWorker(prepared, {
+      kind: "sessions",
+      pricingFingerprint: fingerprint,
+      sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    });
+    assert.equal(report.kind, "sessions");
+    if (report.kind !== "sessions") {
+      throw new Error("Unexpected report");
+    }
+    assert.equal(report.summaries.length, fixture.sessions);
+    verified = report.summaries.map((summary, index) => {
+      assert(summary);
+      assert.equal(summary.totalTokens, fixture.events * 10);
+      assert(Math.abs(summary.totalCost - fixture.events * 0.01) < 1e-9);
+      const daily = summary
+        .dailyBreakdown!.map(({ date, tokens, cost }) => ({
+          date,
+          tokens,
+          cost,
+        }))
+        .toSorted((a, b) => a.date.localeCompare(b.date));
+      assert.deepEqual(
+        daily.map((day) => ({ ...day, cost: Number(day.cost.toFixed(9)) })),
+        [0, 1]
+          .map((day) => {
+            const count =
+              day === 0 ? Math.floor(fixture.events / 2) : Math.ceil(fixture.events / 2);
+            return {
+              date: new Date(stamp + day * 86_400_000).toISOString().slice(0, 10),
+              tokens: count * 10,
+              cost: Number((count * 0.01).toFixed(9)),
+            };
+          })
+          .filter((day) => day.tokens > 0),
+      );
+      return {
+        session: index,
+        tokens: summary.totalTokens,
+        cost: summary.totalCost,
+        daily,
+      };
+    });
   }
-  assert.equal(report.summaries.length, fixture.sessions);
-  const verified = report.summaries.map((summary, index) => {
-    assert(summary);
-    assert.equal(summary.totalTokens, fixture.events * 10);
-    assert(Math.abs(summary.totalCost - fixture.events * 0.01) < 1e-9);
-    const daily = summary
-      .dailyBreakdown!.map(({ date, tokens, cost }) => ({
-        date,
-        tokens,
-        cost,
-      }))
-      .toSorted((a, b) => a.date.localeCompare(b.date));
-    assert.deepEqual(
-      daily.map((day) => ({ ...day, cost: Number(day.cost.toFixed(9)) })),
-      [0, 1]
-        .map((day) => {
-          const count = day === 0 ? Math.floor(fixture.events / 2) : Math.ceil(fixture.events / 2);
-          return {
-            date: new Date(stamp + day * 86_400_000).toISOString().slice(0, 10),
-            tokens: count * 10,
-            cost: Number((count * 0.01).toFixed(9)),
-          };
-        })
-        .filter((day) => day.tokens > 0),
-    );
-    return {
-      session: index,
-      tokens: summary.totalTokens,
-      cost: summary.totalCost,
-      daily,
-    };
-  });
   let sampledAllocationBytes: number | null = null;
   let missingWorkerProfiles: string[] = [];
   let sampledIsolates = 0;
@@ -531,9 +647,24 @@ async function measure() {
   }
   console.log(
     JSON.stringify({
-      scope: "production cold-usage refresh; isolated synthetic state",
+      scope:
+        reader === "usage"
+          ? "production cold-usage refresh; isolated synthetic state"
+          : "production cold-transcript reads; isolated synthetic state",
       node: process.version,
       fixture,
+      reader,
+      iterations,
+      reads: reader === "usage" ? fixture.sessions : reads,
+      queryPlans,
+      latencyMs: latencies.length
+        ? {
+            mean: latencies.reduce((a, b) => a + b, 0) / iterations,
+            max: Math.max(...latencies),
+            p99: latencies.toSorted((a, b) => a - b)[Math.ceil(iterations * 0.99) - 1],
+            samples: iterations,
+          }
+        : undefined,
       result,
       before,
       after,
@@ -547,6 +678,7 @@ async function measure() {
       mainHeapPeak,
       mainGc: gc,
       mainLoopP99Ms: loop.percentile(99) / 1e6,
+      mainLoopSamples: loop.count,
       hostLoadBefore,
       hostLoadAfter: loadavg(),
       reservationCount: reservations.length,
@@ -558,7 +690,10 @@ async function measure() {
       sampledAllocationBytes,
       sampledIsolates,
       missingWorkerProfiles,
-      usageDigest: createHash("sha256").update(JSON.stringify(verified)).digest("hex"),
+      usageDigest:
+        reader === "usage"
+          ? createHash("sha256").update(JSON.stringify(verified)).digest("hex")
+          : undefined,
     }),
   );
   clearRuntimeConfigSnapshot();

@@ -698,6 +698,7 @@ src/config/runtime-write-application.ts
 src/config/schema.field-metadata.ts
 src/config/schema.shared.ts
 src/config/schema.walk.ts
+src/config/security-presets.ts
 src/config/sensitive-paths.ts
 src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
@@ -711,6 +712,7 @@ src/config/sessions/migration-required.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts
 src/config/sessions/session-accessor.sqlite-entry-inventory.ts
+src/config/sessions/session-accessor.sqlite-entry-equality.ts
 src/config/sessions/session-accessor.sqlite-conversation-publication.ts
 src/config/sessions/session-accessor.sqlite-owner-projection.ts
 src/config/sessions/session-accessor.sqlite-scope-helpers.ts
@@ -1238,6 +1240,7 @@ src/infra/sqlite-schema-lifetime.ts
 src/infra/sqlite-schema-mutation.ts
 src/infra/sqlite-schema-scope.ts
 src/infra/sqlite-schema-sql.ts
+src/infra/sqlite-snapshot-diagnostics.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
 src/infra/sqlite-snapshot-retirement.ts
@@ -1388,6 +1391,7 @@ src/logging/diagnostic-cpu-profile.ts
 src/logging/diagnostic-heap-profile.ts
 src/logging/diagnostic-profile.ts
 src/logging/diagnostic-support-key-check.ts
+src/logging/diagnostic-support-causes.ts
 src/logging/diagnostic-support-redaction.ts
 src/logging/diagnostic-worker-gc-profile.ts
 src/logging/env-log-level.ts
@@ -1655,6 +1659,7 @@ src/plugins/plugin-return-value.ts
 src/plugins/plugin-tool-execution.ts
 src/plugins/plugin-runtime-artifact-identity.ts
 src/plugins/plugin-runtime-artifact-resolution.ts
+src/plugins/plugin-runtime-artifact-binding.ts
 src/plugins/plugin-runtime-artifact-selection.ts
 src/plugins/plugin-safety-inspected-files.ts
 src/plugins/plugin-scope.ts
@@ -1980,6 +1985,7 @@ src/state/openclaw-agent-session-snapshots-schema.ts
 src/state/openclaw-agent-session-transcript-archive-schema.ts
 src/state/openclaw-agent-standing-intents-schema.ts
 src/state/openclaw-agent-storage-schema.ts
+src/state/openclaw-agent-text-search-migration.ts
 src/state/openclaw-agent-trajectory-storage-migration.ts
 src/state/openclaw-agent-transcript-fts-schema-source.ts
 src/state/openclaw-agent-transcript-fts-schema.ts

@@ -42,6 +42,7 @@ type ResultInput = {
   didSendViaMessagingTool?: boolean;
   assistantTexts?: readonly string[];
   allowedToolNames?: string[];
+  capabilityToolNames?: string[];
 };
 
 function createResultFixture(params: ResultInput = {}) {
@@ -92,7 +93,10 @@ function createResultFixture(params: ResultInput = {}) {
     lifecycle: { readYieldState: () => ({ yieldDetected: false }) },
     prepared: {
       toolCatalog: {
-        toolSearchRunPlan: { liveAllowedToolNames: new Set(params?.allowedToolNames) },
+        toolSearchRunPlan: {
+          liveAllowedToolNames: new Set(params?.allowedToolNames),
+          capabilityToolNames: new Set(params?.capabilityToolNames),
+        },
       },
       bootstrap: { bootstrapPromptWarning: {} },
       systemPrompt: { systemPromptReport: undefined },
@@ -201,6 +205,19 @@ describe("attempt result projection", () => {
       ).toBe(expected);
     },
   );
+
+  it.each([false, true])("corrects deferred text calls only when available: %s", (available) => {
+    const assistant = textAssistant(
+      "<tool_call>\n<function=skills_read>\n<parameter=name>\nbriefing\n</parameter>\n</function>\n</tool_call>",
+    );
+    expect(
+      completeResult({
+        currentAttemptCompletedAssistant: assistant,
+        allowedToolNames: ["dispatch_action"],
+        capabilityToolNames: available ? ["skills_read"] : [],
+      }).textToolCallAttempt,
+    ).toBe(available ? true : undefined);
+  });
 
   it("keeps the settled result snapshot when an output hook replaces live state", () => {
     const assistant = makeAssistantMessageFixture({ content: [{ type: "text", text: "settled" }] });

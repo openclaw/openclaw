@@ -612,7 +612,7 @@ agent is told about user tier-1 events via session notices, e.g.
 - Boards do not introduce a separate sharing or ACL model. Session visibility
   and membership use the existing session-sharing surface. Widget capability
   grants remain separate from membership.
-- Native macOS/iOS board rendering is through the embedded Control UI. The
+- Native Android, iOS, and macOS board rendering is through the embedded Control UI. The
   inline-widget path is unchanged.
 - Enabled plugins extend data bindings and action verbs through
   the existing registries.

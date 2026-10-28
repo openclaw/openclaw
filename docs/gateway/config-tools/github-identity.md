@@ -173,7 +173,15 @@ Ordinary temporary GitHub failures retain the same association's last verified
 status with a warning; a failed own-PR authorization clears it.
 
 Repeating a completed preparation of the same head preserves later edits without
-resetting or synchronizing source files. If the remote PR head has advanced,
+resetting or synchronizing source files. An explicit refresh adopts the PR's
+current destination and updates its review comparison, including after its base
+branch changes. A destination-only change preserves staged and unstaged edits,
+local commits, and the original PR head; it does not merge the destination into
+that head or change GitHub's selected base. The agent uses the user's intent to
+continue recoverable work and asks a focused question when the intended change
+is materially ambiguous. `inspect_pr` supplies current branch and commit facts
+when needed; restoring the old destination is not a prerequisite.
+If the remote PR head has advanced,
 an explicit refresh with `prepare_pr` integrates that head and preserves subsequent
 guest work. Resolve returned `conflictPaths`, then repeat with
 `conflictsResolved: true` and `expectedHeadCommit` set to the returned `headCommit`.
@@ -182,7 +190,8 @@ refresh refuses that case so its index-only version is not lost. The returned re
 head and its base, so an older PR head does not make newer base work appear to be
 deleted.
 
-An interrupted preparation retains the same accepted source for retry.
+An interrupted preparation retains the same accepted source for retry while
+reconciling the current destination for its review comparison.
 If recovery returns `headChanged: true`, it completed that original accepted
 head while GitHub has since advanced; repeat preparation to integrate the newer
 head. Preparation makes no GitHub writes

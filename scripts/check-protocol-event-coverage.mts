@@ -18,7 +18,6 @@
 // intentionally does not consume live in scripts/protocol-event-coverage.allowlist.json.
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { upperCamel } from "./lib/protocol-codegen-names.mts";
 // Dependency-light seam by design: security-fast runs this script without
 // installed dependencies on current targets, so the
@@ -96,10 +95,6 @@ function requiredCapture(match: RegExpMatchArray, index: number): string {
     throw new Error(`Expected regular expression capture group ${index}.`);
   }
   return value;
-}
-
-function isMainModule(): boolean {
-  return process.argv[1] ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url) : false;
 }
 
 /**
@@ -753,7 +748,8 @@ function collectProtocolEventCoverageErrors() {
   };
 }
 
-if (isMainModule()) {
+// Node owns entrypoint identity; comparing argv paths silently skips symlinked invocations.
+if (import.meta.main) {
   let result;
   try {
     result = collectProtocolEventCoverageErrors();

@@ -136,7 +136,7 @@ describe.each(transports)("guarded $api SSE liveness integration", (transport) =
     const abort = new AbortController();
     let settleStream: (() => Promise<void>) | undefined;
     try {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
       const onIdleTimeout = vi.fn();
       const model = makeProviderModelFixture({
         id: "keepalive-model",

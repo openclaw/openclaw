@@ -16,7 +16,7 @@ import {
 import { createRetainedAgentDatabaseMatcherFromSnapshot } from "../state/agent-deletion-discovery.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../state/agent-deletion-journal.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import { loadCronJobsStore } from "./store.js";
+import { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
 
 const log = createSubsystemLogger("cron/maintenance");
 
@@ -66,9 +66,9 @@ type RunningCronJobIds =
 
 async function readRunningCronJobIds(cronStorePath: string): Promise<RunningCronJobIds> {
   try {
-    const runningJobs = (await loadCronJobsStore(cronStorePath)).jobs.filter(
-      (job) => typeof job.state?.runningAtMs === "number",
-    );
+    const runningJobs = (
+      await loadCronJobsStoreWithConfigJobsReadOnly(cronStorePath)
+    ).store.jobs.filter((job) => typeof job.state?.runningAtMs === "number");
     // A running detached job may have been retargeted after its session was created. Keep its
     // explicit session segment because the registry has no producer metadata for the transcript.
     const ids = new Set<string>();

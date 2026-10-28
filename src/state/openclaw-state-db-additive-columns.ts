@@ -10,6 +10,7 @@ type LazyColumn = readonly [
 const lazyColumns = [
   ["agent_deletion_journal", "phase", "TEXT", true],
   ["agent_database_leases", "provenance", "TEXT", true],
+  ["user_profile_identities", "canonical_login", "TEXT"],
   ["user_profile_identities", "authorization_id", "TEXT"],
   ["user_profile_identities", "authorization_basis_json", "TEXT"],
   ["user_profile_identities", "verified_email_json", "TEXT", true],

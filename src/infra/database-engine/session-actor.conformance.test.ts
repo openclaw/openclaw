@@ -183,6 +183,7 @@ describe
           appendSessionManagerActor({
             actor,
             toolResult: false,
+            message: input.kind === "message" ? { role: "user" } : null,
             assertCurrent() {},
             append: input,
           });

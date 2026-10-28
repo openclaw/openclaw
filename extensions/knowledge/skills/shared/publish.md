@@ -13,8 +13,9 @@
 - `save_page` cannot set lifecycle, entity IDs, claim kinds, relationships or
   arbitrary frontmatter. Don't smuggle them into `fields`. Unsupported facts go
   in attributed prose.
-- Page body limit is 48,000 characters. Keep long originals attached; never
-  truncate them to fit.
+- One body input is at most 48,000 characters, and a page body has a smaller
+  size budget (see [page budgets](#page-budgets)). Keep long originals attached;
+  never truncate them to fit.
 - Search before creating. Match source ID, URL, original hash, title and date,
   not just a similar title.
 
@@ -35,6 +36,35 @@ edit.
   compare hashes across pages). Never edit from a truncated read.
 - Request `metadataView: "full"` before changing domain fields. Preserve
   unrelated prose and metadata.
+
+## Page budgets
+
+A page body may hold 12,000 characters (one default `knowledge_record` read) if
+it is a hub, one of the most-linked pages in the store, and 24,000 otherwise.
+Claims have no budget.
+
+- A write that would grow a body past its budget saves nothing and returns a
+  receipt with `state: "rejected"` and `budget.pages`: current and attempted
+  size, the budget, the page's link degree and hub status, its largest sections
+  with `start` offsets, and connected pages each section links to or names.
+- Edits that keep a body the same size or smaller always succeed, even on a page
+  already over budget. Such a page can only shrink.
+- On rejection, don't truncate, summarize away detail, or park the text on an
+  unrelated nearby page. Move a whole section that has its own subject with
+  `knowledge_extract_section`, to a listed candidate it is about or to a new page,
+  then reread and retry your edit.
+- A rejected page edit never blocks a fact: save it with `knowledge_remember` or
+  a claim.
+- Integrate into an existing topic before adding one. A page near its budget
+  usually means a subject needs its own page.
+
+`knowledge_extract_section` takes the source fences, the heading's
+`sectionStart`, a `destination` (fences of an existing page connected to the
+source, or `{title, type}` for a new page), a one-line `summary`, a reason, and
+the vault and ontology fences. In one publication the section moves verbatim with
+its links and the source evidence it quotes; claims it cites that name the source
+as a subject move to the destination; the source keeps the heading, your summary
+and a link. The destination's own budget applies.
 
 ## Publish related records together
 

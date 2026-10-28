@@ -27,6 +27,54 @@ type StoppedGatewayInspection =
   | { kind: "not-ours"; reason: string }
   | { kind: "inconclusive"; reason: string };
 
+/** Decides whether Doctor may start a managed Gateway that it did not stop itself. */
+export async function resolveUnstoppedGatewayRestoration(params: {
+  before: PreManagedServiceStop;
+  serviceEnv: NodeJS.ProcessEnv;
+  root: string;
+  leaveStopped: boolean;
+  reportStopped: boolean;
+}): Promise<{ restore: boolean; warning?: string }> {
+  const { before, serviceEnv } = params;
+  const verdict = before.serviceUpdateVerdict;
+  if (verdict?.kind === "owned" && verdict.requiresInstallRootRefresh) {
+    const { inspectGatewayServiceInstallationDrift } = await import("../daemon/service-layout.js");
+    const drift = await inspectGatewayServiceInstallationDrift(
+      { packageRootReal: verdict.root },
+      params.root,
+    );
+    if (drift) {
+      const { formatGatewayServiceInstallationDrift } = await import("../cli/daemon-cli/shared.js");
+      const warning = formatGatewayServiceInstallationDrift(drift, serviceEnv, {
+        stopped: true,
+        port: before.servicePort,
+      });
+      return { restore: false, warning };
+    }
+  }
+  if (
+    !params.leaveStopped &&
+    before.offline === true &&
+    verdict?.kind === "owned" &&
+    !verdict.requiresInstallRootRefresh
+  ) {
+    return { restore: true };
+  }
+  // Public update repair would otherwise report success over a Gateway that stays down.
+  if (
+    params.reportStopped &&
+    verdict?.kind === "owned" &&
+    before.runtimeInspected &&
+    !before.running
+  ) {
+    return {
+      restore: false,
+      warning: `Gateway service is stopped and remains stopped; update repair does not start a Gateway that a failed update or the operator stopped. Start it with \`${formatCliCommand("openclaw gateway start", serviceEnv)}\`, then check \`${formatCliCommand("openclaw gateway status --deep", serviceEnv)}\`.`,
+    };
+  }
+  return { restore: false };
+}
+
 export async function restoreDoctorGatewayService(params: {
   before: PreManagedServiceStop;
   serviceEnv: NodeJS.ProcessEnv;

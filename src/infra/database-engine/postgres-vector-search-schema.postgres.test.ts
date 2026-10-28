@@ -1,16 +1,13 @@
-import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { sql } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { AGENT_VECTOR_SEARCH_POSTGRES_SQL } from "../../state/openclaw-agent-vector-search-migration.js";
-import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
-import { publishSqliteDatabaseSchemaChange } from "../sqlite-database-admission.js";
 import { admitStoreSearch } from "./adapters.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { SearchSchema, StoreSchema } from "./contract.js";
-import { openPostgresEngineTestStore } from "./engine-store.test-support.js";
+import { createPostgresEngineTestFixture } from "./engine-store.test-support.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -62,42 +59,15 @@ describe.skipIf(!connection)("PostgreSQL binary vector schema", () => {
   it("migrates existing optional projections, preserves historical admission and maintains zero eligibility", async () => {
     const pending: Array<Promise<{ rows: { id: string }[] }>> = [];
     let finish: (() => void) | undefined;
-    let close: (() => void) | undefined;
+    using store = createPostgresEngineTestFixture({
+      directory: dirs.make("pg-vector-search-"),
+      connection: connection!,
+      schemaPrefix: "binary_vector_test",
+      schema: source,
+    });
+    const { open, invalidate } = store;
     try {
       withEngineStoreAdmission(() => {
-        const anchor = openNodeSqliteDatabase(
-          path.join(dirs.make("pg-vector-search-"), "anchor.sqlite"),
-        );
-        const opened: PostgresSyncConnection[] = [];
-        close = () => {
-          try {
-            const original = opened[0];
-            if (original) {
-              original.exec(`DROP SCHEMA "${original.schema}" CASCADE`);
-            }
-          } finally {
-            for (const db of opened) {
-              db.close();
-            }
-            anchor.close();
-          }
-        };
-        const open = (schema: StoreSchema, existingVersion = false) => {
-          const db = openPostgresEngineTestStore({
-            anchor,
-            schema,
-            existingVersion,
-            input: { connection: connection!, schemaPrefix: "binary_vector_test" },
-            openSqlite() {
-              throw new Error("Expected PostgreSQL");
-            },
-          });
-          if (!(db instanceof PostgresSyncConnection)) {
-            throw new Error("Expected PostgreSQL");
-          }
-          opened.push(db);
-          return db;
-        };
         const original = open(source);
         original.runTransaction(() => {
           for (const dim of dimensions) {
@@ -136,7 +106,7 @@ describe.skipIf(!connection)("PostgreSQL binary vector schema", () => {
             )
             .get(original.schema)?.count,
         ).toBe(0);
-        publishSqliteDatabaseSchemaChange(anchor);
+        invalidate();
         // oxlint-disable-next-line typescript/unbound-method -- Forwarded below with the intercepted connection as receiver.
         const prepare = PostgresSyncConnection.prototype.prepare;
         const oldVector = vi
@@ -247,7 +217,7 @@ describe.skipIf(!connection)("PostgreSQL binary vector schema", () => {
           migrated.runTransaction(() => {
             migrated.exec("ALTER TABLE vectors_3 ALTER COLUMN embedding_bits DROP EXPRESSION");
           });
-          publishSqliteDatabaseSchemaChange(anchor);
+          invalidate();
           expect(() => open(destination)).toThrow("schema drift");
         };
       });
@@ -260,42 +230,20 @@ describe.skipIf(!connection)("PostgreSQL binary vector schema", () => {
       withEngineStoreAdmission(() => finish!());
     } finally {
       await Promise.allSettled(pending);
-      if (close) {
-        withEngineStoreAdmission(close);
-      }
     }
   });
 
   it("migrates stores without optional vectors without creating vector projections", () => {
     withEngineStoreAdmission(() => {
-      using anchor = openNodeSqliteDatabase(
-        path.join(dirs.make("pg-vector-empty-"), "anchor.sqlite"),
-      );
-      const open = (schema: StoreSchema) =>
-        openPostgresEngineTestStore({
-          anchor,
-          schema,
-          input: { connection: connection!, schemaPrefix: "binary_vector_empty_test" },
-          openSqlite() {
-            throw new Error("Expected PostgreSQL");
-          },
-        });
-      const original = open(source);
-      try {
-        const migrated = open(destination);
-        try {
-          expect(migrated.prepare("SELECT version FROM openclaw_schema_meta").get()?.version).toBe(
-            33,
-          );
-        } finally {
-          migrated.close();
-        }
-      } finally {
-        if (original instanceof PostgresSyncConnection) {
-          original.exec(`DROP SCHEMA "${original.schema}" CASCADE`);
-        }
-        original.close();
-      }
+      using store = createPostgresEngineTestFixture({
+        directory: dirs.make("pg-vector-empty-"),
+        connection: connection!,
+        schemaPrefix: "binary_vector_empty_test",
+        schema: source,
+      });
+      store.open();
+      const migrated = store.open(destination);
+      expect(migrated.prepare("SELECT version FROM openclaw_schema_meta").get()?.version).toBe(33);
     });
   });
 });

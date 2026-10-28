@@ -32,7 +32,6 @@ import {
 } from "./cron.js";
 import { digestClawValue } from "./digest.js";
 import {
-  ClawMcpInstallError,
   installClawMcpServersStateless,
   rollbackStatelessClawMcpServers,
   type PersistedClawMcpServerRef,
@@ -203,7 +202,7 @@ export async function stageClawAddHostRequirementsStateless(
   let configCommitAttempted = false;
   let workspaceFiles: PersistedClawWorkspaceFile[] = [];
   let packages: PersistedClawPackageRef[] = [];
-  let mcpServers: PersistedClawMcpServerRef[] = [];
+  const mcpServers: PersistedClawMcpServerRef[] = [];
   let cronJobs: PersistedClawCronRef[] = [];
   let continued = false;
   const result = (
@@ -391,7 +390,7 @@ export async function stageClawAddHostRequirementsStateless(
       if (workspacePlan.actions.some((action) => action.kind === "package")) {
         packages = [...packages, ...(await installClawPackages(workspacePlan, stageOptions()))];
       }
-      mcpServers = await installClawMcpServersStateless(plan, stageOptions());
+      await installClawMcpServersStateless(plan, { ...stageOptions(), refs: mcpServers });
       workspaceBeforeExposure = await workspaceIdentity(workspace);
       const deletion = await readAgentDeletionJournalAsync(plan.agent.finalId);
       if (deletion && !deletion.cleanupCompleted) {
@@ -501,9 +500,6 @@ export async function stageClawAddHostRequirementsStateless(
       }
       if (error instanceof ClawPackageInstallError) {
         packages = [...packages, ...error.installedPackages];
-      }
-      if (error instanceof ClawMcpInstallError) {
-        mcpServers = error.mcpServers;
       }
       return {
         kind: "partial",

@@ -91,6 +91,8 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
       expect(result).toMatchObject({
         bootstrapMode,
         shouldRecordCompletedBootstrapTurn: completion,
+        // Pending setup must not add a commit policy to ordinary workspace edits.
+        workspaceNotes: [],
       });
       expect(result.contextFiles.some((file) => file.content === "Workspace instructions")).toBe(
         injected,

@@ -1,12 +1,20 @@
 // In-process owner workload; run with --expose-gc on an approved benchmark host.
+// Memory-only Team-shaped rows: --parentless-rows --parents 40 --children 100
+// --sessions 10000 --updates 3000 --warmup 300 --state-dir <new-dir>.
+// Run timing/allocation separately; --owner-module <path> selects an adjacent source baseline.
+// --compare-owner-module <path> measures both owners per list with alternating order.
+// Use --warmup 3000 and identical owner paths for A/A controls before judging arm differences.
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { loadavg } from "node:os";
 import path from "node:path";
 import { constants, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import type { SubagentRunReadIndex } from "../../src/agents/subagents/registry/subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "../../src/agents/subagents/registry/subagent-registry-read.types.js";
@@ -27,6 +35,9 @@ const { values } = parseArgs({
     "team-shape": { type: "boolean", default: false },
     sessions: { type: "string", default: "10800" },
     workload: { type: "string", default: "owner" },
+    "parentless-rows": { type: "boolean", default: false },
+    "owner-module": { type: "string" },
+    "compare-owner-module": { type: "string" },
   },
 });
 const integer = (name: "parents" | "children" | "updates" | "warmup" | "sessions") =>
@@ -39,6 +50,11 @@ assert.ok(values["state-dir"], "--state-dir must name a new isolated directory")
 assert.ok(["timing", "allocation", "census"].includes(values.mode), "Invalid --mode");
 assert.ok(values.workload === "owner" || values.workload === "list", "Invalid --workload");
 assert.ok(values.workload !== "list" || values["team-shape"], "--workload list needs --team-shape");
+assert.ok(!values["parentless-rows"] || !values["team-shape"], "Choose one row fixture");
+assert.ok(
+  !values["compare-owner-module"] || (values.mode === "timing" && values.workload === "owner"),
+  "Owner comparison requires timing mode and the owner workload",
+);
 const collectGarbage = global.gc;
 assert.ok(collectGarbage, "Run with --expose-gc");
 const root = path.resolve(values["state-dir"]);
@@ -91,7 +107,16 @@ const { publishSubagentRunChanges } =
   await import("../../src/agents/subagents/registry/subagent-registry-publication.js");
 const { createSubagentSessionListReadIndex } =
   await import("../../src/agents/subagents/registry/subagent-registry-read-index.js");
-const { resolveSessionChildOwners } = await import("../../src/gateway/session-utils-core.js");
+const { resolveSessionChildOwners }: typeof import("../../src/gateway/session-utils-core.js") =
+  await import(
+    values["owner-module"]
+      ? pathToFileURL(path.resolve(values["owner-module"])).href
+      : "../../src/gateway/session-utils-core.js"
+  );
+const compareOwner: typeof resolveSessionChildOwners | undefined = values["compare-owner-module"]
+  ? (await import(pathToFileURL(path.resolve(values["compare-owner-module"])).href))
+      .resolveSessionChildOwners
+  : undefined;
 const parentKeys = Array.from({ length: parentCount }, (_, index) => `agent:main:parent-${index}`);
 const active: SubagentRunRecord[] = [];
 const claims = new Map<string, string>();
@@ -190,7 +215,7 @@ if (fixture) {
       if (child === 0) {
         active.push(entry);
       }
-      if (child < 4) {
+      if (values["parentless-rows"] || child < 4) {
         rows.push({
           key,
           entry: {
@@ -203,6 +228,16 @@ if (fixture) {
           },
         });
       }
+    }
+  }
+  if (values["parentless-rows"]) {
+    assert.ok(rows.length < integer("sessions"), "Mixed fixture needs parentless rows");
+    while (rows.length < integer("sessions")) {
+      const sessionId = `parentless-${rows.length}`;
+      rows.push({
+        key: `agent:main:dashboard:${sessionId}`,
+        entry: { sessionId, updatedAt: now, archivedAt: now },
+      });
     }
   }
 }
@@ -263,6 +298,14 @@ let ownerReads = 0;
 let returnedRows = 0;
 let descendantQueries = 0;
 let sampleOwnerRegions = false;
+const ownerComparisons: Array<{
+  arm: string;
+  reads: number;
+  cpuMicros: number;
+  allocatedBytes: number;
+  checksum: number;
+  hostLoad: number[];
+}> = [];
 const allocationRegions: {
   owner: HeapProfiler.SamplingHeapProfile[];
   descendant: HeapProfiler.SamplingHeapProfile[];
@@ -367,6 +410,36 @@ async function resolveList() {
     return;
   }
   readActiveDescendants(index);
+  if (compareOwner) {
+    const owners = [resolveSessionChildOwners, compareOwner];
+    let expected: number | undefined;
+    for (const arm of ownerComparisons.length % 4 === 0 ? [0, 1] : [1, 0]) {
+      const owner = owners[arm]!;
+      const hostLoad = loadavg();
+      const allocatedBefore = getHeapStatistics().total_allocated_bytes;
+      const before = process.threadCpuUsage();
+      let observed = 0;
+      for (const row of ownerRows) {
+        observed += owner({ ...row, now: clock, subagentRuns: index }).length;
+      }
+      const cpu = process.threadCpuUsage(before);
+      const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocatedBefore;
+      expected ??= observed;
+      assert.equal(observed, expected, "Both owners must preserve the navigation result count");
+      checksum += observed;
+      ownerCpuMicros += cpu.user + cpu.system;
+      ownerReads += rows.length;
+      ownerComparisons.push({
+        arm: arm === 0 ? "owner" : "comparison",
+        reads: rows.length,
+        cpuMicros: cpu.user + cpu.system,
+        allocatedBytes,
+        checksum: observed,
+        hostLoad,
+      });
+    }
+    return;
+  }
   const before = process.threadCpuUsage();
   for (const row of ownerRows) {
     checksum += resolveSessionChildOwners({ ...row, now: clock, subagentRuns: index }).length;
@@ -422,6 +495,7 @@ try {
   ownerReads = 0;
   returnedRows = 0;
   descendantQueries = 0;
+  ownerComparisons.length = 0;
   const heapBefore = process.memoryUsage().heapUsed;
   if (values.mode !== "timing") {
     inspector.connect();
@@ -437,11 +511,13 @@ try {
     });
   }
   sampleOwnerRegions = values.mode === "allocation" && values.workload === "owner";
+  const allocatedBefore = getHeapStatistics().total_allocated_bytes;
   const started = performance.now();
   const before = process.threadCpuUsage();
   const work = await run(updates);
   const cpu = process.threadCpuUsage(before);
   const ended = performance.now();
+  const workloadAllocatedBytes = getHeapStatistics().total_allocated_bytes - allocatedBefore;
   await nextTurn();
   await nextTurn();
   if (values.mode === "census") {
@@ -508,6 +584,7 @@ try {
     childCount,
     registryRows: memory.subagentRuns.size,
     rows: rows.length,
+    parentlessRows: rows.filter(({ entry }) => !entry.parentSessionKey && !entry.spawnedBy).length,
     subagentRows: rows.filter(({ key }) => key.includes(":subagent:")).length,
     ...work,
     wallMs: ended - started,
@@ -516,6 +593,9 @@ try {
     updateCpuMsPerUpdate: work.updateCpuMicros / 1000 / work.updates,
     ownerCpuMsPerList: values.workload === "owner" ? ownerCpuMicros / 1000 / work.lists : undefined,
     ownerReads,
+    ownerComparisons: compareOwner ? ownerComparisons : undefined,
+    totalAllocatedBytes: workloadAllocatedBytes,
+    totalAllocatedBytesPerOwnerRead: ownerReads ? workloadAllocatedBytes / ownerReads : undefined,
     returnedRows,
     requesterRoots: requesterRoots.length,
     descendantQueryCountAvailable: values.workload === "owner",
