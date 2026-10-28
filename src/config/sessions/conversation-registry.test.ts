@@ -382,6 +382,7 @@ describe("conversation registry", () => {
     expect(await primary(scope, "ops-session")).toEqual(resumed);
 
     await commitInitialization(scope, {
+      entry: { updatedAt: resumed!.lastSeenAt + 100 },
       routeContext: { peerId: "canonical-ops", guildId: "guild-b" },
       entry: { updatedAt: 400 },
     });
