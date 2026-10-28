@@ -45,6 +45,7 @@ import type {
 } from "./subagent-completion-mutation.types.js";
 
 export class SubagentCompletionSourceChangedError extends SubagentRegistryMutationRejectedError {}
+export class SubagentRequesterWakeProgressChangedError extends SubagentCompletionSourceChangedError {}
 
 type AdmissionReceipt =
   SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
@@ -475,22 +476,53 @@ export async function reconcileRetiredSubagentCancellation(
 function currentRequesterEntries(
   rows: ReadonlyMap<string, SubagentRunRecord>,
   entries: readonly SubagentRunRecord[],
+  operation: RequesterWakeMutation["kind"] | "settle",
   committed?: RequesterWakeCommittedWrite,
 ): Array<{ subagent: SubagentRunRecord }> {
   return entries.map((expected) => {
     if (!rows.has(expected.runId) && committed?.result.retiredRunIds.includes(expected.runId)) {
       return { subagent: expected };
     }
-    const current = currentCompletionOwner(rows, expected);
+    // Terminal bookkeeping settles the owed wake, not the child's old execution custody.
+    // Cleanup and recovery can change that custody while this exact wave remains owed.
+    const current =
+      operation !== "transition" && !committed
+        ? rows.get(expected.runId)
+        : currentCompletionOwner(rows, expected);
+    if (
+      !current ||
+      !isSameSubagentRunOwner(current, expected) ||
+      !sameRequesterSettleRunIdentity(current, expected) ||
+      (operation !== "transition" &&
+        !committed &&
+        (!current.requesterSettleWake ||
+          current.requesterSettleWake.rearmGeneration !==
+            expected.requesterSettleWake?.rearmGeneration ||
+          !isDeepStrictEqual(
+            current.requesterSettleWake.batchRunIds?.toSorted(),
+            expected.requesterSettleWake?.batchRunIds?.toSorted(),
+          ) ||
+          !isDeepStrictEqual(
+            current.requesterSettleWake.pauseNotice,
+            expected.requesterSettleWake?.pauseNotice,
+          ) ||
+          (current.requesterSettleWake.yieldedFinalDeliverable === true) !==
+            (expected.requesterSettleWake?.yieldedFinalDeliverable === true)))
+    ) {
+      throw new SubagentCompletionSourceChangedError(
+        "Subagent requester wake owner changed before settlement",
+      );
+    }
     if (
       !committed &&
+      operation !== "settle" &&
       (current.delivery?.generation !== expected.delivery?.generation ||
         !isDeepStrictEqual(
           captureRequesterSettleWakeProgress(current),
           captureRequesterSettleWakeProgress(expected),
         ))
     ) {
-      throw new SubagentCompletionSourceChangedError(
+      throw new SubagentRequesterWakeProgressChangedError(
         "Subagent requester wake cohort changed before mutation",
       );
     }
@@ -516,7 +548,12 @@ export async function mutateRequesterCompletionBatch(
     params.entries,
     (rows) => {
       const cohort = {
-        entries: currentRequesterEntries(rows, params.entries, params.committed),
+        entries: currentRequesterEntries(
+          rows,
+          params.entries,
+          params.operation.kind,
+          params.committed,
+        ),
         committed: params.committed,
       };
       return params.operation.kind === "settle"
