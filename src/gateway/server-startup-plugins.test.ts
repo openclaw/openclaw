@@ -28,8 +28,8 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
-  vi.fn((params: { config: unknown }) => ({
-    config: params.config,
+  vi.fn((params: { config?: OpenClawConfig }) => ({
+    config: params.config ?? {},
     changes: [] as string[],
     autoEnabledReasons: {} as Record<string, string[]>,
   })),
@@ -89,6 +89,7 @@ const loadPluginLookUpTable = vi.hoisted(() =>
       pluginIds: ["telegram"] as string[],
       channelPluginIds: ["telegram"] as string[],
     },
+    workerProviderIds: [],
     metrics: pluginLookUpTableMetrics,
   })),
 );
@@ -115,15 +116,18 @@ vi.mock("../agents/workspace-state-dirs.js", () => ({
   assertConfiguredWorkspaceStateReady: () => {},
 }));
 
-vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
+vi.mock(import("../channels/plugins/lifecycle-startup.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   runChannelPluginStartupMaintenance,
 }));
 
-vi.mock("../config/plugin-auto-enable.js", () => ({
+vi.mock(import("../config/plugin-auto-enable.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   applyPluginAutoEnable,
 }));
 
-vi.mock("../infra/openclaw-root.js", () => ({
+vi.mock(import("../infra/openclaw-root.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   resolveOpenClawPackageRootSync,
 }));
 
@@ -131,15 +135,18 @@ vi.mock("../infra/device-pairing-node-desktop-migration.js", () => ({
   migrateLegacyDesktopStreamOptOuts: async () => 0,
 }));
 
-vi.mock("../infra/pairing-files.js", () => ({
+vi.mock(import("../infra/pairing-files.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   listLegacyPairingStoreFiles,
 }));
 
-vi.mock("../plugins/channel-presence-policy.js", () => ({
+vi.mock(import("../plugins/channel-presence-policy.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   listAmbientOnlyConfiguredChannelIds,
 }));
 
-vi.mock("../plugins/plugin-lookup-table.js", () => ({
+vi.mock(import("../plugins/plugin-lookup-table.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   loadPluginLookUpTable,
 }));
 
@@ -304,15 +311,7 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     applyPluginAutoEnable.mockClear();
     prepareGatewayPluginLoad.mockClear();
     listAmbientOnlyConfiguredChannelIds.mockClear().mockReturnValue([]);
-    loadPluginLookUpTable.mockClear().mockReturnValue({
-      ...pluginMetadataSnapshot,
-      manifestRegistry: pluginManifestRegistry,
-      startup: {
-        pluginIds: ["telegram"] as string[],
-        channelPluginIds: ["telegram"] as string[],
-      },
-      metrics: pluginLookUpTableMetrics,
-    });
+    loadPluginLookUpTable.mockReset();
     resolveOpenClawPackageRootSync.mockClear().mockReturnValue("/package");
     runChannelPluginStartupMaintenance.mockClear();
     runGatewaySessionStartupMaintenance.mockClear();
@@ -464,6 +463,7 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
         pluginIds: [],
         channelPluginIds: [],
       },
+      workerProviderIds: [],
       metrics: pluginLookUpTableMetrics,
     });
 
