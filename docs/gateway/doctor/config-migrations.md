@@ -70,22 +70,27 @@ The migration also leaves lists absent when the effective account, channel, or
 global-default `groupPolicy` disables groups. Explicit policy overrides still
 apply. Update-time Doctor repair follows the same rules.
 
-## Collaborative steering defaults
+## Collaborative steering default
 
-[Security presets](/gateway/security/presets) own runtime steering defaults. Doctor
-and configuration creation no longer persist a separate steering default: doing
-so would pin an override and prevent a later preset switch from taking effect.
-Ordinary reads and startup also leave the authored configuration unchanged.
+Collaborative steering is enabled by default. Doctor and initial configuration
+creation do not persist a separate steering override. Existing explicit `true` and
+`false` values, including values supplied through includes, remain unchanged.
+An older explicit value, even one written by an earlier Doctor, must be unset if
+you want the current default. Ordinary reads and startup leave authored config
+unchanged.
 
-Existing explicit `messages.queue.allowCollaborativeSteering` values, including
-booleans persisted by earlier versions or supplied through includes, stay
-unchanged. Doctor does not infer whether an older explicit value was a user
-choice. Unset that override to use the selected preset. The same rule applies
-during updates, without an additional default-only config or bookkeeping write.
+With collaboration explicitly disabled, messages still queue quietly as
+requester-owned turns. Explicit `collaborativeSteeringFallback: "reject"` remains
+available. See [Queue steering](/concepts/queue-steering) for the authority tradeoff.
 
-With collaboration disabled and quiet fallback selected, messages queue as
-requester-owned turns without a resend instruction. Explicit strict fallback
-remains available. See [Queue steering](/concepts/queue-steering).
+## Removed security presets
+
+The unreleased `security.preset` field has been removed. Configurations containing
+`personal` or `corporate` must remove that field before startup; `openclaw doctor --fix`
+removes it through the existing unknown-key repair and backup flow.
+Doctor does not expand the removed preset. Explicit execution, sandbox, file,
+steering, and messaging settings are preserved; configure those controls directly
+if you relied on preset-derived restrictions.
 
 ## Cloud setup secret migration
 

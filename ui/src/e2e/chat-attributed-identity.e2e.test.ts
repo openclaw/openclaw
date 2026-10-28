@@ -248,14 +248,19 @@ suite.define(() => {
               transcript.getByText("The response uses the available transcript width."),
               label,
             ).toBeVisible();
-            const expectColumn = async (content: Locator, phase: string) => {
-              const frame = await transcript.boundingBox();
-              const bounds = await content.boundingBox();
+            const expectColumn = async (content: Locator, phase: string, outer = false) => {
+              const frame = (await transcript.boundingBox())!;
+              const bounds = (await content.boundingBox())!;
               const columnLabel = `${label}: ${phase}`;
-              expect(frame, columnLabel).not.toBeNull();
-              expect(bounds, columnLabel).not.toBeNull();
-              expect(bounds!.x, columnLabel).toBeCloseTo(frame!.x, 0);
-              expect(bounds!.width, columnLabel).toBeCloseTo(frame!.width, 0);
+              expect(bounds.x + bounds.width / 2, columnLabel).toBeCloseTo(
+                frame.x + frame.width / 2,
+                0,
+              );
+              if (outer) {
+                expect(bounds.width, columnLabel).toBeGreaterThanOrEqual(frame.width);
+              } else {
+                expect(bounds.width, columnLabel).toBeCloseTo(frame.width, 0);
+              }
             };
             for (const direction of ["ltr", "rtl"]) {
               await page.evaluate((dir) => {
@@ -264,6 +269,7 @@ suite.define(() => {
               await expectColumn(
                 pane.locator(".agent-chat__composer-shell"),
                 `${direction} composer`,
+                true,
               );
               const frame = await transcript.boundingBox();
               const directionLabel = `${label} (${direction})`;
@@ -365,7 +371,11 @@ suite.define(() => {
               await expect
                 .poll(() => thread.evaluate((element) => element.scrollTop), { message: label })
                 .toBeGreaterThan(0);
-              await expectColumn(pane.locator(".agent-chat__composer-shell"), "scrolled composer");
+              await expectColumn(
+                pane.locator(".agent-chat__composer-shell"),
+                "scrolled composer",
+                true,
+              );
             }
           }
         },
@@ -570,7 +580,9 @@ suite.define(() => {
               return bounds.top + bounds.height / 2;
             };
             const buttons = [...footer.querySelectorAll(".chat-group-footer-actions button")];
+            const name = footer.querySelector<HTMLElement>(".chat-sender-name")!;
             return {
+              nameOverflow: name.scrollWidth - name.clientWidth,
               time: centerY(footer.querySelector(".chat-group-timestamp")!),
               icons: [...footer.querySelectorAll(".chat-group-footer-actions button svg")].map(
                 centerY,
@@ -586,6 +598,7 @@ suite.define(() => {
             };
           });
           expect((await group.boundingBox())?.height).toBe(restingHeight);
+          expect(alignment.nameOverflow).toBeLessThanOrEqual(1);
           expect(alignment.icons.length).toBeGreaterThan(0);
           for (const center of alignment.icons) {
             expect(Math.abs(center - alignment.time)).toBeLessThanOrEqual(1);

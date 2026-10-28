@@ -5,6 +5,7 @@ import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inboun
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { prependUniqueNativeMessages } from "../../lib/chat/history-message-identity.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
 import { resolveWorkingProgress } from "./chat-progress.ts";
@@ -37,7 +38,12 @@ import {
 } from "./chat-thread.ts";
 import { coalesceStreamRuns, collapseCompletedTurnWork } from "./chat-turn-presentation.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
-import { readLiveTerminalRevision, rememberLiveTerminalRun } from "./terminal-message-identity.ts";
+import { createSnapshotRecord } from "./session-snapshot-projection.ts";
+import {
+  normalizeFinalAssistantMessage,
+  readLiveTerminalRevision,
+  rememberLiveTerminalRun,
+} from "./terminal-message-identity.ts";
 
 const { extractToolCardsCached: extractToolCards } = toolCards;
 
@@ -1407,102 +1413,27 @@ describe("buildCachedChatItems", () => {
   );
 
   it.each([
-    {
-      savedReceipt: false,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-      tailFirst: true,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-      shortcode: true,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 2,
-      shortcode: true,
-      otherShortcode: true,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-      steer: true,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-      steer: true,
-      includeOriginal: false,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-      steer: true,
-      savedReply: false,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: true,
-      count: 1,
-      search: true,
-    },
-    { savedReceipt: true, finalRun: "other-run", finalView: "cv_final", live: true, count: 2 },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_other",
-      live: true,
-      count: 2,
-    },
-    {
-      savedReceipt: true,
-      finalRun: "final-widget-run",
-      finalView: "cv_final",
-      live: false,
-      count: 2,
-    },
+    { savedReceipt: false },
+    {},
+    { tailFirst: true },
+    { shortcode: "string", reload: true },
+    { shortcode: "text", reload: true },
+    { shortcode: true, otherShortcode: true, count: 2, reload: true },
+    { steer: true },
+    { steer: true, includeOriginal: false },
+    { steer: true, savedReply: false },
+    { search: true },
+    { finalRun: "other-run", count: 2 },
+    { finalView: "cv_other", count: 2 },
+    { live: false, count: 2 },
   ])(
     "reconciles only the owned final Canvas tail: %j",
-    ({
-      savedReceipt,
-      finalRun,
-      finalView,
-      live,
-      count,
+    async ({
+      savedReceipt = true,
+      finalRun = "final-widget-run",
+      finalView = "cv_final",
+      live = true,
+      count = 1,
       tailFirst = false,
       shortcode = false,
       otherShortcode = false,
@@ -1510,6 +1441,7 @@ describe("buildCachedChatItems", () => {
       includeOriginal = true,
       savedReply = true,
       search = false,
+      reload = false,
     }) => {
       const runId = "final-widget-run";
       const parentToolCallId = "call_widget|fc_widget";
@@ -1548,7 +1480,18 @@ describe("buildCachedChatItems", () => {
         1_005,
         { __openclaw: { runId: finalRun } },
       );
-      const terminal = live ? rememberLiveTerminalRun(final, finalRun) : final;
+      if (shortcode === "string") {
+        final.content = 'Final tail. [embed ref="cv_final" /]';
+      }
+      const source =
+        shortcode === "text"
+          ? normalizeFinalAssistantMessage({
+              role: "assistant",
+              text: 'Final tail. [embed ref="cv_final" /]',
+              timestamp: 1_005,
+            })
+          : final;
+      const terminal = live ? rememberLiveTerminalRun(source, finalRun) : source;
       const messages = [
         ...(includeOriginal ? [nativeUser(runId, "Show a counter", 1_000, { runId })] : []),
         ...(tailFirst ? [terminal] : []),
@@ -1567,8 +1510,25 @@ describe("buildCachedChatItems", () => {
       ];
       const original = structuredClone(messages);
       const terminalRevision = readLiveTerminalRevision();
+      const cached = reload
+        ? await createSnapshotRecord("widget-session", {
+            savedAt: 1_006,
+            snapshot: {
+              messages,
+              pagination: { hasMore: false },
+              sessionId: "widget-session",
+              historyState: { stateRevision: { pendingInputs: "inputs-1" } },
+            },
+          })
+        : null;
+      if (reload) {
+        expect(cached?.record.snapshot.historyState).toBeUndefined();
+        expect(cached?.record.snapshot.messages.map(extractText).join("\n")).not.toContain(
+          'ref="cv_final"',
+        );
+      }
       const groups = messageGroups({
-        messages,
+        messages: cached?.record.snapshot.messages ?? messages,
         toolMessages: savedReceipt ? [] : [nested],
         showToolCalls: true,
         searchOpen: search,

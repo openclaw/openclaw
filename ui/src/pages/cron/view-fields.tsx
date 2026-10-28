@@ -20,6 +20,7 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   scheduleAt: "cron.form.runAt",
   everyAmount: "cron.form.every",
   cronExpr: "cron.form.expression",
+  cronTz: "cron.form.timezoneOptional",
   staggerAmount: "cron.form.staggerWindow",
   activeHoursStart: "cron.form.activeHoursStart",
   activeHoursEnd: "cron.form.activeHoursEnd",
