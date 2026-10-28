@@ -133,7 +133,7 @@ export const sameCitation = (a: Evidence, b: Evidence) =>
   a.quote === b.quote;
 
 /**
- * A claim revision that adds the destination page as its first entity. Its established
+ * A claim revision with the destination page as its first entity. Its established
  * subjects stay: whether the source page is still relevant is the agent's call, made
  * explicitly with knowledge_annotate, not inferred from the claim's wording.
  */
@@ -142,7 +142,10 @@ export function relinkClaim(
   destinationId: string,
   change: { reason: string; actor: string; requestId: string; at: string },
 ): LoadedRecord {
-  const entities = [destinationId, ...(claim.metadata.entities ?? [])];
+  const entities = [
+    destinationId,
+    ...(claim.metadata.entities ?? []).filter((e) => e !== destinationId),
+  ];
   const revision = claim.revision + 1;
   const match = /^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(claim.raw)!;
   const doc = parseDocument(match[1]!);

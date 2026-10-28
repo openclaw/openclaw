@@ -284,7 +284,7 @@ export class StorageEdits extends StoragePublication {
             r.kind === "claim" &&
             moved.linked.has(r.id) &&
             r.metadata.entities?.includes(source.id) &&
-            !r.metadata.entities.includes(destinationId) &&
+            r.metadata.entities[0] !== destinationId &&
             current.some((c) => c.id === r.id),
         )
         .map((before) => {
