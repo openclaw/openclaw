@@ -280,13 +280,11 @@ export async function prepareGatewayClose(
       shutdownLog.warn(`session admission settlement failed: ${formatErrorMessage(error)}`);
       recordShutdownWarning(warnings, "session-admissions");
     });
-    if (admissions.failure) {
-      throw admissions.failure.error;
-    }
+    return admissions.failure;
   };
 
   try {
-    await prepareRuns();
+    const failure = await prepareRuns();
     await shutdownStep("update-check", () => params.updateCheckStop?.());
     await shutdownStep("config-reloader", () => params.configReloader.stop());
     await triggerLifecycleHook("shutdown", GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
@@ -309,7 +307,7 @@ export async function prepareGatewayClose(
       shutdownLog.warn(`memory preparation failed during shutdown: ${formatErrorMessage(error)}`);
       recordShutdownWarning(warnings, "memory-managers");
     });
-    return { start, notice, restart, warnings, cleanupWork, retainedErrors };
+    return { start, notice, restart, warnings, cleanupWork, retainedErrors, failure };
   } catch (error) {
     if (!isGatewayCleanupRetainedError(error)) {
       await settlesWithin(cleanupWork.drain(), RUNTIME_CLOSE_GRACE_MS);
@@ -672,6 +670,10 @@ async function closeGatewayResources(
   }
   if (closeFailure && !resourceCleanupErrors.includes(closeFailure.error)) {
     resourceCleanupErrors.unshift(closeFailure.error);
+  }
+  // Failed resume persistence remains fatal, but must not leave ingress listening.
+  if (preparation.failure) {
+    resourceCleanupErrors.push(preparation.failure.error);
   }
   resourceCleanupErrors.push(...preparation.retainedErrors, ...retainedErrors);
   const durationMs = Date.now() - start;
