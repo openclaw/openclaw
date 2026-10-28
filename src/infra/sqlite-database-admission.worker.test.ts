@@ -293,6 +293,7 @@ it("settles scoped writes without host metadata round trips after peer registrat
     return token("second");
   });
   expect(token("second")).not.toBe(retired);
+  first = token("first");
 
   // Pressure evicts the writer's cell; settlement must invalidate its replacement too.
   const replacement = await writeAfterPublication(6, "second", () => {
