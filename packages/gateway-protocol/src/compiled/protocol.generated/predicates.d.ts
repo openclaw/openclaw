@@ -2088,6 +2088,11 @@ export function isSessionsGroupsDefaultsResult(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsGroupsDefaultsResultSchema
 >;
+export function isSessionsGroupsCreateParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsGroupsCreateParamsSchema
+>;
 export function isSessionsGroupsPutParams(
   value: unknown,
 ): value is import("typebox").Static<

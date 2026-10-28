@@ -4,6 +4,7 @@ import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
+  validateSessionsGroupsCreateParams,
   validateSessionsGroupsDefaultsParams,
   validateSessionsGroupsDeleteParams,
   validateSessionsGroupsListParams,
@@ -17,6 +18,7 @@ import { ensureSessionGroupCatalog, readSessionGroupCatalog } from "../session-g
 import { filterMutableSessionGroupRecords } from "../session-group-defaults-access.js";
 import {
   deleteSessionGroup,
+  ensureSessionGroupRegistered,
   putSessionGroups,
   renameSessionGroup,
   SessionGroupNotEmptyError,
@@ -67,6 +69,21 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       });
       respond(true, { defaults }, undefined);
     },
+  ),
+  "sessions.groups.create": defineValidatedGatewayHandler(
+    "sessions.groups.create",
+    validateSessionsGroupsCreateParams,
+    async ({ params, respond, context, sessionMutationAuthorization }) => {
+      await ensureSessionGroupRegistered(
+        params.name,
+        process.env,
+        sessionMutationAuthorization?.assertCurrent,
+      );
+      const { groups, sectionOrder } = readSessionGroupCatalog();
+      respond(true, { ok: true, groups, sectionOrder }, undefined);
+      emitSessionsChanged(context, { reason: "groups" }, { catalogOnly: true });
+    },
+    (error) => sessionGroupMutationError(error),
   ),
   "sessions.groups.put": defineValidatedGatewayHandler(
     "sessions.groups.put",

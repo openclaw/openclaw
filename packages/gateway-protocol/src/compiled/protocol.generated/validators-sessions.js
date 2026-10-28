@@ -67,6 +67,7 @@ export {
   isSessionsGroupsListResult,
   isSessionsGroupsDefaultsParams,
   isSessionsGroupsDefaultsResult,
+  isSessionsGroupsCreateParams,
   isSessionsGroupsPutParams,
   isSessionsGroupsRenameParams,
   isSessionsGroupsUpdateParams,

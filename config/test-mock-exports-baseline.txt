@@ -4872,7 +4872,6 @@
 ["src/gateway/server-methods/sessions-goal.event-custody.test.ts","./session-change-event.js","be28038bbaecbfc52973981b12b48bcf1f34ae04bc23af78e78dd13162f45659",1]
 ["src/gateway/server-methods/sessions-goal.test.ts","./chat-send-handler.js","cac827f3923c02701d8ae3ef574e648f38edd096964b33a2f7fd68dc82bf4237",1]
 ["src/gateway/server-methods/sessions-groups.test.ts","../session-group-defaults-access.js","da30f442767a08ab0e8d559e1d143e983d8556eb7c277109e9184ae4b5358cd9",1]
-["src/gateway/server-methods/sessions-groups.test.ts","../session-groups.js","1f59f5e5176d9aa2ee2d2f2029502be309a2485bf6b279abb0e5250c34e4007b",1]
 ["src/gateway/server-methods/sessions-groups.test.ts","./workspace-path-containment.js","d936fee8f86b498c842f5a5d70065862ba1ad75a77982ad3ad31cf553eb3f38c",1]
 ["src/gateway/server-methods/sessions-mutations.sticky-model.test.ts","../../agents/model-runtime-choice.js","f2414aef3149b5077ee50abae80e22e79b0b7d3d81080ccb9cc3be6b7a2ce8ac",1]
 ["src/gateway/server-methods/sessions-mutations.sticky-model.test.ts","../../plugins/provider-thinking.js","a6ab364ef6d3e72f4d9c9341f4a76ff85f037b17b162ae32922467b4a728bc87",1]

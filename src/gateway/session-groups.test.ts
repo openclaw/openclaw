@@ -250,13 +250,26 @@ describe("session groups catalog", () => {
     expect(catalog().groups).toEqual(groups("Work", "Travel"));
   });
 
-  it("keeps the original state directory and atomic append order across overlapping registrations", async () => {
+  it("keeps defaults, sidebar order, and the original directory across overlapping registrations", async () => {
+    const sectionOrder = ["category:Work", "groups", "category:Existing"];
+    await put(["Existing", "Work"], { sectionOrder });
+    await defaults("Existing", "/repos/existing");
+    await defaults("Work", null, false);
     const originalEnv = { ...env };
     const redirectedRoot = path.join(root, "redirected");
     const registrations = ["First", "Second", "First"].map(register);
     env.OPENCLAW_STATE_DIR = redirectedRoot;
     expect(await Promise.all(registrations)).toEqual([true, true, false]);
-    expect(readSessionGroupCatalog(originalEnv).groups).toEqual(groups("First", "Second"));
+    expect(readSessionGroupCatalog(originalEnv)).toEqual({
+      groups: groups("Existing", "Work", "First", "Second"),
+      defaults: [
+        groupDefaults("Existing", "/repos/existing"),
+        { name: "Work", worktree: false },
+        { name: "First" },
+        { name: "Second" },
+      ],
+      sectionOrder,
+    });
     await expect(fs.stat(redirectedRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
 

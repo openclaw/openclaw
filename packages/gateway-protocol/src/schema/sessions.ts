@@ -589,6 +589,11 @@ export const SessionsGroupsDefaultsResultSchema = closedObject({
   defaults: Type.Array(SessionGroupDefaultsSchema),
 });
 
+/** Atomically adds a group without replacing existing groups, defaults, or order. */
+export const SessionsGroupsCreateParamsSchema = closedObject({
+  name: Type.String({ ...SessionLabelString, pattern: "\\S" }),
+});
+
 /** Replaces the ordered group catalog; creates listed names, keeps member categories untouched. */
 export const SessionsGroupsPutParamsSchema = closedObject({
   names: Type.Array(SessionLabelString),
@@ -789,6 +794,7 @@ export type SessionsGroupsListParams = Static<typeof SessionsGroupsListParamsSch
 export type SessionsGroupsListResult = Static<typeof SessionsGroupsListResultSchema>;
 export type SessionsGroupsDefaultsParams = Static<typeof SessionsGroupsDefaultsParamsSchema>;
 export type SessionsGroupsDefaultsResult = Static<typeof SessionsGroupsDefaultsResultSchema>;
+export type SessionsGroupsCreateParams = Static<typeof SessionsGroupsCreateParamsSchema>;
 export type SessionsGroupsPutParams = Static<typeof SessionsGroupsPutParamsSchema>;
 export type SessionsGroupsRenameParams = Static<typeof SessionsGroupsRenameParamsSchema>;
 export type SessionsGroupsUpdateParams = Static<typeof SessionsGroupsUpdateParamsSchema>;
