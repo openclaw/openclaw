@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { codexCatalogPageWorkerEntrypoint } from "../../catalog-page-worker-entrypoint.js";
@@ -16,8 +15,6 @@ const INLINE_CATALOG_MAX_BYTES = 64 * 1024;
 const CATALOG_MAX_BYTES = 8 * 1024 * 1024;
 // Bounded headroom for irreducible previews; larger singletons retain the overflow cooldown.
 const CATALOG_SINGLETON_MAX_BYTES = 64 * 1024 * 1024;
-const CATALOG_WORKER_IDLE_MS = 60_000;
-const runInCatalogWorkerContext = AsyncLocalStorage.snapshot();
 const loadProcessRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/process-runtime"),
 );
@@ -43,10 +40,6 @@ export function codexCatalogRequestId(
 /** Each physical client owns one catalog projection worker. */
 export class CodexCatalogWorker {
   private pool: WorkerTaskPool<CodexCatalogDecodeInput, CodexCatalogDecodeResult> | undefined;
-  private idleTimer: ReturnType<typeof setTimeout> | undefined;
-  private retirement: Promise<void> | undefined;
-  private readonly setTimeoutFn = setTimeout;
-  private readonly clearTimeoutFn = clearTimeout;
   private closed = false;
 
   async decode(
@@ -85,13 +78,6 @@ export class CodexCatalogWorker {
         );
       }
     }
-    this.clearTimeoutFn(this.idleTimer);
-    this.idleTimer = undefined;
-    // Rotation retains the pool's custody until native exit; new frames wait here.
-    await this.retirement;
-    if (this.closed) {
-      return undefined;
-    }
     if (!this.pool) {
       const { resolveRuntimeWorkerUrl, WorkerTaskPool } = await loadProcessRuntime();
       if (this.closed) {
@@ -102,8 +88,11 @@ export class CodexCatalogWorker {
         workerClass: "singleton",
         maxPendingTasks: 1,
         maxPendingBytes: CATALOG_SINGLETON_MAX_BYTES,
-        idleTimeoutMs: 0,
         restartOnError: false,
+        onRetirementFailure: (error) => {
+          // Refuse queued pages promptly when native retirement retains the only slot.
+          void this.pool?.close(error).catch(() => undefined);
+        },
       });
     }
     const attempt = route === "unresolved" ? undefined : attempts.get(route.id);
@@ -124,7 +113,6 @@ export class CodexCatalogWorker {
     if (this.closed) {
       return undefined;
     }
-    this.armIdleRetirement();
     if (oversizedSingleton && !decoded.message) {
       // Restore the local error type after worker serialization so the existing cooldown applies.
       return {
@@ -135,25 +123,9 @@ export class CodexCatalogWorker {
     return decoded;
   }
 
-  private armIdleRetirement(): void {
-    // Do not retain the decoded page or its caller's async context in this timer.
-    this.idleTimer = runInCatalogWorkerContext(() =>
-      this.setTimeoutFn(() => {
-        this.idleTimer = undefined;
-        this.retirement = this.pool?.rotate();
-        // The next decode observes failure; terminal close still owns a cleanup retry.
-        void this.retirement?.catch(() => undefined);
-      }, CATALOG_WORKER_IDLE_MS),
-    );
-    this.idleTimer.unref();
-  }
-
   async close(error: Error): Promise<void> {
     this.closed = true;
-    this.clearTimeoutFn(this.idleTimer);
-    this.idleTimer = undefined;
-    // A failed rotation must release its stop attempt before close retries custody.
-    await this.retirement?.catch(() => undefined);
-    await this.pool?.close(error);
+    // Close can join an in-flight idle stop; retry its failed custody before returning.
+    await this.pool?.close(error).catch(() => this.pool?.close(error));
   }
 }
