@@ -421,6 +421,13 @@ async function runProviderAuthMethod(
           }
           return next;
         },
+      }).catch(async (error: unknown) => {
+        // Saved credentials stand on their own; a rejected settings write
+        // (for example a read-only Nix config) must not hide them from the Gateway.
+        if (persistedProfiles.length > 0) {
+          await refreshProviderAuthAfterLogin(login);
+        }
+        throw error;
       });
       if (defaultModel) {
         const warnings = await repairModelSelectionRuntimePlugins({
