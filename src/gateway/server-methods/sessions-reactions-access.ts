@@ -44,8 +44,7 @@ export async function withSessionReactionAccess(
       }
       if (
         !target ||
-        (hasOperatorBoundary(client, policyConfig, sharing) &&
-          sharing.entryFilter?.(target.storeKey, target.entry) === false)
+        (hasOperatorBoundary(client, policyConfig, sharing) && !sharing.canReadTarget(target))
       ) {
         deny(errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${params.sessionKey}`));
       }

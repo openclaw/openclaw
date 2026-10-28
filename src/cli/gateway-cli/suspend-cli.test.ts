@@ -36,6 +36,9 @@ const suspend = (options: Partial<Parameters<typeof runGatewaySuspend>[0]> = {})
 function mockClock(advance = (delayMs: number) => delayMs) {
   let now = 1_000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
+  // The wait window runs on the monotonic clock; the mocked sleeps advance
+  // the same reading the way real elapsed time would.
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   vi.mocked(sleep).mockImplementation(async (delayMs = 0) => {
     now += advance(delayMs);
   });

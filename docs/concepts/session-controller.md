@@ -199,7 +199,7 @@ With `messages.queue.allowCollaborativeSteering: true`, human input from the sam
 conversation may steer another person's turn under that turn's unchanged identity
 and prepared permissions. The message retains its author's identity; it does not
 change the execution's requester or imply that the requester approved its content.
-This opt-in tradeoff does not broaden cross-session `sessions_send(mode="steer")`.
+This same-conversation default does not broaden cross-session `sessions_send(mode="steer")`.
 
 With collaboration disabled, cross-human input queues quietly for a separate
 execution by default. With `messages.queue.collaborativeSteeringFallback: "reject"`,

@@ -9,6 +9,7 @@ import {
   installStaleChunkReloadListener,
 } from "./app/stale-chunk-reload.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
+import { installKeyboardHints } from "./lib/keyboard-hints.ts";
 import { listen } from "./lib/reactive/listener.ts";
 import kbdStyles from "./components/kbd.css?inline";
 
@@ -35,6 +36,7 @@ export async function startControlUi(
     }
     bootStyles.media = "all";
   }
+  installKeyboardHints();
   const root = document.getElementsByTagName("openclaw-app").item(0);
   if (root instanceof HTMLElement) {
     mountOpenClawApp(root, bootstrapApplication(initial, earlyGateway));

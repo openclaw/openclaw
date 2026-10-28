@@ -163,6 +163,33 @@ describe("renderPluginConsentDialog", () => {
     },
   );
 
+  it.each([true, false, undefined])(
+    "discloses native web UI only when inspection confirms it (%s)",
+    (hasNativeUi) => {
+      const container = mount({
+        inspection: createInspectResult({
+          overview: {
+            hasNativeUi,
+            capabilities: { providers: [], channels: [], contracts: {}, ui: ["page"] },
+          },
+        }),
+      });
+      const disclosure = container.querySelector(".plugin-native-ui-disclosure");
+      expect(Boolean(disclosure)).toBe(hasNativeUi === true);
+      if (hasNativeUi) {
+        const text = normalizedText(disclosure);
+        expect(text).toMatch(/runs code.*web app/u);
+        expect(text).toMatch(/read and modify.*interface/u);
+        expect(text).toMatch(/Gateway permissions.*signed-in user/u);
+        const actions = container.querySelector(".plugins-consent__actions")!;
+        expect(
+          disclosure!.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).not.toBe(0);
+        expect(disclosure?.querySelector("[role=alert], input, button")).toBeNull();
+      }
+    },
+  );
+
   it("explains an empty manifest and preserves external-plugin grants", () => {
     const container = mount();
     const text = normalizedText(container.querySelector('[data-plugin-consent="enable"]'));

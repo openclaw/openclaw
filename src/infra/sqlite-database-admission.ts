@@ -39,6 +39,7 @@ import {
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
 import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import { sqliteSchemaOwners } from "./sqlite-schema-scope.js";
 import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export {
@@ -147,6 +148,9 @@ const scopedWrites = createSqliteDatabaseWriteReceipts({
   readRevision: readSqliteDatabaseWriteRevision,
   writer: (database) => state.dataWriters.get(database),
   suspended: (database) => state.suspended.has(database),
+  // Native schema ownership survives a caught savepoint rollback; staged admissions do not.
+  hasPendingSchemaMutation: (database) =>
+    database.isTransaction && sqliteSchemaOwners.get(database)?.transactionalSchema === true,
   publish(record, keys) {
     state.registry.publish(record, keys);
     exchange(record);

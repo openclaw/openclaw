@@ -8,6 +8,7 @@ import { repairJson } from "@openclaw/ai/internal/runtime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../../infra/errno.js";
+import { decodeUtf8Input } from "../../../infra/utf8-input.js";
 import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
@@ -15,7 +16,6 @@ import {
 import type { AgentTool } from "../../runtime/index.js";
 import { ToolInputError } from "../../tool-input-error.js";
 import { textResult } from "../../tools/tool-results.js";
-import { decodeUtf8File } from "../../utf8-file.js";
 import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
@@ -175,7 +175,7 @@ export function createEditTool(
           assertCurrent();
           return ops.readFile(absolutePath);
         });
-        const rawContent = decodeUtf8File(buffer, absolutePath);
+        const rawContent = decodeUtf8Input(buffer, `File ${absolutePath}`);
         try {
           assertFileToolNotAborted(signal);
 

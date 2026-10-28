@@ -78,6 +78,7 @@ defineSolidBridge<Props>(
             <openclaw-tooltip prop:content={t("chat.commandPaletteTitle")}>
               <span slot="content">
                 <ShortcutText
+                  fallback={t("chat.openCommandPalette")}
                   text={t("chat.commandPaletteTitle").replace("⌘K", "{shortcut}")}
                   shortcut={() => <Kbd keys={["⌘", "K"]} inline />}
                 />

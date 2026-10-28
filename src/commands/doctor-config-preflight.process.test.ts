@@ -532,6 +532,8 @@ describe("Doctor repair followed by gateway readiness", () => {
         env: {
           NODE_ENV: undefined,
           ...doctorEnv,
+          // Retain elapsed step costs on timeout, not only the last progress label.
+          OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
           OPENCLAW_HOME: undefined,
           OPENCLAW_NO_RESPAWN: "1",
           OPENCLAW_SKIP_CHANNELS: "1",
@@ -613,8 +615,11 @@ describe("Doctor repair followed by gateway readiness", () => {
           execPath: nodeExecutable,
           timeoutMs: READINESS_CHILD_TIMEOUT_MS,
         });
+        // Keep the extra diagnostics scoped to Doctor, not Gateway startup.
+        env.OPENCLAW_GATEWAY_STARTUP_TRACE = process.env.OPENCLAW_GATEWAY_STARTUP_TRACE;
         const doctorOutput = `${doctor.stdout}\n${doctor.stderr}`;
         expect(doctor.code, doctorOutput).toBe(0);
+        expect(doctor.stderr).toMatch(/doctor[.]legacy-cron[.]store [0-9]+[.][0-9]+ms/);
         expect(doctorOutput).not.toContain("Building Control UI assets");
         expect(doctorOutput).not.toContain("Left plugin-state sidecar in place");
         expect(fs.readFileSync(sidecarPath)).toEqual(preservedSidecar);

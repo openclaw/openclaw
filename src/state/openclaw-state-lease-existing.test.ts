@@ -29,6 +29,7 @@ import {
 } from "./openclaw-state-lease.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -55,6 +56,7 @@ function source(holdAgent = false, provenance = true) {
   const agent = holdAgent ? openOpenClawAgentDatabase({ agentId: "worker", env }) : undefined;
   closeOpenClawStateDatabaseForTest();
   using db = openNodeSqliteDatabase(pathname);
+  restorePreTemplateStateIdentifiersForTest(db);
   addPreCutoverClientCredentialTablesForTest(db);
   db.exec(`PRAGMA foreign_keys=OFF;
       PRAGMA user_version=15;

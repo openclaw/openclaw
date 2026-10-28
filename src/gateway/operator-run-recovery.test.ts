@@ -31,10 +31,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
-import {
-  bindGatewayContextResolver,
-  withPluginRuntimeGatewayRequestScope,
-} from "../plugins/runtime/gateway-request-scope.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -71,17 +68,13 @@ import {
   restoreGatewayQueuedOperatorRecovery,
 } from "./operator-run-recovery.js";
 import {
+  compactRecoveryChild,
   createOperatorRecoveryFixture,
   pairedOperator,
   persistDevices,
   recoveryFixture,
 } from "./operator-run-recovery.test-support.js";
-import {
-  captureOperatorToolGatewayContinuationContext,
-  withOperatorToolGatewayAuthority,
-} from "./server-plugin-in-process-authority.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
-import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   SharedGatewaySessionGenerationState,
@@ -280,24 +273,12 @@ describe("restart recovery authenticated operator source", () => {
       withRecovery(async (fixture, stateDir, profile) => {
         // Keep this profile independent when its original authentication email moves.
         linkEmail("retained@example.test", profile.id);
-        const restored = expectDefined(await fixture.restore(), "recovered requester authority");
-        const client = createSyntheticPluginRuntimeClient({
-          authenticatedUserProfile: fixture.client.authenticatedUserProfile,
-          operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
-          operatorRunAuthority: restored.authority,
-          scopes: ["operator.write"],
+        using restored = await restoreFixture(fixture);
+        const child = await compactRecoveryChild(fixture, restored.authority, () => {
+          fixture.retire();
+          restored.release();
+          expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
         });
-        const child = expectDefined(
-          await withPluginRuntimeGatewayRequestScope(
-            { client, context: fixture.context, isWebchatConnect: () => false },
-            () =>
-              withOperatorToolGatewayAuthority(
-                { operatorRunAuthority: restored.authority, scopes: ["operator.write"] },
-                async () => await captureOperatorToolGatewayContinuationContext(),
-              ),
-          ),
-          "accepted child authority",
-        );
         const beforeWrite = createDeferredCore();
         const releaseWrite = createDeferredCore();
         let pauseWrite = false;
@@ -306,8 +287,9 @@ describe("restart recovery authenticated operator source", () => {
         let admission: ReturnType<typeof prepareAgentRunAdmission> | undefined;
         let host: ReturnType<typeof createAgentHarnessHostCapabilities> | undefined;
         try {
+          expectCurrent(child.operatorAuthority);
           const runId = "recovered-child-effect";
-          const { agentId, sessionKey, sessionId } = fixture.target;
+          const { agentId, sessionKey, sessionId } = child.target;
           const prepared = prepareAgentRunAdmission({
             cfg: {},
             facts: {
@@ -352,9 +334,6 @@ describe("restart recovery authenticated operator source", () => {
             "child write capability",
           );
           const file = "recovered-child-effect.txt";
-          fixture.retire();
-          restored.release();
-          expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
           expect(child.operatorAuthority?.scopes).toEqual(["operator.write"]);
           await child.run(() => tool.execute("allowed", { path: file, content: "allowed\n" }));
           expect(await readFile(path.join(stateDir, file), "utf8")).toBe("allowed\n");
@@ -386,7 +365,6 @@ describe("restart recovery authenticated operator source", () => {
           host?.close();
           admission?.close();
           child.release();
-          restored.release();
         }
       }),
   );

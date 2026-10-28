@@ -73,6 +73,11 @@ import {
   withLegacyLocalWorkspaceCas,
 } from "./openclaw-state-db-schema-v35-workspace-cas.js";
 import {
+  stateTemplateNamesMigration,
+  withLegacyTemplateStateSchema,
+  withLegacyTemplateStateCompatibility,
+} from "./openclaw-state-db-schema-v36-template-names.js";
+import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
   type StateSchemaVersionFacts,
@@ -83,6 +88,8 @@ import {
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
   STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+  STATE_V5_ADDITIVE_TABLES,
+  STATE_V6_ADDITIVE_TABLES,
 } from "./openclaw-state-schema-compatibility.js";
 import {
   readStateSchemaPublicationBlocker,
@@ -181,30 +188,6 @@ export function prepareStateDatabaseSchemaRepair(
   };
 }
 
-const STATE_V6_ADDITIVE_TABLES = [
-  ...LAZY_ADDITIVE_STATE_TABLES,
-  "worker_session_tool_operations",
-  "worker_turn_tool_authorities",
-] as const;
-const STATE_V5_ADDITIVE_TABLES = [
-  "agent_database_leases",
-  "agent_deletion_journal",
-  "claw_cron_refs",
-  "claw_installs",
-  "claw_mcp_server_refs",
-  "claw_package_refs",
-  "claw_workspace_files",
-  "config_machine_state",
-  "cron_job_scratch",
-  "meeting_transcript_sessions",
-  "meeting_transcript_summaries",
-  "meeting_transcript_utterances",
-  "outbound_media_provenance",
-  "worker_environment_credentials",
-  "worker_transcript_commit_heads",
-  "worker_transcript_commits",
-  ...STATE_V6_ADDITIVE_TABLES,
-] as const;
 const STATE_MIGRATION_VERSIONS = [
   5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
 ] as const;
@@ -303,16 +286,21 @@ function assertOpenClawStateDatabaseVersionForMigration(
       `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; repair the ownership metadata before migrating it.`,
     );
   }
-  assertSqliteSchemaTablesPresent(database, options.pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-    allowedMissingTables: [
-      ...(options.version === 5
-        ? STATE_V5_ADDITIVE_TABLES
-        : options.version < 13
-          ? STATE_V6_ADDITIVE_TABLES
-          : LAZY_ADDITIVE_STATE_TABLES),
-      ...DOCTOR_OWNED_STATE_TABLES,
-    ],
-  });
+  assertSqliteSchemaTablesPresent(
+    database,
+    options.pathname,
+    withLegacyTemplateStateSchema(OPENCLAW_STATE_SCHEMA_SQL),
+    {
+      allowedMissingTables: [
+        ...(options.version === 5
+          ? STATE_V5_ADDITIVE_TABLES
+          : options.version < 13
+            ? STATE_V6_ADDITIVE_TABLES
+            : LAZY_ADDITIVE_STATE_TABLES),
+        ...DOCTOR_OWNED_STATE_TABLES,
+      ],
+    },
+  );
 }
 
 /** Keep historical migration gates beside their version-specific ownership assertions. */
@@ -553,6 +541,7 @@ export const versionedStateMigrations = [
   stateLocalWorkspaceManifestMigration,
   cronIdentity.stateCronIdentityMigration,
   stateLocalWorkspaceCasMigration,
+  stateTemplateNamesMigration,
 ] as const;
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
@@ -576,6 +565,7 @@ export function migrateBoundedStateSchema(
     ...stateIndexOrderingMigrations,
     cronIdentity.stateCronIdentityMigration,
     stateLocalWorkspaceCasMigration,
+    stateTemplateNamesMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.
@@ -589,7 +579,12 @@ export function migrateBoundedStateSchema(
   const indexes = getCanonicalSqliteNamedIndexContracts(OPENCLAW_STATE_SCHEMA_SQL).filter((index) =>
     tables.has(index.tableName),
   );
-  const casSourceSchema = withLegacyLocalWorkspaceCas(OPENCLAW_STATE_SCHEMA_SQL);
+  const predecessorSchema =
+    previousVersion < 36
+      ? withLegacyTemplateStateSchema(OPENCLAW_STATE_SCHEMA_SQL)
+      : OPENCLAW_STATE_SCHEMA_SQL;
+  const casSourceSchema =
+    previousVersion < 35 ? withLegacyLocalWorkspaceCas(predecessorSchema) : predecessorSchema;
   const manifestSourceSchema =
     previousVersion < 31 ? withLegacyLocalWorkspaceManifests(casSourceSchema) : casSourceSchema;
   const indexSourceSchema =
@@ -601,11 +596,11 @@ export function migrateBoundedStateSchema(
     !options.versionMigrationOnly &&
     (tableExists(db, "cron_run_logs") ||
       collectSqliteSchemaIssues(db, sourceSchema, {
-        ...STATE_RUNTIME_SCHEMA_COMPATIBILITY,
+        ...withLegacyTemplateStateCompatibility(STATE_RUNTIME_SCHEMA_COMPATIBILITY),
         allowedMissingColumns: [
           ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingColumns ?? []),
           ...pending.flatMap((migration) => migration.columns),
-        ],
+        ].map(withLegacyTemplateStateSchema),
         allowedMissingIndexes: [
           ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingIndexes ?? []),
           ...indexes.map((index) => index.name),

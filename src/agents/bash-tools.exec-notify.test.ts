@@ -6,6 +6,7 @@ import type {
   SessionEventReceipt,
 } from "../auto-reply/reply/session-event-contract.js";
 import * as handoff from "../auto-reply/reply/session-event-handoff.js";
+import { readSessionEventTargetCommandOwner } from "../auto-reply/reply/session-event-target.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
@@ -44,6 +45,7 @@ import {
   recoverExecExitNotifications,
 } from "./bash-tools.exec-notify.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import type { RequesterOrigin } from "./requester-origin.js";
 import { isRuntimeToolAllowed } from "./tool-policy-match.js";
 import { attachToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -85,6 +87,7 @@ async function withFixture(
       notifyOnExit?: boolean;
       id?: string;
       toolsAllow?: string[];
+      requesterOrigin?: RequesterOrigin;
     }) => Promise<ReturnType<typeof createProcessSessionFixture>>;
     recover: (config?: OpenClawConfig) => Promise<void>;
   }) => Promise<void>,
@@ -145,7 +148,12 @@ async function withFixture(
           });
           addSession(process);
           await withGatewayToolCallerIdentity(
-            { agentId, sessionKey: key, sessionEventToolsAllow: options.toolsAllow },
+            {
+              agentId,
+              sessionKey: key,
+              sessionEventToolsAllow: options.toolsAllow,
+              requesterOrigin: options.requesterOrigin,
+            },
             () => prepareExecExitNotification(process, false),
           );
           markBackgrounded(process);
@@ -531,6 +539,27 @@ describe("background exec completion obligations", () => {
       expect(() => options.assertCurrent?.()).toThrow("notifications are disabled");
     });
   });
+
+  it.each([
+    ["456", true],
+    ["789", false],
+  ] as const)(
+    "retains requester %s's owner authority for its completion: %s",
+    async (senderId, owner) => {
+      await withFixture(async ({ background }) => {
+        const commands = { ownerAllowFrom: ["456"] };
+        setRuntimeConfigSnapshot({ ...initialConfig, channels: { telegram: {} }, commands });
+        const requesterOrigin = { sessionKey, messageProvider: "telegram", senderId };
+        const process = await background({ requesterOrigin });
+        process.exitCode = 0;
+        await maybeNotifyOnExit(process, "completed", false);
+        const target = lastNotification().options.expectedTarget!;
+        expect(readSessionEventTargetCommandOwner(target)?.requester.senderId).toBe(
+          owner ? senderId : undefined,
+        );
+      });
+    },
+  );
 
   it("preserves intersected tool restrictions through durable recovery", async () => {
     await withFixture(async ({ background, read, recover }) => {

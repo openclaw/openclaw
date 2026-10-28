@@ -46,7 +46,7 @@ it("shared search/get/health roundtrip uses native publication, provenance and r
   expect((await f.service.record({ id: saved.id }, f.tool)).record!.id).toBe(saved.id);
 });
 
-it("conversation audiences never acquire private scope", async () => {
+it("ungranted conversation audiences never acquire private scope", async () => {
   const f = await memoryFixture(tempDirs);
   await f.save("Private sentinel");
   f.setAudience(f.conversation);
@@ -133,6 +133,7 @@ async function stubProvider(
     policy: { operatorRead: false },
     incarnation: 0,
     assertLive(_epoch: number) {},
+    async ensure() {},
     async open(principal: any, _options: { provision: boolean }): Promise<unknown> {
       const access = { ...principal(), assertCurrent: () => principal() };
       return { kind: "ready", runtime, access };
@@ -146,7 +147,8 @@ async function stubProvider(
       }
     },
   };
-  const { provider } = await createKnowledgeMemoryRuntime(stores as Stores).open({
+  // SAFETY: the provider runtime calls only the members stubbed above.
+  const { provider } = await createKnowledgeMemoryRuntime(stores as unknown as Stores).open({
     cfg: {},
     agentId: "main",
     context,
@@ -369,7 +371,7 @@ it("knowledge_recall rejects non-owner authority, unavailable writes and invalid
   f.setAudience(f.conversation);
   await expect(
     f.service.recall({ ...base, set: { summary: "Private context" } }, f.tool),
-  ).rejects.toThrow(/conversation audiences/);
+  ).rejects.toThrow(/owner grant to read and save/);
   f.setAudience({ kind: "owner-private", agentId: "main" });
   const operator: any = {
     source: "session-action",

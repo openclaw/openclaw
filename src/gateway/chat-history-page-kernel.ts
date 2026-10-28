@@ -240,6 +240,9 @@ export async function readChatHistoryPageKernel(
   const activeLeafEntryId = includeActiveLeaf
     ? resolveChatHistoryActiveLeafEntryId(readPage)
     : null;
+  const source = readPage.displaySource
+    ? createTranscriptDisplaySource([readPage.displaySource])
+    : undefined;
   return {
     ...(incrementalTail.windowReset ? { windowReset: true } : {}),
     ...(includeActiveLeaf ? { activeLeafEntryId } : {}),
@@ -254,6 +257,18 @@ export async function readChatHistoryPageKernel(
       ? { activity: incrementalTail.projection.activity }
       : {}),
     ...(isOffsetPage ? { responseOffset: currentOffset } : {}),
+    ...(source
+      ? {
+          anchor: {
+            sessionId,
+            source,
+            hasOlder: incrementalTail.hasOlder,
+            hasNewer: (currentOffset ?? 0) > 0,
+            oldestMessageId: incrementalTail.oldestMessageId,
+            newestMessageId: incrementalTail.newestMessageId,
+          },
+        }
+      : {}),
     pagination: {
       offset: currentOffset ?? 0,
       totalMessages: readPage.totalMessages,

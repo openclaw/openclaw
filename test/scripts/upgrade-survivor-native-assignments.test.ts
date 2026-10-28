@@ -7,7 +7,12 @@ import {
   assertPublishedAssignments,
 } from "../../scripts/e2e/lib/upgrade-survivor/native-assignments.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { readJson, successSummary, writeJson } from "./upgrade-survivor-shard.test-support.js";
+import {
+  backupRollbackProof,
+  readJson,
+  successSummary,
+  writeJson,
+} from "./upgrade-survivor-shard.test-support.js";
 
 const owner = {
   parentThreadId: "native-upgrade-parent",
@@ -102,34 +107,7 @@ it("requires package-bound proof before publishing a successful retirement cell"
   const digest = "a".repeat(64);
   const snapshot = {
     ...successSummary(versions.baselineVersion, versions.candidateVersion),
-    backupRollback: {
-      status: "passed",
-      ...versions,
-      runtime: {
-        version: "2026.9.4",
-        schemaVersions: { state: 16, agent: 19 },
-        manifestSha256: digest,
-        entrySha256: digest,
-      },
-      candidateSchemaVersions: { state: 17, agent: 21 },
-      archive: { sha256: digest },
-      before: {
-        databases: [
-          {
-            kind: "agent",
-            agentId: "main",
-            present: true,
-            userVersion: 19,
-            contentVersion: 19,
-            sessions: [{ key: "synthetic", sessionId: "synthetic" }],
-            tables: [{ table: "transcript_events", rows: 1, sha256: digest }],
-          },
-        ],
-        files: [],
-      },
-      preflights: [{ agentId: "main", status: "exact", foundVersion: 19, targetVersion: 19 }],
-      sessionReads: [{ agentId: "main", count: 1 }],
-    },
+    backupRollback: backupRollbackProof(versions.baselineVersion, versions.candidateVersion),
     nativeAssignmentEligibility: {
       status: "required",
       candidateVersion: "2026.9.6",

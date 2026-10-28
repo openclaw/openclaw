@@ -51,6 +51,7 @@ function createReceipts(
     readRevision: () => 0,
     writer: () => record,
     suspended: () => false,
+    hasPendingSchemaMutation: () => false,
     publish: publishScopeRevision,
     ...overrides,
   });

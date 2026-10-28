@@ -1,3 +1,4 @@
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { createMigrationLogger } from "../commands/migrate/context.js";
 import {
@@ -108,8 +109,8 @@ export async function runSetupMemoryImportStep(params: {
           ? t("wizard.memoryImport.conflictSuffix", { count: offer.conflicts })
           : "";
         return t("wizard.memoryImport.offerLine", {
-          label: offer.provider.label,
-          source: offer.source,
+          label: terminalText`${offer.provider.label}`,
+          source: terminalText`${offer.source}`,
           count: offer.plannedIds.length,
           conflictSuffix,
         });
@@ -132,8 +133,8 @@ export async function runSetupMemoryImportStep(params: {
               message: t("wizard.memoryImport.selectSources"),
               options: offers.map((offer) => ({
                 value: offer.provider.id,
-                label: offer.provider.label,
-                hint: offer.source,
+                label: terminalText`${offer.provider.label}`,
+                hint: terminalText`${offer.source}`,
               })),
               initialValues: offers.map((offer) => offer.provider.id),
             });
@@ -155,15 +156,23 @@ export async function runSetupMemoryImportStep(params: {
       };
       for (const offer of selectedOffers) {
         const progress = params.prompter.progress(
-          t("wizard.memoryImport.importing", { label: offer.provider.label }),
+          t("wizard.memoryImport.importing", { label: terminalText`${offer.provider.label}` }),
         );
         const reportFailure = async (reason: string) => {
           failureLines.push(
-            t("wizard.memoryImport.failureLine", { label: offer.provider.label, reason }),
+            t("wizard.memoryImport.failureLine", {
+              label: terminalText`${offer.provider.label}`,
+              reason,
+            }),
           );
-          progress.stop(t("wizard.memoryImport.importFailed", { label: offer.provider.label }));
+          progress.stop(
+            t("wizard.memoryImport.importFailed", { label: terminalText`${offer.provider.label}` }),
+          );
           await params.prompter.note(
-            t("wizard.memoryImport.applyFailed", { label: offer.provider.label, reason }),
+            t("wizard.memoryImport.applyFailed", {
+              label: terminalText`${offer.provider.label}`,
+              reason,
+            }),
             t("wizard.memoryImport.errorTitle"),
           );
         };
@@ -172,7 +181,9 @@ export async function runSetupMemoryImportStep(params: {
         try {
           await params.beforeApply?.();
         } catch (error) {
-          progress.stop(t("wizard.memoryImport.importFailed", { label: offer.provider.label }));
+          progress.stop(
+            t("wizard.memoryImport.importFailed", { label: terminalText`${offer.provider.label}` }),
+          );
           throw error;
         }
         let result: Awaited<ReturnType<typeof applyProviderMemoryImport>>;
@@ -197,10 +208,10 @@ export async function runSetupMemoryImportStep(params: {
           // an apply throw whose partial copy count cannot be recovered.
           summaryLines.push(
             t("wizard.memoryImport.summaryLine", {
-              label: offer.provider.label,
+              label: terminalText`${offer.provider.label}`,
               migrated: 0,
               skipped: 0,
-              target: offer.plan.target ?? workspace,
+              target: terminalText`${offer.plan.target ?? workspace}`,
             }),
           );
           await reportFailure(reason);
@@ -208,10 +219,10 @@ export async function runSetupMemoryImportStep(params: {
         }
         summaryLines.push(
           t("wizard.memoryImport.summaryLine", {
-            label: offer.provider.label,
+            label: terminalText`${offer.provider.label}`,
             migrated: result.summary.migrated,
             skipped: result.summary.skipped,
-            target: result.target ?? offer.plan.target ?? workspace,
+            target: terminalText`${result.target ?? offer.plan.target ?? workspace}`,
           }),
         );
         // Conflicts count as incomplete: a selected item was skipped because its
@@ -231,7 +242,9 @@ export async function runSetupMemoryImportStep(params: {
         if (failure !== undefined) {
           await reportFailure(failure);
         } else {
-          progress.stop(t("wizard.memoryImport.imported", { label: offer.provider.label }));
+          progress.stop(
+            t("wizard.memoryImport.imported", { label: terminalText`${offer.provider.label}` }),
+          );
         }
       }
 

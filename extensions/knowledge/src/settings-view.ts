@@ -1,11 +1,12 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import type { contract } from "./contract.js";
+import { conversationAccessSection, type GrantSessions } from "./conversation-access-view.js";
 import { loadVocabulary } from "./inspection-client.js";
 import { ontologyView } from "./ontology-view.js";
 import type { Page } from "./page-context.js";
 import { button, choice, el, human, label, time } from "./page-dom.js";
 import { andList, recordsText } from "./store-entries.js";
-import type { StoreChange } from "./stores-contract.js";
+import { GRANT_SESSION_KEY, type StoreChange } from "./stores-contract.js";
 import {
   accessText,
   maintenanceSection,
@@ -69,7 +70,11 @@ export async function settings(ui: Page, n: number, settingsTarget: HTMLElement)
     sectionHeadings[state.settingsSection],
   );
   if (state.settingsSection === "stores") {
-    state.storesSnapshot = await base.invoke("stores_snapshot", {});
+    const [storesSnapshot, sessions] = await Promise.all([
+      base.invoke("stores_snapshot", {}),
+      grantSessions(state.context.host, viewedId),
+    ]);
+    state.storesSnapshot = storesSnapshot;
     if (!live(n)) {
       return;
     }
@@ -199,13 +204,7 @@ export async function settings(ui: Page, n: number, settingsTarget: HTMLElement)
                 );
               }
             }
-            effect.append(
-              el(
-                "p",
-                "Group chats still see only their own conversation’s knowledge.",
-                "knowledge-muted",
-              ),
-            );
+            effect.append(el("p", GROUP_ACCESS_NOTE, "knowledge-muted"));
           };
           submitLabel = () => "Share store";
           body.append(nameField, picks);
@@ -267,13 +266,7 @@ export async function settings(ui: Page, n: number, settingsTarget: HTMLElement)
                 ),
               );
             }
-            effect.append(
-              el(
-                "p",
-                "Group chats still see only their own conversation’s knowledge.",
-                "knowledge-muted",
-              ),
-            );
+            effect.append(el("p", GROUP_ACCESS_NOTE, "knowledge-muted"));
           };
           submitLabel = () => (target ? `Use ${target.label}` : "Use store");
           body.append(picks);
@@ -396,6 +389,32 @@ export async function settings(ui: Page, n: number, settingsTarget: HTMLElement)
         refresh();
         (dialog.querySelector<HTMLElement>("input:not(:disabled)") ?? submit).focus();
       }),
+      conversationAccessSection(
+        storesSnapshot,
+        viewedId,
+        viewedName,
+        sessions,
+        async (sessionKey, access) => {
+          try {
+            const result = await base.invoke("stores_grant", {
+              expectedRevision: state.storesSnapshot!.grants.revision,
+              sessionKey,
+              access,
+            });
+            if (result.snapshot) {
+              state.storesSnapshot = result.snapshot;
+            }
+            if (result.outcome !== "applied") {
+              return result.message;
+            }
+            ui.announce(result.message);
+            void load(true);
+            return undefined;
+          } catch (error) {
+            return `Access was not changed. ${error instanceof Error ? error.message : String(error)}`;
+          }
+        },
+      ),
     );
   } else if (state.settingsSection === "maintenance") {
     const status = await base.invoke("maintenance_status", {});
@@ -449,7 +468,7 @@ export async function settings(ui: Page, n: number, settingsTarget: HTMLElement)
       ],
       [
         "Access",
-        `${viewedStore ? accessText(viewedStore, viewedId, displayName) + ". " : ""}Read and update from owner-direct conversations. Group chats see only their own conversation’s knowledge.`,
+        `${viewedStore ? accessText(viewedStore, viewedId, displayName) + ". " : ""}Read and update from owner-direct conversations. ${grantsText(state.storesSnapshot?.grants.entries.filter((g) => g.agent === viewedId).length ?? 0)}`,
       ],
       [
         "Changes",
@@ -518,3 +537,48 @@ function assignmentApplied(
   }
   void refresh();
 }
+
+const grantKey = new RegExp(GRANT_SESSION_KEY);
+type SessionListRow = {
+  key: string;
+  chatType?: string;
+  label?: string;
+  displayName?: string;
+  archived?: boolean;
+};
+/** The viewed agent's group and channel conversations, for grant labels and the
+ * picker. Listing uses the operator's own session access; Knowledge's grant
+ * enforcement never reads session rows. Undefined when the list can't load. */
+async function grantSessions(
+  host: Page["s"]["context"]["host"],
+  agentId: string,
+): Promise<GrantSessions | undefined> {
+  try {
+    const result = await host.request<{ sessions: SessionListRow[]; hasMore?: boolean }>(
+      "sessions.list",
+      { agentId, archived: "all", limit: 500 },
+    );
+    return {
+      rows: result.sessions
+        .filter((s) => (s.chatType === "group" || s.chatType === "channel") && grantKey.test(s.key))
+        .map((s) => ({
+          key: s.key,
+          title: s.label || s.displayName || s.key,
+          archived: s.archived === true,
+        })),
+      complete: result.hasMore !== true,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+// Vault status summary of conversation grants for the viewed agent.
+const grantsText = (count: number) =>
+  count
+    ? `${count} group conversation${count === 1 ? " has" : "s have"} owner-granted access; other group chats see only their own conversation’s knowledge.`
+    : "Group chats see only their own conversation’s knowledge.";
+
+// Store-change dialogs: grants follow the agent, so granted chats reach the new store.
+const GROUP_ACCESS_NOTE =
+  "Group chats keep their own conversation’s knowledge, except those granted access under Conversation access: they read, or read and save, whichever store this agent uses.";

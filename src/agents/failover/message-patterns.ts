@@ -59,8 +59,20 @@ const PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES = new Set([
   "Responses stream completed tool call with invalid JSON arguments",
 ]);
 
+// Anthropic-compatible relay gateways validate tool_use input themselves and,
+// on malformed upstream arguments, fail the response with this diagnostic
+// instead of forwarding the call. Nothing was dispatched. Keep it anchored.
+const GATEWAY_INVALID_TOOL_INPUT_RE =
+  /^Upstream returned invalid tool input for '[^'\r\n]{1,128}'\.?$/;
+
 export function isPreDispatchToolCallRejectionMessage(errorMessage?: string): boolean {
-  return errorMessage !== undefined && PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES.has(errorMessage);
+  if (errorMessage === undefined) {
+    return false;
+  }
+  return (
+    PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES.has(errorMessage) ||
+    GATEWAY_INVALID_TOOL_INPUT_RE.test(errorMessage.trim())
+  );
 }
 const PERIODIC_USAGE_LIMIT_RE =
   /\b(?:daily|weekly|monthly)(?:\/(?:daily|weekly|monthly))* (?:usage )?limit(?:s)?(?: (?:exhausted|reached|exceeded))?\b|已达到 Token Plan 用量上限|已达到每[日周月天](?:\/每[日周月天])*使用上限|(?:配额|额度)已用尽/i;

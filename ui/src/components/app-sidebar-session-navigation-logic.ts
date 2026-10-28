@@ -303,6 +303,7 @@ export function buildSidebarSessionNavigationState(input: {
           spawnedBy: row.spawnedBy,
           forkSource: row.forkSource,
           status: row.status,
+          lastRunError: row.lastRunError,
           createdAt: row.createdAt,
           startedAt: row.startedAt,
           updatedAt: row.updatedAt,

@@ -43,10 +43,7 @@ import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayRuntimeServiceLogger } from "./server-runtime-service-shared.js";
 import { measureStartup } from "./server-startup-trace.js";
 export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
-export {
-  startGatewayChannelHealthMonitor,
-  type GatewayChannelManager,
-} from "./server-runtime-startup-services.js";
+export { startGatewayChannelHealthMonitor } from "./server-runtime-startup-services.js";
 
 type StartupMaintenanceParams = Parameters<
   typeof import("./server-startup-plugins.js").runGatewayPostReadyStartupMaintenance

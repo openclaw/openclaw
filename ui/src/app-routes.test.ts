@@ -36,11 +36,11 @@ describe("application router registration", () => {
     expect(routeIdFromPath("/control/tasks", "/control")).toBeNull();
   });
 
-  it("replaces the Agents overview with Claws while keeping per-agent settings", () => {
+  it("replaces the Agents overview with Templates while keeping per-agent settings", () => {
     expect(routeIdFromPath("/agents")).toBeNull();
-    expect(routeIdFromPath("/agents/claws/workflow-operator")).toBeNull();
-    expect(routeIdFromPath("/claws")).toBe("claws");
-    expect(routeIdFromPath("/claws/workflow-operator")).toBe("claws");
+    expect(routeIdFromPath("/agents/templates/workflow-operator")).toBeNull();
+    expect(routeIdFromPath("/templates")).toBe("templates");
+    expect(routeIdFromPath("/templates/workflow-operator")).toBe("templates");
     expect(routeIdFromPath("/settings/agents/research")).toBe("agents");
     expect(routeIdFromPath("/settings/agents/research/tools")).toBe("agents");
   });

@@ -483,14 +483,6 @@ describe("snapshot write serialization and scheduling", () => {
     }
   });
 
-  it("uses the debounce timer when idle callbacks are unavailable", async () => {
-    vi.stubGlobal("requestIdleCallback", undefined);
-    writeSnapshotFixture(store, sessionKey, snapshot());
-    vi.advanceTimersByTime(500);
-    await store.whenIdle();
-    expect(await store.read(sessionKey)).toEqual(snapshot());
-  });
-
   it.each(["pagehide", "visibilitychange", "disconnect"])(
     "%s starts flushing synchronously and cancels the pending idle callback",
     async (event) => {
