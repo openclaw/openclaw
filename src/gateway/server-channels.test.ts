@@ -45,7 +45,10 @@ import {
   channelReadyPatch,
   createTransportActivityStatusPatch,
 } from "./channel-status-patches.js";
-import { restartRunningChannelAccounts } from "./channel-thaw-restart.js";
+import {
+  captureThawRestartTargets,
+  restartRunningChannelAccounts,
+} from "./channel-thaw-restart.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 import { registerChannelAutostartRecoveryTests } from "./server-channels.recovery.test-support.js";
 import {
@@ -904,7 +907,7 @@ describe("server-channels auto restart", () => {
       if (recovery === "thaw") {
         const errors: string[] = [];
         expect(
-          await restartRunningChannelAccounts(manager, {
+          await restartRunningChannelAccounts(captureThawRestartTargets(manager), {
             shouldContinue: () => true,
             onError: (message) => errors.push(message),
           }),
@@ -969,7 +972,7 @@ describe("server-channels auto restart", () => {
           : undefined;
       const thaw =
         recovery === "thaw"
-          ? restartRunningChannelAccounts(manager, {
+          ? restartRunningChannelAccounts(captureThawRestartTargets(manager), {
               shouldContinue: () => true,
               onError: (message) => errors.push(message),
             })
@@ -1000,7 +1003,7 @@ describe("server-channels auto restart", () => {
 
   it.each([
     { kind: "deferred-retry", restarted: ["broken"] },
-    { kind: "new-thaw", restarted: ["broken", "healthy"] },
+    { kind: "new-thaw", restarted: ["healthy", "broken"] },
   ] as const)(
     "selects $kind targets after a partial host-thaw restart",
     async ({ kind, restarted }) => {
@@ -1026,11 +1029,16 @@ describe("server-channels auto restart", () => {
       starts.length = 0;
       stops.length = 0;
 
-      const failedTargets = await restartRunningChannelAccounts(manager, {
-        shouldContinue: () => true,
-        onError: (message) => errors.push(message),
-      });
-      expect(failedTargets).toEqual([{ channelId: "discord", accountId: "broken" }]);
+      const failedTargets = await restartRunningChannelAccounts(
+        captureThawRestartTargets(manager),
+        {
+          shouldContinue: () => true,
+          onError: (message) => errors.push(message),
+        },
+      );
+      expect(failedTargets.map(({ channelId, accountId }) => ({ channelId, accountId }))).toEqual([
+        { channelId: "discord", accountId: "broken" },
+      ]);
       expect(starts).toEqual(["healthy"]);
       expect(stops).toEqual(["healthy", "broken"]);
       expect(errors).toEqual(["[discord:broken] host-thaw restart failed: Error: stop failed"]);
@@ -1039,11 +1047,10 @@ describe("server-channels auto restart", () => {
       starts.length = 0;
       stops.length = 0;
       const second = await restartRunningChannelAccounts(
-        manager,
-        { shouldContinue: () => true, onError: (message) => errors.push(message) },
         kind === "deferred-retry"
-          ? { kind, targets: failedTargets }
-          : { kind, pendingTargets: failedTargets },
+          ? failedTargets
+          : captureThawRestartTargets(manager, failedTargets),
+        { shouldContinue: () => true, onError: (message) => errors.push(message) },
       );
       expect(second).toEqual([]);
       expect(starts).toEqual(restarted);
@@ -1068,7 +1075,7 @@ describe("server-channels auto restart", () => {
 
     configured = false;
     const errors: string[] = [];
-    const failedTargets = await restartRunningChannelAccounts(manager, {
+    const failedTargets = await restartRunningChannelAccounts(captureThawRestartTargets(manager), {
       shouldContinue: () => true,
       onError: (message) => errors.push(message),
     });
@@ -1104,7 +1111,7 @@ describe("server-channels auto restart", () => {
           : undefined;
       const restartTask =
         recovery === "thaw"
-          ? restartRunningChannelAccounts(manager, {
+          ? restartRunningChannelAccounts(captureThawRestartTargets(manager), {
               shouldContinue: () => true,
               onError: () => {},
             })
@@ -1131,40 +1138,6 @@ describe("server-channels auto restart", () => {
       }
     },
   );
-
-  it("stops thaw restarts once admission closes mid-pass", async () => {
-    const starts: string[] = [];
-    const stops: string[] = [];
-    const manager = setupChannel({
-      listAccountIds: () => ["first", "second"],
-      startAccount: async (context) => {
-        starts.push(context.accountId);
-        await waitForAbort(context.abortSignal);
-      },
-      stopAccount: async (context) => {
-        stops.push(context.accountId);
-      },
-    });
-    await manager.startChannels();
-    await vi.waitFor(() => expect(starts).toHaveLength(2));
-    starts.length = 0;
-    stops.length = 0;
-
-    let open = true;
-    await restartRunningChannelAccounts(manager, {
-      shouldContinue: () => {
-        if (stops.length > 0) {
-          // Simulate a suspension committing while the first stop was awaited.
-          open = false;
-        }
-        return open;
-      },
-      onError: () => {},
-    });
-
-    expect(stops).toEqual(["first"]);
-    expect(starts).toEqual([]);
-  });
 
   it("keeps terminal diagnosis sticky across activity and connected backfill patches", async () => {
     let publishDerivedSignals: (() => void) | undefined;

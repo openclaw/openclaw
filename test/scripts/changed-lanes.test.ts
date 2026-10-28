@@ -708,16 +708,24 @@ describe("scripts/changed-lanes", () => {
     expect(runChangedLanesCli(dir, ["--json", "--staged"]).lanes.releaseMetadata).toBe(true);
   });
 
-  it("preserves both rename owners through worktree, staged, and committed changes", () => {
+  it("preserves renamed and type-changed paths through worktree, staged, and committed changes", () => {
     const dir = tempDirs.make("openclaw-changed-lanes-rename-");
     const before = "src/old name.ts";
     const after = "ui/new name.ts";
+    const changedType = "src/type-changed.ts";
+    const wasLink = "src/was-link.ts";
     git(dir, ["init", "-q", "--initial-branch=main"]);
     git(dir, ["config", "diff.renames", "true"]);
     writeRepoFile(dir, before, "export const value = 1;\n");
+    writeRepoFile(dir, changedType, "export const value = 1;\n");
+    symlinkSync("old name.ts", path.join(dir, wasLink));
     commitAll(dir, "before rename");
     mkdirSync(path.join(dir, "ui"));
     renameSync(path.join(dir, before), path.join(dir, after));
+    unlinkSync(path.join(dir, changedType));
+    symlinkSync("../ui/new name.ts", path.join(dir, changedType));
+    unlinkSync(path.join(dir, wasLink));
+    writeRepoFile(dir, wasLink, "export const value = 1;\n");
     git(dir, ["add", "--intent-to-add", "--", after]);
 
     for (const mode of ["worktree", "staged", "committed"] as const) {
@@ -734,7 +742,7 @@ describe("scripts/changed-lanes", () => {
               cwd: dir,
               includeWorktree: mode === "worktree",
             });
-      expect(paths, mode).toEqual([before, after]);
+      expect(paths, mode).toEqual([before, changedType, wasLink, after]);
       expectLanes(detectChangedLanes(paths).lanes, { core: true, coreTests: true, ui: true });
       if (mode === "staged") {
         expect(listChangedPathsFromGit({ base: "HEAD", cwd: dir })).toEqual(paths);
