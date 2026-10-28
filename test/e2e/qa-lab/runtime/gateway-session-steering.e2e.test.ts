@@ -159,7 +159,20 @@ describe("session input lifecycle", () => {
         expect(session.chatStates(runId).at(-1)).toBe("aborted");
       }
       expect(session.requests()).toHaveLength(1);
-      expect(session.executedRuns()).toEqual([original.runId]);
+      expect(gateway.events).toContainEqual(
+        expect.objectContaining({
+          event: "agent",
+          payload: expect.objectContaining({
+            runId: queued.runId,
+            stream: "lifecycle",
+            data: expect.objectContaining({
+              status: "cancelled",
+              executionStarted: false,
+              providerStarted: false,
+            }),
+          }),
+        }),
+      );
       const history = await session.history();
       expect(roleTexts(history, "assistant")).toEqual([]);
       expect(history.pendingInputs).toMatchObject({
