@@ -243,6 +243,23 @@ function sameCompletionTerminalOwner(
   );
 }
 
+function sameCompletionCancellationOwner(
+  current: SubagentRunRecord,
+  expected: SubagentRunRecord,
+): boolean {
+  return (
+    isDeepStrictEqual(current.killIntent, expected.killIntent) &&
+    current.killReconciliation?.killedAt === expected.killReconciliation?.killedAt &&
+    Boolean(current.killReconciliation?.taskCancellationAccepted) ===
+      Boolean(expected.killReconciliation?.taskCancellationAccepted) &&
+    Boolean(current.killReconciliation?.suppressTaskDelivery) ===
+      Boolean(expected.killReconciliation?.suppressTaskDelivery) &&
+    current.killReconciliation?.supersededAt === expected.killReconciliation?.supersededAt &&
+    (current.endedReason === SUBAGENT_ENDED_REASON_KILLED) ===
+      (expected.endedReason === SUBAGENT_ENDED_REASON_KILLED)
+  );
+}
+
 function currentCompletionOwner(
   rows: ReadonlyMap<string, SubagentRunRecord>,
   expected: SubagentRunRecord,
@@ -254,15 +271,7 @@ function currentCompletionOwner(
     !sameRequesterSettleRunIdentity(current, expected) ||
     current.execution.lifecycleGeneration !== expected.execution.lifecycleGeneration ||
     !isDeepStrictEqual(current.childSessionIdentity, expected.childSessionIdentity) ||
-    !isDeepStrictEqual(current.killIntent, expected.killIntent) ||
-    current.killReconciliation?.killedAt !== expected.killReconciliation?.killedAt ||
-    Boolean(current.killReconciliation?.taskCancellationAccepted) !==
-      Boolean(expected.killReconciliation?.taskCancellationAccepted) ||
-    Boolean(current.killReconciliation?.suppressTaskDelivery) !==
-      Boolean(expected.killReconciliation?.suppressTaskDelivery) ||
-    current.killReconciliation?.supersededAt !== expected.killReconciliation?.supersededAt ||
-    (current.endedReason === SUBAGENT_ENDED_REASON_KILLED) !==
-      (expected.endedReason === SUBAGENT_ENDED_REASON_KILLED) ||
+    !sameCompletionCancellationOwner(current, expected) ||
     !sameCompletionTerminalOwner(current, expected) ||
     current.suppressAnnounceReason !== expected.suppressAnnounceReason
   ) {
@@ -515,12 +524,13 @@ function currentRequesterEntries(
     }
     if (
       !committed &&
-      operation !== "settle" &&
       (current.delivery?.generation !== expected.delivery?.generation ||
-        !isDeepStrictEqual(
-          captureRequesterSettleWakeProgress(current),
-          captureRequesterSettleWakeProgress(expected),
-        ))
+        !sameCompletionCancellationOwner(current, expected) ||
+        (operation !== "settle" &&
+          !isDeepStrictEqual(
+            captureRequesterSettleWakeProgress(current),
+            captureRequesterSettleWakeProgress(expected),
+          )))
     ) {
       throw new SubagentRequesterWakeProgressChangedError(
         "Subagent requester wake cohort changed before mutation",
