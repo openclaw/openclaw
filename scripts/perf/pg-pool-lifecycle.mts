@@ -597,7 +597,7 @@ if (child?.kind === "transfer") {
             environment: { OPENCLAW_STATE_DIR: fixtureRoot },
           },
           undefined,
-          { sharedState: true },
+          { carrierClass: "shared-state" },
         );
       const store = await (selected
         ? withDatabaseEngineSelection(selected, openStore)

@@ -590,7 +590,7 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .settings-page.oc-app-surface .btn.oc-action,
-.agents-home .btn:is(.agents-home__claw-add, .agents-home__open).oc-action {
+.agents-home .btn:is(.agents-home__template-add, .agents-home__open).oc-action {
   min-height: 0;
   gap: 6px;
   padding: 8px 14px;
@@ -616,13 +616,14 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .settings-page.oc-app-surface .btn.btn--sm.oc-action,
-.agents-home .btn.btn--sm:is(.agents-home__claw-add, .agents-home__open).oc-action {
+.agents-home .btn.btn--sm:is(.agents-home__template-add, .agents-home__open).oc-action {
   padding: 6px 10px;
   font-size: var(--oc-font-size-xs);
 }
 
 .settings-page.oc-app-surface .btn.oc-action:hover:not(:disabled),
-.agents-home .btn:is(.agents-home__claw-add, .agents-home__open).oc-action:hover:not(:disabled) {
+.agents-home
+  .btn:is(.agents-home__template-add, .agents-home__open).oc-action:hover:not(:disabled) {
   border-color: var(--oc-border-strong);
   background: var(--oc-surface-interactive-hover);
   color: var(--oc-text-primary);

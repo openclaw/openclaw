@@ -1,0 +1,138 @@
+.template-creator {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+  max-height: var(--openclaw-modal-height-limit);
+  overflow: auto;
+}
+
+.template-creator h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.template-creator__intro,
+.template-creator__section > p,
+.template-creator__status {
+  color: var(--muted);
+  margin: 0;
+}
+
+.template-creator__identity {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.template-creator__identity label {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.template-creator__identity .settings-input {
+  width: 100%;
+}
+
+.template-creator__section {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+
+.template-creator__section h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  font-size: 14px;
+}
+
+.template-creator__section h3 span {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.template-creator__row,
+.template-creator__archive-file {
+  border-top: 1px solid var(--border);
+  padding: var(--space-2) 0;
+}
+
+.template-creator__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.template-creator__row-choice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.template-creator__row details summary,
+.template-creator__archive-file summary,
+.template-creator__summary summary {
+  cursor: var(--cursor-action);
+}
+
+.template-creator pre {
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.template-creator openclaw-modal-actions {
+  position: sticky;
+  bottom: -20px;
+  z-index: 1;
+  margin: 0 -20px -20px;
+  padding: var(--space-3) 20px;
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+
+.template-creator__row details[open] {
+  flex: 1;
+}
+
+.template-creator__summary dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-2);
+}
+
+.template-creator__summary dd {
+  margin: 0;
+}
+
+.template-creator__notice,
+.template-creator__reopen {
+  position: fixed;
+  z-index: 70;
+  right: var(--space-4);
+  bottom: var(--space-4);
+}
+
+.template-creator__notice {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 360px;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: var(--shadow-md);
+}
+
+.template-creator__notice a {
+  cursor: pointer;
+}
+
+.template-creator__notice--error {
+  border-color: var(--danger);
+}

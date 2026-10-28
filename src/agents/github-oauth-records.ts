@@ -50,7 +50,7 @@ const agentLifecycleBinding = strictRecord({
   agentId,
   provenance: strictRecord({
     agentId,
-    createdVia: z.enum(["operator", "agent", "claw"]),
+    createdVia: z.enum(["operator", "agent", "template"]),
     creatorAgentId: agentId.nullable(),
     createdAtMs: timestamp,
   }).nullable(),

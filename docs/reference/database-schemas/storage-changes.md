@@ -1676,7 +1676,7 @@ opening, with Gateway schema authority granted by its live host operation.
 Classified database errors survive transport, and store close joins worker
 operations and native cleanup. Cold subagent-registry restoration reads through
 the shared-state read-only worker before installing its resident snapshot.
-Asynchronous runtime-configuration preparation also reads Claw consent provenance
+Asynchronous runtime-configuration preparation also reads Template consent provenance
 in the shared-state worker; the synchronous configuration loader retains its
 existing compatibility path.
 

@@ -1606,7 +1606,7 @@ var External = [
     /(^schemaVersion$|^records$|^summary$)/u,
     /(^agentId$|^name$|^version$|^sourceKind$|^status$|^agentState$|^bootstrapState$|^orphaned$|^addedAtMs$|^updatedAtMs$|^resources$)/u,
     /(^kind$|^id$|^state$|^reason$|^relationship$|^origin$|^independentOwner$)/u,
-    /(^claws$|^healthy$|^attention$|^managed$|^referenced$)/u,
+    /(^templates$|^healthy$|^attention$|^managed$|^referenced$)/u,
     /(^source$|^agentId$)/u,
     /(^source$|^agentId$|^planIntegrity$|^acknowledgeClawHubRisk$|^acknowledgeCapabilities$|^acknowledgeSkillWarnings$)/u,
     /(^actionId$|^pluginId$|^reviewToken$|^capabilityGrants$|^capabilityGrantsByPluginId$|^acknowledgeRiskWarning$)/u,
@@ -1628,8 +1628,8 @@ var External = [
     /(^transport$|^command$|^arguments$|^url$|^urlDigest$|^queryParameterNames$|^environment$|^authentication$|^toolFilter$|^timeout$|^connectTimeout$)/u,
     /(^name$|^sourceName$)/u,
     /(^include$|^exclude$)/u,
-    /(^relationship$|^origin$|^independentOwner$|^affectedClawCount$)/u,
-    /(^type$|^relationship$|^origin$|^independentOwner$|^affectedClawCount$)/u,
+    /(^relationship$|^origin$|^independentOwner$|^affectedTemplateCount$)/u,
+    /(^type$|^relationship$|^origin$|^independentOwner$|^affectedTemplateCount$)/u,
     /(^type$|^current$|^desired$|^ownership$)/u,
     /(^source$|^ref$|^version$|^integrity$)/u,
     /^sha256-[A-Za-z0-9+/]{43}=$/u,
@@ -19408,7 +19408,8 @@ var External = [
     check_2899(value.schemaVersion) &&
     check_2900(value.records) &&
     check_2924(value.summary),
-  check_2899 = (value) => typeof value == "string" && value === "openclaw.clawsGatewayStatus.v1",
+  check_2899 = (value) =>
+    typeof value == "string" && value === "openclaw.templatesGatewayStatus.v1",
   check_2900 = (value) =>
     Array.isArray(value) && value.every((unique_1961, index) => check_2901(unique_1961)),
   check_2901 = (value) =>
@@ -19498,13 +19499,13 @@ var External = [
   check_2919 = (value) => check_561(value) || check_2920(value),
   check_2920 = (value) => typeof value == "string" && value === "referenced",
   check_2921 = (value) => check_2922(value) || check_2923(value),
-  check_2922 = (value) => typeof value == "string" && value === "claw-introduced",
+  check_2922 = (value) => typeof value == "string" && value === "template-introduced",
   check_2923 = (value) => typeof value == "string" && value === "pre-existing",
   check_2924 = (value) =>
     typeof value == "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    "claws" in value &&
+    "templates" in value &&
     "healthy" in value &&
     "attention" in value &&
     "managed" in value &&
@@ -19512,7 +19513,7 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1967, unique_1968) => External[991].test(unique_1967) || check_2(value[unique_1967]),
     ) &&
-    check_7(value.claws) &&
+    check_7(value.templates) &&
     check_7(value.healthy) &&
     check_7(value.attention) &&
     check_7(value.managed) &&
@@ -19752,7 +19753,7 @@ var External = [
       !("scheduledJobs" in value) ||
       check_3024(value.scheduledJobs)) &&
     (value.readiness === void 0 || !("readiness" in value) || check_3036(value.readiness)),
-  check_2948 = (value) => typeof value == "string" && value === "openclaw.clawsGatewayPlan.v1",
+  check_2948 = (value) => typeof value == "string" && value === "openclaw.templatesGatewayPlan.v1",
   check_2949 = (value) => check_16(value) || check_17(value) || check_245(value),
   check_2950 = (value) =>
     typeof value == "object" &&
@@ -19889,14 +19890,14 @@ var External = [
     "relationship" in value &&
     "origin" in value &&
     "independentOwner" in value &&
-    "affectedClawCount" in value &&
+    "affectedTemplateCount" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_2015, unique_2016) => External[1013].test(unique_2015) || check_2(value[unique_2015]),
     ) &&
     check_2968(value.relationship) &&
     check_2969(value.origin) &&
     check_97(value.independentOwner) &&
-    check_7(value.affectedClawCount),
+    check_7(value.affectedTemplateCount),
   check_2968 = (value) => check_561(value) || check_2920(value),
   check_2969 = (value) => check_2922(value) || check_2923(value),
   check_2970 = (value) =>
@@ -19907,7 +19908,7 @@ var External = [
     "relationship" in value &&
     "origin" in value &&
     "independentOwner" in value &&
-    "affectedClawCount" in value &&
+    "affectedTemplateCount" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_2017, unique_2018) => External[1014].test(unique_2017) || check_2(value[unique_2017]),
     ) &&
@@ -19915,7 +19916,7 @@ var External = [
     check_2968(value.relationship) &&
     check_2969(value.origin) &&
     check_97(value.independentOwner) &&
-    check_7(value.affectedClawCount),
+    check_7(value.affectedTemplateCount),
   check_2971 = (value) => typeof value == "string" && value === "ownership",
   check_2972 = (value) =>
     typeof value == "object" &&
@@ -22531,27 +22532,27 @@ var External = [
   isExecApprovalsNodeGetParams = (value) => check_2802(value),
   isExecApprovalsNodeSetParams = (value) => check_2803(value),
   isExecApprovalsNodeSnapshot = (value) => check_2816(value),
-  isClawsCatalogSearchParams = (value) => check_2839(value),
-  isClawDraftDocument = (value) => check_2842(value),
-  isClawsDraftsCreateParams = (value) => check_2850(value),
-  isClawsDraftsReadParams = (value) => check_2852(value),
-  isClawsDraftsSaveParams = (value) => check_2855(value),
-  isClawsDraftsReviewParams = (value) => check_2858(value),
-  isClawsDraftsPublishParams = (value) => check_2863(value),
-  isClawsCatalogSearchResult = (value) => check_2865(value),
-  isClawsCatalogDetailParams = (value) => check_2872(value),
-  isClawsCatalogDetailResult = (value) => check_2874(value),
-  isClawsCatalogPreviewParams = (value) => check_2888(value),
-  isClawsCatalogPreviewResult = (value) => check_2892(value),
-  isClawsStatusParams = (value) => check_2895(value),
-  isClawsStatusResult = (value) => check_2897(value),
-  isClawsAddPlanParams = (value) => check_2925(value),
-  isClawsAddApplyParams = (value) => check_2927(value),
-  isClawsUpdatePlanParams = (value) => check_2939(value),
-  isClawsUpdateApplyParams = (value) => check_2941(value),
-  isClawsRemovePlanParams = (value) => check_2943(value),
-  isClawsRemoveApplyParams = (value) => check_2944(value),
-  isClawLifecyclePlanResult = (value) => check_2946(value),
+  isTemplatesCatalogSearchParams = (value) => check_2839(value),
+  isTemplateDraftDocument = (value) => check_2842(value),
+  isTemplatesDraftsCreateParams = (value) => check_2850(value),
+  isTemplatesDraftsReadParams = (value) => check_2852(value),
+  isTemplatesDraftsSaveParams = (value) => check_2855(value),
+  isTemplatesDraftsReviewParams = (value) => check_2858(value),
+  isTemplatesDraftsPublishParams = (value) => check_2863(value),
+  isTemplatesCatalogSearchResult = (value) => check_2865(value),
+  isTemplatesCatalogDetailParams = (value) => check_2872(value),
+  isTemplatesCatalogDetailResult = (value) => check_2874(value),
+  isTemplatesCatalogPreviewParams = (value) => check_2888(value),
+  isTemplatesCatalogPreviewResult = (value) => check_2892(value),
+  isTemplatesStatusParams = (value) => check_2895(value),
+  isTemplatesStatusResult = (value) => check_2897(value),
+  isTemplatesAddPlanParams = (value) => check_2925(value),
+  isTemplatesAddApplyParams = (value) => check_2927(value),
+  isTemplatesUpdatePlanParams = (value) => check_2939(value),
+  isTemplatesUpdateApplyParams = (value) => check_2941(value),
+  isTemplatesRemovePlanParams = (value) => check_2943(value),
+  isTemplatesRemoveApplyParams = (value) => check_2944(value),
+  isTemplateLifecyclePlanResult = (value) => check_2946(value),
   isCanvasDocumentPreviewParams = (value) => check_3041(value),
   isCanvasDocumentViewParams = (value) => check_3044(value),
   isProjectsCheckoutOptionsParams = (value) => check_3047(value),
@@ -22655,27 +22656,6 @@ export {
   isChatSendParams,
   isChatStartupParams,
   isChatToolTitlesParams,
-  isClawDraftDocument,
-  isClawLifecyclePlanResult,
-  isClawsAddApplyParams,
-  isClawsAddPlanParams,
-  isClawsCatalogDetailParams,
-  isClawsCatalogDetailResult,
-  isClawsCatalogPreviewParams,
-  isClawsCatalogPreviewResult,
-  isClawsCatalogSearchParams,
-  isClawsCatalogSearchResult,
-  isClawsDraftsCreateParams,
-  isClawsDraftsPublishParams,
-  isClawsDraftsReadParams,
-  isClawsDraftsReviewParams,
-  isClawsDraftsSaveParams,
-  isClawsRemoveApplyParams,
-  isClawsRemovePlanParams,
-  isClawsStatusParams,
-  isClawsStatusResult,
-  isClawsUpdateApplyParams,
-  isClawsUpdatePlanParams,
   isCommandsListParams,
   isComputerInvokeParams,
   isComputerStatusParams,
@@ -23011,6 +22991,27 @@ export {
   isTaskSuggestionsCreateParams,
   isTaskSuggestionsDismissParams,
   isTaskSuggestionsListParams,
+  isTemplateDraftDocument,
+  isTemplateLifecyclePlanResult,
+  isTemplatesAddApplyParams,
+  isTemplatesAddPlanParams,
+  isTemplatesCatalogDetailParams,
+  isTemplatesCatalogDetailResult,
+  isTemplatesCatalogPreviewParams,
+  isTemplatesCatalogPreviewResult,
+  isTemplatesCatalogSearchParams,
+  isTemplatesCatalogSearchResult,
+  isTemplatesDraftsCreateParams,
+  isTemplatesDraftsPublishParams,
+  isTemplatesDraftsReadParams,
+  isTemplatesDraftsReviewParams,
+  isTemplatesDraftsSaveParams,
+  isTemplatesRemoveApplyParams,
+  isTemplatesRemovePlanParams,
+  isTemplatesStatusParams,
+  isTemplatesStatusResult,
+  isTemplatesUpdateApplyParams,
+  isTemplatesUpdatePlanParams,
   isTerminalAttachParams,
   isTerminalCloseParams,
   isTerminalInputParams,

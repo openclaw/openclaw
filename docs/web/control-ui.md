@@ -518,15 +518,15 @@ Local onboarding generates a Gateway secret in token mode by default, without a 
 
 <a id="agents-home" />
 
-## Agents and Claws
+## Agents and Templates
 
 Use the agent selector to open an agent's chat or its settings gear to configure
 that agent. Per-agent settings remain at `/settings/agents/<id>`.
 
-Open **Claws** in **Pages**, or visit `/claws`, to discover official Claws.
-This page contains Claws discovery only. Enable **Claws** in **Settings → Labs**
+Open **Templates** in **Pages**, or visit `/templates`, to discover official Templates.
+This page contains Templates discovery only. Enable **Templates** in **Settings → Labs**
 to make it available; when disabled, both the Pages entry and direct visits to
-Claws discovery or details are unavailable. The former `/agents` overview is removed.
+Templates discovery or details are unavailable. The former `/agents` overview is removed.
 
 To browse sessions across agents, choose the **Show all** tile in the agent
 switcher. It appears with two or more agents and groups their own avatars: two

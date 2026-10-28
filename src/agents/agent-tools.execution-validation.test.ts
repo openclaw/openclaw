@@ -1,3 +1,4 @@
+import { rejects } from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
@@ -23,7 +24,8 @@ it.each([false, true])(
         }
       });
       if (reject) {
-        await expect(operation).rejects.toThrow("tool failed");
+        // Vitest retains async-assertion diagnostic stacks until this test finishes.
+        await rejects(operation, { message: "tool failed" });
       } else {
         await operation;
       }

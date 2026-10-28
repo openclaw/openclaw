@@ -46,7 +46,7 @@ runs to the end of the file.
 
 - Patch paths support relative paths (from the workspace directory) and absolute paths.
 - Use `./~/file` for a file inside a literal `~` directory; `~/file` retains its home-directory meaning.
-- `tools.exec.applyPatch.workspaceOnly` defaults to `false` in the personal preset and `true` in corporate. Set it explicitly to `true` for workspace containment; required roots and other file-policy layers remain authoritative. See [security presets](/gateway/security/presets).
+- `tools.exec.applyPatch.workspaceOnly` defaults to `false` for host execution. Set it to `true` to restrict patches to the workspace. Required roots, session restrictions, and sandbox filesystem boundaries remain authoritative.
 - This setting is independent of `tools.exec.mode`. Setting `tools.exec.mode: "full"` does not lift the `apply_patch` workspace boundary.
 - `tools.fs.workspaceOnly` contains `apply_patch` independently, so clearing one setting can leave the other in force.
 - An explicit session permission mode overrides both configuration settings: `full` removes their containment, `guarded` and `workspace` contain `apply_patch`, and `read-only` omits the tool.

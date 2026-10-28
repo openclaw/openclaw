@@ -420,8 +420,7 @@
         calc(
           (
               100cqw - var(--chat-table-reserved-space, 0px) -
-                var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-gutter) - 2 *
-                var(--chat-thread-side-inset)
+                var(--chat-transcript-column-width, 100cqw) - 2 * var(--chat-thread-inline-inset)
             ) /
             2
         )

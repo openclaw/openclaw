@@ -25,6 +25,42 @@ afterEach(() => vi.restoreAllMocks());
 
 const readText = (file: string) => fs.readFile(file, "utf8");
 
+it("migrates the Claws preference through candidate Doctor with a rollback original", async () => {
+  await withOpenClawTestState(
+    {
+      scenario: "minimal",
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SUPERVISOR_MODE: "external" },
+    },
+    async (state) => {
+      vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
+      await state.writeConfig({
+        plugins: { enabled: false },
+        gateway: {
+          mode: "local",
+          auth: { mode: "none" },
+          controlUi: {
+            enabled: false,
+            experimental: { customPlugins: true, chatBubbles: true, claws: true },
+          },
+        },
+      });
+      const original = await readText(state.configPath);
+      const backupRoot = state.path("templates-recovery", "native");
+      await updateMigrateCommand(backupRoot);
+      const receipt = JSON.parse(await readText(`${backupRoot}.receipt.json`));
+      expect(receipt.status).toBe("migrated");
+      expect(receipt.configFiles).toContainEqual(
+        expect.objectContaining({ path: state.configPath, raw: original }),
+      );
+      expect(JSON.parse(await readText(state.configPath)).gateway.controlUi.experimental).toEqual({
+        customPlugins: true,
+        chatBubbles: true,
+        templates: true,
+      });
+    },
+  );
+});
+
 it("migrates retired heartbeat config with its backed-up state only once", async () => {
   await withOpenClawTestState(
     {

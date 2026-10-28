@@ -3,6 +3,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
 import type { SessionRestartResume } from "../../config/sessions/restart-resume.js";
 import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
+import type { SessionControllerInput } from "../../sessions/session-controller.contracts.js";
 import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
@@ -37,6 +38,7 @@ export async function prepareAndAdmitChatSend(
   onAdmissionOwned?: () => Promise<boolean>,
   options?: {
     trustedSystemInput?: boolean;
+    controllerInput?: SessionControllerInput;
     isDirectExternalUser?: boolean;
     goalResume?: SessionGoalOperation & { action: "resume" };
     restartResume?: SessionRestartResume;
@@ -189,6 +191,7 @@ export async function prepareAndAdmitChatSend(
     ...preparation,
     session,
     onAdmissionOwned,
+    controllerInput: options?.controllerInput,
     hasCurrentClientAuthority,
     withPreparedCurrent: sessionMutationAuthorization?.withPreparedCurrent,
     followRegistration: sessionMutationAuthorization?.followRegistration,

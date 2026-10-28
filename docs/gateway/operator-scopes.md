@@ -120,7 +120,11 @@ retain document-ID-only access.
 
 In the Control UI, session writers can use **New Session**, send messages in
 their own conversations, fork from a persisted user message in an owned settled
-conversation, and stop their own active runs. Their model, effort,
+conversation, use **Advanced → Fork conversation** on their own conversation,
+and stop their own active runs. Whole-conversation forks preserve the saved
+conversation history; while the source is working, they copy through its last
+completed reply. Forking does not grant access to another creator's conversation
+or change the source's workspace and isolation rules. Their model, effort,
 fast-mode, and non-full permission choices use the same session grant and the
 Gateway's allowed model catalog. Full permission mode, sandbox changes, and
 changes to an existing session's context window still require administrator access.

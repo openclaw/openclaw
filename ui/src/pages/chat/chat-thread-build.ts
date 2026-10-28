@@ -457,7 +457,6 @@ export function buildChatItems(
       message: createCanvasAssistantMessage(preview, timestamp),
     });
   }
-  items = reconcileLiveCanvasPreviews(items, hiddenHistoryKeys, hiddenKeys);
   const projections: ChatProjection[] = [];
   if (compaction && compactionKey && !hasPersistedCompaction) {
     const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
@@ -748,5 +747,6 @@ export function buildChatItems(
     hiddenHistoryKeys.size > 0 || hiddenKeys.size > 0
       ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
       : undefined;
+  items = reconcileLiveCanvasPreviews(items, hiddenHistoryKeys, hiddenKeys);
   return groupDisplayItems(hidden);
 }
