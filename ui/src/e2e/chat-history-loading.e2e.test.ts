@@ -1,7 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { newChatPage } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
@@ -41,23 +38,16 @@ suite.define(() => {
           deferredRequests: [{ method: "chat.history", match: { offset: 1 } }],
           methodResponses: {
             "chat.startup": historyPage([recent], true, 1),
-            "chat.history": {
-              cases: [
+            "chat.history": historyPage(
+              [
                 {
-                  match: { offset: 1 },
-                  response: historyPage(
-                    [
-                      {
-                        role: "user",
-                        content: "Please check the report and compare the available options.",
-                        __openclaw: { id: "earlier", seq: 1 },
-                      },
-                    ],
-                    false,
-                  ),
+                  role: "user",
+                  content: "Please check the report and compare the available options.",
+                  __openclaw: { id: "earlier", seq: 1 },
                 },
               ],
-            },
+              false,
+            ),
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -68,16 +58,6 @@ suite.define(() => {
           { code: "UNAVAILABLE", message: "The connection was interrupted. Try again." },
           { match: { offset: 1 } },
         );
-        await expect
-          .poll(() => pane.locator('.chat-history-boundary__action[aria-busy="true"]').count())
-          .toBe(0);
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          pane,
-          [pane.getByText(recent.content, { exact: true })],
-          { animations: "disabled" },
-        );
-        await writeFile(join(suite.artifactDir, "history-retry-mobile.png"), frame.png);
         const retry = pane.getByRole("button", { name: "Retry earlier messages", exact: true });
         await expect.poll(() => retry.count()).toBe(1);
         await retry.click();
@@ -86,7 +66,10 @@ suite.define(() => {
           .waitFor();
         expect(await pane.locator(".chat-history-boundary").count()).toBe(0);
         expect(await pane.getByText(recent.content, { exact: true }).count()).toBe(1);
-        expect(await gateway.getRequests("chat.history")).toHaveLength(2);
+        expect(await gateway.getRequests("chat.history")).toMatchObject([
+          { params: { offset: 1 } },
+          { params: { offset: 1 } },
+        ]);
       },
     );
   });
