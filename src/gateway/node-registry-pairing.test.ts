@@ -123,116 +123,48 @@ describe("host stats checkpoints", () => {
     });
   }
 
-  it("persists the first sample immediately and checkpoints by saved receipt age", async () => {
+  it.each([
+    { label: "unchanged clock", receipt: 60_000, step: 0, later: false },
+    { label: "quiet node after rollback", receipt: 60_000, step: -56_000, later: false },
+    { label: "reporting node after rollback", receipt: 60_000, step: -56_000, later: true },
+    { label: "buffered receipt before rollback", receipt: 240_000, step: -120_000, later: false },
+    { label: "reporting node after forward step", receipt: 60_000, step: 30_000, later: true },
+  ])("checkpoints by monotonic receipt age ($label)", async ({ receipt, step, later }) => {
     const { registry, persistHostStats, closeHostStats } = fixture();
     const firstWrite = createDeferred<boolean>();
     const secondWrite = createDeferred<boolean>();
     persistHostStats
       .mockImplementationOnce(() => firstWrite.promise)
       .mockImplementationOnce(() => secondWrite.promise);
-
     report(registry);
-    expect(persistHostStats).toHaveBeenCalledExactlyOnceWith({
+    const expected = (memoryFreeBytes: number, updatedAtMs: number) => ({
       nodeId: "node-1",
-      hostStats: { ...stats, updatedAtMs: 1_000 },
+      hostStats: { ...stats, memoryFreeBytes, updatedAtMs },
       expectedPairingGeneration: { nodeId: "node-1", key: "generation-a" },
     });
-    await vi.advanceTimersByTimeAsync(60_000);
+    expect(persistHostStats).toHaveBeenCalledExactlyOnceWith(expected(512, 1_000));
+    await vi.advanceTimersByTimeAsync(receipt);
     report(registry, 400);
     firstWrite.resolve(true);
-    await vi.advanceTimersByTimeAsync(239_999);
-    expect(registry.get("node-1")?.hostStats).toEqual({
-      ...stats,
-      memoryFreeBytes: 400,
-      updatedAtMs: 61_000,
-    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    vi.setSystemTime(Date.now() + step);
+    const savedReceipt = later ? receipt + 30_000 : receipt;
+    const savedEpoch = later ? Date.now() : receipt + 1_000;
+    if (later) {
+      report(registry, 300);
+    }
+    await vi.advanceTimersByTimeAsync(300_000 - receipt - 30_000 - 1);
     expect(persistHostStats).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
-    expect(persistHostStats).toHaveBeenNthCalledWith(2, {
-      nodeId: "node-1",
-      hostStats: { ...stats, memoryFreeBytes: 400, updatedAtMs: 61_000 },
-      expectedPairingGeneration: { nodeId: "node-1", key: "generation-a" },
-    });
-
+    expect(persistHostStats).toHaveBeenNthCalledWith(2, expected(later ? 300 : 400, savedEpoch));
     await vi.advanceTimersByTimeAsync(30_000);
-    report(registry, 300);
+    report(registry, 200);
+    const latestEpoch = Date.now();
     secondWrite.resolve(true);
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(savedReceipt - 30_000 - 1);
     expect(persistHostStats).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
-    expect(persistHostStats).toHaveBeenNthCalledWith(3, {
-      nodeId: "node-1",
-      hostStats: { ...stats, memoryFreeBytes: 300, updatedAtMs: 331_000 },
-      expectedPairingGeneration: { nodeId: "node-1", key: "generation-a" },
-    });
-    await closeHostStats();
-    expect(persistHostStats).toHaveBeenCalledTimes(3);
-  });
-
-  it.each([
-    { label: "when the node goes quiet", laterReport: false },
-    { label: "when the node keeps reporting", laterReport: true },
-  ])(
-    "persists checkpoints on the monotonic clock across a backward wall-clock jump ($label)",
-    async ({ laterReport }) => {
-      const { registry, persistHostStats, closeHostStats } = fixture();
-      const firstWrite = createDeferred<boolean>();
-      persistHostStats.mockImplementationOnce(() => firstWrite.promise);
-
-      report(registry);
-      await vi.advanceTimersByTimeAsync(60_000);
-      report(registry, 400);
-      firstWrite.resolve(true);
-      await vi.advanceTimersByTimeAsync(0);
-      vi.setSystemTime(5_000);
-      if (laterReport) {
-        report(registry, 300);
-        await vi.advanceTimersByTimeAsync(0);
-      }
-      await vi.advanceTimersByTimeAsync(239_999);
-      expect(persistHostStats).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(persistHostStats).toHaveBeenNthCalledWith(2, {
-        nodeId: "node-1",
-        hostStats: {
-          ...stats,
-          memoryFreeBytes: laterReport ? 300 : 400,
-          updatedAtMs: laterReport ? 5_000 : 61_000,
-        },
-        expectedPairingGeneration: { nodeId: "node-1", key: "generation-a" },
-      });
-      await closeHostStats();
-      expect(persistHostStats).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it("anchors a buffered sample's next checkpoint to its receipt, not the write", async () => {
-    const { registry, persistHostStats, closeHostStats } = fixture();
-    const firstWrite = createDeferred<boolean>();
-    persistHostStats.mockImplementationOnce(() => firstWrite.promise);
-
-    report(registry);
-    await vi.advanceTimersByTimeAsync(240_000);
-    report(registry, 400);
-    firstWrite.resolve(true);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(30_000);
-    vi.setSystemTime(151_000);
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(persistHostStats).toHaveBeenNthCalledWith(2, {
-      nodeId: "node-1",
-      hostStats: { ...stats, memoryFreeBytes: 400, updatedAtMs: 241_000 },
-      expectedPairingGeneration: { nodeId: "node-1", key: "generation-a" },
-    });
-    report(registry, 300);
-    await vi.advanceTimersByTimeAsync(239_999);
-    expect(persistHostStats).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(persistHostStats).toHaveBeenNthCalledWith(3, {
-      nodeId: "node-1",
-      hostStats: { ...stats, memoryFreeBytes: 300, updatedAtMs: 181_000 },
-      expectedPairingGeneration: { nodeId: "node-1", key: "generation-a" },
-    });
+    expect(persistHostStats).toHaveBeenNthCalledWith(3, expected(200, latestEpoch));
     await closeHostStats();
     expect(persistHostStats).toHaveBeenCalledTimes(3);
   });
