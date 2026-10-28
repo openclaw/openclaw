@@ -335,12 +335,11 @@ export async function withPageNavigationRequestGuard<T>(
   while (inFlight.size > 0) {
     await Promise.allSettled(inFlight);
   }
-  // The action can resolve after its main document commits but before that
-  // response finishes (for example, location.href to streaming HTML). Settle
-  // only that committed main-frame load; subframe redirect chains retain their
-  // interception owner until their authority checks finish.
+  // Successful committed responses may keep loading after ownership retires.
+  // Only failed/cancelled actions need page-wide cancellation; uncommitted
+  // redirect chains still drain under the fence before successful cleanup.
   const authorityCleanupError = await removeAuthorityFence?.({
-    stopLoadingOnMainFrameCommit: true,
+    stopLoading: actionFailed || hasGuardError || opts.signal?.aborted,
   });
   const cleanupError = authorityCleanupError;
 

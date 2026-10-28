@@ -150,32 +150,27 @@ describe("navigation authority fence lifecycle", () => {
     expect(send).toHaveBeenCalledWith("Page.stopLoading", undefined);
   });
 
-  it("stops a committed main-frame action document without stopping subframe ownership", async () => {
-    const main = await fence();
-    main.session.emit("Network.requestWillBeSent", {
-      requestId: "streaming-document",
-      type: "Document",
-      frameId: "main",
-    });
-    const mainCleanup = main.dispose({ stopLoadingOnMainFrameCommit: true });
+  it("retires committed bodies while retaining a simultaneous child redirect", async () => {
+    const { send, detach, session, dispose } = await fence();
+    for (const frameId of ["main", "child"]) {
+      session.emit("Network.requestWillBeSent", {
+        requestId: frameId + "-document",
+        type: "Document",
+        frameId,
+      });
+    }
+    const cleanup = dispose();
     await vi.waitFor(() =>
-      expect(main.send).toHaveBeenCalledWith("Runtime.evaluate", { expression: "void 0" }),
+      expect(send).toHaveBeenCalledWith("Runtime.evaluate", { expression: "void 0" }),
     );
-    expect(main.send).not.toHaveBeenCalledWith("Page.stopLoading", undefined);
-    main.session.emit("Page.frameNavigated", { frame: { id: "main" } });
-    await expect(mainCleanup).resolves.toBeUndefined();
-    expect(main.send).toHaveBeenCalledWith("Page.stopLoading", undefined);
-
-    const child = await fence();
-    child.session.emit("Network.requestWillBeSent", {
-      requestId: "subframe-document",
-      type: "Document",
-      frameId: "child",
-    });
-    child.session.emit("Page.frameNavigated", { frame: { id: "child" } });
-    child.session.emit("Network.loadingFinished", { requestId: "subframe-document" });
-    await expect(child.dispose({ stopLoadingOnMainFrameCommit: true })).resolves.toBeUndefined();
-    expect(child.send).not.toHaveBeenCalledWith("Page.stopLoading", undefined);
+    session.emit("Page.frameNavigated", { frame: { id: "main" } });
+    await Promise.resolve();
+    expect(detach).not.toHaveBeenCalled();
+    // Neither body reaches EOF. Only the child's own commit retires its chain.
+    session.emit("Page.frameNavigated", { frame: { id: "child" } });
+    await expect(cleanup).resolves.toBeUndefined();
+    expect(send).not.toHaveBeenCalledWith("Page.stopLoading", undefined);
+    expect(detach).toHaveBeenCalledOnce();
   });
 
   it("removes the paused-request listener before detachment releases interception", async () => {

@@ -22,6 +22,31 @@ describe.skipIf(!isLiveTestEnabled())(
     const heldResponses = new Set<ServerResponse>();
     let documents = 0;
     const source = createServer((req, res) => {
+      if (req.url === "/finite" || req.url === "/finite-child") {
+        const child = req.url === "/finite-child";
+        heldResponses.add(res);
+        res.writeHead(200, { "Content-Type": "text/html", "Cache-Control": "no-store" });
+        res.write(
+          child
+            ? "<!doctype html><title>Pending child</title><body>child prefix"
+            : '<!doctype html><title>Pending main</title><body><iframe src="/finite-child"></iframe>',
+        );
+        const timer = setTimeout(
+          () => {
+            res.end(
+              child
+                ? '<p id="child-tail">child complete</p></body>'
+                : '<form id="main-tail">main complete</form><script>document.title="Finite complete"</script></body>',
+            );
+          },
+          child ? 2_000 : 1_500,
+        );
+        res.on("close", () => {
+          clearTimeout(timer);
+          heldResponses.delete(res);
+        });
+        return;
+      }
       if (req.url === "/stream") {
         heldResponses.add(res);
         const timer = setTimeout(() => {
@@ -161,6 +186,38 @@ describe.skipIf(!isLiveTestEnabled())(
         await page.close();
       }
     });
+    it("preserves delayed finite HTML and simultaneous pending child loads after success", async () => {
+      const page = await browser.newPage();
+      try {
+        await page.goto(sourceUrl);
+        await withPageNavigationRequestGuard({
+          page,
+          ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+          action: async () => {
+            await page.evaluate((url) => {
+              location.href = url;
+            }, sourceUrl + "/finite");
+            await page.waitForURL(sourceUrl + "/finite", { waitUntil: "commit" });
+            await page.frameLocator("iframe").locator("body").waitFor();
+          },
+        });
+        expect(await page.locator("#main-tail").count()).toBe(0);
+        expect(await page.frameLocator("iframe").locator("#child-tail").count()).toBe(0);
+        await page.waitForLoadState("load", { timeout: 5_000 });
+        expect(await page.locator("#main-tail").textContent()).toBe("main complete");
+        expect(await page.frameLocator("iframe").locator("#child-tail").textContent()).toBe(
+          "child complete",
+        );
+        expect(await page.title()).toBe("Finite complete");
+        if (process.env.OPENCLAW_LIVE_PROOF === "1") {
+          console.info(
+            "[browser-proof] successfulAction pendingMain=true pendingChild=true delayedMain=complete delayedChild=complete load=complete",
+          );
+        }
+      } finally {
+        await page.close();
+      }
+    }, 15_000);
     it("settles a committed action stream before releasing navigation ownership", async () => {
       const page = await browser.newPage();
       try {

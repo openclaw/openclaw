@@ -64,7 +64,6 @@ export type NavigationDocumentRequest = {
 };
 export type NavigationAuthorityFenceDisposeOptions = {
   stopLoading?: boolean;
-  stopLoadingOnMainFrameCommit?: boolean;
 };
 
 /** Fence every Chromium redirect hop, including separately hosted iframe targets. */
@@ -80,7 +79,6 @@ export async function installNavigationAuthorityFence(
   const assertCurrent = policy.assertNavigationCurrent ?? (() => {});
   const session = await page.context().newCDPSession(page);
   let mainFrameId: string | undefined;
-  let mainFrameCommitted = false;
   const states = new Map<NavigationTargetSession, TargetState>();
   const inFlight = new Set<Promise<void>>();
   let stateChanged = createDeferred<void>();
@@ -120,6 +118,18 @@ export async function installNavigationAuthorityFence(
         finishedDocuments.add(event.requestId);
         notify();
       }
+    };
+    const committed = (event: { frame: { id: string } }) => {
+      // A committed response cannot redirect. Retire its navigation ownership,
+      // not its still-loading body or children; each new document request keeps
+      // its own admission check and uncommitted redirects remain fenced.
+      for (const [requestId, frameId] of documents) {
+        if (frameId === event.frame.id) {
+          documents.delete(requestId);
+          finishedDocuments.add(requestId);
+        }
+      }
+      notify();
     };
     const handle = async (event: PausedRequest) => {
       try {
@@ -235,6 +245,7 @@ export async function installNavigationAuthorityFence(
         target.events.off("Network.requestWillBeSent", started);
         target.events.off("Network.loadingFinished", finished);
         target.events.off("Network.loadingFailed", finished);
+        target.events.off("Page.frameNavigated", committed);
       },
     };
     states.set(target, state);
@@ -242,6 +253,7 @@ export async function installNavigationAuthorityFence(
     target.events.on("Network.requestWillBeSent", started);
     target.events.on("Network.loadingFinished", finished);
     target.events.on("Network.loadingFailed", finished);
+    target.events.on("Page.frameNavigated", committed);
     if (target.parent && target.frameId) {
       // At OOPIF response handoff the parent no longer receives the document's
       // terminal Network event. The child initialization barrier owns the swap.
@@ -255,6 +267,8 @@ export async function installNavigationAuthorityFence(
       }
     }
     notify();
+    assertTargetCurrent();
+    await target.send("Page.enable");
     assertTargetCurrent();
     await target.send("Network.enable");
     assertTargetCurrent();
@@ -459,17 +473,8 @@ export async function installNavigationAuthorityFence(
     }
   };
   const ready = (async () => {
-    await session.send("Page.enable");
     const tree = await session.send("Page.getFrameTree");
     mainFrameId = tree.frameTree.frame.id;
-    const mainFrameNavigated = (event: { frame: { id: string } }) => {
-      if (event.frame.id === mainFrameId) {
-        mainFrameCommitted = true;
-        notify();
-      }
-    };
-    rootEvents.on("Page.frameNavigated", mainFrameNavigated);
-    removers.add(() => rootEvents.off("Page.frameNavigated", mainFrameNavigated));
     await prepare(rootTarget);
     while (initialization.size > 0) {
       await Promise.all(initialization);
@@ -547,13 +552,7 @@ export async function installNavigationAuthorityFence(
         // Capture before reading state so a terminal event cannot notify
         // between the predicate and the wait and leave cleanup asleep.
         const changed = stateChanged.promise;
-        if (
-          !loadingSettled &&
-          (options.stopLoading || (options.stopLoadingOnMainFrameCommit && mainFrameCommitted))
-        ) {
-          // A committed document can remain open indefinitely. Its commit may
-          // arrive after cleanup starts, so re-evaluate this boundary whenever
-          // protocol state changes instead of sampling it only once.
+        if (!loadingSettled && options.stopLoading) {
           await stopLoading();
           loadingSettled = true;
         }
