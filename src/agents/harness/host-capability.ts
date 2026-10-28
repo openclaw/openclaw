@@ -57,6 +57,7 @@ import { gateBoundTool } from "./host-bound-tool.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import { captureRequiredWorkspaceToolFloor } from "./host-capability-workspace.js";
 import { normalizeNativeOperationCwd, prepareAgentHarnessEnvironment } from "./host-environment.js";
+import { bindHarnessExecReviewContext } from "./host-exec-review-context.js";
 import { bindHarnessMedia } from "./host-media.js";
 import {
   registerAgentHarnessBeforeToolCallRetention,
@@ -161,17 +162,22 @@ export function createAgentHarnessHostCapabilities(params: {
       !boundGatewayContext || callerIdentity?.gatewayContextResolver?.() !== undefined,
     inactiveError,
   });
-  const callerIdentity = createAdmittedGatewayToolCallerIdentity({
-    admittedRunContext: attempt.admittedRunContext,
-    receiptAuthority: assertActive,
-    approvalSignals: [capabilityAbortController.signal, ...(attemptSignal ? [attemptSignal] : [])],
-    agentId: attempt.agentId,
-    sessionKey: attempt.sessionKey,
-    turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,
-    turnSourceTo: attempt.currentMessagingTarget ?? attempt.currentChannelId,
-    turnSourceAccountId: attempt.agentAccountId,
-    turnSourceThreadId: attempt.currentThreadTs,
-  });
+  const createCallerIdentity = (receiptAuthority: typeof assertActive) =>
+    createAdmittedGatewayToolCallerIdentity({
+      admittedRunContext: attempt.admittedRunContext,
+      receiptAuthority,
+      approvalSignals: [
+        capabilityAbortController.signal,
+        ...(attemptSignal ? [attemptSignal] : []),
+      ],
+      agentId: attempt.agentId,
+      sessionKey: attempt.sessionKey,
+      turnSourceChannel: attempt.messageChannel ?? attempt.messageProvider,
+      turnSourceTo: attempt.currentMessagingTarget ?? attempt.currentChannelId,
+      turnSourceAccountId: attempt.agentAccountId,
+      turnSourceThreadId: attempt.currentThreadTs,
+    });
+  const callerIdentity = createCallerIdentity(assertActive);
   const observeCoreTtsToolResult = (result: unknown) => {
     if (typeof result === "object" && result !== null && getCoreTtsToolResultMediaUrls(result)) {
       coreTtsToolResults.add(result);
@@ -200,6 +206,13 @@ export function createAgentHarnessHostCapabilities(params: {
   });
   const recorder = attempt.userTurnTranscriptRecorder;
   const sessionTarget = attempt.sessionTarget ? cloneSnapshot(attempt.sessionTarget) : undefined;
+  const execReviewContext = bindHarnessExecReviewContext({
+    attempt,
+    config,
+    assertActive,
+    abort: (error) => capabilityAbortController.abort(error),
+  });
+  const execCallerIdentity = createCallerIdentity(execReviewContext.assertCurrent);
   const annotateCurrentUserTurn =
     attempt.userTurnTranscriptRecorder &&
     attempt.sessionTarget &&
@@ -384,7 +397,10 @@ export function createAgentHarnessHostCapabilities(params: {
       .map((tool) => bindAgentToolSourceExecutionGuard(tool, assertActive))
       .map((tool) => rewrapToolWithBeforeToolCallHook(tool, bindingHookContext))
       .map((tool) =>
-        callerIdentity ? wrapToolWithGatewayCallerIdentity(tool, callerIdentity) : tool,
+        wrapToolWithGatewayCallerIdentity(
+          tool,
+          tool.name === "exec" ? execCallerIdentity : callerIdentity,
+        ),
       )
       .map((tool) => wrapToolWithAbortSignal(tool, boundAbortSignal))
       .map((tool) => gateBoundTool(tool, assertActive, observeResult));
@@ -414,6 +430,7 @@ export function createAgentHarnessHostCapabilities(params: {
     return {
       options: {
         ...effectiveOptions,
+        exec: { ...effectiveOptions.exec, reviewTranscript: execReviewContext.reviewTranscript },
         // Availability belongs to this prepared host, not mutable plugin inputs.
         githubPublicationAvailable,
         runtimePluginToolGrant,
@@ -478,7 +495,9 @@ export function createAgentHarnessHostCapabilities(params: {
         });
       }
     },
-    ...(annotateCurrentUserTurn ? { annotateCurrentUserTurn } : {}),
+    ...(annotateCurrentUserTurn
+      ? { annotateCurrentUserTurn: execReviewContext.bindAnnotation(annotateCurrentUserTurn) }
+      : {}),
     ...media.capabilities,
     ...(trajectoryRecorder
       ? {
