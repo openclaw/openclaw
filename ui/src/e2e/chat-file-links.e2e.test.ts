@@ -128,6 +128,56 @@ suite.define(() => {
     });
   });
 
+  it("restores the Files catalog selection after a refused document link", async () => {
+    await withPage(async (page) => {
+      const gateway = await installMockGateway(page, {
+        workspace: "/workspace",
+        agentModel: "proof/model",
+        historyMessages: [chatMessage("assistant", "[Report](/workspace/report.md)")],
+        methodResponses: {
+          "sessions.files.get": textPreview("report.md", "# Report\n\n[Evidence](evidence.md)"),
+          "sessions.files.list": {
+            sessionKey,
+            root: "/workspace",
+            files: [],
+            browser: {
+              path: "",
+              entries: ["report.md", "evidence.md"].map((path) => ({
+                path,
+                name: path,
+                kind: "file",
+              })),
+            },
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator('.chat-thread a[data-file-path="/workspace/report.md"]').click();
+      const reader = page.locator(".sidebar-file-view:visible .sidebar-file-view__markdown");
+      await polledText(reader).toContain("Report");
+      const chatUrl = page.url();
+      await exactButton(page, "Toggle file tree").click();
+      const catalog = page.getByRole("complementary", { name: "Session workspace", exact: true });
+      const report = catalog.getByRole("button", { name: "report.md", exact: true });
+      const evidence = catalog.getByRole("button", { name: "evidence.md", exact: true });
+      await polledAttribute(report, "aria-current").toBe("true");
+      const match = { path: "/workspace/evidence.md" };
+      const after = await gateway.deferNext("sessions.files.get", match);
+      await reader.getByText("Evidence", { exact: true }).click();
+      await gateway.waitForRequest("sessions.files.get", { after, match });
+      await polledAttribute(report, "aria-current").not.toBe("true");
+      await gateway.rejectDeferred("sessions.files.get", { message: "Access denied" }, { match });
+      await polledText(page.locator("openclaw-toast-host")).toContain("Access denied");
+      await page.evaluate(
+        "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+      );
+      expect(await report.getAttribute("aria-current")).toBe("true");
+      expect(await evidence.getAttribute("aria-current")).not.toBe("true");
+      expect(await reader.textContent()).toContain("Report");
+      expect(page.url()).toBe(chatUrl);
+    });
+  });
+
   it.each(["close", "list"] as const)(
     "shows a file tab before completion and honors the %s intent",
     async (intent) => {

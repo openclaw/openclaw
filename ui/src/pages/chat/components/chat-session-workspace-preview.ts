@@ -220,9 +220,11 @@ export function openWorkspaceItem<T>(
           return undefined;
         }
         if (options.revalidateBeforeSelect) {
+          workspace.pendingPreview = undefined;
           workspace.activeId = previousActiveId;
           const message = options.resolveError?.(error) ?? formatUiError(error);
           setSessionWorkspaceError(workspace, message, read);
+          sessionWorkspaceForHost(state).publish();
           showToast({ message, severity: "error" });
           return undefined;
         }
