@@ -342,6 +342,8 @@ it.for([
 
 it.for([
   ["publish", "session-replaced"],
+  ["publish", "binding-cleared"],
+  ["publish", "binding-replaced"],
   ["consume", "rebound"],
   ["consume", "deleted"],
   ["consume", "lifecycle-replaced"],
@@ -367,13 +369,11 @@ it.for([
     const beforeCache = structuredClone(f.sessionStore);
     const replacements: Partial<Record<typeof durableState, Partial<SessionEntry>>> = {
       "session-replaced": { sessionId: "openclaw-session-2" },
+      "binding-cleared": { cliSessionBindings: {}, cliSessionIds: {} },
+      "binding-replaced": { cliSessionBindings: { "claude-cli": { sessionId: "other" } } },
       "lifecycle-replaced": { lifecycleRevision: "replacement-lifecycle" },
       "writer-replaced": { activeWriterRunId: "replacement-writer" },
-      rebound: {
-        cliSessionBindings: {
-          "claude-cli": { sessionId: "claude-other-session", forceReuse: true },
-        },
-      },
+      rebound: { cliSessionBindings: { "claude-cli": { sessionId: "other", forceReuse: true } } },
     };
     const durableEntry = { ...cached, ...replacements[durableState] };
     await f.seed(cached, durableState === "deleted" ? null : durableEntry);
@@ -389,7 +389,7 @@ it.for([
     });
     const result =
       operation === "publish"
-        ? f.publish(nativeResult("late-native-session"))
+        ? f.publish(nativeResult("claude-source-session"))
         : operation === "consume"
           ? callbacks.claimCliSessionFork()
           : operation === "restore"
