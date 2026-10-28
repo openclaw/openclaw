@@ -337,7 +337,11 @@ also refuses manual force runs, so a disabled schedule cannot spend attempts.
 
 Each run restores the original requester and revalidates current operator,
 provider-account, session, plugin, and native tool authority. It reuses the
-command-scoped native-child eligibility producer. Reset, deletion, revocation,
+command-scoped native-child eligibility producer. Native tool policy follows the
+rules of capped scheduled automations: the requester's recorded channel account
+selects current group and channel tool policy, and a named account must still be
+configured; sender-specific `toolsBySender` entries keep the snapshot taken when
+the schedule was accepted. Reset, deletion, revocation,
 expired budgets, and unloaded plugins fail closed. Revoking a channel requester
 also fails a child that an earlier occurrence queued, without waiting for its
 Swarm slot. Stored source facts are not execution authority. No caller can

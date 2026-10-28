@@ -7,6 +7,8 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
+import { createAccountListHelpers } from "../../channels/plugins/account-helpers.js";
+import type { ChannelGroupContext } from "../../channels/plugins/types.core.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -39,6 +41,7 @@ import type { PluginCommandContext, PluginCommandResult } from "../../plugins/ty
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { unlinkUserChannelIdentity } from "../../state/user-channel-identities.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
@@ -49,6 +52,7 @@ import {
 import type { HandleCommandsParams } from "./commands-types.js";
 export const pluginId = "command-controller";
 
+type AdminIngressFixture = Parameters<Parameters<typeof withAdminIngress>[0]>[0];
 type Handler = (ctx: PluginCommandContext) => PluginCommandResult | Promise<PluginCommandResult>;
 type CommandMetadata = {
   name: string;
@@ -100,9 +104,11 @@ export async function withCommandPlugin(
     manifestCapabilities?: unknown;
     scheduledContract?: boolean;
     bundled?: boolean;
+    /** Parent session key of the requester; defaults to a channel conversation. */
+    sessionKey?: string;
   } = {},
 ) {
-  await withAdminIngress(async ({ cfg, state, admins, context, gateway }) => {
+  const body = async ({ cfg, state, admins, context, gateway }: AdminIngressFixture) => {
     // The test state restores both bundled-plugin variables when it ends.
     const bundledDist = options.bundled ? state.path("openclaw-package", "dist") : undefined;
     if (bundledDist) {
@@ -172,6 +178,24 @@ export async function withCommandPlugin(
       entries: { [pluginId]: { enabled: true } },
     };
     const cronStorePath = state.path("cron/jobs.json");
+    // A loaded Discord channel lists the configured accounts and resolves conversation tool
+    // policy like extensions/discord/src/group-policy.ts: the account's guilds, else the
+    // channel's; a run without a guild id selects only the "*" guild.
+    const discord = {
+      ...createChannelTestPluginBase({
+        id: "discord",
+        config: { listAccountIds: createAccountListHelpers("discord").listAccountIds },
+      }),
+      groups: {
+        resolveToolPolicy: ({ cfg: current, accountId, groupId }: ChannelGroupContext) => {
+          const config = current.channels?.discord;
+          const guilds =
+            (accountId ? config?.accounts?.[accountId]?.guilds : undefined) ?? config?.guilds;
+          const guild = guilds?.["*"];
+          return (groupId ? guild?.channels?.[groupId]?.tools : undefined) ?? guild?.tools;
+        },
+      },
+    };
     let registry: PluginRegistry | undefined;
     const loadPlugin = () => {
       registry = loadOpenClawPlugins({
@@ -180,6 +204,7 @@ export async function withCommandPlugin(
         cache: false,
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       });
+      registry.channels.push({ pluginId: discord.id, source: "test", plugin: discord });
       setActivePluginRegistry(registry);
       return registry;
     };
@@ -380,7 +405,8 @@ export async function withCommandPlugin(
       }
       await expect(waitForPluginCacheRetirement()).resolves.toMatchObject({ failures: [] });
     }
-  });
+  };
+  await withAdminIngress(body, "role", "discord", options.sessionKey);
 }
 
 export function commandInvocation(fixture: Fixture, body = "/review-panel") {

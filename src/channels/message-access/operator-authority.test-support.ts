@@ -35,6 +35,7 @@ export async function withAdminIngress(
   run: (fixture: Awaited<ReturnType<typeof createAdminIngressFixture>>) => Promise<void>,
   authority: "role" | "identity-grant" = "role",
   channelId: "discord" | "slack" = "discord",
+  sessionKey?: string,
 ) {
   const plugin =
     channelId === "slack"
@@ -45,7 +46,7 @@ export async function withAdminIngress(
       : undefined;
   await withTestChannelRegistry(plugin, () =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const fixture = await createAdminIngressFixture(state, authority, channelId);
+      const fixture = await createAdminIngressFixture(state, authority, channelId, sessionKey);
       using _ = { [Symbol.dispose]: () => fixture.unregister() };
       await run(fixture);
     }),
@@ -56,6 +57,7 @@ export async function createAdminIngressFixture(
   state: OpenClawTestState,
   authority: "role" | "identity-grant",
   channelId: "discord" | "slack",
+  sessionKey?: string,
 ) {
   const cfg: OpenClawConfig = {
     channels: { [channelId]: { accounts: { team: { allowFrom: ["*"] } } } },
@@ -91,7 +93,7 @@ export async function createAdminIngressFixture(
   await activatePolicy({});
   setRuntimeConfigSnapshot(cfg);
   const host = createHostIngressFixture(channelId, cfg);
-  const key = `agent:main:${channelId}:channel:maintainers`;
+  const key = sessionKey ?? `agent:main:${channelId}:channel:maintainers`;
   const context = async (
     senderId: string,
     verified = true,

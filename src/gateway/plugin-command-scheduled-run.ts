@@ -5,6 +5,8 @@ import {
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import { resolveGroupToolPolicy } from "../agents/agent-tools.policy.js";
+import { resolveScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -31,6 +33,7 @@ import {
   type PluginCommandSchedule,
 } from "../cron/plugin-command-schedule.types.js";
 import { prepareCronRunAdmission } from "../cron/run-admission.js";
+import { resolveCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
 import { resolveCronRequesterExecutionRevision } from "../cron/service/jobs-tool-policy.js";
 import type { CronServiceDeps } from "../cron/service/state.js";
 import type { CronStoredJob } from "../cron/types.js";
@@ -184,6 +187,18 @@ export async function runPluginCommandScheduledTurn(params: {
       throw new Error("Scheduled plugin command has no native tool ceiling.");
     }
     const toolsAllow = [...job.payload.toolsAllow];
+    // Senderless occurrence: policy follows the creator's recorded account, as for capped runs.
+    // The core-written schedule channel, checked against the job every occurrence, is its origin.
+    const scheduledToolPolicy = resolveScheduledToolPolicyContext({
+      toolsAllow,
+      scheduledToolPolicy: resolveCronScheduledToolPolicy({
+        toolsAllow,
+        scheduledToolPolicy: job.scheduledToolPolicy,
+        owner: job.owner,
+      }),
+      callerOrigin: { kind: "external", channel: schedule.channel },
+      execTarget: job.toolsAllowExecTarget,
+    });
     const binding = resolvePluginCommandScheduleBinding(job, schedule);
     const context = params.resolveGatewayContext?.();
     const registry = params.resolvePluginRegistry?.();
@@ -231,6 +246,17 @@ export async function runPluginCommandScheduledTurn(params: {
       assertPluginCommandScheduleRegistry(registry, schedule, binding);
     };
     assertSource();
+    if (scheduledToolPolicy?.mode === "account") {
+      // As for capped runs: a creator account its channel no longer lists refuses before input.
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: scheduledToolPolicy.ownerSessionKey,
+        messageProvider: schedule.channel,
+        accountId: scheduledToolPolicy.ownerAccountId,
+        requireConfiguredAccount: true,
+        senderPolicyMode: "never",
+      });
+    }
     // The ordinary dispatcher exposes ambient completion and converts failures to chat text.
     // A host-only strict entry point must be present BEFORE accepting input.
     const execute = params.executeScheduledDispatch;
@@ -430,7 +456,7 @@ export async function runPluginCommandScheduledTurn(params: {
             executionIdentity: request.executionIdentity,
             operatorAuthority,
             toolsAllow: [...toolsAllow],
-            scheduledToolPolicy: job.scheduledToolPolicy,
+            scheduledToolPolicy,
             resolveGatewayContext: params.resolveGatewayContext,
           });
           const prepared = admission.preparedRunAdmission;
@@ -481,6 +507,7 @@ export async function runPluginCommandScheduledTurn(params: {
                   senderIsOwner: false,
                   disableTools: false,
                   traceAuthorized: false,
+                  scheduledToolPolicy,
                   operatorAuthority,
                 }),
                 messageChannel: schedule.channel,

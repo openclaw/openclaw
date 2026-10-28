@@ -25,6 +25,7 @@ import {
   pluginId,
   scheduleRequest,
   withCommandPlugin,
+  type Fixture,
 } from "./commands-plugin.scheduled-turns.test-support.js";
 
 // Every test doubles as a no-fallback guard: no scheduled occurrence may reach an ordinary
@@ -631,4 +632,100 @@ describe("native scheduled command execution", () => {
       });
     },
   );
+});
+
+// An occurrence has no sender: tool policy resolves as for capped scheduled runs, from the
+// requester's recorded account. The fixture requester is Discord sender 100 on account `team`
+// in channel `maintainers`; its stored ceiling is read plus native scheduling.
+describe("scheduled command tool policy", () => {
+  /** Runs one forced occurrence that spawns a child held queued by swarm capacity. */
+  async function runOccurrence(fixture: Fixture, id: string) {
+    const results = fixture.scheduledResults.length;
+    const inputs = (await fixture.userInputs()).length;
+    let childSessionKey: string | undefined;
+    fixture.handler.mockClear();
+    fixture.handler.mockImplementation(async (ctx) => {
+      const native = expectDefined(ctx.runtimeContext?.subagents, "scheduled native runtime");
+      const child = await native.spawn({
+        requestId: `policy-${results}`,
+        task: "Synthetic scheduled child; capacity keeps it queued",
+        context: "isolated",
+      });
+      childSessionKey = child.childSessionKey;
+      return { text: "child accepted" };
+    });
+    const capacity = holdScheduledChildCapacity(fixture);
+    try {
+      await fixture.cron.run(id, "force");
+    } finally {
+      capacity.release();
+    }
+    const child =
+      childSessionKey === undefined
+        ? undefined
+        : loadSessionEntry({
+            agentId: "main",
+            sessionKey: childSessionKey,
+            storePath: fixture.params().storePath,
+          });
+    const childDeny = child?.inheritedToolDeny ?? [];
+    return {
+      result: fixture.scheduledResults[results],
+      handlerCalls: fixture.handler.mock.calls.length,
+      newInputs: (await fixture.userInputs()).length - inputs,
+      childTools: child?.inheritedToolAllow?.filter((tool) => !childDeny.includes(tool)),
+    };
+  }
+
+  it("does not apply the wildcard sender entry to an occurrence", async () => {
+    guards.stubModelChoice = true;
+    await withCommandPlugin(async (fixture) => {
+      // The requester's own entry allows its tools; the wildcard is meant for other senders.
+      fixture.cfg.tools = {
+        ...fixture.cfg.tools,
+        toolsBySender: { "channel:discord:100": {}, "*": { deny: ["read"] } },
+      };
+      const occurrence = await runOccurrence(fixture, await createContinuation(fixture));
+      expect(occurrence.result).toMatchObject({ status: "ok", outputText: "child accepted" });
+      expect(occurrence.childTools).toEqual(["read", "sessions_spawn", "agents_wait"]);
+    });
+  });
+
+  it("revalidates the requester's account on every occurrence", async () => {
+    guards.stubModelChoice = true;
+    await withCommandPlugin(async (fixture) => {
+      const id = await createContinuation(fixture);
+      const discord = expectDefined(fixture.cfg.channels?.discord, "discord channel config");
+      // A scheduled run has no guild id, so Discord resolves it through the "*" guild.
+      expectDefined(discord.accounts?.team, "requester account").guilds = {
+        "*": { channels: { maintainers: { tools: { deny: ["read"] } } } },
+      };
+      const restricted = await runOccurrence(fixture, id);
+      expect(restricted.result).toMatchObject({ status: "ok", outputText: "child accepted" });
+      expect(restricted.childTools).toEqual(["sessions_spawn", "agents_wait"]);
+
+      discord.accounts = { other: { allowFrom: ["*"] } };
+      const removed = await runOccurrence(fixture, id);
+      expect(removed.result).toMatchObject({
+        status: "error",
+        executionStarted: false,
+        error: expect.stringContaining('Scheduled account "team" is unavailable'),
+      });
+      expect(removed.handlerCalls).toBe(0);
+      expect(removed.newInputs).toBe(0);
+    });
+  });
+
+  it("keeps running a direct-chat requester's occurrence on its named account", async () => {
+    guards.stubModelChoice = true;
+    await withCommandPlugin(
+      async (fixture) => {
+        const occurrence = await runOccurrence(fixture, await createContinuation(fixture));
+        expect(occurrence.result).toMatchObject({ status: "ok", outputText: "child accepted" });
+        expect(occurrence.childTools).toEqual(["read", "sessions_spawn", "agents_wait"]);
+      },
+      // A direct-chat parent key has no channel segment; the schedule's channel stands in.
+      { sessionKey: "agent:main:direct:100" },
+    );
+  });
 });
