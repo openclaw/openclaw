@@ -164,8 +164,8 @@ export async function closeAgentDatabaseNativeGeneration(params: {
   context: OpenClawStateWorkerContext;
   processOwner: ReturnType<typeof captureGatewayStateOwner>;
   opening: Promise<AgentDatabaseNativeStore | undefined> | undefined;
-  readOpenedStore(): AgentDatabaseNativeStore | undefined;
-  assertCleanupOwned(): void;
+  readOpenedStore: () => AgentDatabaseNativeStore | undefined;
+  assertCleanupOwned: () => void;
   readRetirement(): {
     stopped: Promise<void> | undefined;
     lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
