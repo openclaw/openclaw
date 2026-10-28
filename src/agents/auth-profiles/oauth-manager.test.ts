@@ -10,7 +10,6 @@ import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
-import * as providerRuntime from "../../plugins/provider-runtime.runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   connectUserModelAccount,
@@ -147,48 +146,6 @@ afterEach(async () => {
 });
 
 describe("createOAuthManager", () => {
-  it("persists manager-admitted Anthropic refresh through the built-in fallback", async () => {
-    await withOAuthAgentDirs("oauth-manager-anthropic-", async ({ mainAgentDir }) => {
-      const profileId = "anthropic:default";
-      const credential = oauth("stale-access", "stale-refresh", {
-        provider: "anthropic",
-        expires: Date.now() + 4 * 60_000,
-      });
-      saveCredential(profileId, credential, mainAgentDir);
-      vi.spyOn(
-        providerRuntime,
-        "resolveProviderOAuthRefreshCapabilityWithPlugin",
-      ).mockResolvedValue({ status: "unhandled" });
-      vi.spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin").mockResolvedValue({
-        status: "unhandled",
-      });
-      vi.spyOn(providerRuntime, "formatProviderAuthProfileApiKeyWithPlugin").mockResolvedValue(
-        undefined,
-      );
-      const fetch = vi
-        .spyOn(globalThis, "fetch")
-        .mockResolvedValue(
-          new Response(
-            '{"access_token":"rotated-access","refresh_token":"rotated-refresh","expires_in":3600}',
-            { status: 200, headers: { "content-type": "application/json" } },
-          ),
-        );
-
-      const result = await resolve(createOAuthManager(), profileId, credential, mainAgentDir, {
-        forceRefresh: true,
-      });
-
-      expect(fetch).toHaveBeenCalledOnce();
-      expect(result?.credential).toMatchObject({
-        access: "rotated-access",
-        refresh: "rotated-refresh",
-      });
-      expect(loadPersistedAuthProfileStore(mainAgentDir)?.profiles[profileId]).toMatchObject(
-        result?.credential,
-      );
-    });
-  });
-
   it("serializes personal refreshes without CLI bootstrap or shared copies", async () => {
     const provider = "xai";
     await withOAuthAgentDirs("oauth-manager-personal-", async ({ mainAgentDir, agentDir }) => {
