@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
@@ -116,21 +117,35 @@ suite.define(() => {
       },
     ));
 
-  it("keeps person actions visible on touch without opening the activity hovercard", () =>
+  it("aligns quiet person actions on mobile without opening the activity hovercard", () =>
     suite.withPage(
       {
         colorScheme: "dark",
         locale: "en-US",
         hasTouch: true,
-        viewport: { width: 1280, height: 800 },
+        viewport: { width: 390, height: 844 },
       },
       async ({ page }) => {
         await installMockGateway(page, {
-          presenceUsers: [
-            { id: "ada", identity: { type: "profile", id: "ada" }, name: "Ada Chen", self: true },
-          ],
+          presenceUsers: ["Ada Chen", "Bob Rivera", "Jacqueline Henriksen"].map((name, index) => ({
+            id: ["ada", "bob", "jacqueline"][index]!,
+            identity: { type: "profile", id: ["ada", "bob", "jacqueline"][index]! },
+            name,
+            self: index === 0,
+          })),
+          methodResponses: {
+            "sessions.list": {
+              ...sessionsListResponse([]),
+              ownerSessionCounts: [
+                { profileId: "ada", open: 33, running: 11 },
+                { profileId: "bob", open: 1, running: 0 },
+                { profileId: "jacqueline", open: 0, running: 0 },
+              ],
+            },
+          },
         });
         await page.goto(suite.server.baseUrl + "chat");
+        await navigationDrawerToggle(page).tap();
         await page.locator('[data-navigation-view="online"]').tap();
         const person = page.locator('[data-online-user-id="ada"]');
         const more = person
@@ -139,6 +154,34 @@ suite.define(() => {
         await more.waitFor();
         expect(await more.evaluate((el) => getComputedStyle(el.parentElement!).opacity)).toBe("1");
         expect((await more.boundingBox())!.height).toBeGreaterThanOrEqual(40);
+        await page.locator('[data-online-user-id="ada"] [data-session-count="running"]').waitFor();
+        const restFrame = await takeControlUiScreenshotFrame(
+          page,
+          page.locator(".sidebar"),
+          [person, more],
+          { animations: "disabled" },
+        );
+        await writeFile(path.join(suite.artifactDir, "people-dark-mobile-rest.png"), restFrame.png);
+        const actions = await page.locator(".sidebar-online__row").evaluateAll((rows) =>
+          rows.map((row) => {
+            const button = row.querySelector<HTMLElement>(".sidebar-online__menu-trigger")!;
+            const name = row.querySelector<HTMLElement>(".sidebar-online__person-name")!;
+            return {
+              x: button.getBoundingClientRect().x,
+              nameRight: name.getBoundingClientRect().right,
+              background: getComputedStyle(button).backgroundColor,
+            };
+          }),
+        );
+        expect(actions).toHaveLength(3);
+        expect(
+          Math.max(...actions.map((action) => action.x)) -
+            Math.min(...actions.map((action) => action.x)),
+        ).toBeLessThan(1);
+        for (const action of actions) {
+          expect(action.nameRight).toBeLessThanOrEqual(action.x);
+          expect(action.background).toBe("rgba(0, 0, 0, 0)");
+        }
         await more.tap();
         const menu = page.getByRole("menu", { name: "Actions for Ada Chen", exact: true });
         await menu.waitFor();
