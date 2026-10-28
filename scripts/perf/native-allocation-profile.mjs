@@ -86,7 +86,7 @@ function observe() {
   assert(addon && path.isAbsolute(addon), "absolute profiling addon path required");
   const { isMainThread, threadId } = threads;
   const ancestryKey = "openclaw.nativeAllocationProfile.ancestors";
-  const ancestors = threads.getEnvironmentData(ancestryKey) ?? [];
+  const ancestors = /** @type {number[]} */ (threads.getEnvironmentData(ancestryKey) ?? []);
   // Environment data is inherited even with an explicit env or SHARE_ENV.
   // Keep the full chain: an intermediate ready record can disappear first.
   threads.setEnvironmentData(ancestryKey, [...ancestors, threadId]);
