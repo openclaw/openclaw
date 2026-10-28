@@ -69,7 +69,7 @@ describe("channel ingress queue", () => {
           expect(rows.map((row) => row.event_id)).toEqual(ids);
         }
         const snapshot = channelIngressOperations["channelIngress.claimSnapshot"](
-          { queueName, blockedLaneKeys: [], deriveLaneKey: false },
+          { queueName, blockedLaneKeys: [] },
           context,
         );
         expect(snapshot.pending.map((row) => row.event_id)).toEqual(["pending"]);

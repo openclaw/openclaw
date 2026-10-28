@@ -3556,6 +3556,7 @@ const workerModules = new Set([
 
   "src/channels/message/ingress-queue-health.kernel.ts",
   "src/channels/message/ingress-queue.kernel.ts",
+  "src/channels/message/ingress-queue.claim-prefix.kernel.ts", // Prefix revalidation SQL is called only by ingress-queue.kernel.ts inside the same worker.
 
   "src/config/sessions/session-accessor.sqlite-archive.worker.ts", // The archive owner starts this native worker; cold-prepare callbacks stay inside its read-only scope and private-port dispatcher.
   "src/config/sessions/session-accessor.sqlite-archive-selection.ts", // Archive worker read-page selection only.

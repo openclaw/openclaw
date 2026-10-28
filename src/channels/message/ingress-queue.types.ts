@@ -278,16 +278,65 @@ export type ChannelIngressClaimRequest = {
   queueName: string;
   candidateIds?: string[];
   blockedLaneKeys: string[];
-  deriveLaneKey: boolean;
+  /** Stored lane keys are authoritative unless a reconcile callback can remap them. */
+  reconcileStoredLaneKey?: boolean;
   scanLimit?: number;
   orderBy?: "received" | "id";
+  /** Keyset cursor past the last scanned row, used to page beyond a blocked snapshot. */
+  claimAfter?: ChannelIngressClaimCursor;
+  /**
+   * Count of scan-visible pending rows before claimAfter expected by a retained
+   * direct-scan resume cursor. The snapshot computes the authoritative count in
+   * the same read, so a write from any handle that inserted or removed a row
+   * before the cursor invalidates the resume.
+   */
+  expectedPendingBeforeCursor?: number;
+  /**
+   * Fingerprint of the scan-visible pending rows before claimAfter expected by a
+   * retained direct-scan resume cursor. Combined with expectedPendingBeforeCursor
+   * it detects offsetting writes that preserve the count (one row removed and
+   * another inserted before the cursor), which count alone cannot observe.
+   */
+  expectedPendingBeforeCursorFingerprint?: string;
+  /**
+   * Return the materialized scan-visible prefix rows with the snapshot. Set only
+   * on a resumed direct scan whose lane policy is derived: the host re-evaluates
+   * each skipped row under the current callback policy, because callback identity
+   * cannot prove a captured policy is unchanged.
+   */
+  includePrefixRows?: boolean;
 };
 export type ChannelIngressClaimSnapshot = {
   pending: ChannelIngressRow[];
   claimed: ChannelIngressRow[];
+  /** Authoritative count of scan-visible pending rows strictly before claimAfter. */
+  pendingBeforeCursor?: number;
+  /** Fingerprint of the scan-visible pending rows strictly before claimAfter. */
+  pendingBeforeCursorFingerprint?: string;
+  /**
+   * Fingerprint of the pending cursor row itself, read in the same pinned read.
+   * The strict-before prefix cannot observe an equal-position replacement of the
+   * cursor row, so resuming validates it separately.
+   */
+  cursorRowFingerprint?: string;
+  /**
+   * The materialized pending cursor row, present only when the request set
+   * includePrefixRows so the host can re-evaluate its lane under current policy.
+   */
+  cursorRow?: ChannelIngressRow;
+  /** Materialized prefix rows, present only when the request set includePrefixRows. */
+  prefixRows?: ChannelIngressRow[];
+};
+
+/** Keyset cursor matching the pending ordering; the row after it opens the next claim page. */
+export type ChannelIngressClaimCursor = {
+  receivedAt: number;
+  eventId: string;
 };
 
 export type ChannelIngressClaimSelection = {
   corruptIds: string[];
   selected?: { id: string; laneKey?: string };
+  /** The snapshot consumed its full allowance with no eligible row; another page may exist. */
+  more?: boolean;
 };
