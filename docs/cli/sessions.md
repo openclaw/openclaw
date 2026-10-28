@@ -70,7 +70,9 @@ when callers need to show that more rows exist.
 
 JSON session rows include `color` when a session color is set (for example,
 `"color": "blue"`). Uncolored sessions and sessions whose color was cleared omit
-the field.
+the field. Rows also include `category` when a stored session category is set
+(for example, `"category": "Research"`); sessions without a category and
+sessions whose category was cleared omit the field.
 
 RPC clients can pass `configuredAgentsOnly: true` to keep the broad combined
 discovery source but return only rows for agents currently present in config.
