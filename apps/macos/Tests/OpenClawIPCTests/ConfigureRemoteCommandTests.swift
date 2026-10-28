@@ -401,7 +401,8 @@ struct ConfigureRemoteCommandTests {
         }
     }
 
-    @Test @MainActor func `configure remote can write direct private url`() async throws {
+    @Test(arguments: ["192.168.0.202", "127.0.0.2", "[::ffff:127.0.0.1]"])
+    @MainActor func `configure remote can write direct private url`(host: String) async throws {
         let configURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-configure-direct-\(UUID().uuidString).json")
         defer { try? FileManager().removeItem(at: configURL) }
@@ -419,12 +420,12 @@ struct ConfigureRemoteCommandTests {
         try await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configURL.path]) {
             let output = try configureRemote(
                 .init(
-                    directUrl: "ws://192.168.0.202:18789",
+                    directUrl: "ws://\(host):18789",
                     token: "test-token"), // pragma: allowlist secret
                 configURL: configURL, defaultsSuites: [])
 
             #expect(output.transport == "direct")
-            #expect(output.remoteUrl == "ws://192.168.0.202:18789")
+            #expect(output.remoteUrl == "ws://\(host):18789")
             #expect(output.localUrl == nil)
             #expect(output.sshTarget == nil)
             #expect(output.sshHostKeyPolicy == nil)
@@ -436,7 +437,7 @@ struct ConfigureRemoteCommandTests {
             #expect(gateway["mode"] as? String == "remote")
             #expect(gateway["port"] as? Int == 19089)
             #expect(remote["transport"] as? String == "direct")
-            #expect(remote["url"] as? String == "ws://192.168.0.202:18789")
+            #expect(remote["url"] as? String == "ws://\(host):18789")
             #expect(remote["remotePort"] == nil)
             #expect(remote["sshTarget"] == nil)
             #expect(remote["sshHostKeyPolicy"] == nil)

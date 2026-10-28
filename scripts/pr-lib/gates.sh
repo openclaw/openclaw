@@ -148,9 +148,13 @@ pin_worktree_bundled_plugins_dir() {
 resolve_pr_gates_remote_mode() {
   case "${OPENCLAW_PR_GATES_REMOTE:-}" in
     "")
-      printf 'local\n'
+      if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+        printf 'local\n'
+      else
+        printf 'github\n'
+      fi
       ;;
-    testbox|crabbox-aws|github)
+    local|testbox|crabbox-aws|github)
       if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
         echo "OPENCLAW_PR_GATES_REMOTE=$OPENCLAW_PR_GATES_REMOTE conflicts with OPENCLAW_TESTBOX=1; select one gate mode." >&2
         echo "Unset OPENCLAW_TESTBOX to use $OPENCLAW_PR_GATES_REMOTE gates, or unset OPENCLAW_PR_GATES_REMOTE to use completed hosted proof." >&2
@@ -159,7 +163,7 @@ resolve_pr_gates_remote_mode() {
       printf '%s\n' "$OPENCLAW_PR_GATES_REMOTE"
       ;;
     *)
-      echo "Unsupported OPENCLAW_PR_GATES_REMOTE=${OPENCLAW_PR_GATES_REMOTE} (supported: testbox, crabbox-aws, github)." >&2
+      echo "Unsupported OPENCLAW_PR_GATES_REMOTE=${OPENCLAW_PR_GATES_REMOTE} (supported: local, testbox, crabbox-aws, github)." >&2
       return 1
       ;;
   esac
@@ -418,17 +422,21 @@ write_gates_env_stamp() {
 }
 
 # Correction publication requires the native gate owner's exact candidate
-# stamp. An explicit pending Crabbox stamp is admission to its protected-main
-# publisher, not proof; retain that separately authorized route.
+# disposition. GitHub pending is not proof: merge_verify still owns exact-head
+# auto-merge admission and enforced checks. Pending Crabbox retains its separate
+# protected-main publisher and live-admin requirements.
 require_correction_publication_gates() (
-  local pr="$1" head="$2" allow_pending="${3:-false}"
+  local pr="$1" head="$2" allow_crabbox_pending="${3:-false}"
   local PR_NUMBER="" LAST_VERIFIED_HEAD_SHA="" FULL_GATES_HEAD_SHA=""
   local GATES_MODE="" HOSTED_GATES_TARGET_HEAD_SHA="" DOCS_ONLY=""
   local REMOTE_GATES_PROVIDER="" REMOTE_GATES_RUN_ID="" REMOTE_GATES_LEASE_ID="" REMOTE_GATES_RUN_URL=""
   require_artifact .local/gates.env || return 1
   source .local/gates.env || return 1
   local qualified_head="$LAST_VERIFIED_HEAD_SHA"
-  [ "$PR_NUMBER" = "$pr" ] || return 1
+  if [ "$GATES_MODE" = github_pending ]; then
+    qualified_head="$HOSTED_GATES_TARGET_HEAD_SHA"
+  fi
+  [ "$PR_NUMBER" = "$pr" ] && [[ "$qualified_head" =~ ^[0-9a-f]{40}$ ]] || return 1
   if [ "$qualified_head" != "$head" ]; then
     # GraphQL can assign a hosted OID for the identical reviewed local tree.
     # The verified publication can precede the completed preparation stamp.
@@ -444,6 +452,7 @@ require_correction_publication_gates() (
     }
   fi
   case "$GATES_MODE" in
+    github_pending) ;; # Exact pending binding above; never promote it to success.
     full) [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
     docs_only|reused_docs_only) [ "$DOCS_ONLY" = true ] || return 1 ;;
     hosted_exact_or_recent_parent) [ "$HOSTED_GATES_TARGET_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
@@ -459,7 +468,7 @@ require_correction_publication_gates() (
         [[ "$REMOTE_GATES_RUN_URL" == https://github.com/openclaw/openclaw/actions/runs/* ]] || return 1
       ;;
     remote_crabbox_aws_pending)
-      [ "$allow_pending" = true ] && [ "$REMOTE_GATES_PROVIDER" = aws ] || return 1
+      [ "$allow_crabbox_pending" = true ] && [ "$REMOTE_GATES_PROVIDER" = aws ] || return 1
       require_active_org_admin_for_crabbox_gate >/dev/null || return 1
       # The candidate is not hosted yet. Bind eligibility to the publication
       # lease, then let the existing publisher verify the newly hosted head.

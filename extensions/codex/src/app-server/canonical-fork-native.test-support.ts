@@ -9,6 +9,7 @@ import { CodexAppServerClient } from "./client.js";
 import { createCodexDesktopGenerationOwner } from "./desktop-generation-owner.js";
 import * as desktopGenerationRuntime from "./desktop-generation.js";
 import * as managedBinary from "./managed-binary.js";
+import { appInfo } from "./plugin-inventory.test-helpers.js";
 import {
   isJsonObject,
   type CodexThread,
@@ -50,6 +51,17 @@ export async function createCanonicalForkNativeFixture(
   let archivedNotifications: Array<() => void> | undefined;
   let afterFork: ((threadId: string) => Promise<void> | void) | undefined;
   let overload: { method: string; onReject: () => Promise<void> | void } | undefined;
+  const configure = (value: NativeThread, params: Record<string, unknown>, model?: string) => {
+    value.config = isJsonObject(params.config) ? params.config : undefined;
+    if (model !== undefined) {
+      value.model = typeof params.model === "string" ? params.model : model;
+      value.thread.model = value.model;
+    }
+    value.developerInstructions =
+      typeof params.developerInstructions === "string"
+        ? params.developerInstructions
+        : value.developerInstructions;
+  };
   const persist = async (value: NativeThread) => {
     const lines = [
       {
@@ -111,9 +123,6 @@ export async function createCanonicalForkNativeFixture(
           .spyOn(desktopGenerationRuntime, "waitForCodexDesktopGeneration")
           .mockImplementation(desktopGeneration.wait),
         vi
-          .spyOn(desktopGenerationRuntime, "isCodexDesktopGenerationCurrent")
-          .mockImplementation(desktopGeneration.isCurrent),
-        vi
           .spyOn(managedBinary, "isManagedCodexDesktopCommand")
           .mockImplementation((command) => command === process.execPath),
       ]
@@ -144,6 +153,10 @@ export async function createCanonicalForkNativeFixture(
         status: { type: loaded.has(value.thread.id) ? "idle" : "notLoaded" },
       },
     });
+    const subscribe = (value: NativeThread) => {
+      loaded.add(value.thread.id);
+      subscriptions.add(`${clientIndex}:${value.thread.id}`);
+    };
     const request = async (method: string, params: Record<string, unknown>): Promise<unknown> => {
       calls.push({ client: clientIndex, method, params });
       if (overload?.method === method) {
@@ -152,23 +165,19 @@ export async function createCanonicalForkNativeFixture(
         await rejection.onReject();
         throw Object.assign(new Error("Native ingress overloaded"), { code: -32001 });
       }
-      if (method === "initialize") {
-        return {
-          userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`,
-          codexHome: home,
-        };
-      }
-      if (method === "initialized") {
-        return {};
-      }
-      if (method === "skills/list") {
-        return { data: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
+      switch (method) {
+        case "initialize":
+          return { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`, codexHome: home };
+        case "initialized":
+          return {};
+        case "skills/list":
+          return { data: [] };
+        case "configRequirements/read":
+          return { requirements: null };
+        case "config/read":
+          return { config: {}, origins: {}, layers: [] };
+        case "modelProvider/capabilities/read":
+          return { webSearch: true };
       }
       if (method === "app/installed" || method === "app/read") {
         if (typeof params.threadId === "string" && !loaded.has(params.threadId)) {
@@ -178,24 +187,10 @@ export async function createCanonicalForkNativeFixture(
         const app = isJsonObject(apps) ? apps["synthetic-app"] : undefined;
         return codexAppInventoryResponse(method, [
           {
-            id: "synthetic-app",
+            ...appInfo("synthetic-app", true, isJsonObject(app) && app.enabled === true),
             name: "Synthetic App",
-            description: null,
-            logoUrl: null,
-            logoUrlDark: null,
-            distributionChannel: null,
-            branding: null,
-            appMetadata: null,
-            labels: null,
-            installUrl: null,
-            isAccessible: true,
-            isEnabled: isJsonObject(app) && app.enabled === true,
-            pluginDisplayNames: [],
           },
         ]);
-      }
-      if (method === "modelProvider/capabilities/read") {
-        return { webSearch: true };
       }
       if (method === "thread/list") {
         return {
@@ -205,16 +200,9 @@ export async function createCanonicalForkNativeFixture(
       }
       if (method === "thread/start") {
         const value = await create(`native-${sequence++}`, []);
-        value.config = isJsonObject(params.config) ? params.config : undefined;
-        value.model = typeof params.model === "string" ? params.model : "gpt-5.5";
-        value.thread.model = value.model;
+        configure(value, params, "gpt-5.5");
         value.dynamicTools = Array.isArray(params.dynamicTools) ? params.dynamicTools : [];
-        value.developerInstructions =
-          typeof params.developerInstructions === "string"
-            ? params.developerInstructions
-            : undefined;
-        loaded.add(value.thread.id);
-        subscriptions.add(`${clientIndex}:${value.thread.id}`);
+        subscribe(value);
         await persist(value);
         return response(value);
       }
@@ -255,43 +243,25 @@ export async function createCanonicalForkNativeFixture(
           });
         }
         if (!loaded.has(id)) {
-          value.config = isJsonObject(params.config) ? params.config : undefined;
-          value.developerInstructions =
-            typeof params.developerInstructions === "string"
-              ? params.developerInstructions
-              : value.developerInstructions;
+          configure(value, params);
         }
-        loaded.add(id);
-        subscriptions.add(`${clientIndex}:${id}`);
+        subscribe(value);
         return response(value);
       }
       if (method === "thread/fork") {
         const turns = value.thread.turns ?? [];
-        const before =
-          typeof params.beforeTurnId === "string"
-            ? turns.findIndex((turn) => turn.id === params.beforeTurnId)
-            : undefined;
-        const last =
-          typeof params.lastTurnId === "string"
-            ? turns.findIndex((turn) => turn.id === params.lastTurnId)
-            : undefined;
-        const retained = ignoreCut
-          ? turns
-          : before !== undefined
-            ? turns.slice(0, before)
-            : last !== undefined
-              ? turns.slice(0, last + 1)
-              : turns;
+        const before = typeof params.beforeTurnId === "string";
+        const boundary = before ? params.beforeTurnId : params.lastTurnId;
+        const end =
+          typeof boundary === "string"
+            ? turns.findIndex((turn) => turn.id === boundary) + (before ? 0 : 1)
+            : turns.length;
+        const retained = ignoreCut ? turns : turns.slice(0, end);
         const child = await create(`native-${sequence++}`, structuredClone(retained), id);
-        child.config = isJsonObject(params.config) ? params.config : undefined;
-        child.model = typeof params.model === "string" ? params.model : "gpt-5.6-luna";
         child.rawPrefix = structuredClone(value.rawPrefix);
         child.dynamicTools = structuredClone(value.dynamicTools);
-        child.developerInstructions =
-          typeof params.developerInstructions === "string"
-            ? params.developerInstructions
-            : value.developerInstructions;
-        child.thread.model = child.model;
+        child.developerInstructions = value.developerInstructions;
+        configure(child, params, "gpt-5.6-luna");
         if (forkFault === "model") {
           child.model = "wrong-native-model";
         } else if (forkFault === "thread-model") {
@@ -305,8 +275,7 @@ export async function createCanonicalForkNativeFixture(
         if (forkFault === "lineage") {
           child.thread.forkedFromId = "another-parent";
         }
-        loaded.add(child.thread.id);
-        subscriptions.add(`${clientIndex}:${child.thread.id}`);
+        subscribe(child);
         await persist(child);
         await afterFork?.(child.thread.id);
         return response(child);

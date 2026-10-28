@@ -410,14 +410,16 @@ class ChatControllerCommandControlsTest {
         }
 
       controller.patchSession(
-        key = "main",
-        ownerAgentId = "owner-a",
-        expectedSessionId = "session-main",
-        clearLabel = true,
-        clearCategory = true,
-        pinned = true,
-        archived = false,
-        unread = true,
+        ChatSessionPatch(
+          key = "main",
+          ownerAgentId = "owner-a",
+          expectedSessionId = "session-main",
+          clearLabel = true,
+          clearCategory = true,
+          pinned = true,
+          archived = false,
+          unread = true,
+        ),
       )
       controller.deleteSession("main", ownerAgentId = "main")
 
@@ -445,8 +447,8 @@ class ChatControllerCommandControlsTest {
           respond("sessions.list", """{"sessions":[]}""")
         }
 
-      assertTrue(controller.patchSession(key = "main", ownerAgentId = "owner-a", color = "purple"))
-      assertTrue(controller.patchSession(key = "main", ownerAgentId = "owner-a", clearColor = true))
+      assertTrue(controller.patchSession(ChatSessionPatch(key = "main", ownerAgentId = "owner-a", color = "purple")))
+      assertTrue(controller.patchSession(ChatSessionPatch(key = "main", ownerAgentId = "owner-a", clearColor = true)))
 
       val patches = requests.filter { it.first == "sessions.patch" }.map { json.parseToJsonElement(it.second!!).jsonObject }
       assertEquals(listOf(JsonPrimitive("purple"), JsonNull), patches.map { it["color"] })
@@ -463,7 +465,7 @@ class ChatControllerCommandControlsTest {
           respond("sessions.list", """{"sessions":[]}""")
         }
 
-      assertTrue(controller.patchSession(key = "main", ownerAgentId = "owner-a", label = "Renamed chat"))
+      assertTrue(controller.patchSession(ChatSessionPatch(key = "main", ownerAgentId = "owner-a", label = "Renamed chat")))
 
       val patch = requests.single { it.first == "sessions.patch" }.second.orEmpty()
       assertTrue(patch.contains("\"key\":\"main\""))
@@ -500,9 +502,11 @@ class ChatControllerCommandControlsTest {
 
       assertTrue(
         controller.patchSession(
-          key = "agent:main:side",
-          expectedSessionId = "session-side",
-          archived = true,
+          ChatSessionPatch(
+            key = "agent:main:side",
+            expectedSessionId = "session-side",
+            archived = true,
+          ),
         ),
       )
 
@@ -526,7 +530,7 @@ class ChatControllerCommandControlsTest {
           },
         )
 
-      assertFalse(controller.patchSession(key = "agent:main:cached", archived = true))
+      assertFalse(controller.patchSession(ChatSessionPatch(key = "agent:main:cached", archived = true)))
       assertFalse(requests.contains("sessions.patch"))
     }
 
@@ -816,7 +820,7 @@ class ChatControllerCommandControlsTest {
           gatewayAdvertisesCapability = { it == SESSION_UNREAD_ACK_CAPABILITY }
         }
 
-      assertTrue(controller.patchSession(key = "main", unread = false))
+      assertTrue(controller.patchSession(ChatSessionPatch(key = "main", unread = false)))
       advanceUntilIdle()
 
       val patch = requests.single { it.first == "sessions.patch" }.second.orEmpty()
@@ -840,9 +844,11 @@ class ChatControllerCommandControlsTest {
       assertEquals("agent:main:side", controller.sessionKey.value)
 
       controller.patchSession(
-        key = "agent:main:side",
-        expectedSessionId = "session-side",
-        archived = true,
+        ChatSessionPatch(
+          key = "agent:main:side",
+          expectedSessionId = "session-side",
+          archived = true,
+        ),
       )
       advanceUntilIdle()
       assertEquals("main", controller.sessionKey.value)

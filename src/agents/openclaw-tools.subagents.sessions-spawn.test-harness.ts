@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { onTestFinished, vi, type Mock } from "vitest";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { configureMockSubagentRegistryPersistence } from "./subagent-test-fixtures.test-helpers.js";
 import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
@@ -257,6 +258,22 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
     ({ createSessionsSpawnTool: cachedCreateSessionsSpawnTool } =
       await import("./tools/sessions-spawn-tool.js"));
   }
+  if (opts?.agentSessionKey) {
+    const requesterKey = resolveRequesterStoreKey(
+      hoisted.state.configOverride,
+      opts.agentSessionKey,
+      opts.requesterAgentIdOverride,
+    );
+    const requesterEntry = {
+      sessionId: `requester-${requesterKey}`,
+      updatedAt: Date.now(),
+    };
+    hoisted.sessionStore[requesterKey] = requesterEntry;
+    await upsertSessionEntryCore(
+      { storePath: sessionStorePath, sessionKey: requesterKey },
+      requesterEntry,
+    );
+  }
   return cachedCreateSessionsSpawnTool(opts);
 }
 
@@ -385,17 +402,13 @@ vi.mock("./runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
   return { loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()) };
 });
-vi.mock("./subagents/announce/subagent-announce.js", async (importOriginal) => {
-  const { hasUsableSessionEntry } =
-    await importOriginal<typeof import("./subagents/announce/subagent-announce.js")>();
-  return {
-    hasUsableSessionEntry,
-    captureSubagentCompletionReply: (sessionKey: Parameters<CaptureSubagentCompletionReply>[0]) =>
-      hoisted.state.captureSubagentCompletionReplyOverride(sessionKey),
-    runSubagentAnnounceFlow: (params: Parameters<RunSubagentAnnounceFlow>[0]) =>
-      hoisted.state.runSubagentAnnounceFlowOverride(params),
-  };
-});
+vi.mock("./subagents/announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagents/announce/subagent-announce.js")>()),
+  captureSubagentCompletionReply: (sessionKey: Parameters<CaptureSubagentCompletionReply>[0]) =>
+    hoisted.state.captureSubagentCompletionReplyOverride(sessionKey),
+  runSubagentAnnounceFlow: (params: Parameters<RunSubagentAnnounceFlow>[0]) =>
+    hoisted.state.runSubagentAnnounceFlowOverride(params),
+}));
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => hoisted.state.configOverride,
   resolveGatewayPort: () => 18789,

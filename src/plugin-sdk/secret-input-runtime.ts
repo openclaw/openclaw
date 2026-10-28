@@ -1,6 +1,3 @@
-/**
- * Runtime SDK subpath for secret input normalization and configured secret resolution.
- */
 import { coerceSecretRef, isLegacySecretRefWithoutProvider } from "../config/types.secrets.js";
 import {
   resolveCanonicalConfiguredSecretInputString,

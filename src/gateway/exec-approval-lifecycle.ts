@@ -173,20 +173,19 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     const liveRecord = entry?.record;
     const uncertainty = entry?.uncertainVerdict;
     let observedSource: ExecApprovalResolutionSource = "operator";
-    if (localResolutionSource === undefined && uncertainty) {
+    if (
+      localResolutionSource === undefined &&
+      uncertainty?.autoReview &&
+      record.status === "allowed" &&
+      record.decision === "allow-once"
+    ) {
       if (
-        uncertainty.autoReview &&
-        record.status === "allowed" &&
-        record.decision === "allow-once"
+        uncertainty.autoReview.committedResolutionKey === getOperatorApprovalResolutionKey(record)
       ) {
-        if (
-          uncertainty.autoReview.committedResolutionKey === getOperatorApprovalResolutionKey(record)
-        ) {
-          observedSource = "auto-review";
-        } else if (record.resolver?.kind === "runtime") {
-          // Runtime IDs are shared by operator and auto-review callers, including null IDs.
-          return false;
-        }
+        observedSource = "auto-review";
+      } else if (record.resolver?.kind === "runtime") {
+        // Runtime IDs are shared by operator and auto-review callers, including null IDs.
+        return false;
       }
     }
     const settlement = prepareExecApprovalSettlement({
@@ -408,13 +407,10 @@ export abstract class ExecApprovalLifecycle<TPayload> {
   protected observeEntry<T>(entry: PendingEntry<TPayload>, completion: Promise<T>): Promise<T> {
     const signal = getAsyncWorkSignal();
     return new Promise<T>((resolve, reject) => {
-      let settled = false;
       const finish = (settle: () => void) => {
-        if (settled) {
+        if (!this.observers.delete(onClose)) {
           return;
         }
-        settled = true;
-        this.observers.delete(onClose);
         signal?.removeEventListener("abort", onClose);
         settle();
       };
@@ -688,11 +684,33 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     opts: {
       includeResolved?: boolean;
       authority?: ExecApprovalReadAuthority;
-      filter?: (record: ExecApprovalRecord<TPayload>) => boolean;
+      filter?: (record: ExecApprovalRecord<TPayload>) => boolean | Promise<boolean>;
     } = {},
   ): Promise<ExecApprovalIdLookupResult> {
     await this.listPendingRecords(opts.authority);
-    return this.lookupLocalApprovalId(input, opts);
+    const filter = opts.filter;
+    if (!filter) {
+      return this.lookupLocalApprovalId(input, { includeResolved: opts.includeResolved });
+    }
+    const exact = this.getLocalSnapshot(input) ?? this.getLocalSnapshot(input.trim());
+    const prefix = normalizeLowercaseStringOrEmpty(input.trim());
+    const candidates = exact
+      ? [exact]
+      : Array.from(this.pending.values(), ({ record }) => record).filter(
+          (record) => prefix && normalizeLowercaseStringOrEmpty(record.id).startsWith(prefix),
+        );
+    const allowed = await Promise.all(
+      candidates.map(async (record) =>
+        (opts.includeResolved || record.resolvedAtMs === undefined) && (await filter(record))
+          ? record
+          : undefined,
+      ),
+    );
+    opts.authority?.assertCurrent();
+    return this.lookupLocalApprovalId(input, {
+      includeResolved: opts.includeResolved,
+      filter: (record) => allowed.includes(record),
+    });
   }
 
   lookupLocalApprovalId(
@@ -703,22 +721,16 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     } = {},
   ): ExecApprovalIdLookupResult {
     const rawExact = this.getLocalSnapshot(input);
-    if (rawExact) {
-      return (opts.includeResolved || rawExact.resolvedAtMs === undefined) &&
-        (opts.filter?.(rawExact) ?? true)
-        ? { kind: "exact", id: input }
-        : { kind: "none" };
-    }
-    const normalized = input.trim();
-    if (!normalized) {
-      return { kind: "none" };
-    }
-    const exact = this.getLocalSnapshot(normalized);
+    const normalized = rawExact ? input : input.trim();
+    const exact = rawExact ?? (normalized ? this.getLocalSnapshot(normalized) : null);
     if (exact) {
       return (opts.includeResolved || exact.resolvedAtMs === undefined) &&
         (opts.filter?.(exact) ?? true)
         ? { kind: "exact", id: normalized }
         : { kind: "none" };
+    }
+    if (!normalized) {
+      return { kind: "none" };
     }
     const lowerPrefix = normalizeLowercaseStringOrEmpty(normalized);
     const candidates = new Map(
@@ -727,14 +739,13 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     const matches: string[] = [];
     for (const [id, record] of candidates) {
       if (
+        !normalizeLowercaseStringOrEmpty(id).startsWith(lowerPrefix) ||
         (!opts.includeResolved && record.resolvedAtMs !== undefined) ||
         opts.filter?.(record) === false
       ) {
         continue;
       }
-      if (normalizeLowercaseStringOrEmpty(id).startsWith(lowerPrefix)) {
-        matches.push(id);
-      }
+      matches.push(id);
     }
     return matches.length === 1
       ? { kind: "prefix", id: expectDefined(matches[0], "approval prefix match") }

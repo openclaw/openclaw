@@ -4,7 +4,8 @@ import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { Cookie } from "playwright-core";
 
-export type SystemBrowser = "chrome" | "brave" | "edge" | "chromium";
+export const SUPPORTED_SYSTEM_BROWSERS = ["chrome", "brave", "edge", "chromium"] as const;
+export type SystemBrowser = (typeof SUPPORTED_SYSTEM_BROWSERS)[number];
 
 export type PlaywrightCookie = Pick<
   Cookie,

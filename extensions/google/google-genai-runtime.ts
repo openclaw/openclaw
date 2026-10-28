@@ -12,7 +12,7 @@ export function createGoogleGenAI(options: GoogleGenAIOptions): GoogleGenAIClien
       headers: {
         ...httpOptions.headers,
         ...resolveGoogleApiClientHeaders({
-          baseUrl: typeof httpOptions.baseUrl === "string" ? httpOptions.baseUrl : undefined,
+          baseUrl: httpOptions.baseUrl,
         }),
       },
     },

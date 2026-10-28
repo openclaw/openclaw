@@ -1,4 +1,3 @@
-// Shared validation, auth-surface, and config-load helpers for Gateway startup.
 import { isDeepStrictEqual } from "node:util";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import {
@@ -55,7 +54,6 @@ export type GatewayStartupConfigSnapshotLoadResult = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
-/** Throw a formatted startup error when the loaded config snapshot is invalid. */
 function assertValidGatewayStartupConfigSnapshot(
   snapshot: ConfigFileSnapshot,
   options: { includeDoctorHint?: boolean } = {},
@@ -227,7 +225,6 @@ export function applyGatewayAuthOverridesForStartupPreflight(
   return next;
 }
 
-/** Prepare the effective Gateway startup config after auth, overrides, and secrets activation. */
 export async function prepareGatewayStartupConfig(params: {
   configSnapshot: ConfigFileSnapshot;
   authOverride?: GatewayAuthConfig;

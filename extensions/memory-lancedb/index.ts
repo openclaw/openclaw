@@ -19,7 +19,6 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
-import { createAutoRecallHook } from "./auto-recall.js";
 import {
   MEMORY_CATEGORIES,
   type MemoryConfig,
@@ -33,7 +32,7 @@ import {
   MemoryRecallEmbeddingError,
 } from "./embeddings.js";
 import { MemoryDB, type MemoryEntry } from "./lancedb-store.js";
-import { sanitizeForMemoryCapture } from "./memory-capture-sanitization.js";
+import { dropMediaNoteLines, sanitizeForMemoryCapture } from "./memory-capture-sanitization.js";
 import { registerMemoryCli } from "./memory-cli.js";
 import {
   type AutoCaptureMessageProgress,
@@ -43,12 +42,17 @@ import {
   extractUserTextContent,
   findCleanDuplicateMemory,
   formatRecalledMemoryForModel,
+  formatRelevantMemoriesContext,
   looksLikePromptInjection,
   normalizeRecallQuery,
   prepareAutoCaptureMessages,
   projectMemorySearchResult,
   shouldCapture,
 } from "./memory-policy.js";
+import {
+  createEmbeddingHealthTracker,
+  createLanceDbMemoryProviderRuntime,
+} from "./provider-runtime.js";
 import { startMemoryRecall } from "./recall-service.js";
 
 const loadMemoryHostCoreModule = createLazyRuntimeModule(
@@ -56,6 +60,9 @@ const loadMemoryHostCoreModule = createLazyRuntimeModule(
 );
 
 const DEFAULT_TOOL_RECALL_TIMEOUT_MS = 15_000;
+const AUTO_RECALL_TIMEOUT_MS = 15_000;
+const AUTO_RECALL_OVERFETCH_LIMIT = 10;
+const AUTO_RECALL_RESULT_CAP = 3;
 const DEFAULT_RECALL_COOLDOWN_MS = 60_000;
 const DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA = 10;
 const MAX_AUTO_CAPTURE_TEXTS_PER_TURN = 3;
@@ -116,7 +123,7 @@ export default definePluginEntry({
     let captureStopped = false;
     const memoryRecallCooldowns = new Map<string, { until: number; error: string }>();
     const resolveRuntimeConfig = (): OpenClawConfig =>
-      (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
+      api.runtime.config.current() as OpenClawConfig;
     const resolveEnabledAgentId = (
       rawAgentId: string | undefined,
       runtimeConfig = resolveRuntimeConfig(),
@@ -152,9 +159,7 @@ export default definePluginEntry({
     };
     const resolveCurrentHookConfig = () => {
       const runtimePluginConfig = resolveLivePluginConfigObject(
-        api.runtime.config?.current
-          ? () => api.runtime.config.current() as OpenClawConfig
-          : undefined,
+        () => api.runtime.config.current() as OpenClawConfig,
         "memory-lancedb",
         api.pluginConfig as Record<string, unknown>,
       );
@@ -177,7 +182,8 @@ export default definePluginEntry({
       // changing provider/model/dimensions without re-embedding corrupts search compatibility.
       return { ...currentCfg, embedding: { ...cfg.embedding, apiKey, baseUrl } };
     };
-    const embeddings = createEmbeddings(api);
+    const embeddingHealth = createEmbeddingHealthTracker(createEmbeddings(api));
+    const embeddings = embeddingHealth.embeddings;
     const readMemoryRecallCooldown = (agentId: string): { error: string } | undefined => {
       const memoryRecallCooldown = memoryRecallCooldowns.get(agentId);
       if (!memoryRecallCooldown) {
@@ -197,13 +203,32 @@ export default definePluginEntry({
     };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
-    api.registerMemoryCapability?.({
+    api.registerMemoryCapability({
       publicArtifacts: {
         async listArtifacts(params) {
           const { listMemoryHostPublicArtifacts } = await loadMemoryHostCoreModule();
           return await listMemoryHostPublicArtifacts(params);
         },
       },
+      providerRuntime: createLanceDbMemoryProviderRuntime({
+        providerId: "memory-lancedb",
+        db,
+        embeddings,
+        resolveCurrentConfig: resolveCurrentHookConfig,
+        resolveEnabledAgentId,
+        countMemories: async (agentId) => {
+          const { readMemoryStats } = await import("./memory-stats.js");
+          return await readMemoryStats(
+            { dbPath: resolvedDbPath, storageOptions: cfg.storageOptions },
+            agentId,
+          );
+        },
+        lastEmbeddingFailure: embeddingHealth.lastFailure,
+        readRecallCooldown: readMemoryRecallCooldown,
+        recordRecallCooldown: recordMemoryRecallCooldown,
+        isRecallTimeoutError: isMemoryRecallTimeoutError,
+        logger: api.logger,
+      }),
     });
 
     const registerMemoryTool = (
@@ -437,7 +462,6 @@ export default definePluginEntry({
             .map((r) => `- [${r.entry.id}] ${truncateUtf16Safe(r.entry.text, 60)}...`)
             .join("\n");
 
-          // Strip vector data for serialization
           const sanitizedCandidates = results.map((r) => ({
             id: r.entry.id,
             text: r.entry.text,
@@ -462,15 +486,96 @@ export default definePluginEntry({
 
     api.on(
       "before_prompt_build",
-      createAutoRecallHook({
-        logger: api.logger,
-        db,
-        embeddings,
-        resolveCurrentConfig: resolveCurrentHookConfig,
-        resolveEnabledAgentId,
-        readCooldown: readMemoryRecallCooldown,
-        recordCooldown: recordMemoryRecallCooldown,
-      }),
+      async (event, ctx) => {
+        if (isIncognitoSessionKey(ctx.sessionKey)) {
+          return undefined;
+        }
+        const currentCfg = resolveCurrentHookConfig();
+        const recallMaxChars = currentCfg.recallMaxChars;
+        if (!currentCfg.autoRecall) {
+          return undefined;
+        }
+        const toolAuthority = ctx.toolAuthority;
+        if (!toolAuthority) {
+          api.logger.debug?.(
+            "memory-lancedb: auto-recall skipped because this prompt has no turn tool authority",
+          );
+          return undefined;
+        }
+        toolAuthority.assertActive();
+        if (!toolAuthority.allows("memory_recall")) {
+          api.logger.debug?.("memory-lancedb: auto-recall skipped by turn tool policy");
+          return undefined;
+        }
+        const agentId = resolveEnabledAgentId(ctx.agentId);
+        if (!agentId || !event.prompt || event.prompt.length < 5) {
+          return undefined;
+        }
+        // One hung embedding request must not stall both automatic and explicit recall.
+        // Keep the breaker per agent so unrelated memory namespaces still probe.
+        const cooldown = readMemoryRecallCooldown(agentId);
+        if (cooldown) {
+          api.logger.debug?.(
+            `memory-lancedb: auto-recall skipped during recall cooldown: ${cooldown.error}`,
+          );
+          return undefined;
+        }
+
+        try {
+          // Prompt hooks receive prior history separately from the current request.
+          const recallQuery = normalizeRecallQuery(
+            dropMediaNoteLines(event.prompt),
+            recallMaxChars,
+          );
+          if (!recallQuery) {
+            return undefined;
+          }
+          toolAuthority.assertActive();
+          const recallOperation = startMemoryRecall({
+            timeoutMs: AUTO_RECALL_TIMEOUT_MS,
+            embed: (timeoutMs) =>
+              embeddings.embed(agentId, recallQuery, currentCfg.embedding, timeoutMs()),
+            beforeSearch: () => toolAuthority.assertActive(),
+            search: (vector, timeoutMs) =>
+              db.search(agentId, vector, AUTO_RECALL_OVERFETCH_LIMIT, 0.3, { timeoutMs }),
+          });
+          const recall = await recallOperation.result;
+          toolAuthority.assertActive();
+          if (recall.status === "timeout") {
+            if (recallOperation.phase === "embedding") {
+              recordMemoryRecallCooldown(
+                agentId,
+                `auto-recall timed out after ${Math.round(AUTO_RECALL_TIMEOUT_MS / 1000)}s`,
+              );
+            }
+            api.logger.warn?.(
+              `memory-lancedb: auto-recall timed out after ${AUTO_RECALL_TIMEOUT_MS}ms; skipping memory injection to avoid stalling agent startup`,
+            );
+            return undefined;
+          }
+
+          const cleanResults = cleanMemorySearchResults(recall.value)
+            .map(({ entry }) => entry)
+            .slice(0, AUTO_RECALL_RESULT_CAP);
+          if (cleanResults.length === 0) {
+            return undefined;
+          }
+          api.logger.info?.(
+            `memory-lancedb: injecting ${cleanResults.length} memories into context`,
+          );
+          const context = formatRelevantMemoriesContext(cleanResults, recallMaxChars);
+          return context ? { prependContext: context } : undefined;
+        } catch (err) {
+          if (
+            err instanceof MemoryRecallEmbeddingError &&
+            isMemoryRecallTimeoutError(err.originalError)
+          ) {
+            recordMemoryRecallCooldown(agentId, formatErrorMessage(err.originalError));
+          }
+          api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
+          return undefined;
+        }
+      },
       { requiresToolAuthority: true },
     );
 
@@ -602,6 +707,7 @@ export default definePluginEntry({
     api.registerService({
       id: "memory-lancedb",
       start: () => {
+        db.start();
         embeddings.start();
         captureStopped = false;
         api.logger.info(
@@ -615,7 +721,7 @@ export default definePluginEntry({
           await embeddings.close?.();
         } finally {
           autoCaptureSessions.clear();
-          db.close();
+          await db.close();
           memoryRecallCooldowns.clear();
           api.logger.info("memory-lancedb: stopped");
         }

@@ -22,7 +22,7 @@ export function selectWorkspacePackageBuildConfig(
     ...selected[0],
     config: false,
     clean: false,
-    dts: true,
+    dts: { tsconfig: "tsconfig.packages.json" },
     platform: "node",
     format: "esm",
     target,

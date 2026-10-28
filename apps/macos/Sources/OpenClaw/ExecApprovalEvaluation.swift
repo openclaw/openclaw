@@ -14,10 +14,10 @@ struct ExecApprovalEvaluation {
     let allowAlwaysPatterns: [ExecAllowAlwaysPattern]
     let allowlistMatches: [ExecAllowlistEntry]
     let allowlistAuthorizationSatisfied: Bool
-    let allowlistSatisfied: Bool
     let allowlistMatch: ExecAllowlistEntry?
     let skillTrust: SkillBinsCache.Snapshot?
     let policySnapshot: ExecApprovalPolicySnapshot
+    var unavailableReason: String?
 
     var skillAllow: Bool {
         self.boundCommand != nil && ExecApprovalEvaluator.isSkillAutoAllowed(
@@ -49,13 +49,6 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
     struct AllowlistRule: Sendable, Hashable {
         let match: ExecAllowlistEntryMatchKey
         let source: String?
-
-        func isSatisfied(by currentRules: Set<Self>) -> Bool {
-            currentRules.contains(self) ||
-                (self.source == nil && currentRules.contains(Self(
-                    match: self.match,
-                    source: "allow-always")))
-        }
     }
 
     let security: ExecSecurity
@@ -103,16 +96,6 @@ struct ExecApprovalPolicySnapshot: Sendable, Equatable {
                     source: rule.source?.rawValue,
                     argPattern: rule.argPattern)
             })
-    }
-
-    func isCurrent(_ current: Self) -> Bool {
-        self.security == current.security &&
-            self.ask == current.ask &&
-            self.askFallback == current.askFallback &&
-            self.autoAllowSkills == current.autoAllowSkills &&
-            // Concurrent grants and in-place allow-always upgrades are additive.
-            // Revocation and reverse source downgrade still fail closed.
-            self.allowlistRules.allSatisfy { $0.isSatisfied(by: current.allowlistRules) }
     }
 }
 
@@ -224,6 +207,9 @@ struct ExecApprovalExecutionCommit: Sendable {
 }
 
 enum ExecApprovalEvaluator {
+    /// Discover once per app lifetime; relaunch after changing tool installation folders.
+    private static let searchPaths = Task { await CommandResolver.preferredPathsAsync() }
+
     static func evaluate(
         command: [String],
         rawCommand: String?,
@@ -233,14 +219,18 @@ enum ExecApprovalEvaluator {
         agentId: String?,
         skillBinsCache: SkillBinsCache = .shared) async -> ExecApprovalEvaluation
     {
+        let searchPaths = await self.searchPaths.value
         let effectiveCwd = ExecCommandResolution.canonicalApprovalCwd(cwd)
         let trimmedAgent = agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedAgentId = (trimmedAgent?.isEmpty == false) ? trimmedAgent : nil
-        let approvals = ExecApprovalsStore.resolve(agentId: normalizedAgentId)
+        let approvals = await ExecApprovalsStore.resolve(agentId: normalizedAgentId)
         let security = approvals.agent.security
         let ask = approvals.agent.ask
         let shellWrapper = ExecShellWrapperParser.extract(command: command, rawCommand: rawCommand).isWrapper
-        let env = HostEnvSanitizer.sanitize(overrides: envOverrides, shellWrapper: shellWrapper)
+        let env = HostEnvSanitizer.sanitize(
+            searchPaths: searchPaths,
+            overrides: envOverrides,
+            shellWrapper: shellWrapper)
         let effectiveDisplayCommand = displayCommand ??
             ExecCommandFormatter.displayString(for: command, rawCommand: rawCommand)
         let allowlistRawCommand = ExecSystemRunCommandValidator.allowlistEvaluationRawCommand(
@@ -290,10 +280,10 @@ enum ExecApprovalEvaluator {
             allowAlwaysPatterns: allowAlwaysPatterns,
             allowlistMatches: allowlistMatches,
             allowlistAuthorizationSatisfied: allowlistAuthorizationSatisfied,
-            allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: allowlistSatisfied ? allowlistMatches.first : nil,
             skillTrust: skillTrust,
-            policySnapshot: ExecApprovalPolicySnapshot(resolved: approvals))
+            policySnapshot: ExecApprovalPolicySnapshot(resolved: approvals),
+            unavailableReason: approvals.unavailableReason)
     }
 
     static func isSkillAutoAllowed(

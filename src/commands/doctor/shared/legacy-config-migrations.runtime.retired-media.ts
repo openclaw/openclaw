@@ -16,19 +16,12 @@ export function migrateDiscordVoice(raw: Record<string, unknown>, changes: strin
 }
 
 export function hasDiscordRealtimeVoice(value: unknown): boolean {
-  const discord = getRecord(value);
-  if (!discord) {
-    return false;
-  }
-  const hasAlias = (entry: unknown) => {
-    const realtime = getRecord(getRecord(getRecord(entry)?.voice)?.realtime);
-    return realtime ? Object.hasOwn(realtime, "voice") : false;
-  };
-  if (hasAlias(discord)) {
-    return true;
-  }
-  const accounts = getRecord(discord.accounts);
-  return accounts ? Object.values(accounts).some(hasAlias) : false;
+  let found = false;
+  visitChannelEntries({ channels: { discord: value } }, "discord", (entry) => {
+    const realtime = getRecord(getRecord(entry.voice)?.realtime);
+    found ||= realtime !== null && Object.hasOwn(realtime, "voice");
+  });
+  return found;
 }
 
 function mapDeepgram(value: Record<string, unknown>): Record<string, unknown> {
@@ -62,50 +55,48 @@ function migrateDeepgramOwner(
   changes.push(`Moved ${path}.deepgram → ${path}.providerOptions.deepgram.`);
 }
 
-export function migrateMediaDeepgram(raw: Record<string, unknown>, changes: string[]): void {
-  const media = getRecord(getRecord(raw.tools)?.media);
+function visitMediaOwners(
+  value: unknown,
+  visit: (owner: Record<string, unknown>, path: string) => void,
+): void {
+  const media = getRecord(value);
   if (!media) {
     return;
   }
-  const migrateModels = (models: unknown, path: string) => {
+  const visitModels = (models: unknown, path: string) => {
     if (!Array.isArray(models)) {
       return;
     }
-    models.forEach((value, index) => {
-      const model = getRecord(value);
+    models.forEach((modelValue, index) => {
+      const model = getRecord(modelValue);
       if (model) {
-        migrateDeepgramOwner(model, `${path}[${index}]`, changes);
+        visit(model, `${path}[${index}]`);
       }
     });
   };
-  migrateModels(media.models, "tools.media.models");
+  visitModels(media.models, "tools.media.models");
   for (const capability of ["audio", "image", "video"]) {
     const entry = getRecord(media[capability]);
     if (!entry) {
       continue;
     }
-    migrateDeepgramOwner(entry, `tools.media.${capability}`, changes);
-    migrateModels(entry.models, `tools.media.${capability}.models`);
+    visit(entry, `tools.media.${capability}`);
+    visitModels(entry.models, `tools.media.${capability}.models`);
   }
 }
 
+export function migrateMediaDeepgram(raw: Record<string, unknown>, changes: string[]): void {
+  visitMediaOwners(getRecord(raw.tools)?.media, (owner, path) =>
+    migrateDeepgramOwner(owner, path, changes),
+  );
+}
+
 export function hasMediaDeepgram(value: unknown): boolean {
-  const media = getRecord(value);
-  if (!media) {
-    return false;
-  }
-  const hasAlias = (entry: unknown) => {
-    const owner = getRecord(entry);
-    return owner ? Object.hasOwn(owner, "deepgram") : false;
-  };
-  const modelsHaveAlias = (models: unknown) => Array.isArray(models) && models.some(hasAlias);
-  if (modelsHaveAlias(media.models)) {
-    return true;
-  }
-  return ["audio", "image", "video"].some((capability) => {
-    const entry = getRecord(media[capability]);
-    return entry ? hasAlias(entry) || modelsHaveAlias(entry.models) : false;
+  let found = false;
+  visitMediaOwners(value, (owner) => {
+    found ||= Object.hasOwn(owner, "deepgram");
   });
+  return found;
 }
 
 const RETIRED_LOOP_DETECTION_PATHS = [

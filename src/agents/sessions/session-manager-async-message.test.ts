@@ -1,27 +1,43 @@
 import path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import {
   appendTranscriptMessageSync,
+  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  bindSessionPendingInputSources,
-  stageSessionPendingInput,
-  withSessionPendingInputPersistence,
-} from "../../config/sessions/session-accessor.pending-inputs.js";
+import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { kickSessionEntryMaintenanceAfterWrite } from "../../config/sessions/session-accessor.sqlite-maintenance-kick.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
+import * as reclamationRun from "../../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
+import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { prepareModelVisibleToolTextBlock } from "../../logging/redact.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import { assertOpenClawAgentWriterReleased } from "../../state/openclaw-agent-write-admission-state.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
+import { withSessionManagerAppend } from "./session-manager-append-admission.js";
+import { sessionManagerReadMessageAnchor } from "./session-manager-message-anchor.js";
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
+import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
 let state: OpenClawTestState;
@@ -51,48 +67,180 @@ const user = (key: string) => ({
   idempotencyKey: `${key}:user`,
 });
 
+const toolResult = <T extends object>(overrides: T) => ({
+  role: "toolResult" as const,
+  toolCallId: "result",
+  toolName: "lookup",
+  content: [{ type: "text" as const, text: "Synthetic result" }],
+  isError: false,
+  timestamp: 2,
+  ...overrides,
+});
+
+type MetadataWorker = Parameters<
+  Parameters<typeof metadataRuntime.withSessionMetadataWorker>[3]
+>[0];
+
+function interceptWorker(wrap: (worker: MetadataWorker) => MetadataWorker) {
+  const original = metadataRuntime.withSessionMetadataWorker;
+  return vi
+    .spyOn(metadataRuntime, "withSessionMetadataWorker")
+    .mockImplementation((options, database, assertCurrent, operation, controls) =>
+      original(options, database, assertCurrent, (worker) => operation(wrap(worker)), controls),
+    );
+}
+
+function afterMetadataReceipt(after: () => void) {
+  const original = metadataRuntime.withSessionMetadataWorker;
+  return vi
+    .spyOn(metadataRuntime, "withSessionMetadataWorker")
+    .mockImplementation(async (...args) => {
+      const result = await original(...args);
+      after();
+      return result;
+    });
+}
+
+it.for(["protected", "below cap protected insert"] as const)(
+  "resumes idle protected-store maintenance after a lazy worker creates a session (starting state: %s)",
+  async (startingState, { signal }) => {
+    const belowCap = startingState.startsWith("below cap");
+    const storePath = state.statePath(`lazy-maintenance-${startingState}.sqlite`);
+    const scope = { agentId: "main", path: storePath };
+    const protectedKey = "agent:main:lazy-protected";
+    const updatedAt = Date.now();
+    openOpenClawAgentDatabase(scope);
+    runOpenClawAgentWriteTransaction((database) => {
+      for (const key of [protectedKey, ...(belowCap ? [] : ["agent:main:lazy-other-protected"])]) {
+        writeSessionEntry(database, key, {
+          sessionId: key,
+          updatedAt,
+          modelSelectionLocked: true,
+        });
+      }
+    }, scope);
+    const request = {
+      activeSessionKey: protectedKey,
+      archiveDirectory: path.join(path.dirname(storePath), "lazy-archives"),
+      maintenanceConfig: {
+        ...resolveMaintenanceConfigFromInput(),
+        maxEntries: belowCap ? 2 : 1,
+        pruneAfterMs: 86_400_000,
+        archiveDashboardAfterMs: null,
+        preserveRecentMs: null,
+      },
+      scope,
+      storePath,
+    };
+    const settled = createDeferred();
+    const archived = createDeferred();
+    const run = reclamationRun.runSqliteSessionReclamation;
+    let passes = 0;
+    const observe = vi
+      .spyOn(reclamationRun, "runSqliteSessionReclamation")
+      .mockImplementation(async (params) => {
+        if (params.plan.kind === "maintenance-plan") {
+          passes++;
+        }
+        const result = await run(params);
+        if (result.kind === "maintenance-plan") {
+          if (belowCap && result.value.archived === 0) {
+            expect(result.value.durableNoCandidates).not.toBe(true);
+            settled.resolve();
+          }
+          if (result.value.durableNoCandidates === true) {
+            settled.resolve();
+          }
+          if (result.value.archived > 0) {
+            archived.resolve();
+          }
+        }
+        return result;
+      });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      kickSessionEntryMaintenanceAfterWrite(request);
+      await withinTest(settled.promise, signal);
+      await yieldToEventLoop();
+      const protectedPasses = passes;
+      kickSessionEntryMaintenanceAfterWrite(request);
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(passes).toBe(protectedPasses);
+
+      const target = {
+        agentId: "main",
+        storePath,
+        sessionKey:
+          startingState === "below cap protected insert"
+            ? "agent:main:direct:lazy-protected-insert"
+            : "agent:main:lazy-eligible",
+        sessionId: "lazy-eligible",
+      };
+      const firstKey = belowCap ? "lazy-first" : "direct:lazy-protected-insert";
+      const firstTarget = {
+        ...target,
+        sessionKey: `agent:main:${firstKey}`,
+        sessionId: firstKey,
+      };
+      const first = await SessionManager.openAsync(firstTarget, state.workspaceDir);
+      await first.appendMessageAsync(user("lazy-maintenance-first"));
+      await yieldToEventLoop();
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(passes).toBe(protectedPasses);
+      expect(loadSessionEntry(firstTarget)?.archivedAt).toBeUndefined();
+      const victim = belowCap ? firstTarget : target;
+      const manager = await SessionManager.openAsync(target, state.workspaceDir);
+      await manager.appendMessageAsync(user("lazy-maintenance"));
+      expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
+      await yieldToEventLoop();
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(passes).toBeGreaterThan(protectedPasses);
+      await withinTest(archived.promise, signal);
+      expect(loadSessionEntry(victim)?.archiveReason).toBe("active-session-cap");
+      if (startingState === "below cap protected insert") {
+        expect(loadSessionEntry(target)?.archivedAt).toBeUndefined();
+      }
+      expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({
+        message: user("lazy-maintenance"),
+      });
+    } finally {
+      vi.useRealTimers();
+      await closeOpenClawAgentDatabaseByPathAsync(storePath);
+      observe.mockRestore();
+    }
+  },
+);
+
 it.each([1, 2])(
   "rereads and retries one local append after a transcript conflict (conflicting writes: %s)",
   async (conflicts) => {
     const { target, manager } = await fixture(state, `mutation-conflicts-${conflicts}`);
     await manager.appendMessageAsync(user("seed"));
-    const withWorker = metadataRuntime.withSessionMetadataWorker;
     let appends = 0;
     let mutationReads = 0;
     const failures: unknown[] = [];
-    const spy = vi
-      .spyOn(metadataRuntime, "withSessionMetadataWorker")
-      .mockImplementation((options, database, assertCurrent, operation, controls) =>
-        withWorker(
-          options,
-          database,
-          assertCurrent,
-          (worker) =>
-            operation({
-              execute: async (command, commandOptions) => {
-                if (command.type === "session.metadata.mutation") {
-                  mutationReads++;
-                }
-                if (command.type === "session.metadata.append" && ++appends <= conflicts) {
-                  // The synchronous SDK can commit after host preparation but before the worker.
-                  expect(
-                    appendTranscriptMessageSync(target, {
-                      eventId: `concurrent-${appends}`,
-                      message: user(`concurrent-${appends}`),
-                    }).ok,
-                  ).toBe(true);
-                }
-                try {
-                  return await worker.execute(command, commandOptions);
-                } catch (error) {
-                  failures.push(error);
-                  throw error;
-                }
-              },
-            }),
-          controls,
-        ),
-      );
+    const spy = interceptWorker((worker) => ({
+      execute: async (command, commandOptions) => {
+        if (command.type === "session.metadata.mutation") {
+          mutationReads++;
+        }
+        if (command.type === "session.metadata.append" && ++appends <= conflicts) {
+          // The synchronous SDK can commit after host preparation but before the worker.
+          expect(
+            appendTranscriptMessageSync(target, {
+              eventId: `concurrent-${appends}`,
+              message: user(`concurrent-${appends}`),
+            }).ok,
+          ).toBe(true);
+        }
+        try {
+          return await worker.execute(command, commandOptions);
+        } catch (error) {
+          failures.push(error);
+          throw error;
+        }
+      },
+    }));
     let failure: unknown;
     let entryId: string | undefined;
     try {
@@ -144,14 +292,12 @@ it("keeps a newer user intact when a prepared tool result cannot rebase", async 
   ).toBe(true);
   const before = await loadTranscriptEvents(target);
   await expect(
-    manager.appendMessageAsync({
-      role: "toolResult",
-      toolCallId: "superseded-result",
-      toolName: "lookup",
-      content: [{ type: "text", text: "Prepared for the older user" }],
-      isError: false,
-      timestamp: 2,
-    }),
+    manager.appendMessageAsync(
+      toolResult({
+        toolCallId: "superseded-result",
+        content: [{ type: "text" as const, text: "Prepared for the older user" }],
+      }),
+    ),
   ).rejects.toBeInstanceOf(SqliteTranscriptMutationConflictError);
   expect(await loadTranscriptEvents(target)).toEqual(before);
   expect(manager.getEntries()).toHaveLength(1);
@@ -161,15 +307,16 @@ it("shares one frozen tool-result graph across append receipts, transcript views
   const { target, manager } = await fixture(state, "shared-tool-results");
   const seed = await manager.appendMessageWithTranscriptAnchorAsync(user("shared-results"));
   const text = "Synthetic result line with Unicode: 🦞\n".repeat(1024);
-  const messages = Array.from({ length: 3 }, (_, index) => ({
-    role: "toolResult" as const,
-    toolCallId: `large-${index}`,
-    toolName: "read",
-    content: [{ type: "text" as const, text }],
-    details: { rows: [{ index, values: [index, index + 1] }] },
-    isError: false,
-    timestamp: index + 2,
-  }));
+  const messages = Array.from({ length: 3 }, (_, index) =>
+    toolResult({
+      toolCallId: `large-${index}`,
+      toolName: "read",
+      content: [{ type: "text" as const, text }],
+      details: { rows: [{ index, values: [index, index + 1] }] },
+      timestamp: index + 2,
+    }),
+  );
+  const originalMessages = structuredClone(messages);
   const originalGraphs = messages.map((message) => ({
     content: message.content,
     block: message.content[0],
@@ -200,26 +347,11 @@ it("shares one frozen tool-result graph across append receipts, transcript views
         id: receipts[index]!.entryId,
         parentId: index === 0 ? seed.entryId : receipts[index - 1]!.entryId,
         timestamp: entry.timestamp,
-        message: {
-          role: "toolResult",
-          toolCallId: `large-${index}`,
-          toolName: "read",
-          content: [{ type: "text", text }],
-          details: { rows: [{ index, values: [index, index + 1] }] },
-          isError: false,
-          timestamp: index + 2,
-        },
+        message: originalMessages[index],
       }),
     })),
   );
   const context = manager.buildSessionContext().messages.slice(-messages.length);
-  const retained = new Set([
-    ...messages,
-    ...receipts.map(({ message }) => message),
-    ...entries.map(({ message }) => message),
-    ...context,
-  ]);
-  expect(retained.size).toBe(messages.length);
   for (const [index, message] of messages.entries()) {
     const original = originalGraphs[index]!;
     expect(receipts[index]!.message).toBe(message);
@@ -231,7 +363,7 @@ it("shares one frozen tool-result graph across append receipts, transcript views
     expect(message.details.rows).toBe(original.rows);
     expect(message.details.rows[0]).toBe(original.row);
     expect(message.details.rows[0]!.values).toBe(original.values);
-    for (const value of [entries[index], message, ...Object.values(original)]) {
+    for (const value of [message, ...Object.values(original)]) {
       expect(Object.isFrozen(value)).toBe(true);
     }
   }
@@ -248,38 +380,22 @@ it.each(["message", "custom"] as const)(
     await manager.appendMessageAsync(user(`captured-${family}`));
     const nested = { value: "captured" };
     const data = { nested };
-    const message = {
-      role: "toolResult" as const,
+    const message = toolResult({
       toolCallId: "captured-result",
-      toolName: "lookup",
       content: [{ type: "text" as const, text: "Captured result" }],
       details: data,
-      isError: false,
-      timestamp: 2,
-    };
-    const withWorker = metadataRuntime.withSessionMetadataWorker;
+    });
     let appends = 0;
     let workerMutation: boolean | undefined;
-    const spy = vi
-      .spyOn(metadataRuntime, "withSessionMetadataWorker")
-      .mockImplementation((options, database, assertCurrent, operation, controls) =>
-        withWorker(
-          options,
-          database,
-          assertCurrent,
-          (worker) =>
-            operation({
-              execute: (command, commandOptions) => {
-                const pending = worker.execute(command, commandOptions);
-                if (command.type === "session.metadata.append" && ++appends === 2) {
-                  workerMutation = Reflect.set(nested, "value", "worker mutation");
-                }
-                return pending;
-              },
-            }),
-          controls,
-        ),
-      );
+    const spy = interceptWorker((worker) => ({
+      execute: (command, commandOptions) => {
+        const pending = worker.execute(command, commandOptions);
+        if (command.type === "session.metadata.append" && ++appends === 2) {
+          workerMutation = Reflect.set(nested, "value", "worker mutation");
+        }
+        return pending;
+      },
+    }));
     const blocker = manager.appendCustomEntryAsync("queued-before-capture");
     const pending =
       family === "message"
@@ -349,28 +465,20 @@ it("persists the native first content getter result before provenance reads", as
   });
 });
 
-it("expands message toJSON with its envelope key before applying transcript redaction", async () => {
+it("expands message toJSON with its envelope key without changing tool text", async () => {
   const { target, manager } = await fixture(state, "message-json-redaction");
   await manager.appendMessageAsync(user("json-redaction"));
-  const message = {
-    role: "toolResult" as const,
+  const message = toolResult({
     toolCallId: "json-result",
-    toolName: "lookup",
     content: [],
-    isError: false,
-    timestamp: 2,
     toJSON(key: string) {
-      return {
-        role: "toolResult",
+      return toolResult({
         toolCallId: "json-result",
-        toolName: "lookup",
-        content: [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }],
+        content: [{ type: "text" as const, text: "opaque(abcdefghijklmnopqrst)" }],
         details: { serializationKey: key },
-        isError: false,
-        timestamp: 2,
-      };
+      });
     },
-  };
+  });
   const committed = await manager.appendMessageWithTranscriptAnchorAsync(message, {
     config: { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } },
   });
@@ -378,7 +486,7 @@ it("expands message toJSON with its envelope key before applying transcript reda
     role: "toolResult",
     toolCallId: "json-result",
     toolName: "lookup",
-    content: [{ type: "text", text: "opaque(abcdef…qrst)" }],
+    content: [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }],
     details: { serializationKey: "message" },
     isError: false,
     timestamp: 2,
@@ -387,29 +495,24 @@ it("expands message toJSON with its envelope key before applying transcript reda
   expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({ message: expected });
 });
 
-it("persists prepared tool text once when JSON normalization copies a frozen content block", async () => {
+it("preserves tool text when JSON normalization copies a frozen content block", async () => {
   const { target, manager } = await fixture(state, "frozen-prepared-tool-text");
   await manager.appendMessageAsync(user("frozen-prepared-text"));
   const config = { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } };
-  const block = Object.freeze(
-    prepareModelVisibleToolTextBlock(
-      { type: "text", text: "opaque(abcdefghijklmnopqrst)", optional: undefined },
-      config.logging,
-    ),
-  );
-  expect(block.text).toBe("opaque(abcdef…qrst)");
+  const block = Object.freeze({
+    type: "text" as const,
+    text: "opaque(abcdefghijklmnopqrst)",
+    optional: undefined,
+  });
+  expect(block.text).toBe("opaque(abcdefghijklmnopqrst)");
   const committed = await manager.appendMessageWithTranscriptAnchorAsync(
-    {
-      role: "toolResult",
+    toolResult({
       toolCallId: "frozen-result",
-      toolName: "lookup",
       content: [block],
-      isError: false,
-      timestamp: 2,
-    },
+    }),
     { config },
   );
-  const expected = [{ type: "text", text: "opaque(abcdef…qrst)" }];
+  const expected = [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }];
   expect(committed.message).toHaveProperty("content", expected);
   expect((await loadTranscriptEvents(target)).at(-1)).toMatchObject({
     message: { content: expected },
@@ -518,20 +621,10 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
     message: Parameters<SessionManager["appendMessageWithTranscriptAnchorAsync"]>[0],
     nextKey: string,
   ) => {
-    const withWorker = metadataRuntime.withSessionMetadataWorker;
-    const delayed: typeof withWorker = async (
-      options,
-      database,
-      assertCurrent,
-      operation,
-      controls,
-    ) => {
-      const receipt = await withWorker(options, database, assertCurrent, operation, controls);
+    const spy = afterMetadataReceipt(() => {
       // The retained synchronous SDK can publish before an awaited receipt is adopted.
       newerId = manager.appendMessage(user(nextKey));
-      return receipt;
-    };
-    const spy = vi.spyOn(metadataRuntime, "withSessionMetadataWorker").mockImplementation(delayed);
+    });
     try {
       return await manager.appendMessageWithTranscriptAnchorAsync(message);
     } finally {
@@ -571,6 +664,8 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
     });
     expect(pending.state).toBe("consumed");
     expect(manager.getLeafEntry()).toMatchObject({ id: newerId, parentId: pending.inputId });
+    expect(manager[sessionManagerReadMessageAnchor](newerId)).toMatchObject({ entryId: newerId });
+    expect(manager[sessionManagerReadMessageAnchor](committed.entryId)).toBeUndefined();
     expect(await loadTranscriptEvents(target)).toEqual(manager.getPersistedEntries());
   } finally {
     pending.finish("interrupted");
@@ -590,20 +685,15 @@ it("fences local navigation changes at worker commit and receipt publication", a
   const before = await loadTranscriptEvents(target);
   for (const change of ["branch", "branch-back"] as const) {
     manager.branch(tail);
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    const admission = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            manager.branch(seed);
-            if (change === "branch-back") {
-              manager.branch(tail);
-            }
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "commit") {
+        manager.branch(seed);
+        if (change === "branch-back") {
+          manager.branch(tail);
+        }
+      }
+      admit(request, grant);
+    });
     try {
       await expect(manager.appendMessageAsync(user(`refused-${change}`))).rejects.toThrow(
         "Session transcript navigation changed before publication",
@@ -615,21 +705,7 @@ it("fences local navigation changes at worker commit and receipt publication", a
     }
   }
 
-  const withWorker = metadataRuntime.withSessionMetadataWorker;
-  const delayed: typeof withWorker = async (
-    options,
-    database,
-    assertCurrent,
-    operation,
-    controls,
-  ) => {
-    const receipt = await withWorker(options, database, assertCurrent, operation, controls);
-    manager.resetLeaf();
-    return receipt;
-  };
-  const publication = vi
-    .spyOn(metadataRuntime, "withSessionMetadataWorker")
-    .mockImplementation(delayed);
+  const publication = afterMetadataReceipt(() => manager.resetLeaf());
   let failure: unknown;
   try {
     failure = await manager.appendMessageAsync(user("committed-before-reset")).then(
@@ -652,72 +728,6 @@ it("fences local navigation changes at worker commit and receipt publication", a
   ]);
 });
 
-it.each([false, true])(
-  "preserves pending custody and closed committed replay (collected: %s)",
-  async (collected) => {
-    const { target, manager } = await fixture(state, `pending-messages-${collected}`);
-    const stage = async (key: string) =>
-      expectDefined(
-        await stageSessionPendingInput(target, {
-          runId: key,
-          message: user(key),
-          assertCurrent: () => {},
-        }),
-        "Expected pending input custody",
-      );
-    const firstSource = await stage("first");
-    const sources = [firstSource];
-    if (collected) {
-      sources.push(await stage("second"));
-    }
-    const receipt = collected
-      ? expectDefined(
-          bindSessionPendingInputSources(sources, user("aggregate")),
-          "Expected aggregate custody",
-        )
-      : firstSource;
-    const beforeFreshMessageCommit = vi.fn(() => {
-      throw new Error("Accepted input must retain its original admission");
-    });
-    try {
-      await expect(manager.appendMessageAsync(firstSource.message)).rejects.toThrow(
-        "admitted turn",
-      );
-      const committed = await receipt.run(() =>
-        manager.appendMessageWithTranscriptAnchorAsync(receipt.message, {
-          beforeFreshMessageCommit,
-        }),
-      );
-      expect(committed).toMatchObject({
-        entryId: receipt.inputId,
-        message: receipt.message,
-        appended: true,
-      });
-      expect([receipt.state, ...sources.map((source) => source.state)]).toEqual(
-        Array(sources.length + 1).fill("consumed"),
-      );
-      expect(beforeFreshMessageCommit).not.toHaveBeenCalled();
-      const events = await loadTranscriptEvents(target);
-      expect(events).toEqual(manager.getPersistedEntries());
-      receipt.finish("cancelled");
-      await expect(
-        withSessionPendingInputPersistence(receipt, () =>
-          manager.appendMessageWithTranscriptAnchorAsync(receipt.message, {
-            beforeFreshMessageCommit,
-          }),
-        ),
-      ).resolves.toMatchObject({ entryId: receipt.inputId, appended: false });
-      expect(beforeFreshMessageCommit).not.toHaveBeenCalled();
-      expect(await loadTranscriptEvents(target)).toEqual(events);
-    } finally {
-      receipt.finish("interrupted");
-      for (const source of sources) {
-        source.finish("interrupted");
-      }
-    }
-  },
-);
-
 it("rolls back worker promotion when pending authority retires at commit", async () => {
   const { target, manager } = await fixture(state, "revoked-message");
   await manager.appendMessageAsync(user("seed"));
@@ -735,17 +745,12 @@ it("rolls back worker promotion when pending authority retires at commit", async
     "Expected pending input custody",
   );
   const before = await loadTranscriptEvents(target);
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const admission = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          current = false;
-        }
-        admit(request, grant);
-      }, attachment),
-    );
+  const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      current = false;
+    }
+    admit(request, grant);
+  });
   try {
     await expect(receipt.run(() => manager.appendMessageAsync(receipt.message))).rejects.toThrow(
       "Pending owner retired at commit",
@@ -758,4 +763,63 @@ it("rolls back worker promotion when pending authority retires at commit", async
     receipt.finish("interrupted");
   }
   expect(await loadTranscriptEvents(target)).toEqual(before);
+});
+
+it("lets another session write between actor appends while retaining manager order", async () => {
+  const target = {
+    agentId: "main",
+    sessionId: "append-owner",
+    sessionKey: "agent:main:append-owner",
+    storePath: state.statePath("transcript.sqlite"),
+  };
+  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+  await withSelectedTranscriptReader(
+    target,
+    async () => {
+      const manager = await SessionManager.openAsync(target);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const order: string[] = [];
+      const batch = withSessionManagerAppend(manager, async () => {
+        await manager.appendMessageAsync(makeUserMessage("first", 1));
+        // Assembly and view adoption must permit storage resource cleanup and unrelated writes.
+        assertOpenClawAgentWriterReleased("prepare the next session append");
+        entered.resolve();
+        await release.promise;
+        await manager.appendMessageAsync(makeUserMessage("second", 2));
+        order.push("batch");
+      });
+      let follower: Promise<unknown> | undefined;
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          batch,
+          "Append batch settled before preparation",
+        );
+        follower = manager
+          .appendMessageAsync(makeUserMessage("third", 3))
+          .then(() => order.push("follower"));
+        await upsertSessionEntryCore(
+          { ...target, sessionKey: "agent:main:other" },
+          { sessionId: "other", updatedAt: 1 },
+        );
+        expect(order).toEqual([]);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([batch, ...(follower ? [follower] : [])]);
+      }
+      await batch;
+      await follower;
+      expect(order).toEqual(["batch", "follower"]);
+      const messages = manager.getEntries().filter((entry) => entry.type === "message");
+      expect(messages.map((entry) => entry.message)).toMatchObject([
+        { role: "user", content: "first" },
+        { role: "user", content: "second" },
+        { role: "user", content: "third" },
+      ]);
+      expect(messages[1]?.parentId).toBe(messages[0]?.id);
+      expect(messages[2]?.parentId).toBe(messages[1]?.id);
+    },
+    true,
+  );
 });

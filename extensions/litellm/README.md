@@ -13,7 +13,9 @@ openclaw onboard --auth-choice litellm-api-key
 ```
 
 Configure `models.providers.litellm.baseUrl` for your proxy and supply its key
-through onboarding or `LITELLM_API_KEY`. Refresh the proxy's catalog with
+through onboarding or `LITELLM_API_KEY`. Interactive setup offers the proxy's served models,
+defaults to the first, and explains discovery failures before asking for a manual ID.
+Refresh the proxy's catalog with
 `openclaw models list --provider litellm --refresh`.
 
 The proxy owns upstream credentials and model availability. Installing this

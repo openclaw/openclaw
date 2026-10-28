@@ -73,9 +73,7 @@ export function registerExecutionFailureTests() {
           {
             check: "managed-service",
             code: "service-manager-access-denied",
-            message: expect.stringContaining(
-              "The service-manager check could not start (EACCES/EPERM).",
-            ),
+            message: "Service manager returned EACCES.",
           },
         ]);
       }

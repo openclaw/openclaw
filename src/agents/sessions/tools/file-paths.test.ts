@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { createEditTool } from "./edit.js";
 import { createLsTool } from "./ls.js";
@@ -8,105 +8,75 @@ import { createReadTool } from "./read.js";
 import { createWriteTool } from "./write.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-describe("session file tool path ownership", () => {
-  it("preserves literal @ paths across session file operations and keeps shorthand", async () => {
-    const cwd = tempDirs.make("openclaw-tool-factories-at-paths-");
-    const tools = {
-      read: createReadTool(cwd),
-      write: createWriteTool(cwd),
-      edit: createEditTool(cwd),
-      ls: createLsTool(cwd),
-    };
-    await fs.writeFile(path.join(cwd, "@literal.txt"), "literal before\n");
-    await fs.writeFile(path.join(cwd, "literal.txt"), "plain sibling\n");
-    await fs.writeFile(path.join(cwd, "shorthand.txt"), "shorthand control\n");
-
-    const shorthand = await tools.read.execute("read-shorthand", { path: "@shorthand.txt" });
-    expect(shorthand.content).toEqual([{ type: "text", text: "shorthand control\n" }]);
-    const literal = await tools.read.execute("read-literal", { path: "@literal.txt" });
-    expect(literal.content).toEqual([{ type: "text", text: "literal before\n" }]);
-
-    const written = await tools.write.execute("write-literal", {
-      path: "@literal.txt",
-      content: "literal written\n",
-    });
-    expect(written.details).toMatchObject({ changed: true, created: false });
-    const edited = await tools.edit.execute("edit-literal", {
-      path: "@literal.txt",
-      edits: [{ oldText: "written", newText: "edited" }],
-    });
-    expect(edited.details).toMatchObject({ changed: true });
-    await expect(fs.readFile(path.join(cwd, "@literal.txt"), "utf8")).resolves.toBe(
-      "literal edited\n",
-    );
-    await expect(fs.readFile(path.join(cwd, "literal.txt"), "utf8")).resolves.toBe(
-      "plain sibling\n",
-    );
-
-    await fs.mkdir(path.join(cwd, "@directory"));
-    const created = await tools.write.execute("write-literal-child", {
-      path: "@directory/new.txt",
-      content: "literal child\n",
-    });
-    expect(created.details).toMatchObject({ changed: true, created: true });
-    const listed = await tools.ls.execute("list-literal-directory", { path: "@directory" });
-    expect(listed.content).toEqual([{ type: "text", text: '"new.txt"' }]);
-    await expect(fs.readFile(path.join(cwd, "@directory/new.txt"), "utf8")).resolves.toBe(
-      "literal child\n",
-    );
-    await expect(fs.stat(path.join(cwd, "directory"))).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("keeps injected file paths independent of colliding local @ files", async () => {
-    const cwd = tempDirs.make("openclaw-tool-factories-local-");
-    const remote = tempDirs.make("openclaw-tool-factories-remote-");
-    await fs.writeFile(path.join(cwd, "@target.txt"), "local sentinel\n");
-    await fs.writeFile(path.join(remote, "target.txt"), "remote before\n");
-    const remotePath = (absolutePath: string) =>
-      path.join(remote, path.relative(cwd, absolutePath));
-    const access = (absolutePath: string) => fs.access(remotePath(absolutePath));
-    const readFile = (absolutePath: string) => fs.readFile(remotePath(absolutePath));
-    const writeFile = (absolutePath: string, content: string) =>
-      fs.writeFile(remotePath(absolutePath), content, "utf8");
-    const statFile = async (absolutePath: string) => {
-      const stat = await fs.stat(remotePath(absolutePath));
-      return {
-        type: stat.isDirectory() ? "directory" : "file",
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      } as const;
-    };
-    const tools = {
-      read: createReadTool(cwd, { operations: { access, readFile } }),
-      write: createWriteTool(cwd, {
-        operations: {
-          readFile,
-          writeFile,
-          statFile,
-          mkdir: async (directory) => {
-            await fs.mkdir(remotePath(directory), { recursive: true });
-          },
+function fixture(remote?: string) {
+  const cwd = tempDirs.make("file-paths-");
+  const file = (name: string) => path.join(cwd, name);
+  const mapped = (absolute: string) => path.join(remote ?? cwd, path.relative(cwd, absolute));
+  const operations = remote
+    ? {
+        access: (absolute: string) => fs.access(mapped(absolute)),
+        readFile: (absolute: string) => fs.readFile(mapped(absolute)),
+        writeFile: (absolute: string, text: string) => fs.writeFile(mapped(absolute), text, "utf8"),
+        mkdir: async (absolute: string) => {
+          await fs.mkdir(mapped(absolute), { recursive: true });
         },
-      }),
-      edit: createEditTool(cwd, { operations: { access, readFile, writeFile, statFile } }),
-    };
+        statFile: async (absolute: string) => {
+          const stat = await fs.stat(mapped(absolute));
+          const type = stat.isDirectory() ? "directory" : "file";
+          return { type, size: stat.size, mtimeMs: stat.mtimeMs } as const;
+        },
+      }
+    : undefined;
+  const read = createReadTool(cwd, operations && { operations });
+  const write = createWriteTool(cwd, operations && { operations });
+  const edit = createEditTool(cwd, operations && { operations });
+  const edits = [{ oldText: "written", newText: "edited" }];
+  return {
+    file,
+    expectFile: (name: string, content: string) => expectFile(file(name), content),
+    read: async (name: string) => (await read.execute("read", { path: name })).content,
+    write: async (name: string, content: string) =>
+      (await write.execute("write", { path: name, content })).details,
+    edit: async (name: string) => (await edit.execute("edit", { path: name, edits })).details,
+    list: async (name: string) => (await createLsTool(cwd).execute("ls", { path: name })).content,
+  };
+}
+const text = (value: string) => [{ type: "text", text: value }];
+const expectFile = (file: string, content: string) =>
+  expect(fs.readFile(file, "utf8")).resolves.toBe(content);
 
-    const read = await tools.read.execute("read-remote", { path: "@target.txt" });
-    expect(read.content).toEqual([{ type: "text", text: "remote before\n" }]);
-    await tools.write.execute("write-remote", { path: "@target.txt", content: "remote written\n" });
-    await tools.edit.execute("edit-remote", {
-      path: "@target.txt",
-      edits: [{ oldText: "written", newText: "edited" }],
-    });
-    await expect(fs.readFile(path.join(remote, "target.txt"), "utf8")).resolves.toBe(
-      "remote edited\n",
-    );
-    await expect(fs.readFile(path.join(cwd, "@target.txt"), "utf8")).resolves.toBe(
-      "local sentinel\n",
-    );
-    await expect(fs.stat(path.join(remote, "@target.txt"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
+it("preserves literal @ paths and shorthand across file operations", async () => {
+  const f = fixture();
+  for (const [name, content] of [
+    ["@a.txt", "before\n"],
+    ["a.txt", "sibling\n"],
+    ["shorthand.txt", "short\n"],
+  ] as const) {
+    await fs.writeFile(f.file(name), content);
+  }
+  expect(await f.read("@shorthand.txt")).toEqual(text("short\n"));
+  expect(await f.read("@a.txt")).toEqual(text("before\n"));
+  expect(await f.write("@a.txt", "written\n")).toMatchObject({ changed: true, created: false });
+  expect(await f.edit("@a.txt")).toMatchObject({ changed: true });
+  await f.expectFile("@a.txt", "edited\n");
+  await f.expectFile("a.txt", "sibling\n");
+  await fs.mkdir(f.file("@dir"));
+  expect(await f.write("@dir/new.txt", "child\n")).toMatchObject({ changed: true, created: true });
+  expect(await f.list("@dir")).toEqual(text('"new.txt"'));
+  await f.expectFile("@dir/new.txt", "child\n");
+  await expect(fs.stat(f.file("dir"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("keeps injected paths independent of colliding local @ files", async () => {
+  const remote = tempDirs.make("file-paths-remote-");
+  const f = fixture(remote);
+  const target = path.join(remote, "target.txt");
+  await fs.writeFile(f.file("@target.txt"), "local\n");
+  await fs.writeFile(target, "before\n");
+  expect(await f.read("@target.txt")).toEqual(text("before\n"));
+  await f.write("@target.txt", "written\n");
+  await f.edit("@target.txt");
+  await expectFile(target, "edited\n");
+  await f.expectFile("@target.txt", "local\n");
+  await expect(fs.stat(path.join(remote, "@target.txt"))).rejects.toMatchObject({ code: "ENOENT" });
 });

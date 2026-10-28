@@ -6,21 +6,73 @@ import {
 } from "../components/panel-toggle-contract.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
+
+const readerCatalogs = new WeakMap<
+  NonNullable<ApplicationGatewaySnapshot["client"]>,
+  {
+    recoveryScope: string;
+    hello: ApplicationGatewaySnapshot["hello"];
+    capabilities: ApplicationGatewaySnapshot["pluginCapabilities"];
+    readers: readonly ControlUiLinkReaderDescriptor[];
+  }
+>();
 
 export function availableLinkReaders(
   snapshot: ApplicationGatewaySnapshot,
 ): readonly ControlUiLinkReaderDescriptor[] {
-  if (snapshot.phase !== "connected") {
+  const client = snapshot.client;
+  if (!client || client.offlineRecoveryRetired) {
     return EMPTY_LINK_READERS;
   }
-  return (snapshot.pluginCapabilities?.controlUiLinkReaders ?? EMPTY_LINK_READERS).filter(
+  const catalog = readerCatalogs.get(client);
+  const previous = catalog && catalog.recoveryScope === client.recoveryScope ? catalog : undefined;
+  if (snapshot.phase !== "connected") {
+    return previous?.readers ?? EMPTY_LINK_READERS;
+  }
+  if (
+    previous &&
+    previous.hello === snapshot.hello &&
+    previous.capabilities === snapshot.pluginCapabilities
+  ) {
+    return previous.readers;
+  }
+  const readers = (snapshot.pluginCapabilities?.controlUiLinkReaders ?? EMPTY_LINK_READERS).filter(
     (reader) =>
       snapshot.pluginCapabilities?.methods?.includes(reader.linkReader.detailMethod) === true &&
       canCallGatewayMethod(snapshot, reader.linkReader.detailMethod, "operator.read", {
         requireAdvertisement: false,
       }),
   );
+  const retained = readers.map((reader) => {
+    const prior = previous?.readers.find(
+      (entry) => entry.pluginId === reader.pluginId && entry.id === reader.id,
+    );
+    const metadata = reader.linkReader;
+    const priorMetadata = prior?.linkReader;
+    return prior &&
+      priorMetadata &&
+      prior.label === reader.label &&
+      prior.icon === reader.icon &&
+      priorMetadata.pathPattern === metadata.pathPattern &&
+      priorMetadata.detailMethod === metadata.detailMethod &&
+      priorMetadata.previewMethod === metadata.previewMethod &&
+      priorMetadata.imageMethod === metadata.imageMethod &&
+      priorMetadata.sessionScoped === metadata.sessionScoped &&
+      priorMetadata.progressive === metadata.progressive &&
+      priorMetadata.hosts.length === metadata.hosts.length &&
+      priorMetadata.hosts.every((host, index) => host === metadata.hosts[index])
+      ? prior
+      : reader;
+  });
+  readerCatalogs.set(client, {
+    recoveryScope: client.recoveryScope,
+    hello: snapshot.hello,
+    capabilities: snapshot.pluginCapabilities,
+    readers: retained,
+  });
+  return retained;
 }
 
 export function availableLinkPreviewReaders(
@@ -29,7 +81,8 @@ export function availableLinkPreviewReaders(
   return availableLinkReaders(snapshot).filter((reader) =>
     Boolean(
       reader.linkReader.previewMethod &&
-      snapshot.pluginCapabilities?.methods?.includes(reader.linkReader.previewMethod),
+      (snapshot.phase !== "connected" ||
+        snapshot.pluginCapabilities?.methods?.includes(reader.linkReader.previewMethod)),
     ),
   );
 }
@@ -84,6 +137,5 @@ export function startLinkReaderRouting(
       event.preventDefault();
     }
   };
-  document.addEventListener("click", handleClick);
-  return { dispose: () => document.removeEventListener("click", handleClick) };
+  return { dispose: listen(document, "click", handleClick) };
 }

@@ -67,7 +67,7 @@ export const raftPlugin: ChannelPlugin<ResolvedRaftAccount, RaftProbe> = createC
         }),
       resolveAccountSnapshot: ({ account }) => ({
         accountId: account.accountId,
-        name: account.name ?? undefined,
+        name: account.name,
         enabled: account.enabled,
         configured: account.configured,
         extra: {

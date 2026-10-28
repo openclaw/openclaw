@@ -59,31 +59,28 @@ describe("sessions_search candidate matching", () => {
     );
     const keys = ["agent:main:requester", ...aliases];
     const returned = aliases.slice(-25).map((key, index) => searchHit(`agent:main:${key}`, index));
-    const parse = vi.spyOn(sessionKeys, "parseAgentSessionKey");
-    try {
-      const { tool, requests } = createSearchFixture(keys, returned, () => parse.mockClear());
-      const result = await tool.execute("candidate-budget", { query: "text", limit: 25 });
-      expect(result.details).toEqual({
-        results: returned.map((row, index) =>
-          Object.assign({}, row, { sessionKey: aliases[174 + index] }),
-        ),
-      });
-      expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-      expect(requests.filter((request) => request.method === "sessions.search")).toEqual([
-        {
-          method: "sessions.search",
-          params: { agentId: "main", query: "text", limit: 25, sessionKeys: keys },
-        },
-      ]);
-      expect(requests.filter((request) => request.method === "sessions.list")).toHaveLength(4);
-      const aliasKeys = new Set(aliases);
-      const aliasParses = parse.mock.calls.filter(
-        ([key]) => typeof key === "string" && aliasKeys.has(key),
-      );
-      expect(aliasParses.length).toBeLessThanOrEqual(1_000);
-    } finally {
-      parse.mockRestore();
-    }
+    using parse = vi.spyOn(sessionKeys, "parseAgentSessionKey");
+
+    const { tool, requests } = createSearchFixture(keys, returned, () => parse.mockClear());
+    const result = await tool.execute("candidate-budget", { query: "text", limit: 25 });
+    expect(result.details).toEqual({
+      results: returned.map((row, index) =>
+        Object.assign({}, row, { sessionKey: aliases[174 + index] }),
+      ),
+    });
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(requests.filter((request) => request.method === "sessions.search")).toEqual([
+      expect.objectContaining({
+        method: "sessions.search",
+        params: { agentId: "main", query: "text", limit: 25, sessionKeys: keys },
+      }),
+    ]);
+    expect(requests.filter((request) => request.method === "sessions.list")).toHaveLength(4);
+    const aliasKeys = new Set(aliases);
+    const aliasParses = parse.mock.calls.filter(
+      ([key]) => typeof key === "string" && aliasKeys.has(key),
+    );
+    expect(aliasParses.length).toBeLessThanOrEqual(1_000);
   });
 
   it.each([

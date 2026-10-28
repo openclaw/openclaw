@@ -1,6 +1,6 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import { isTerminalWorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
@@ -25,7 +25,7 @@ export function listRetainedWorkerBundleHashes(params: {
       const bundleHash =
         record.bootstrapReceipt?.bundleHash ??
         (record.state === "provisioning"
-          ? readWorkerProjectPreparation(record.profileSnapshot.project)?.artifacts.workerBundleHash
+          ? readWorkerPreparation(record.profileSnapshot)?.artifacts.workerBundleHash
           : undefined);
       return bundleHash ? [bundleHash] : [];
     }),

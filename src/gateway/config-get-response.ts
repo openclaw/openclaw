@@ -1,5 +1,6 @@
 import { readConfigFileSnapshot } from "../config/config.js";
 import { redactConfigSnapshot } from "../config/redact-snapshot.js";
+import { loadGatewayConfigRedactionHints } from "../config/runtime-schema.js";
 import { getRuntimeConfigAppliedHash, hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
@@ -40,13 +41,12 @@ function createConfigGetResponse(
 /** Reads and projects config.get once per watcher-owned runtime and plugin-schema revision. */
 export async function readConfigGetResponse(params: {
   getHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
-  loadUiHints: () => Parameters<typeof redactConfigSnapshot>[1];
   revisionProjector: GatewayConfigRevisionProjector;
 }): Promise<ConfigGetResponse> {
   const readResponse = async () =>
     createConfigGetResponse(
       await readConfigFileSnapshot(),
-      params.loadUiHints(),
+      loadGatewayConfigRedactionHints(),
       params.revisionProjector,
     );
   const getHotReloadStatus = params.getHotReloadStatus;

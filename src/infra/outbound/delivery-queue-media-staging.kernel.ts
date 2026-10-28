@@ -1,8 +1,9 @@
 // SQLite media custody runs on the queue operation's admitted connection.
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
+import { oldestDeliveryQueueMediaStageAdmission } from "../delivery-queue-cache.js";
 import {
   expireStagingAndLoadDeliveryQueueEntriesInDatabase,
   upsertDeliveryQueueEntryInDatabase,
@@ -10,6 +11,10 @@ import {
 import type { DeliveryQueueEntryState } from "../delivery-queue-sqlite.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { generateSecureUuid } from "../secure-random.js";
+import {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+} from "../sqlite-database-admission.js";
 import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
   OUTBOUND_EXECUTABLE_QUEUE_NAMES,
@@ -42,21 +47,26 @@ export function createDeliveryQueueMediaRetentionInDatabase(
   prepared = { id: generateSecureUuid(), enqueuedAt: Date.now() },
 ): string {
   const { id, enqueuedAt } = prepared;
-  const entry: MediaStageEntry = {
-    id,
-    enqueuedAt,
-    retryCount: 0,
-    artifacts: [...artifacts],
-  };
-  const insert = {
-    queueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
-    entry,
-    metadata: { entryKind },
-    insertOnly: true,
-  };
-  const inserted = upsertDeliveryQueueEntryInDatabase(insert, database);
+  const entry: MediaStageEntry = { id, enqueuedAt, retryCount: 0, artifacts: [...artifacts] };
+  const inserted = upsertDeliveryQueueEntryInDatabase(
+    {
+      queueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
+      entry,
+      metadata: { entryKind },
+      insertOnly: true,
+    },
+    database,
+  );
   if (!inserted) {
     throw new Error(`Delivery queue media stage already exists: ${id}`);
+  }
+  const oldest = getSqliteDatabaseAdmission(database.db, oldestDeliveryQueueMediaStageAdmission);
+  if (oldest !== undefined) {
+    publishSqliteDatabaseAdmission(
+      database.db,
+      oldestDeliveryQueueMediaStageAdmission,
+      oldest === null ? enqueuedAt : Math.min(oldest, enqueuedAt),
+    );
   }
   return id;
 }
@@ -78,7 +88,6 @@ export function loadDeliveryQueueMediaRetentionSnapshotInDatabase(
       OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
       OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
     ],
-    stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
     expireBeforeMs: params.expireBeforeMs,
   });
   // A failed migration backup still owns its original media, even without a runnable row.
@@ -97,7 +106,7 @@ export function loadDeliveryQueueMediaRetentionSnapshotInDatabase(
       return [];
     }
     const paths = report?.mediaPaths;
-    if (!Array.isArray(paths) || !paths.every((value) => typeof value === "string")) {
+    if (!isStringArray(paths)) {
       throw new Error("Cannot safely collect queue media with an invalid migration receipt");
     }
     return paths;

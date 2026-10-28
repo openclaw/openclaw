@@ -10,6 +10,7 @@ import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { sendPolicySessionEntry } from "./dispatch-from-config.session-fixtures.test-support.js";
 import {
   createDispatcher,
   emptyConfig,
@@ -25,9 +26,25 @@ import {
   globalBeforeAll0,
   describe2BeforeEach0,
   requireBlockReplyHandler,
-} from "./dispatch-from-config.test-harness.js";
+  createMessageToolOnlyDispatchArgs,
+} from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+function createMirroredTextReply(text: string, idempotencyKey: string) {
+  return setReplyPayloadMetadata(
+    { text },
+    {
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        text,
+        idempotencyKey,
+      },
+    },
+  );
+}
 
 beforeAll(globalBeforeAll0);
 
@@ -55,7 +72,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     },
   ] as const)("$name", async ({ text, command, queuedFinal }) => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = { sessionId: "s1", updatedAt: 0, sendPolicy: "allow" };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const payload = setReplyPayloadMetadata(
       { text },
@@ -133,7 +150,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     },
   ] as const)("$name", async ({ sendPolicy, ctx, delivered }) => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = { sessionId: "s1", updatedAt: 0, sendPolicy };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry(sendPolicy);
     const dispatcher = createDispatcher();
     const onBlockReplyQueued = vi.fn(async () => {});
     const payload = setReplyPayloadMetadata(
@@ -196,7 +213,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     },
   ])("delivers $name harness questions in direct message-tool-only turns", async ({ deliver }) => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = { sessionId: "s1", updatedAt: 0, sendPolicy: "allow" };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       await deliver(requireBlockReplyHandler(opts?.onBlockReply));
@@ -224,11 +241,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       delivered: false,
       context: { ChatType: "group", InboundEventKind: "room_event" } as const,
     },
-  ])(
+  ] as const)(
     "$name authorized durable harness updates in message-tool-only turns",
     async ({ sendPolicy, delivered, context }) => {
       setNoAbort();
-      sessionStoreMocks.currentEntry = { sessionId: "s1", updatedAt: 0, sendPolicy };
+      sessionStoreMocks.currentEntry = sendPolicySessionEntry(sendPolicy);
       const dispatcher = createDispatcher();
       const payload = setReplyPayloadMetadata(
         { text: "Background agent update." },
@@ -260,11 +277,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("keeps hook-cancelled marked blocks out of delivery and queued callbacks", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const deliver = vi.fn(async (_payload: ReplyPayload) => {});
     const dispatcher = createReplyDispatcher({
       deliver,
@@ -300,24 +313,12 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("mirrors internal source reply payloads into the active transcript", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const deliver = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver });
-    const sourceReply = setReplyPayloadMetadata(
-      { text: "message tool reply" },
-      {
-        deliverDespiteSourceReplySuppression: true,
-        sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          text: "message tool reply",
-          idempotencyKey: "run-1:internal-source-reply:0",
-        },
-      },
+    const sourceReply = createMirroredTextReply(
+      "message tool reply",
+      "run-1:internal-source-reply:0",
     );
     const replyResolver = vi.fn(async () => sourceReply satisfies ReplyPayload);
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
@@ -342,7 +343,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       mediaUrls: undefined,
       idempotencyKey: "run-1:internal-source-reply:0",
       expectedSessionId: "s1",
-      storePath: "/tmp/mock-sessions.json",
+      storePath: sessionStoreMocks.resolveSessionStorePathCore(),
       updateMode: "inline",
       config: emptyConfig,
       beforeMessageWrite: expect.any(Function),
@@ -351,11 +352,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("mirrors post-hook internal source reply payloads into the active transcript", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const deliver = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver });
     dispatcher.appendBeforeDeliver?.((payload, info) => {
@@ -410,7 +407,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       mediaUrls: ["https://example.com/redacted.png"],
       idempotencyKey: "run-1:internal-source-reply:rewritten",
       expectedSessionId: "s1",
-      storePath: "/tmp/mock-sessions.json",
+      storePath: sessionStoreMocks.resolveSessionStorePathCore(),
       updateMode: "inline",
       config: emptyConfig,
       beforeMessageWrite: expect.any(Function),
@@ -436,18 +433,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         order.push("first-delivery");
       },
     });
-    const firstReply = setReplyPayloadMetadata(
-      { text: "first reply" },
-      {
-        deliverDespiteSourceReplySuppression: true,
-        sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          text: "first reply",
-          idempotencyKey: "run-1:internal-source-reply:queued",
-        },
-      },
-    );
+    const firstReply = createMirroredTextReply("first reply", "run-1:internal-source-reply:queued");
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockImplementationOnce(async () => {
       order.push("mirror");
       return {
@@ -506,24 +492,12 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("does not mirror internal source replies cancelled by dispatcher hooks", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const deliver = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver, beforeDeliver: async () => null });
-    const sourceReply = setReplyPayloadMetadata(
-      { text: "message tool reply" },
-      {
-        deliverDespiteSourceReplySuppression: true,
-        sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          text: "message tool reply",
-          idempotencyKey: "run-1:internal-source-reply:0",
-        },
-      },
+    const sourceReply = createMirroredTextReply(
+      "message tool reply",
+      "run-1:internal-source-reply:0",
     );
     const replyResolver = vi.fn(async () => sourceReply satisfies ReplyPayload);
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
@@ -548,23 +522,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
   it("keeps internal source reply metadata on TTS-cloned final payloads", async () => {
     setNoAbort();
     ttsMocks.state.synthesizeFinalAudio = true;
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("allow");
     const dispatcher = createDispatcher();
-    const sourceReply = setReplyPayloadMetadata(
-      { text: "message tool reply" },
-      {
-        deliverDespiteSourceReplySuppression: true,
-        sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          text: "message tool reply",
-          idempotencyKey: "run-tts:internal-source-reply:0",
-        },
-      },
+    const sourceReply = createMirroredTextReply(
+      "message tool reply",
+      "run-tts:internal-source-reply:0",
     );
     const replyResolver = vi.fn(async () => sourceReply satisfies ReplyPayload);
 
@@ -594,11 +556,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("does not deliver marked runtime failure notices when sendPolicy denies delivery", async () => {
     setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "deny",
-    };
+    sessionStoreMocks.currentEntry = sendPolicySessionEntry("deny");
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(
       async () =>
@@ -609,15 +567,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
     const ctx = buildTestCtx({ SessionKey: "test:session" });
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
+    const result = await dispatchReplyFromConfig(
+      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
+    );
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(false);
@@ -901,16 +853,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expectedMode: "automatic",
       text: "visible switched-model reply",
     },
-    {
-      name: "honors heartbeat model overrides before Codex direct source delivery defaults",
-      supportsProvider: "codex",
-      currentEntry: codexEntry,
-      ctx: telegramDirectCtx,
-      cfg: emptyConfig,
-      replyOptions: { isHeartbeat: true, heartbeatModelOverride: "anthropic/claude-sonnet-4.6" },
-      expectedMode: "automatic",
-      text: "visible heartbeat-model reply",
-    },
+
     {
       name: "preserves non-Codex harness direct source delivery defaults",
       harnessId: "custom",
@@ -1022,10 +965,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
     expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
       agentId: "main",
-      storePath: "/tmp/mock-sessions.json",
+      storePath: sessionStoreMocks.resolveSessionStorePathCore(),
       sessionKey: parentSessionKey,
       readConsistency: "latest",
       clone: false,

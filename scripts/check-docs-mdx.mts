@@ -1,7 +1,5 @@
 #!/usr/bin/env node
 
-// Validates docs MDX files for syntax and repository-specific conventions.
-
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

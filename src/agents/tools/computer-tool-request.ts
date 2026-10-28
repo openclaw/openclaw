@@ -60,8 +60,8 @@ export function computerActionNeedsFrame(
   input: Record<string, unknown>,
 ): boolean {
   return (
-    !input.windowRef &&
-    !input.elementRef &&
+    !readToolStringParam(input, "windowRef") &&
+    !readToolStringParam(input, "elementRef") &&
     (COORDINATE_REQUIRED_ACTIONS.has(action) ||
       (COORDINATE_OPTIONAL_ACTIONS.has(action) && Array.isArray(input.coordinate)))
   );
@@ -174,24 +174,20 @@ export function buildComputerActParams(params: {
     wire.refWidth = params.refWidth;
   }
   const elementRef = readToolStringParam(input, "elementRef");
-  if (
+  const coordinateRequired =
     COORDINATE_REQUIRED_ACTIONS.has(action) &&
-    !(elementRef && ELEMENT_TARGETABLE_CLICK_ACTIONS.has(action))
-  ) {
+    !(elementRef && ELEMENT_TARGETABLE_CLICK_ACTIONS.has(action));
+  if (coordinateRequired || COORDINATE_OPTIONAL_ACTIONS.has(action)) {
     const coordinate = readCoordinate(input, "coordinate");
-    if (!coordinate) {
+    if (!coordinate && coordinateRequired) {
       throw new Error(`coordinate [x, y] required for ${action}`);
     }
-    wire.x = coordinate[0];
-    wire.y = coordinate[1];
-  } else if (COORDINATE_OPTIONAL_ACTIONS.has(action)) {
-    const coordinate = readCoordinate(input, "coordinate");
     if (coordinate) {
       wire.x = coordinate[0];
       wire.y = coordinate[1];
     }
   }
-  if ((wire.x !== undefined || wire.fromX !== undefined) && params.displayFrameId) {
+  if (wire.x !== undefined && params.displayFrameId) {
     wire.displayFrameId = params.displayFrameId;
   }
   const modifiers =

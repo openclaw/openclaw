@@ -7,33 +7,22 @@ import type { CodexSessionCatalogHost } from "./session-catalog-types.js";
 type NodeSnapshot = { key: string; host: CodexSessionCatalogHost };
 type NodePublication = {
   connection: number | undefined;
-  generation: number;
   snapshot?: NodeSnapshot;
 };
 
 /** One query-compatible native page per node, owned by the registered catalog provider. */
 export class CodexCatalogNodeSnapshots {
   private config: OpenClawConfig | undefined;
-  private generation = 0;
-  private inventoryGeneration = 0;
-  private configGeneration = 0;
   private readonly nodes = new Map<string, NodePublication>();
 
-  start(config: OpenClawConfig | undefined): number {
+  start(config: OpenClawConfig | undefined): void {
     if (this.config !== config) {
       this.nodes.clear();
       this.config = config;
-      this.configGeneration = this.generation + 1;
-      this.inventoryGeneration = this.configGeneration;
     }
-    return ++this.generation;
   }
 
-  observe(generation: number, nodes: readonly CatalogNode[]): void {
-    if (generation < this.inventoryGeneration) {
-      return;
-    }
-    this.inventoryGeneration = generation;
+  observe(nodes: readonly CatalogNode[]): void {
     const connected = new Map(
       nodes.filter((node) => node.connected).map((node) => [node.nodeId, node]),
     );
@@ -45,35 +34,22 @@ export class CodexCatalogNodeSnapshots {
     }
     for (const node of connected.values()) {
       if (!this.nodes.has(node.nodeId)) {
-        this.nodes.set(node.nodeId, { connection: node.connectedAtMs, generation: 0 });
+        this.nodes.set(node.nodeId, { connection: node.connectedAtMs });
       }
     }
   }
 
-  forNode(node: CatalogNode, generation: number, key: string) {
+  forNode(node: CatalogNode, key: string) {
     let publication = this.nodes.get(node.nodeId);
     if (!publication) {
-      publication = { connection: node.connectedAtMs, generation: 0 };
-      if (generation >= this.inventoryGeneration) {
-        this.nodes.set(node.nodeId, publication);
-      }
+      publication = { connection: node.connectedAtMs };
+      this.nodes.set(node.nodeId, publication);
     }
-    const valid = () =>
-      generation >= this.configGeneration &&
-      this.nodes.get(node.nodeId) === publication &&
-      publication.connection === node.connectedAtMs;
     return {
-      read: () => (valid() && publication.snapshot?.key === key ? publication.snapshot : undefined),
+      read: () => (publication.snapshot?.key === key ? publication.snapshot : undefined),
       publish: (host: CodexSessionCatalogHost) => {
-        if (!valid() || generation < publication.generation) {
-          return false;
-        }
-        publication.generation = generation;
         publication.snapshot = node.connected && host.connected ? { key, host } : undefined;
-        return true;
       },
-      isCurrent: (snapshot: NodeSnapshot) => valid() && publication.snapshot === snapshot,
-      valid,
     };
   }
 }
@@ -111,19 +87,12 @@ export function createNodeHostPublication(
         // Complete callers still own cancellation callbacks; never retain their failed result.
         return partial ? undefined : onHost?.(project(host));
       }
-      if (!publication.valid()) {
-        return;
-      }
-      if (publication.publish(host)) {
-        publishedSnapshot = publication.read();
-        return emit(host);
-      }
-      // A newer different query may own the cache, but cannot discard this caller's answer.
-      const latest = publication.read();
-      return emit(latest?.host ?? host);
+      publication.publish(host);
+      publishedSnapshot = publication.read();
+      return emit(host);
     },
     publishCached: (snapshot: NodeSnapshot) => {
-      if (signal?.aborted || snapshot === publishedSnapshot || !publication.isCurrent(snapshot)) {
+      if (signal?.aborted || snapshot === publishedSnapshot) {
         return;
       }
       const completion = createDeferred<void>();

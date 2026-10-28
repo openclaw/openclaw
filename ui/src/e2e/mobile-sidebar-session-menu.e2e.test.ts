@@ -1,85 +1,340 @@
+import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledGatewayUrl,
+  controlUiBundledSettingsStorageKey,
+  createControlUiMockSameOriginGatewayScript,
+} from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
-  captureUiProof,
+  createControlUiE2eSuite,
+  type ControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
+import {
+  actionOpacity,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
   waitForMobileSidebarDrawerOpen,
+  waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
 
-const suite = createSessionManagementE2eSuite(true);
+const suite = createSessionManagementE2eSuite();
+const menuItem = (root: Page | Locator, name: string) =>
+  root.getByRole("menuitem", { name, exact: true });
+const noNestedMenus = async (root: Page | Locator) =>
+  expect(await root.locator(".session-menu__panel [role='menu']").count()).toBe(0);
+const part = (row: Locator, name: string) => row.locator(`.sidebar-recent-session__${name}`);
+const widthOf = (item: Locator) =>
+  item.evaluate((element) => element.getBoundingClientRect().width);
+const pageOptions = (width: number, height: number, hasTouch: boolean): BrowserContextOptions => ({
+  colorScheme: "dark",
+  hasTouch,
+  viewport: { width, height },
+});
+async function box(item: Locator) {
+  const bounds = await item.boundingBox();
+  expect(bounds, `visible bounds for ${item.toString()}`).not.toBeNull();
+  return bounds!;
+}
+
+async function openDrawer(page: Page, wait = false) {
+  const toggle = navigationDrawerToggle(page);
+  if (wait) {
+    await toggle.waitFor({ state: "visible", timeout: 10_000 });
+  }
+  await toggle.click();
+  await waitForMobileSidebarDrawerOpen(page);
+}
+
+type Box = { x: number; y: number; width: number; height: number };
+function expectHorizontalBounds(inner: Pick<Box, "x" | "width">, outer: Pick<Box, "x" | "width">) {
+  expect(inner.x).toBeGreaterThanOrEqual(outer.x);
+  expect(inner.x + inner.width).toBeLessThanOrEqual(outer.x + outer.width);
+}
+
+function expectVerticalBounds(inner: Pick<Box, "y" | "height">, outer: Pick<Box, "y" | "height">) {
+  expect(inner.y).toBeGreaterThanOrEqual(outer.y);
+  expect(inner.y + inner.height).toBeLessThanOrEqual(outer.y + outer.height);
+}
+
+function expectVerticalOverlap(first: Box, second: Box) {
+  expect(first.y).toBeLessThanOrEqual(second.y + second.height);
+  expect(first.y + first.height).toBeGreaterThanOrEqual(second.y);
+}
+
+async function expectSessionGeometry(row: Locator, multiline = false) {
+  const button = await box(row.locator("[data-sidebar-session-menu]"));
+  const bounds = await box(row);
+  const title = await box(part(row, "name"));
+  expect(title.x + title.width).toBeLessThanOrEqual(button.x);
+  expectVerticalOverlap(button, title);
+  if (multiline) {
+    expect(button.width).toBeCloseTo(44, 4);
+    expect(button.height).toBeCloseTo(44, 4);
+    expect(title.x).toBeGreaterThanOrEqual(bounds.x);
+    expectVerticalBounds(button, bounds);
+  } else {
+    expectHorizontalBounds(button, bounds);
+    expect(button.width).toBe(44);
+    expect(bounds.height).toBeCloseTo(44, 1);
+  }
+}
+
+async function expectTwoLineTitleSpace(
+  browserSuite: ControlUiE2eSuite,
+  pointer: "fine" | "touch" | "hybrid",
+) {
+  await browserSuite.withPage(
+    { ...pageOptions(1280, 800, pointer === "touch"), reducedMotion: "reduce" },
+    async ({ page }) => {
+      const key = "agent:main:two-line";
+      await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
+      await page.addInitScript(
+        ({ storage, gateway }) => {
+          localStorage.setItem(`openclaw.control.currentGateway.v1:${gateway}`, gateway);
+          localStorage.setItem(
+            storage,
+            JSON.stringify({ navWidth: 320, sidebarAgentsMode: "chip" }),
+          );
+          localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+        },
+        {
+          storage: controlUiBundledSettingsStorageKey(browserSuite.server.baseUrl),
+          gateway: controlUiBundledGatewayUrl(browserSuite.server.baseUrl),
+        },
+      );
+      const preview = { unread: true, lastMessagePreview: "Ready for review" };
+      await installMockGateway(page, {
+        sessions: [sessionRow(key, "Two-line session", 1, preview)],
+      });
+      await page.goto(controlUiSessionUrl(browserSuite.server.baseUrl, "agent:main:main"));
+      await waitForSessionRosterHydration(page);
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      const name = part(row, "name"),
+        badge = row.locator(".sidebar-session-indicator .session-unread-dot");
+      await name.waitFor();
+      await badge.waitFor();
+      expect(await row.getAttribute("class")).not.toContain("--single-line");
+      expect(
+        await page.evaluate(() =>
+          ["hover: hover", "pointer: coarse", "pointer: fine"].map(
+            (q) => matchMedia(`(${q})`).matches,
+          ),
+        ),
+      ).toEqual([pointer !== "touch", pointer !== "fine", pointer === "fine"]);
+      const resting = await box(name),
+        restingBadge = await box(badge);
+      for (const activate of [() => row.hover(), () => part(row, "link").focus()]) {
+        await page.mouse.move(1100, 700);
+        await activate();
+        const title = await box(name),
+          actions = await box(row.locator(".session-row-actions"));
+        expect(title.width).toBeGreaterThan(100);
+        expect(actions.x - title.x - title.width).toBeGreaterThanOrEqual(-1);
+        expect(actions.x - title.x - title.width).toBeLessThanOrEqual(12);
+        expect(title.x).toBe(resting.x);
+        expect(await box(badge)).toEqual(restingBadge);
+        if (pointer === "fine") {
+          const gap = actions.x - title.x - title.width;
+          expect(resting.width - title.width).toBeCloseTo(actions.width + gap, 0);
+        }
+      }
+      if (pointer !== "fine") {
+        const pin = row.locator("[data-sidebar-session-pin]");
+        await expect.poll(() => actionOpacity(pin)).toBe("1");
+        const bounds = await box(row),
+          center = bounds.y + bounds.height / 2;
+        expect((await box(part(row, "subtitle"))).y).toBeGreaterThan(center);
+        for (const button of [pin, row.locator("[data-sidebar-session-archive]")]) {
+          const target = await box(button);
+          expect(Math.abs(target.y + target.height / 2 - center)).toBeLessThanOrEqual(1);
+        }
+      }
+      await page.evaluate(() =>
+        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4"),
+      );
+      await expect
+        .poll(() =>
+          part(row, "details").evaluate(
+            (element) =>
+              element.previousElementSibling!.getBoundingClientRect().bottom -
+              element.getBoundingClientRect().top,
+          ),
+        )
+        .toBeLessThanOrEqual(0.5);
+    },
+  );
+}
+
+// Coarse pointers that can hover activate both shipped media-query branches.
+const hybridSuite = createControlUiE2eSuite({
+  name: "Control UI two-line sidebar titles with a hovering coarse pointer",
+  browserLaunchOptions: {
+    args: [
+      "--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=2,availablePointerTypes=6",
+    ],
+  },
+});
+hybridSuite.define(() => {
+  it("keeps built sidebar titles beside touch actions during hover and focus", async () => {
+    await expectTwoLineTitleSpace(hybridSuite, "hybrid");
+  });
+});
 
 suite.define(() => {
+  it.each(["fine", "touch"] as const)(
+    "keeps two-line sidebar titles beside their actions during hover and focus (%s)",
+    async (pointer) => {
+      await expectTwoLineTitleSpace(suite, pointer);
+    },
+  );
+
+  it.each(["coarse", "fine"] as const)(
+    "keeps shortcut menus, colored session glyphs, and section labels usable in a %s pointer layout",
+    async (pointer) => {
+      await suite.withPage(pageOptions(390, 844, pointer === "coarse"), async ({ page }) => {
+        const pinnedKey = "agent:main:release-plan";
+        const groupedKey = "agent:main:review-notes";
+        const gateway = await installMockGateway(page, {
+          sessionKey: groupedKey,
+          sessionGroups: ["Research", "Operations"],
+          sessions: [
+            sessionRow(pinnedKey, "Release planning", 3, { icon: "📌", color: "blue" }),
+            sessionRow(groupedKey, "Review notes", 2, {
+              category: "Research",
+              icon: "🔬",
+              color: "purple",
+            }),
+            sessionRow("agent:main:follow-up", "Follow-up", 1, { category: "Operations" }),
+          ],
+          controlUiTabs: [
+            { id: "reports", pluginId: "reports", label: "Reports", icon: "chartBar" },
+          ],
+        });
+        // Bind the UI to the same Gateway origin as the seeded preferences.
+        await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
+        await page.addInitScript(
+          ({ key, gatewayUrl, railShortcuts }) => {
+            localStorage.setItem(`openclaw.control.currentGateway.v1:${gatewayUrl}`, gatewayUrl);
+            localStorage.setItem(key, JSON.stringify({ railShortcuts }));
+          },
+          {
+            key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+            gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
+            railShortcuts: ["route:cron", "route:sessions", "plugin:reports/reports"],
+          },
+        );
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, groupedKey));
+        await openDrawer(page);
+        const rail = page.locator(".sidebar-rail");
+        const pinned = rail.locator('[data-sidebar-entry="route:sessions"]');
+        const plugin = rail.locator('[data-sidebar-entry="plugin:reports/reports"]');
+        const session = page.locator(
+          '.sidebar-session-content .sidebar-recent-session[data-session-key="agent:main:release-plan"]',
+        );
+        const group = page.locator('[data-session-section="category:Research"]');
+        await pinned.locator(".nav-item__icon").waitFor();
+        await plugin.locator(".nav-item__icon").waitFor();
+        await group.locator(".sidebar-recent-session").waitFor();
+        await session.waitFor();
+        // Rail pins are flat navigation refs; sessions and their actions stay in Sessions.
+        expect(await rail.locator(".sidebar-recent-session").count()).toBe(0);
+        for (const width of [320, 390, 768]) {
+          await page.setViewportSize({ width, height: 844 });
+          expect((await rail.boundingBox())?.width).toBe(52);
+          for (const row of [pinned, plugin]) {
+            const shortcut = row.getByRole("link");
+            await row.hover();
+            const [button, glyph] = await Promise.all([
+              box(shortcut),
+              box(row.locator(".session-glyph, .nav-item__icon").first()),
+            ]);
+            expect(button.width).toBeGreaterThanOrEqual(32);
+            expect(button.height).toBeGreaterThanOrEqual(32);
+            expectHorizontalBounds(glyph, button);
+            expectVerticalBounds(glyph, button);
+          }
+          await expectSessionGeometry(session);
+          for (const colored of [session, group.locator(".sidebar-recent-session")]) {
+            const clearance = await colored.evaluate((row) => {
+              const stripe = getComputedStyle(row, "::before");
+              const glyph = row.querySelector(".session-glyph")!.getBoundingClientRect();
+              const stripeRight = Number.parseFloat(stripe.left) + Number.parseFloat(stripe.width);
+              return glyph.left - row.getBoundingClientRect().left - stripeRight;
+            });
+            expect(clearance).toBeGreaterThanOrEqual(2);
+          }
+        }
+        const toggle = group.locator(".sidebar-session-group-toggle");
+        await toggle.click();
+        await group.locator(".sidebar-recent-session").waitFor({ state: "hidden" });
+        await toggle.click();
+        await group.locator(".sidebar-recent-session").waitFor();
+        expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+        expect(await gateway.getRequests("config.patch")).toEqual([]);
+      });
+    },
+  );
+
   it.each(["coarse", "fine"] as const)(
     "keeps mobile sidebar titles and menus usable with a %s pointer",
     async (pointer) => {
       const sessionKey = "agent:main:mobile-sidebar-menu";
       const plainKey = "agent:main:mobile-sidebar-long-title";
       const privateKey = "agent:main:mobile-sidebar-private";
-      const context = await suite.browser.newContext({
-        colorScheme: "dark",
-        hasTouch: pointer === "coarse",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 650, width: 390 },
-      });
-      const page = await context.newPage();
-      await page.addInitScript(() => {
-        localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
-      });
-      await installMockGateway(page, {
-        methodResponses: {
-          "sessions.list": sessionsListResponse([
-            sessionRow(sessionKey, "Mobile sidebar menu", Date.parse("2026-08-19T03:00:00.000Z"), {
-              category: "Research",
-              lastMessagePreview: "Keep this second line visible during navigation",
-            }),
-            sessionRow(plainKey, "Investigate mobile sidebar title readability", 1),
-            sessionRow(privateKey, "Private planning and follow-up tasks", 0, { incognito: true }),
-          ]),
-        },
-        sessionGroups: [
-          "Research",
-          "Operations",
-          "Planning",
-          ...Array.from({ length: 24 }, (_, index) => `Team ${index + 1}`),
-        ],
-        sessionKey,
-      });
+      const overflowGroups = Array.from({ length: 24 }, (_, index) => `Team ${index + 1}`);
+      await suite.withPage(pageOptions(390, 650, pointer === "coarse"), async ({ page }) => {
+        await page.addInitScript(() => {
+          localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+        });
+        await installMockGateway(page, {
+          methodResponses: {
+            "sessions.list": sessionsListResponse([
+              sessionRow(sessionKey, "Mobile sidebar menu", Date.UTC(2026, 7, 19, 3), {
+                category: "Research",
+                lastMessagePreview: "Keep this second line visible during navigation",
+              }),
+              sessionRow(plainKey, "Investigate mobile sidebar title readability", 1, {
+                category: "Research",
+                color: "blue",
+              }),
+              sessionRow(privateKey, "Private planning and follow-up tasks", 0, {
+                category: "Research",
+                incognito: true,
+              }),
+            ]),
+          },
+          sessionGroups: ["Research", "Operations", "Planning", ...overflowGroups],
+          sessionKey,
+        });
 
-      try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const drawerToggle = page
-          .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-          .first();
-        await drawerToggle.waitFor({ state: "visible", timeout: 10_000 });
-        await drawerToggle.click();
-        await waitForMobileSidebarDrawerOpen(page);
+        await openDrawer(page, true);
 
         const row = page.locator(`[data-session-key="${sessionKey}"]`);
         await row.waitFor({ state: "visible" });
-        await row.locator(".sidebar-recent-session__subtitle").waitFor({ state: "visible" });
+        await part(row, "subtitle").waitFor({ state: "visible" });
         expect(await row.getAttribute("class")).not.toContain(
           "sidebar-recent-session--single-line",
         );
-        const title = row.locator(".sidebar-recent-session__name");
-        const titleWidth = () => title.evaluate((element) => element.getBoundingClientRect().width);
+        const title = part(row, "name");
+        const titleWidth = () => widthOf(title);
         const restingWidth = await titleWidth();
+        await page.mouse.move(389, 649);
         // Keep the drawer increase modest; reclaim reading space inside its rows.
         const drawerBox = await page.locator(".shell-nav").boundingBox();
         expect(drawerBox?.width).toBeGreaterThanOrEqual(330);
         expect(drawerBox?.width).toBeLessThanOrEqual(336);
-        expect(restingWidth).toBeGreaterThanOrEqual(240);
+        // Reserve one 44px menu target without starving the title beside the rail.
+        expect(restingWidth).toBeGreaterThanOrEqual(180);
         const plainRow = page.locator(`[data-session-key="${plainKey}"]`);
-        const plainTitle = plainRow.locator(".sidebar-recent-session__name");
+        const plainTitle = part(plainRow, "name");
         await plainTitle.waitFor({ state: "visible" });
-        expect(
-          await plainTitle.evaluate((element) => element.getBoundingClientRect().width),
-        ).toBeCloseTo(restingWidth, 1);
-        expect(await plainRow.locator(".sidebar-recent-session__details").isVisible()).toBe(false);
+        expect(await widthOf(plainTitle)).toBeCloseTo(restingWidth, 1);
+        expect(await part(plainRow, "details").isVisible()).toBe(false);
         await page
           .locator(`[data-session-key="${privateKey}"] .session-row-badge--incognito`)
           .waitFor({ state: "visible" });
@@ -87,48 +342,39 @@ suite.define(() => {
           await row.hover();
           expect(await titleWidth()).toBeCloseTo(restingWidth, 1);
           await page.mouse.move(389, 649);
-          await row.locator(".sidebar-recent-session__link").focus();
+          await part(row, "link").focus();
           expect(await titleWidth()).toBeCloseTo(restingWidth, 1);
         }
         expect(await row.locator("[data-sidebar-session-pin]").isVisible()).toBe(false);
         expect(await row.locator("[data-sidebar-session-archive]").isVisible()).toBe(false);
         const menuButton = row.locator("[data-sidebar-session-menu]");
-        const buttonBox = await menuButton.boundingBox();
-        const rowBox = await row.boundingBox();
-        if (!buttonBox || !rowBox) {
-          throw new Error("expected visible sidebar row and menu target");
-        }
         // Allow only roundoff from the drawer's translated box coordinates.
-        expect(buttonBox.width).toBeCloseTo(44, 4);
-        expect(buttonBox.height).toBeCloseTo(44, 4);
-        expect(buttonBox.y).toBeGreaterThanOrEqual(rowBox.y);
-        expect(buttonBox.y + buttonBox.height).toBeLessThanOrEqual(rowBox.y + rowBox.height);
-        if (pointer === "coarse") {
-          await menuButton.tap();
-        } else {
-          await menuButton.click();
-        }
+        await expectSessionGeometry(row, true);
+        // Empty metadata must not reserve a second row just for the menu.
+        expect((await box(plainRow)).height).toBeCloseTo(44, 1);
+        expect(
+          await plainTitle.evaluate((element) => ({
+            clipped: element.scrollWidth > element.clientWidth,
+            overflow: getComputedStyle(element).textOverflow,
+            mask: getComputedStyle(element).maskImage,
+          })),
+        ).toEqual({ clipped: true, overflow: "ellipsis", mask: "none" });
+        await (pointer === "coarse" ? menuButton.tap() : menuButton.click());
 
         const menu = page.getByRole("menu", { name: "Actions for Mobile sidebar menu" });
         await menu.waitFor({ state: "visible" });
-        await page.getByRole("menuitem", { name: "Pin session", exact: true }).waitFor();
-        await page.getByRole("menuitem", { name: "Archive session", exact: true }).waitFor();
-        await captureUiProof(suite, page, "mobile-sidebar-session-menu-after-root.png");
+        await menuItem(page, "Pin session").waitFor();
+        await menuItem(page, "Archive session").waitFor();
 
-        expect(await page.locator("openclaw-session-menu [slot='submenu']").count()).toBe(0);
+        await noNestedMenus(page.locator("openclaw-session-menu"));
         await page.getByRole("menuitem", { name: "Move to group" }).click();
         const back = page.getByRole("menuitem", { name: "Back" });
         await back.waitFor({ state: "visible" });
         await page.getByRole("menuitemradio", { name: "Operations" }).waitFor({ state: "visible" });
-        expect(await page.locator("openclaw-session-menu [slot='submenu']").count()).toBe(0);
-        const menuBox = await menu.boundingBox();
-        if (!menuBox) {
-          throw new Error("expected visible compact sidebar session menu");
-        }
-        expect(menuBox.x).toBeGreaterThanOrEqual(8);
-        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(382);
-        expect(menuBox.y).toBeGreaterThanOrEqual(8);
-        expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(642);
+        await noNestedMenus(page.locator("openclaw-session-menu"));
+        const menuBox = await box(menu);
+        expectHorizontalBounds(menuBox, { x: 8, width: 374 });
+        expectVerticalBounds(menuBox, { y: 8, height: 634 });
         const scroll = await menu.evaluate((element) => {
           element.scrollTop = element.scrollHeight;
           return {
@@ -139,22 +385,8 @@ suite.define(() => {
         });
         expect(scroll.scrollHeight).toBeGreaterThan(scroll.clientHeight);
         expect(scroll.scrollTop).toBeGreaterThan(0);
-        const backBox = await back.boundingBox();
-        if (!backBox) {
-          throw new Error("expected sticky Back action bounds");
-        }
-        expect(backBox.y).toBeGreaterThanOrEqual(menuBox.y);
-        expect(backBox.y + backBox.height).toBeLessThanOrEqual(menuBox.y + menuBox.height);
-        await captureUiProof(suite, page, "mobile-sidebar-session-menu-after-group-drilldown.png");
-      } catch (error) {
-        await captureControlUiE2eFailureDiagnostics(page, {
-          error: error instanceof Error ? error : new Error(String(error)),
-          label: "mobile-sidebar-session-menu",
-        });
-        throw error;
-      } finally {
-        await context.close();
-      }
+        expectVerticalBounds(await box(back), menuBox);
+      });
     },
   );
 });

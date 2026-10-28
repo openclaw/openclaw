@@ -8,48 +8,11 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import { withPluginRuntimeGenerationRegistryScope } from "../plugins/runtime/generation-state.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { DoctorToolSchemaFrame } from "./doctor-tool-schema-frames.js";
 import type { HealthFinding } from "./health-checks.js";
-
-function toolSchemaDiagnosticToFinding(params: {
-  agentId: string;
-  tools: readonly AnyAgentTool[];
-  diagnostic: RuntimeToolSchemaDiagnostic;
-  rawToolsByName?: ReadonlyMap<string, AnyAgentTool>;
-}): HealthFinding {
-  let tool: AnyAgentTool | undefined;
-  try {
-    tool = params.tools[params.diagnostic.toolIndex];
-  } catch {
-    tool = undefined;
-  }
-  const rawTool = params.rawToolsByName?.get(params.diagnostic.toolName);
-  const pluginId =
-    (tool ? getPluginToolMeta(tool)?.pluginId : undefined) ??
-    (rawTool ? getPluginToolMeta(rawTool)?.pluginId : undefined);
-  const owner = pluginId ? ` from plugin ${pluginId}` : "";
-  const agent = `Agent ${params.agentId} `;
-  const path =
-    pluginId === "bundle-mcp"
-      ? "mcp.servers"
-      : pluginId
-        ? `plugins.entries.${pluginId}`
-        : `tools.${params.diagnostic.toolName}`;
-  const fixHint =
-    pluginId === "bundle-mcp"
-      ? "Disable or update the offending MCP server/tool so its parameters are a JSON object schema, then rerun doctor."
-      : "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.";
-  return {
-    checkId: "core/doctor/runtime-tool-schemas",
-    severity: "error",
-    message: `${agent}tool ${params.diagnostic.toolName}${owner} has an unsupported input schema for runtime projection.`,
-    path,
-    target: params.diagnostic.toolName,
-    requirement: params.diagnostic.violations.join(", "),
-    fixHint,
-  };
-}
 
 export function collectNormalizedToolSchemaFindings(params: {
   agentId: string;
@@ -61,7 +24,47 @@ export function collectNormalizedToolSchemaFindings(params: {
   normalizationFailureFinding: (error: unknown) => HealthFinding;
 }): readonly HealthFinding[] {
   const preNormalizationFindings: HealthFinding[] = [];
-  const rawToolsByName = buildReadableToolsByName(params.tools);
+  const rawToolInventory = buildReadableToolsByName(params.tools);
+
+  const projectDiagnostics = (
+    tools: readonly AnyAgentTool[],
+    diagnostics: readonly RuntimeToolSchemaDiagnostic[],
+    rawToolsByName?: ReadonlyMap<string, AnyAgentTool>,
+  ) =>
+    diagnostics.map((diagnostic): HealthFinding => {
+      const agentId = params.agentId;
+      let tool: AnyAgentTool | undefined;
+      try {
+        tool = tools[diagnostic.toolIndex];
+      } catch {
+        tool = undefined;
+      }
+      const rawTool = rawToolsByName?.get(diagnostic.toolName);
+      const pluginId =
+        (tool ? getPluginToolMeta(tool)?.pluginId : undefined) ??
+        (rawTool ? getPluginToolMeta(rawTool)?.pluginId : undefined);
+      const owner = pluginId ? ` from plugin ${pluginId}` : "";
+      const agent = `Agent ${agentId} `;
+      const path =
+        pluginId === "bundle-mcp"
+          ? "mcp.servers"
+          : pluginId
+            ? `plugins.entries.${pluginId}`
+            : `tools.${diagnostic.toolName}`;
+      const fixHint =
+        pluginId === "bundle-mcp"
+          ? "Disable or update the offending MCP server/tool so its parameters are a JSON object schema, then rerun doctor."
+          : "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.";
+      return {
+        checkId: "core/doctor/runtime-tool-schemas",
+        severity: "error",
+        message: `${agent}tool ${diagnostic.toolName}${owner} has an unsupported input schema for runtime projection.`,
+        path,
+        target: diagnostic.toolName,
+        requirement: diagnostic.violations.join(", "),
+        fixHint,
+      };
+    });
 
   let normalizedTools: AnyAgentTool[];
   try {
@@ -75,15 +78,7 @@ export function collectNormalizedToolSchemaFindings(params: {
       modelApi: params.model.api,
       model: params.model,
       onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) => {
-        preNormalizationFindings.push(
-          ...diagnostics.map((diagnostic) =>
-            toolSchemaDiagnosticToFinding({
-              agentId: params.agentId,
-              tools: sourceTools,
-              diagnostic,
-            }),
-          ),
-        );
+        preNormalizationFindings.push(...projectDiagnostics(sourceTools, diagnostics));
       },
     });
   } catch (error) {
@@ -92,13 +87,10 @@ export function collectNormalizedToolSchemaFindings(params: {
 
   return [
     ...preNormalizationFindings,
-    ...inspectRuntimeToolInputSchemas(normalizedTools).map((diagnostic) =>
-      toolSchemaDiagnosticToFinding({
-        agentId: params.agentId,
-        tools: normalizedTools,
-        rawToolsByName,
-        diagnostic,
-      }),
+    ...projectDiagnostics(
+      normalizedTools,
+      inspectRuntimeToolInputSchemas(normalizedTools),
+      rawToolInventory,
     ),
   ];
 }
@@ -124,36 +116,35 @@ function agentRuntimeToolFailureFinding(params: {
 export async function collectAgentRuntimeToolSchemaFindings(
   params: DoctorToolSchemaFrame & {
     cfg: OpenClawConfig;
+    toolRegistry: PluginRegistry;
   },
 ): Promise<readonly HealthFinding[]> {
   let tools: AnyAgentTool[];
   try {
     const { createOpenClawCodingTools } = await import("../agents/agent-tools.js");
-    tools = createOpenClawCodingTools({
-      agentId: params.agentId,
-      agentDir: params.agentDir,
-      conversationCapabilityProfile: params.capabilityProfile,
-      workspaceDir: params.workspaceDir,
-      config: params.cfg,
-      modelProvider: params.modelRef.provider,
-      modelId: params.modelRef.model,
-      modelApi: params.model.api,
-      modelCompat: params.model.compat,
-      modelContextWindowTokens: params.model.contextWindow,
-      allowGatewaySubagentBinding: true,
-      emitBeforeToolCallDiagnostics: false,
-    });
+    tools = withPluginRuntimeGenerationRegistryScope(params.toolRegistry, () =>
+      createOpenClawCodingTools({
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        conversationCapabilityProfile: params.capabilityProfile,
+        workspaceDir: params.workspaceDir,
+        config: params.cfg,
+        modelProvider: params.modelRef.provider,
+        modelId: params.modelRef.model,
+        modelApi: params.model.api,
+        modelCompat: params.model.compat,
+        modelContextWindowTokens: params.model.contextWindow,
+        allowGatewaySubagentBinding: true,
+        emitBeforeToolCallDiagnostics: false,
+      }),
+    );
   } catch (error) {
     return [agentRuntimeToolFailureFinding({ agentId: params.agentId, error, phase: "load" })];
   }
 
   return collectNormalizedToolSchemaFindings({
-    agentId: params.agentId,
+    ...params,
     tools,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    modelRef: params.modelRef,
-    model: params.model,
     normalizationFailureFinding: (error) =>
       agentRuntimeToolFailureFinding({
         agentId: params.agentId,

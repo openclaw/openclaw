@@ -12,7 +12,7 @@ import { root } from "../infra/fs-safe.js";
 import { resolveUserPath, truncateUtf16Safe } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveBootstrapFilesForRun } from "./bootstrap-files.js";
-import { buildBootstrapContextFiles } from "./embedded-agent-helpers.js";
+import { buildBootstrapContextFiles } from "./embedded-agent-helpers/bootstrap.js";
 import { resolveAgentIdentity } from "./identity.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
@@ -105,12 +105,8 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
   }
   selectedFiles.sort((left, right) => {
     // Preserve requested profile-file order, then path-sort duplicate sources.
-    const leftOrder = requestedOrder.get(left.name) ?? 0;
-    const rightOrder = requestedOrder.get(right.name) ?? 0;
-    if (leftOrder !== rightOrder) {
-      return leftOrder - rightOrder;
-    }
-    return left.path.localeCompare(right.path);
+    const order = (requestedOrder.get(left.name) ?? 0) - (requestedOrder.get(right.name) ?? 0);
+    return order || left.path.localeCompare(right.path);
   });
   if (selectedFiles.length === 0) {
     return undefined;

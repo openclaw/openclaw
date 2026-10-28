@@ -1,4 +1,5 @@
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerWriteAdmission,
   type SqliteWorkerStore,
@@ -33,6 +34,7 @@ export async function acquireLease(
   },
   assertCurrent: () => void,
   signal?: AbortSignal,
+  captureSource?: (context: OpenClawStateWorkerContext, identity: DatabasePathIdentity) => void,
 ) {
   if (database.options?.readOnly) {
     throw new Error("State lease acquisition requires writable storage");
@@ -46,6 +48,7 @@ export async function acquireLease(
     ...database.options,
     path: opened?.path ?? resolveLeaseDatabasePath(database),
   });
+  const sourceIdentity = Object.freeze({ ...context.admission.identity });
   const assertAdmission = () => {
     context.admission.assertCurrent();
     assertCurrent();
@@ -78,6 +81,10 @@ export async function acquireLease(
   );
   if (!result) {
     throw new Error("State lease acquisition requires an existing database");
+  }
+  if (result.kind === "acquired") {
+    assertAdmission();
+    captureSource?.(context, sourceIdentity);
   }
   return result;
 }
@@ -228,16 +235,10 @@ export function createOpenClawStateLeaseWorkerStorage(
     },
     release(owner: LeaseWorkerOwner, operationLabel: string): Promise<void> {
       return owner.runLifecycle("release", async (admission) => {
-        const { readDatabasePathIdentity } = await import("../infra/sqlite-worker-identity.js");
         const { runSqliteWorkerStoreOperation } = await import("../infra/sqlite-worker-store.js");
         const { openOpenClawStateWorkerCleanupStore } =
           await import("./openclaw-state-worker-store.js");
-        admission.assertCurrent();
-        const expectedIdentity = context.admission.identity.key;
-        const observed = await readDatabasePathIdentity(storage.path);
-        if (observed.key !== expectedIdentity) {
-          throw new Error("State lease cleanup cannot adopt a replacement shared database");
-        }
+        const expectedIdentity = context.admission.identity;
         admission.assertCurrent();
         const cleanupContext = {
           environment: context.environment,
@@ -249,7 +250,8 @@ export function createOpenClawStateLeaseWorkerStorage(
           storage.path,
           cleanupContext,
           admission.assertCurrent,
-          observed,
+          expectedIdentity,
+          context.maintenanceScope,
         );
         if (!store) {
           throw new Error("State lease cleanup lost its original database");
@@ -264,7 +266,7 @@ export function createOpenClawStateLeaseWorkerStorage(
                 input: {
                   identity: admission.identity,
                   operationLabel,
-                  databaseIdentity: expectedIdentity,
+                  databaseIdentity: expectedIdentity.key,
                 },
               }),
             cleanupContext,

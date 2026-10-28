@@ -1,10 +1,21 @@
 import { resolveThreadBindingConversationIdFromBindingId } from "../../channels/thread-binding-id.js";
-import type { SessionBindingAdapter } from "./session-binding-service.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import type { SessionBindingAdapter, SessionBindingAdapterV2 } from "./session-binding-service.js";
 import type {
   BindingTargetKind,
   ConversationRef,
   SessionBindingRecord,
 } from "./session-binding.types.js";
+
+export function warnLegacySessionBindingMethod(
+  method: "listBySession" | "resolveByConversation" | "inspectByConversation" | "touch",
+): void {
+  warnPluginSdkDeprecation({
+    family: "conversation-bindings",
+    method: `SessionBindingAdapter.${method}`,
+    replacement: `SessionBindingAdapterV2.${method}Async`,
+  });
+}
 
 /** Projects plugin-owned lifecycle facts without normalizing its identity or expiry policy. */
 export function projectThreadBindingRecord(
@@ -47,8 +58,8 @@ export function projectThreadBindingRecord(
   };
 }
 
-/** Adapts account-prefixed ids while leaving mutations and their settlement with the manager. */
-export function createAccountScopedBindingAdapter<T>(params: {
+/** Internal synchronous projections still consumed by the core binding service. */
+function createAccountScopedBindingAdapter<T>(params: {
   channel: string;
   accountId: string;
   capabilities: SessionBindingAdapter["capabilities"];
@@ -57,11 +68,9 @@ export function createAccountScopedBindingAdapter<T>(params: {
   listBySessionKey: (targetSessionKey: string) => T[];
   getByConversation: (ref: ConversationRef) => T | null | undefined;
   touchConversation: (conversationId: string, at?: number) => unknown;
-  touchConversationAsync?: (conversationId: string, at?: number) => Promise<unknown>;
   unbindConversation: (conversationId: string, reason: string) => T | null | Promise<T | null>;
   unbindBySessionKey: (targetSessionKey: string, reason: string) => T[] | Promise<T[]>;
 }): SessionBindingAdapter {
-  const touchAsync = params.touchConversationAsync;
   const conversationIdFromBinding = (bindingId?: string) =>
     resolveThreadBindingConversationIdFromBindingId({ accountId: params.accountId, bindingId });
   return {
@@ -69,27 +78,22 @@ export function createAccountScopedBindingAdapter<T>(params: {
     accountId: params.accountId,
     capabilities: params.capabilities,
     bind: params.bind,
-    listBySession: (sessionKey) => params.listBySessionKey(sessionKey).map(params.project),
+    listBySession: (sessionKey) => {
+      warnLegacySessionBindingMethod("listBySession");
+      return params.listBySessionKey(sessionKey).map(params.project);
+    },
     resolveByConversation: (ref) => {
+      warnLegacySessionBindingMethod("resolveByConversation");
       const record = ref.channel === params.channel ? params.getByConversation(ref) : null;
       return record ? params.project(record) : null;
     },
     touch: (bindingId, at) => {
+      warnLegacySessionBindingMethod("touch");
       const conversationId = conversationIdFromBinding(bindingId);
       if (conversationId) {
         params.touchConversation(conversationId, at);
       }
     },
-    ...(touchAsync
-      ? {
-          touchAsync: async (bindingId: string, at?: number) => {
-            const conversationId = conversationIdFromBinding(bindingId);
-            if (conversationId) {
-              await touchAsync(conversationId, at);
-            }
-          },
-        }
-      : {}),
     unbind: async (input) => {
       if (input.targetSessionKey?.trim()) {
         return (await params.unbindBySessionKey(input.targetSessionKey, input.reason)).map(
@@ -102,5 +106,63 @@ export function createAccountScopedBindingAdapter<T>(params: {
         : null;
       return removed ? [params.project(removed)] : [];
     },
+  };
+}
+
+/** Keeps worker operations and legacy synchronous compatibility views on the same owner. */
+export function createAccountScopedBindingAdapterV2<T>(
+  params: Parameters<typeof createAccountScopedBindingAdapter<T>>[0] & {
+    assertCurrent: () => void;
+    /** Reads one coherent published projection and certifies its source until consumption. */
+    inspectByConversations: (refs: readonly ConversationRef[]) => {
+      records: readonly (T | null | undefined)[];
+      assertCurrent: () => void;
+    };
+    listBySessionKeyAsync: (targetSessionKey: string) => Promise<T[]>;
+    getByConversationAsync: (ref: ConversationRef) => Promise<T | null | undefined>;
+    inspectByConversationAsync: (ref: ConversationRef) => Promise<T | null | undefined>;
+    touchConversationAsync: (conversationId: string, at?: number) => Promise<unknown>;
+  },
+): SessionBindingAdapterV2 {
+  const project = async (ref: ConversationRef, read: typeof params.getByConversationAsync) => {
+    params.assertCurrent();
+    const record = ref.channel === params.channel ? await read(ref) : null;
+    params.assertCurrent();
+    return record ? params.project(record) : null;
+  };
+  return {
+    ...createAccountScopedBindingAdapter(params),
+    version: 2,
+    inspectByConversationsAsync: async (refs) => {
+      params.assertCurrent();
+      const snapshot = params.inspectByConversations(refs);
+      return {
+        bindings: snapshot.records.map((record) => (record ? params.project(record) : null)),
+        assertCurrent: () => {
+          params.assertCurrent();
+          snapshot.assertCurrent();
+        },
+      };
+    },
+    touchAsync: async (bindingId, at) => {
+      params.assertCurrent();
+      const conversationId = resolveThreadBindingConversationIdFromBindingId({
+        accountId: params.accountId,
+        bindingId,
+      });
+      if (conversationId) {
+        await params.touchConversationAsync(conversationId, at);
+      }
+      params.assertCurrent();
+    },
+    assertCurrent: params.assertCurrent,
+    listBySessionAsync: async (sessionKey) => {
+      params.assertCurrent();
+      const records = await params.listBySessionKeyAsync(sessionKey);
+      params.assertCurrent();
+      return records.map(params.project);
+    },
+    resolveByConversationAsync: (ref) => project(ref, params.getByConversationAsync),
+    inspectByConversationAsync: (ref) => project(ref, params.inspectByConversationAsync),
   };
 }

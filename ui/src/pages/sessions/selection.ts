@@ -2,8 +2,21 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 
 export type SessionDeleteRow = Pick<
   GatewaySessionRow,
-  "key" | "archived" | "sessionId" | "label" | "displayName"
+  "key" | "archived" | "sessionId" | "label" | "displayName" | "hasAutomation"
 >;
+
+export function settleSelectedSession(
+  selection: Map<string, SessionDeleteRow>,
+  key: string,
+  sessionId: string,
+): Map<string, SessionDeleteRow> {
+  if (!sessionId.trim() || selection.get(key)?.sessionId !== sessionId) {
+    return selection;
+  }
+  const selected = new Map(selection);
+  selected.delete(key);
+  return selected;
+}
 
 export function reconcileSelectedSessions(
   selection: Map<string, SessionDeleteRow>,

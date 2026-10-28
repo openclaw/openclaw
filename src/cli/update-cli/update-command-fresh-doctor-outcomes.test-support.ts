@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
-import { expect, it, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import type { readConfigFileSnapshot } from "../../config/config.js";
+import type {
+  DeferredPluginMigration,
+  readDeferredPluginMigrationsAsync,
+} from "../../infra/deferred-plugin-migrations.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
@@ -17,9 +21,50 @@ export function registerFreshDoctorOutcomeTests(
     command: Mock<typeof runExec>;
     runUtf8: Mock<typeof runUtf8CommandWithTimeout>;
     readConfig: Mock<typeof readConfigFileSnapshot>;
+    pendingMigrations: Mock<typeof readDeferredPluginMigrationsAsync>;
   },
   updateOptions: Parameters<typeof completePostCorePluginUpdate>[0],
 ): void {
+  it.each([false, true])(
+    "reports plugin repairs still pending after successful Doctor (completed: %s)",
+    async (completed) => {
+      const pending = ["acpx", "codex"].map((pluginId): DeferredPluginMigration => ({
+        pluginId,
+        reason: "Doctor-only session repair remains pending.",
+        command: "openclaw doctor --fix",
+        requiresStateMigration: true,
+      }));
+      mocks.pendingMigrations
+        .mockResolvedValueOnce(pending)
+        .mockResolvedValue(completed ? [] : pending);
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", "1");
+
+      const { pluginUpdate: result } = await completePostCorePluginUpdate({
+        ...updateOptions,
+        pluginUpdate: { ...updateOptions.pluginUpdate, changed: false },
+      });
+
+      expect(result.status).toBe(completed ? "ok" : "warning");
+      expect(result.warnings).toHaveLength(completed ? 0 : 2);
+      if (!completed) {
+        for (const pluginId of ["acpx", "codex"]) {
+          expect(result.warnings).toContainEqual({
+            pluginId,
+            reason: "doctor-advisory",
+            message: expect.stringContaining(
+              `Plugin "${pluginId}" data/settings upgrade is unfinished`,
+            ),
+            guidance: ['Run "openclaw doctor --fix" to finish the plugin data/settings upgrade.'],
+          });
+        }
+        expect(
+          result.warnings?.every((warning) => !warning.message.includes("Let the current")),
+        ).toBe(true);
+      }
+    },
+  );
+
   it.each([
     { kind: "advisory", check: "doctor", code: "doctor-failed", blocks: false },
     {

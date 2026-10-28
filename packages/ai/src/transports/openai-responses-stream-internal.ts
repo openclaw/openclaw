@@ -6,6 +6,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { ResponseOutputItem } from "openai/resources/responses/responses.js";
 import {
+  extendResponsesMessageText,
+  renderResponsesMessageText,
+  responsesTextSignature,
+} from "../providers/openai-responses-message-text.js";
+import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
   OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
   isAzureResponsesTextDeltaEvent,
@@ -27,15 +32,21 @@ import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { createCompactionTracker } from "./openai-responses-compaction-replay.js";
-import { OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY } from "./openai-responses-contracts.js";
+import {
+  OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
+  isResponsesTerminalEventType,
+} from "./openai-responses-contracts.js";
 import { normalizeResponsesFailedEvent, ResponsesStreamFailure } from "./openai-responses-debug.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
-import { adaptResponsesStream } from "./openai-responses-stream-observer-internal.js";
+import { normalizeOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay.js";
+import { countToolCallTrailingWhitespace } from "./openai-responses-stream-errors.js";
+import { adaptResponsesStreamEvent } from "./openai-responses-stream-observer-internal.js";
 import {
   appendResponsesPendingTextDelta,
   createResponsesOutputTracker,
   createResponsesOutputSlotTracker,
   readResponsesOutputIndex,
+  RESPONSES_BOOKKEEPING_TIMEOUT_MS,
   type ResponsesStreamOutputSlot,
 } from "./openai-responses-stream-slots-internal.js";
 import {
@@ -43,7 +54,6 @@ import {
   resolveCompletedResponsesToolCall,
   resolveResponsesToolCallId,
   type ResponsesEventSink,
-  type ResponsesThinkingBlock,
   type TextBlockReference,
 } from "./openai-responses-stream-terminal-internal.js";
 import type {
@@ -51,7 +61,7 @@ import type {
   ResponsesStreamOptions,
   ResponsesStreamOutputMessage,
 } from "./openai-responses-stream-types-internal.js";
-import { transportAbortError } from "./transport-stream-shared.js";
+import { iterateModelStream, transportAbortError } from "./transport-stream-shared.js";
 
 export type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
 
@@ -66,9 +76,12 @@ export async function processResponsesStream<TApi extends Api>(
   type StreamingToolCallBlock = ToolCall & { partialJson: string };
   type StreamingToolCallState = ResponsesToolCallState & {
     block: StreamingToolCallBlock;
+    // Consumers normalize the shared block; wire validation keeps the provider's name.
+    readonly providerName: string;
     contentIndex: number;
     // Preview refresh schedule for streamed arguments; done/terminal parses stay authoritative.
     previewSchedule: ToolArgumentPreviewSchedule;
+    trailingWhitespaceChars: number;
   };
   type ResponsesOutputSlot = ResponsesStreamOutputSlot<
     ResponsesStreamOutputMessage,
@@ -88,70 +101,60 @@ export async function processResponsesStream<TApi extends Api>(
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
   const compactionTracker = createCompactionTracker(output, model, options);
+  const createTextBlock = (item: ResponsesStreamOutputMessage, text: string): TextContent => ({
+    type: "text",
+    text,
+    ...(item.phase ? { textSignature: encodeTextSignatureV1(item.id, item.phase) } : {}),
+  });
   const createOutputSlot = (
     event: object,
     item: ResponseOutputItem | ResponsesStreamOutputMessage,
   ): ResponsesOutputSlot | undefined => {
+    let slot: ThinkingOutputSlot | TextOutputSlot;
     if (item.type === "reasoning") {
-      const block: ResponsesThinkingBlock = { type: "thinking", thinking: "" };
-      const slot = {
+      slot = {
         type: "thinking",
         item,
-        block,
+        block: { type: "thinking", thinking: "" },
         contentIndex: blocks.length,
         outputIndex: readResponsesOutputIndex(event),
-      } satisfies ResponsesOutputSlot;
-      blocks.push(block);
-      outputs.set(item, slot.contentIndex, slot.outputIndex);
-      outputSlots.register(event, slot);
-      stream.push({ type: "thinking_start", contentIndex: slot.contentIndex, partial: output });
-      return slot;
-    }
-    if (item.type === "message") {
-      const messageItem = item as ResponsesStreamOutputMessage;
+      };
+      terminal.recordPendingReasoning(slot.contentIndex);
+    } else if (item.type === "message") {
       const collapseCandidate = lastTextBlock;
-      const block: TextContent | null = collapseCandidate
-        ? null
-        : {
-            type: "text",
-            text: "",
-            ...(messageItem.phase
-              ? { textSignature: encodeTextSignatureV1(messageItem.id, messageItem.phase) }
-              : {}),
-          };
-      const slot = {
+      const block = collapseCandidate ? null : createTextBlock(item, "");
+      slot = {
         type: "text",
-        item: messageItem,
+        item,
         block,
         contentIndex: block ? blocks.length : undefined,
         outputIndex: readResponsesOutputIndex(event),
         pendingText: collapseCandidate ? "" : null,
         collapseCandidate,
-      } satisfies ResponsesOutputSlot;
-      if (block) {
-        blocks.push(block);
-        outputs.set(messageItem, slot.contentIndex ?? blocks.length - 1, slot.outputIndex);
-      }
-      outputSlots.register(event, slot);
-      if (slot.contentIndex !== undefined) {
-        stream.push({ type: "text_start", contentIndex: slot.contentIndex, partial: output });
-      }
-      return slot;
+      };
+    } else {
+      return undefined;
     }
-    return undefined;
+    if (slot.block) {
+      blocks.push(slot.block);
+      outputs.set(slot.item, slot.contentIndex ?? blocks.length - 1, slot.outputIndex);
+    }
+    outputSlots.register(event, slot);
+    if (slot.contentIndex !== undefined) {
+      stream.push({
+        type: slot.type === "thinking" ? "thinking_start" : "text_start",
+        contentIndex: slot.contentIndex,
+        partial: output,
+      });
+    }
+    return slot;
   };
   const materializeDeferredTextSlot = (slot: TextOutputSlot): void => {
     if (slot.block || slot.pendingText === null) {
       return;
     }
     const text = slot.pendingText;
-    slot.block = {
-      type: "text",
-      text,
-      ...(slot.item.phase
-        ? { textSignature: encodeTextSignatureV1(slot.item.id, slot.item.phase) }
-        : {}),
-    };
+    slot.block = createTextBlock(slot.item, text);
     blocks.push(slot.block);
     slot.contentIndex = blocks.length - 1;
     outputs.set(slot.item, slot.contentIndex, slot.outputIndex);
@@ -175,15 +178,6 @@ export async function processResponsesStream<TApi extends Api>(
         materializeDeferredTextSlot(slot);
       }
     }
-  };
-  const appendThinkingDelta = (slot: ThinkingOutputSlot, delta: string): void => {
-    appendAssistantThinking(slot.block, delta);
-    stream.push({
-      type: "thinking_delta",
-      contentIndex: slot.contentIndex,
-      delta,
-      partial: output,
-    });
   };
   const projectTextDelta = (slot: TextOutputSlot, delta: string): void => {
     if (slot.pendingText !== null) {
@@ -278,7 +272,7 @@ export async function processResponsesStream<TApi extends Api>(
       if (tracked && !state) {
         throw new Error("Responses stream completed with unresolved tool calls");
       }
-      const validated = resolveCompletedResponsesToolCall(item, { name: state?.block.name });
+      const validated = resolveCompletedResponsesToolCall(item, { name: state?.providerName });
       if (state) {
         recovered.push(state);
       }
@@ -298,7 +292,7 @@ export async function processResponsesStream<TApi extends Api>(
     };
   };
 
-  const guardedStream = adaptResponsesStream(
+  const guardedStream = iterateModelStream(
     withFirstStreamEventTimeout(openaiStream, {
       provider: model.provider,
       api: model.api,
@@ -312,12 +306,13 @@ export async function processResponsesStream<TApi extends Api>(
     options?.signal,
   );
   try {
-    for await (const event of guardedStream) {
-      outputs.observeEvent(event);
-      // Bookkeeping-only SSE events (in_progress, *.done echoes) are still
-      // provider progress; keep the idle watchdog alive without exposing them,
-      // matching the completions and anthropic transports.
-      notifyLlmRequestActivity(options?.signal);
+    for await (const rawEvent of guardedStream) {
+      const event = adaptResponsesStreamEvent(rawEvent);
+      notifyLlmRequestActivity(
+        options?.signal,
+        outputs.observeEvent(event, outputSlots),
+        RESPONSES_BOOKKEEPING_TIMEOUT_MS,
+      );
       if (
         event.type === "response.output_item.done" &&
         event.item.type === "function_call" &&
@@ -334,13 +329,7 @@ export async function processResponsesStream<TApi extends Api>(
       }
       // A rejected call closes output admission; only drain terminal facts.
       // Later async tool completions must not authorize side effects.
-      if (
-        rejectedToolCall &&
-        event.type !== "response.completed" &&
-        event.type !== "response.incomplete" &&
-        event.type !== "response.failed" &&
-        event.type !== "error"
-      ) {
+      if (rejectedToolCall && !isResponsesTerminalEventType(event.type) && event.type !== "error") {
         continue;
       }
       if (event.type === "response.created") {
@@ -367,10 +356,12 @@ export async function processResponsesStream<TApi extends Api>(
           const contentIndex = output.content.length;
           const toolCallState: StreamingToolCallState = {
             block: toolCallBlock,
+            providerName: toolCallBlock.name,
             contentIndex,
             argumentStreamReliable: true,
             argumentsStreamed: false,
             previewSchedule: createToolArgumentPreviewSchedule(),
+            trailingWhitespaceChars: countToolCallTrailingWhitespace(toolCallBlock.partialJson),
             ...readResponsesToolCallItemIdentity(item),
           };
           streamingToolCalls.register(event, toolCallState);
@@ -390,26 +381,29 @@ export async function processResponsesStream<TApi extends Api>(
         slot.item.summary.push(event.part);
       } else if (
         event.type === "response.reasoning_summary_text.delta" ||
-        event.type === "response.reasoning_summary_part.done"
+        event.type === "response.reasoning_summary_part.done" ||
+        event.type === "response.reasoning_text.delta"
       ) {
         const slot = outputSlots.resolve(event, "thinking");
         if (!slot) {
           continue;
         }
-        slot.item.summary = slot.item.summary || [];
-        const lastPart = slot.item.summary[slot.item.summary.length - 1];
-        if (!lastPart) {
-          continue;
+        const delta = event.type === "response.reasoning_summary_part.done" ? "\n\n" : event.delta;
+        if (event.type !== "response.reasoning_text.delta") {
+          slot.item.summary = slot.item.summary || [];
+          const lastPart = slot.item.summary[slot.item.summary.length - 1];
+          if (!lastPart) {
+            continue;
+          }
+          lastPart.text += delta;
         }
-        const delta = event.type === "response.reasoning_summary_text.delta" ? event.delta : "\n\n";
-        lastPart.text += delta;
-        appendThinkingDelta(slot, delta);
-      } else if (event.type === "response.reasoning_text.delta") {
-        const slot = outputSlots.resolve(event, "thinking");
-        if (!slot) {
-          continue;
-        }
-        appendThinkingDelta(slot, event.delta);
+        appendAssistantThinking(slot.block, delta);
+        stream.push({
+          type: "thinking_delta",
+          contentIndex: slot.contentIndex,
+          delta,
+          partial: output,
+        });
       } else if (event.type === "response.content_part.added") {
         const slot = outputSlots.resolve(event, "text");
         if (!slot) {
@@ -422,6 +416,13 @@ export async function processResponsesStream<TApi extends Api>(
           event.part.type === "refusal"
         ) {
           slot.item.content.push(event.part);
+        }
+      } else if (event.type === "response.output_text.annotation.added") {
+        const slot = outputSlots.resolve(event, "text");
+        const part = slot?.item.content?.[event.content_index];
+        if (part?.type === "output_text" && event.annotation !== null) {
+          part.annotations ??= [];
+          part.annotations.push(event.annotation);
         }
       } else if (
         event.type === "response.output_text.delta" ||
@@ -454,9 +455,23 @@ export async function processResponsesStream<TApi extends Api>(
           lastPart.text += event.delta;
         }
         projectTextDelta(slot, event.delta);
-      } else if (event.type === "response.function_call_arguments.delta") {
+      } else if (
+        event.type === "response.function_call_arguments.delta" ||
+        event.type === "response.function_call_arguments.done"
+      ) {
         const toolCall = streamingToolCalls.resolve(event);
-        if (toolCall) {
+        if (!toolCall) {
+          if (streamingToolCalls.hasActive()) {
+            streamingToolCalls.markArgumentsUnreliable();
+          }
+          continue;
+        }
+        let delta: string | undefined;
+        if (event.type === "response.function_call_arguments.delta") {
+          toolCall.trailingWhitespaceChars = countToolCallTrailingWhitespace(
+            event.delta,
+            toolCall.trailingWhitespaceChars,
+          );
           toolCall.block.partialJson += event.delta;
           toolCall.argumentsStreamed = true;
           // Preview refresh is geometric; the done event and terminal finalize
@@ -464,18 +479,8 @@ export async function processResponsesStream<TApi extends Api>(
           if (toolCall.previewSchedule(toolCall.block.partialJson.length)) {
             toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
           }
-          stream.push({
-            type: "toolcall_delta",
-            contentIndex: toolCall.contentIndex,
-            delta: event.delta,
-            partial: output,
-          });
-        } else if (streamingToolCalls.hasActive()) {
-          streamingToolCalls.markArgumentsUnreliable();
-        }
-      } else if (event.type === "response.function_call_arguments.done") {
-        const toolCall = streamingToolCalls.resolve(event);
-        if (toolCall) {
+          delta = event.delta;
+        } else {
           const previousPartialJson = toolCall.block.partialJson;
           const doneArguments = typeof event.arguments === "string" ? event.arguments : undefined;
 
@@ -483,6 +488,7 @@ export async function processResponsesStream<TApi extends Api>(
             doneArguments !== undefined &&
             (doneArguments.length > 0 || previousPartialJson === "")
           ) {
+            toolCall.trailingWhitespaceChars = countToolCallTrailingWhitespace(doneArguments);
             toolCall.block.partialJson = doneArguments;
             toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
             toolCall.argumentStreamReliable = true;
@@ -490,18 +496,16 @@ export async function processResponsesStream<TApi extends Api>(
           }
 
           if (doneArguments?.startsWith(previousPartialJson)) {
-            const delta = doneArguments.slice(previousPartialJson.length);
-            if (delta.length > 0) {
-              stream.push({
-                type: "toolcall_delta",
-                contentIndex: toolCall.contentIndex,
-                delta,
-                partial: output,
-              });
-            }
+            delta = doneArguments.slice(previousPartialJson.length) || undefined;
           }
-        } else if (streamingToolCalls.hasActive()) {
-          streamingToolCalls.markArgumentsUnreliable();
+        }
+        if (delta !== undefined) {
+          stream.push({
+            type: "toolcall_delta",
+            contentIndex: toolCall.contentIndex,
+            delta,
+            partial: output,
+          });
         }
       } else if (event.type === "response.output_item.done") {
         const item = event.item;
@@ -517,7 +521,9 @@ export async function processResponsesStream<TApi extends Api>(
           const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
           const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
           outputSlot.block.thinking = summaryText || contentText || outputSlot.block.thinking;
-          outputSlot.block.thinkingSignature = JSON.stringify(item);
+          outputSlot.block.thinkingSignature = JSON.stringify(
+            normalizeOpenAIResponsesReasoningReplayItem(item, model.api),
+          );
           outputs.set(
             item,
             outputSlot.contentIndex,
@@ -542,21 +548,18 @@ export async function processResponsesStream<TApi extends Api>(
         ) {
           // Support both OpenAI "output_text" and Azure "text" content types
           const streamedText = outputSlot.pendingText ?? outputSlot.block?.text ?? "";
-          const finalText =
-            item.content == null
-              ? streamedText
-              : item.content
-                  .map((c) => (c.type === "output_text" || c.type === "text" ? c.text : c.refusal))
-                  .join("");
+          const rendered = renderResponsesMessageText(
+            item.content ?? outputSlot.item.content ?? [{ type: "text", text: streamedText }],
+          );
           const phase = item.phase ?? undefined;
           const collapse =
             outputSlot.pendingText !== null
               ? resolveResponsesMessageSnapshotCollapse({
                   prior: outputSlot.collapseCandidate && {
-                    text: outputSlot.collapseCandidate.block.text,
+                    text: outputSlot.collapseCandidate.rendered.prose,
                     phase: outputSlot.collapseCandidate.phase,
                   },
-                  nextText: finalText,
+                  nextText: rendered.prose,
                   nextPhase: phase,
                 })
               : ({ kind: "keep" } as const);
@@ -566,33 +569,37 @@ export async function processResponsesStream<TApi extends Api>(
             // instead of appending another copy. The deferred block was never
             // started publicly, and the newest item's signature is kept so
             // replay carries the item that produced this content (#91959).
-            outputSlot.collapseCandidate.block.text = collapse.text;
-            outputSlot.collapseCandidate.block.textSignature = encodeTextSignatureV1(
+            const extended = extendResponsesMessageText(
+              rendered,
+              outputSlot.collapseCandidate.rendered,
+            );
+            outputSlot.collapseCandidate.rendered = extended;
+            outputSlot.collapseCandidate.block.text = extended.text;
+            outputSlot.collapseCandidate.block.textSignature = responsesTextSignature(
               item.id,
               phase,
+              extended,
             );
             stream.push({
               type: "text_end",
               contentIndex: outputSlot.collapseCandidate.index,
-              content: collapse.text,
+              content: extended.text,
               partial: output,
             });
             lastTextBlock = outputSlot.collapseCandidate;
+            terminal.recordCompletedText(outputSlot.collapseCandidate.index, extended);
             outputs.set(
               item,
               outputSlot.collapseCandidate.index,
               readResponsesOutputIndex(event) ?? outputSlot.outputIndex,
               true,
+              rendered.prose,
             );
           } else {
             if (!outputSlot.block) {
               // Deferred distinct message: open its block now, balanced with the
               // text_end below.
-              outputSlot.block = {
-                type: "text",
-                text: "",
-                ...(phase ? { textSignature: encodeTextSignatureV1(item.id, phase) } : {}),
-              };
+              outputSlot.block = createTextBlock(item, "");
               blocks.push(outputSlot.block);
               outputSlot.contentIndex = blocks.length - 1;
               stream.push({
@@ -601,18 +608,20 @@ export async function processResponsesStream<TApi extends Api>(
                 partial: output,
               });
             }
-            outputSlot.block.text = finalText;
-            outputSlot.block.textSignature = encodeTextSignatureV1(item.id, phase);
+            outputSlot.block.text = rendered.text;
+            outputSlot.block.textSignature = responsesTextSignature(item.id, phase, rendered);
             const contentIndex = outputSlot.contentIndex;
             if (contentIndex === undefined) {
               throw new Error("Responses stream finalized text without a content index");
             }
-            lastTextBlock = { block: outputSlot.block, index: contentIndex, phase };
+            lastTextBlock = { block: outputSlot.block, index: contentIndex, phase, rendered };
+            terminal.recordCompletedText(contentIndex, rendered);
             outputs.set(
               item,
               contentIndex,
               readResponsesOutputIndex(event) ?? outputSlot.outputIndex,
               true,
+              rendered.prose,
             );
             stream.push({
               type: "text_end",
@@ -662,7 +671,7 @@ export async function processResponsesStream<TApi extends Api>(
           let validated: Pick<ToolCall, "name" | "arguments">;
           try {
             validated = resolveCompletedResponsesToolCall(item, {
-              name: streamingToolCall?.block.name,
+              name: streamingToolCall?.providerName,
               arguments: parsedStreamedArguments ?? (completedArguments || streamedArguments),
             });
           } catch (error) {
@@ -676,10 +685,7 @@ export async function processResponsesStream<TApi extends Api>(
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         // Preserve reported accounting before rejecting unfinished tool calls.
-        terminal.finalizeResponse(event.response, event.type, Boolean(rejectedToolCall));
-        if (rejectedToolCall) {
-          throw output.errorMessage ? new Error(output.errorMessage) : rejectedToolCall.error;
-        }
+        terminal.finalizeResponse(event.response, event.type, rejectedToolCall);
         if (event.type === "response.completed" || output.stopReason === "length") {
           const items = event.response.output ?? [];
           const completeToolCall =
@@ -727,7 +733,11 @@ export async function processResponsesStream<TApi extends Api>(
     return terminalResponse ?? undefined;
   } finally {
     for (const block of output.content) {
-      delete (block as { partialJson?: string }).partialJson;
+      if (block.type === "toolCall") {
+        delete block.partialJson;
+      }
     }
+    // Completed calls survive interrupted streams, using item.done reasoning if no terminal arrived.
+    terminal.releaseDeferredToolCompletions();
   }
 }

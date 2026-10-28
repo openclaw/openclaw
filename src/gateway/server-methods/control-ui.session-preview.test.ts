@@ -2,29 +2,67 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
-import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import * as subagentState from "../../agents/subagents/registry/subagent-registry-state.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import * as stateReads from "../../state/openclaw-state-db-readonly.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  bindSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import * as sessionRows from "../session-row-projection-record.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
-import { controlUiHandlers, createControlUiHandlers } from "./control-ui.js";
+import { controlUiHandlers } from "./control-ui.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
 import type { RespondFn } from "./types.js";
 
 const requestOptions = createControlUiRequestOptions(() => ({
   agents: { entries: { main: {} } },
 }));
+const preview = expectDefined(
+  controlUiHandlers["controlUi.sessionPreview"],
+  "session preview handler",
+);
+const sharedEntry = (sessionId: string, label: string) => ({
+  sessionId,
+  label,
+  updatedAt: 1,
+  visibility: "shared" as const,
+  createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
+});
+
+function expectPreview(respond: RespondFn, payload: unknown) {
+  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
+}
+
+function observeTranscript(match: (row: sessionRows.MaterializedRow) => boolean) {
+  const published = createDeferred();
+  const publish = sessionRows.publishTranscriptFields;
+  const spy = vi
+    .spyOn(sessionRows, "publishTranscriptFields")
+    .mockImplementation((row, ...args) => {
+      const changed = publish(row, ...args);
+      if (match(row)) {
+        published.resolve();
+      }
+      return changed;
+    });
+  onTestFinished(() => spy.mockRestore());
+  return published.promise;
+}
 
 async function createPreviewContext(cfg: OpenClawConfig = {}, getRuntimeConfig = () => cfg) {
   const projection = await createSessionRowProjection({ cfg });
@@ -34,115 +72,102 @@ async function createPreviewContext(cfg: OpenClawConfig = {}, getRuntimeConfig =
 }
 
 describe("controlUi.sessionPreview", () => {
-  it("joins a second compact recovery before presenting an authorized preview", async () => {
-    await withOpenClawTestState(
-      { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
-      async () => {
-        const sessionKey = "agent:main:dashboard:preview-refill";
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey },
-          {
-            sessionId: "preview-refill",
-            updatedAt: 1,
-            label: "Visible during registry recovery",
-            visibility: "shared",
-            createdActor: { type: "human", source: "profile", id: "owner" },
+  it.for(["active", "archived"])(
+    "returns a renamed %s preview without waiting for native runtime ownership",
+    async (state, { signal }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const cfg = { agents: { entries: { main: {} } } };
+        setRuntimeConfigSnapshot(cfg);
+        const scope = { agentId: "main", sessionKey: "agent:main:preview-owner" };
+        const entry = {
+          sessionId: "preview-owner",
+          updatedAt: 1,
+          label: "Original preview",
+          visibility: "shared" as const,
+          agentHarnessId: "preview-owner",
+          modelSelectionLocked: true,
+          ...(state === "archived" ? { archivedAt: 1 } : {}),
+        };
+        replaceSessionEntrySync(scope, entry);
+        const previousRegistry = captureActivePluginRegistrySnapshot();
+        const registry = createEmptyPluginRegistry();
+        const entered = createDeferred();
+        const release = createDeferred();
+        let holdOwnership = false;
+        registry.agentHarnesses.push({
+          pluginId: "preview-owner",
+          source: "test",
+          harness: {
+            id: "preview-owner",
+            label: "Preview ownership fixture",
+            supports: () => ({ supported: true }),
+            async resolveSessionRuntimeOwnershipAsync({ assertCurrent }) {
+              if (holdOwnership) {
+                entered.resolve();
+                await release.promise;
+              }
+              assertCurrent();
+              return undefined;
+            },
+            async runAttempt() {
+              throw new Error("Previewing a session must not run a model");
+            },
           },
-        );
-        const context = await createPreviewContext();
-        const run = createSubagentRunRecord({
-          runId: "preview-old",
-          childSessionKey: "agent:main:subagent:preview-recovery",
-          completion: { required: false },
-          delivery: { status: "not_required" },
         });
-        saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
-        subagentState.clearSubagentRunsReadCacheForTest();
-        const recoveryStarted = createDeferred();
-        const releaseRecovery = createDeferred();
-        const execute = stateReads.executeExistingOpenClawStateRead;
-        let compactReads = 0;
-        const reads = vi
-          .spyOn(stateReads, "executeExistingOpenClawStateRead")
-          .mockImplementation(async (...args) => {
-            const result = await execute(...args);
-            if (args[1].type === "subagents.sessionList" && ++compactReads === 2) {
-              recoveryStarted.resolve();
-              await releaseRecovery.promise;
-            }
-            return result;
-          });
-        const prepareCompact = subagentState.prepareSubagentSessionListReadCache;
-        let recovering: Promise<unknown> | undefined;
-        const prepare = vi
-          .spyOn(subagentState, "prepareSubagentSessionListReadCache")
-          .mockImplementation(async () => {
-            await prepareCompact();
-            if (recovering) {
-              return;
-            }
-            const replacement = { ...run, runId: "preview-new", generation: 2 };
-            saveSubagentRegistryToSqlite(new Map([[replacement.runId, replacement]]));
-            recovering = subagentState.withSubagentRunReadSnapshot(
-              new Map(),
-              (snapshot) => ({
-                runIds: [...snapshot.values()]
-                  .filter((entry) => entry.childSessionKey === run.childSessionKey)
-                  .map((entry) => entry.runId),
-                sessionKeys: [],
-              }),
-              (selection) => selection.runIds,
-              { sessionKeys: [run.childSessionKey], descendants: true },
-            );
-            void recovering.catch(() => {});
-            await recoveryStarted.promise;
-          });
-        const respond = vi.fn<RespondFn>();
-        const pending = expectDefined(
-          createControlUiHandlers()["controlUi.sessionPreview"],
-          "session preview handler",
-        )(
-          requestOptions({ sessionKey }, respond, {
-            client: { ...identifiedClient("reader"), connId: "preview-reader" },
-            context,
-          }),
-        );
+        setActivePluginRegistry(registry);
+        const abort = () => release.resolve();
+        signal.addEventListener("abort", abort, { once: true });
+        let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+        let pending: Promise<void> | undefined;
         try {
-          await recoveryStarted.promise;
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          releaseRecovery.resolve();
-          await pending;
-          await expect(recovering).resolves.toEqual(["preview-new"]);
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({ status: "ok", title: "Visible during registry recovery" }),
-            undefined,
+          projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+          await projection.ensureMaterialized();
+          const context = bindSessionRowProjection(
+            { getRuntimeConfig: () => cfg },
+            () => projection,
           );
-          expect(compactReads).toBe(2);
+          const respond = vi.fn<RespondFn>();
+          const first = await projection.withSelectionPreparation(async () => {
+            holdOwnership = true;
+            replaceSessionEntrySync(scope, { ...entry, label: "Renamed preview", updatedAt: 2 });
+            pending = Promise.resolve(
+              preview(requestOptions({ sessionKey: scope.sessionKey }, respond, { context })),
+            );
+            const winner = await Promise.race([
+              pending.then(() => "response" as const),
+              entered.promise.then(() => "native ownership" as const),
+            ]);
+            release.resolve();
+            await pending;
+            expectPreview(
+              respond,
+              expect.objectContaining({
+                status: "ok",
+                title: "Renamed preview",
+                updatedAt: 2,
+                archived: state === "archived",
+              }),
+            );
+            return winner;
+          });
+          expect(first).toBe("response");
         } finally {
-          releaseRecovery.resolve();
-          await Promise.allSettled([pending, recovering]);
-          prepare.mockRestore();
-          reads.mockRestore();
-          subagentState.clearSubagentRunsReadCacheForTest();
+          release.resolve();
+          await Promise.allSettled(pending ? [pending] : []);
+          projection?.dispose();
+          restoreActivePluginRegistrySnapshot(previousRegistry);
+          signal.removeEventListener("abort", abort);
         }
-      },
-    );
-  });
+      });
+    },
+  );
 
   it("replies in the same authorization frame before queued visibility revocation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:dashboard:preview-response-frame";
       const scope = { agentId: "main", sessionKey };
-      const entry = {
-        sessionId: "preview-response-frame",
-        updatedAt: 1,
-        label: "Visible preview title",
-        visibility: "shared" as const,
-        createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
-      };
+      const entry = sharedEntry("preview-response-frame", "Visible preview title");
       await replaceSessionEntry(scope, entry);
       const events: string[] = [];
       const revoked = createDeferred();
@@ -165,10 +190,7 @@ describe("controlUi.sessionPreview", () => {
         }
         return {};
       });
-      await expectDefined(
-        controlUiHandlers["controlUi.sessionPreview"],
-        "registered preview",
-      )(
+      await preview(
         requestOptions({ sessionKey }, respond, {
           client: { ...identifiedClient("reader"), connId: "preview-reader" },
           context,
@@ -176,26 +198,17 @@ describe("controlUi.sessionPreview", () => {
       );
       expect(queued).toBe(true);
       await revoked.promise;
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "ok", title: entry.label }),
-        undefined,
-      );
+      expectPreview(respond, expect.objectContaining({ status: "ok", title: entry.label }));
       expect(events).toEqual(["response", "revoked"]);
     });
   });
 
   it("rechecks exact-key visibility after compact registry preparation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const sessionKey = "agent:main:dashboard:preparing-preview";
       const scope = { agentId: "main", sessionKey };
-      const entry = {
-        sessionId: "preparing-preview",
-        updatedAt: 1,
-        label: "Private after preparation",
-        visibility: "shared" as const,
-        createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
-      };
+      const entry = sharedEntry("preparing-preview", "Private after preparation");
       await replaceSessionEntry(scope, entry);
       const context = await createPreviewContext();
       const prepared = createDeferred();
@@ -206,10 +219,7 @@ describe("controlUi.sessionPreview", () => {
         .spyOn(subagentState, "prepareSubagentSessionListReadCache")
         .mockReturnValueOnce(prepared.promise);
       const respond = vi.fn<RespondFn>();
-      const pending = expectDefined(
-        createControlUiHandlers()["controlUi.sessionPreview"],
-        "session preview handler",
-      )(
+      const pending = preview(
         requestOptions({ sessionKey }, respond, {
           client: { ...identifiedClient("reader"), connId: "preview-reader" },
           context,
@@ -221,7 +231,7 @@ describe("controlUi.sessionPreview", () => {
         identity.mockReturnValue({});
         prepared.resolve();
         await pending;
-        expect(respond).toHaveBeenCalledWith(true, { status: "unavailable" }, undefined);
+        expectPreview(respond, { status: "unavailable" });
       } finally {
         prepared.resolve();
         await pending;
@@ -237,6 +247,7 @@ describe("controlUi.sessionPreview", () => {
         session: { scope: "global" },
         agents: { entries: { main: {}, research: {} } },
       };
+      setRuntimeConfigSnapshot(cfg);
       for (const agentId of ["main", "research"]) {
         const scope = { agentId, sessionKey: "global", sessionId: `hover-${agentId}` };
         await replaceSessionEntry(scope, {
@@ -250,38 +261,29 @@ describe("controlUi.sessionPreview", () => {
           messages: [{ message: { role: "user", content: `Title from ${agentId}` }, now: 42 }],
         });
       }
-      const handler = expectDefined(
-        createControlUiHandlers()["controlUi.sessionPreview"],
-        "session preview handler",
-      );
-      const publications = new Map([
-        ["main", createDeferred()],
-        ["research", createDeferred()],
-      ]);
-      const publishTranscriptFields = sessionRows.publishTranscriptFields;
-      const publication = vi
-        .spyOn(sessionRows, "publishTranscriptFields")
-        .mockImplementation((row, ...args) => {
-          const changed = publishTranscriptFields(row, ...args);
-          if (row.key === "global" && row.lastMessagePreview === `Title from ${row.agentId}`) {
-            publications.get(row.agentId)?.resolve();
-          }
-          return changed;
-        });
-      onTestFinished(() => publication.mockRestore());
+      const remaining = new Set(["main", "research"]);
+      const published = observeTranscript((row) => {
+        if (row.key === "global" && row.lastMessagePreview === `Title from ${row.agentId}`) {
+          remaining.delete(row.agentId);
+        }
+        return !remaining.size;
+      });
       const context = await createPreviewContext(cfg);
-      await Promise.all([...publications.values()].map((completion) => completion.promise));
+      for (const agentId of ["main", "research"]) {
+        requireSessionRowProjection(context).describe({ key: "global", agentId });
+      }
+      await published;
       const statements = observeHostDataSql();
       onTestFinished(() => statements.restore());
       for (const agentId of ["main", "research"]) {
         const respond = vi.fn<RespondFn>();
-        await handler(
+        await preview(
           requestOptions({ sessionKey: `agent:${agentId}:main` }, respond, {
             context,
           }),
         );
-        expect(respond).toHaveBeenCalledWith(
-          true,
+        expectPreview(
+          respond,
           expect.objectContaining({
             status: "ok",
             sessionKey: "global",
@@ -289,16 +291,15 @@ describe("controlUi.sessionPreview", () => {
             derivedTitle: `Title from ${agentId}`,
             lastMessagePreview: `Title from ${agentId}`,
           }),
-          undefined,
         );
       }
       expect(statements.queries).toEqual([]);
-      statements.restore();
     });
   });
 
-  it("returns bounded, redacted metadata for one session", async () => {
+  it("returns bounded, original metadata for one session", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const secret = "sk-test-session-preview-secret-1234567890";
       const scope = {
         agentId: "main",
@@ -316,38 +317,23 @@ describe("controlUi.sessionPreview", () => {
           origin: { provider: "webchat" },
         },
       });
+      const content = `  OPENAI_API_KEY=${secret} ${"x".repeat(240)}  `;
       await persistSessionTranscriptTurn(scope, {
         cwd: "/tmp",
         updateMode: "none",
-        messages: [
-          {
-            message: {
-              role: "user",
-              content: `  OPENAI_API_KEY=${secret} ${"x".repeat(240)}  `,
-            },
-            now: 1_786_000_000_000,
-          },
-        ],
+        messages: [{ message: { role: "user", content }, now: 1_786_000_000_000 }],
       });
-      const published = createDeferred();
-      const publishTranscriptFields = sessionRows.publishTranscriptFields;
-      const publication = vi
-        .spyOn(sessionRows, "publishTranscriptFields")
-        .mockImplementation((row, ...args) => {
-          const changed = publishTranscriptFields(row, ...args);
-          if (row.key === scope.sessionKey && row.lastMessagePreview) {
-            published.resolve();
-          }
-          return changed;
-        });
-      onTestFinished(() => publication.mockRestore());
+      const published = observeTranscript(
+        (row) => row.key === scope.sessionKey && Boolean(row.lastMessagePreview),
+      );
       const context = await createPreviewContext();
-      await published.promise;
+      requireSessionRowProjection(context).describe({
+        key: scope.sessionKey,
+        agentId: scope.agentId,
+      });
+      await published;
       const respond = vi.fn<RespondFn>();
-      await expectDefined(
-        controlUiHandlers["controlUi.sessionPreview"],
-        "session preview handler",
-      )(requestOptions({ sessionKey: " agent:main:research " }, respond, { context }));
+      await preview(requestOptions({ sessionKey: " agent:main:research " }, respond, { context }));
 
       const payload = respond.mock.calls[0]?.[1] as ControlUiSessionPreview | undefined;
       expect(respond.mock.calls[0]?.[0]).toBe(true);
@@ -367,17 +353,14 @@ describe("controlUi.sessionPreview", () => {
       expect(payload.derivedTitle).toHaveLength(200);
       expect(payload.lastMessagePreview).toBeTruthy();
       expect(payload.lastMessagePreview?.length).toBeLessThanOrEqual(200);
-      expect(payload.lastMessagePreview).not.toContain(secret);
+      expect(payload.lastMessagePreview).toContain(secret);
     });
   });
 
   it("rejects malformed preview params", async () => {
     const respond = vi.fn<RespondFn>();
 
-    await expectDefined(
-      controlUiHandlers["controlUi.sessionPreview"],
-      'handlers["controlUi.sessionPreview"] test invariant',
-    )(requestOptions({ sessionKey: "agent:main:research", extra: true }, respond));
+    await preview(requestOptions({ sessionKey: "agent:main:research", extra: true }, respond));
 
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: "INVALID_REQUEST",

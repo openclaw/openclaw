@@ -161,23 +161,25 @@ extension StatusMenuSessions {
 
         menu.addItem(NSMenuItem.separator())
 
-        let thinking = NSMenuItem(title: String(localized: "Thinking"), action: nil, keyEquivalent: "")
-        thinking.identifier = NSUserInterfaceItemIdentifier("session.thinking")
-        thinking.submenu = self.buildPreferenceMenu(
-            key: row.key,
-            levels: ["off", "minimal", "low", "medium", "high"],
-            current: row.thinkingLevel,
-            action: #selector(self.patchThinking(_:)))
-        menu.addItem(thinking)
-
-        let verbose = NSMenuItem(title: String(localized: "Verbose"), action: nil, keyEquivalent: "")
-        verbose.identifier = NSUserInterfaceItemIdentifier("session.verbose")
-        verbose.submenu = self.buildPreferenceMenu(
-            key: row.key,
-            levels: ["on", "off"],
-            current: row.verboseLevel,
-            action: #selector(self.patchVerbose(_:)))
-        menu.addItem(verbose)
+        for (title, identifier, levels, current, action) in [
+            (
+                String(localized: "Thinking"),
+                "session.thinking",
+                ["off", "minimal", "low", "medium", "high"],
+                row.thinkingLevel,
+                #selector(self.patchThinking(_:))),
+            (
+                String(localized: "Verbose"),
+                "session.verbose",
+                ["on", "off"],
+                row.verboseLevel,
+                #selector(self.patchVerbose(_:))),
+        ] {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.identifier = NSUserInterfaceItemIdentifier(identifier)
+            item.submenu = self.buildPreferenceMenu(key: row.key, levels: levels, current: current, action: action)
+            menu.addItem(item)
+        }
 
         let color = NSMenuItem(title: String(localized: "Color"), action: nil, keyEquivalent: "")
         color.identifier = NSUserInterfaceItemIdentifier("session.color")
@@ -424,21 +426,14 @@ extension StatusMenuSessions {
     }
 
     @objc private func patchThinking(_ sender: NSMenuItem) {
-        guard let payload = sender.representedObject as? [String: String],
-              let key = payload["key"],
-              let value = payload["value"]
-        else { return }
-
-        Task {
-            await self.performSessionAction(
-                sender,
-                request: OpenClawChatGatewayRequests.patchSessionSettings(
-                    sessionKey: key, agentID: nil, thinkingLevel: .some(value), verboseLevel: nil),
-                errorTitle: String(localized: "Update thinking failed"))
-        }
+        self.patchSessionSettings(sender, thinking: true)
     }
 
     @objc private func patchVerbose(_ sender: NSMenuItem) {
+        self.patchSessionSettings(sender, thinking: false)
+    }
+
+    private func patchSessionSettings(_ sender: NSMenuItem, thinking: Bool) {
         guard let payload = sender.representedObject as? [String: String],
               let key = payload["key"],
               let value = payload["value"]
@@ -448,8 +443,12 @@ extension StatusMenuSessions {
             await self.performSessionAction(
                 sender,
                 request: OpenClawChatGatewayRequests.patchSessionSettings(
-                    sessionKey: key, agentID: nil, thinkingLevel: nil, verboseLevel: .some(value)),
-                errorTitle: String(localized: "Update verbose failed"))
+                    sessionKey: key,
+                    agentID: nil,
+                    thinkingLevel: thinking ? .some(value) : nil,
+                    verboseLevel: thinking ? nil : .some(value)),
+                errorTitle: thinking
+                    ? String(localized: "Update thinking failed") : String(localized: "Update verbose failed"))
         }
     }
 

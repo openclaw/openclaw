@@ -47,7 +47,9 @@ export function getUsedPorts(
     }
     try {
       used.add(parseBrowserHttpUrl(rawUrl, "browser.profiles.*.cdpUrl").port);
-    } catch {}
+    } catch {
+      // An invalid configured URL does not reserve a port.
+    }
   }
   return used;
 }

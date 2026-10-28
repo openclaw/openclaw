@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { sha256Hex } from "./crypto-digest.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
+import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { hasErrnoCode } from "./errors.js";
 import { mergePathPrepend } from "./path-prepend.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
@@ -224,12 +225,7 @@ export async function prepareNativePackageStage(params: {
         path.relative(ownerRoot, path.dirname(installTarget.globalRoot)),
         ".pnpm",
       );
-      const store = await fs.lstat(privateStore).catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
+      const store = await fs.lstat(privateStore).catch(ignoreMissingUpdateCandidateFile);
       if (store?.isSymbolicLink()) {
         const sourceRoot = await fs.realpath(privateStore);
         await fs.unlink(privateStore);

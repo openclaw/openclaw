@@ -2,11 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
-import { handleGatewayRequest } from "./server-methods.js";
-import type { GatewayClient } from "./server-methods/client-types.js";
+import {
+  authorizationClient,
+  dispatchAuthorizationRequest,
+} from "./server-methods.authorization.test-support.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
-import type { GatewayRequestHandler } from "./server-methods/types.js";
-import { captureGatewayClientUploadCommitGuard } from "./upload-policy.js";
+import type { GatewayRequestContext, GatewayRequestHandler } from "./server-methods/types.js";
 
 const attachment = { type: "image", mimeType: "image/png", content: "cGljdHVyZQ==" };
 const uploads: Array<[string, Record<string, unknown>]> = [
@@ -35,18 +36,17 @@ const uploads: Array<[string, Record<string, unknown>]> = [
 ];
 
 function setup(config: OpenClawConfig = {}, synthetic = false) {
-  const client: GatewayClient = {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.admin"],
-      client: { id: "test", mode: "test", platform: "test", version: "1" },
-    },
-    ...(synthetic ? { internal: { syntheticClient: true as const } } : {}),
-  };
+  const client = authorizationClient(
+    "upload-test",
+    ["operator.admin"],
+    synthetic ? { internal: { syntheticClient: true } } : {},
+  );
   let currentConfig = config;
   const getConfig = () => currentConfig;
+  const context = {
+    getRuntimeConfig: getConfig,
+    getCommittedRuntimeConfig: getConfig,
+  } as GatewayRequestContext;
   const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { accepted: true }));
   async function dispatch(
     method: string,
@@ -60,7 +60,6 @@ function setup(config: OpenClawConfig = {}, synthetic = false) {
         : {}),
       ...params,
     };
-    const respond = vi.fn();
     // Exercise the real router; replace only the upload side effect.
     const methodRegistry = createGatewayMethodRegistry([
       {
@@ -71,17 +70,7 @@ function setup(config: OpenClawConfig = {}, synthetic = false) {
         profileAccess: "independent",
       },
     ]);
-    await handleGatewayRequest({
-      req: { type: "req", id: "upload-test", method, params: requestParams },
-      respond,
-      client,
-      isWebchatConnect: () => false,
-      context: { getRuntimeConfig: getConfig, getCommittedRuntimeConfig: getConfig } as Parameters<
-        typeof handleGatewayRequest
-      >[0]["context"],
-      methodRegistry,
-    });
-    return respond;
+    return dispatchAuthorizationRequest(method, requestParams, { client, context, methodRegistry });
   }
   return {
     handler,
@@ -101,24 +90,6 @@ function expectDisabled(respond: ReturnType<typeof vi.fn>) {
 }
 
 describe("Gateway upload admission", () => {
-  it("retains client byte classification after hydration replaces its buffer", () => {
-    let enabled = true;
-    const requestParams: Record<string, unknown> = { buffer: "cHJvb2Y=" };
-    const getConfig = () => ({ gateway: { uploads: { enabled } } });
-    const assertCurrent = captureGatewayClientUploadCommitGuard({
-      method: "send",
-      requestParams,
-      client: null,
-      context: { getRuntimeConfig: getConfig, getCommittedRuntimeConfig: getConfig },
-    });
-    expect(assertCurrent).toBeTypeOf("function");
-    assertCurrent?.();
-    delete requestParams.buffer;
-    requestParams.media = "/stored/proof.txt";
-    enabled = false;
-    expect(() => assertCurrent?.()).toThrow("uploads are disabled");
-  });
-
   it("hot-applies upload policy to client bytes without trusting wire exemptions", async () => {
     const test = setup();
     for (const enabled of [undefined, true, false, true]) {

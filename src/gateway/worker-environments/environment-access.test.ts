@@ -1,6 +1,9 @@
 import { createServer } from "node:http";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "../../../packages/gateway-client/src/websocket.js";
+import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -27,6 +30,21 @@ describe("worker environment service", () => {
 
   registerRecordedInferenceAccessTests();
 
+  it("releases the publisher after desktop policy cancellation settles", async () => {
+    support.testState.config.cloudWorkers!.desktop = true;
+    const workerService = support.createService(support.createProvider());
+    class RetiredPublisher {
+      publish() {
+        support.testState.config.cloudWorkers!.desktop = false;
+        return workerService.reconcileDesktopPolicy();
+      }
+    }
+    await new RetiredPublisher().publish();
+    await nextTurn();
+    expect(queryObjects(RetiredPublisher)).toBe(0);
+    expect(workerService.list()).toEqual([]);
+  });
+
   it("drains all tunnel owners before reporting an independent shutdown failure", async () => {
     const shutdownError = new Error("SSH tunnel shutdown failed");
     const nodeShutdown = createDeferred();
@@ -48,6 +66,7 @@ describe("worker environment service", () => {
       start: vi.fn(),
       stop: vi.fn(async () => {}),
       stopAll: vi.fn(async () => await nodeShutdown.promise),
+      beginClose: vi.fn(),
     };
     const nodeDesktopCarrier = {
       bindRuntime: vi.fn(),
@@ -300,14 +319,8 @@ describe("worker environment service", () => {
       server.on("upgrade", (request, socket, head) => {
         observeBridge.handleDesktopObserveUpgrade(request, socket, head, { registry });
       });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Expected desktop observer server address");
-      }
-      const observer = new WebSocket(`ws://127.0.0.1:${address.port}${observed.wsPath}`);
+      const origin = await listenLoopback(server, "ws");
+      const observer = new WebSocket(`${origin}${observed.wsPath}`);
       try {
         await new Promise<void>((resolve, reject) => {
           observer.once("open", () => reject(new Error("Retired desktop ticket was accepted")));
@@ -360,6 +373,7 @@ describe("worker environment service", () => {
         start,
         stop: vi.fn(async () => {}),
         stopAll: vi.fn(async () => {}),
+        beginClose: vi.fn(),
       };
       if (node) {
         support.testState.config.cloudWorkers!.profiles!.development!.provider = "device";

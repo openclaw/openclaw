@@ -1,14 +1,18 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { retainPreparedSessionGenerationFacts } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { assertCapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import {
-  closeSessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-  startSessionWorkAdmissionInterruption,
-} from "../sessions/session-lifecycle-admission.js";
+  closeSessionControllerAdmission,
+  runSessionMutation,
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+  startSessionControllerInterruption,
+} from "../sessions/session-controller.lifecycle.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import {
   resolveWorkerPlacementSessionStoreTarget,
@@ -16,13 +20,14 @@ import {
   WorkerDispatchTargetChangedError,
   type WorkerPlacementSessionRuntime,
 } from "./server-worker-placement-session-target.js";
+import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import type { WorkerPlacementReclaimBarriers } from "./worker-environments/placement-reclaim-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { matchesWorkerPlacementTarget } from "./worker-environments/placement-target.js";
 import type { WorkerPlacementReclaimRequest } from "./worker-environments/service-contract.js";
 
 type WorkerPlacementReclaimBarrierParams = {
-  placements: Pick<WorkerSessionPlacementStore, "get" | "waitForTurnClaimRelease">;
+  placements: Pick<WorkerSessionPlacementStore, "get" | "getAsync" | "waitForTurnClaimRelease">;
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>;
   cancelSessionWork: WorkerPlacementSessionWorkCancellation;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
@@ -37,12 +42,76 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     agentId,
   }: WorkerPlacementReclaimRequest) => {
     const sessionRuntime = await params.loadSessionRuntime();
-    const resolveTarget = () =>
-      resolveWorkerPlacementSessionStoreTarget(sessionRuntime, getRuntimeConfig(), {
-        sessionKey,
-        agentId,
-      });
-    const target = resolveTarget();
+    const config = getRuntimeConfig();
+    const target = await resolveWorkerPlacementSessionStoreTarget(sessionRuntime, config, {
+      sessionKey,
+      agentId,
+    });
+    const assertRoutingCurrent = captureSessionMutationRouting(
+      config,
+      () =>
+        new WorkerDispatchTargetChangedError(
+          `Session ${sessionKey} changed before cloud worker stop. Retry.`,
+        ),
+      [{ sessionKey, agentId, preserveQualifiedAddress: true }],
+    );
+    const lifetime = new DisposableStack();
+    let retained: ReturnType<typeof retainPreparedSessionGenerationFacts> | undefined;
+    let unregister = () => {};
+    lifetime.defer(() => {
+      retained?.release();
+      unregister();
+    });
+    const release = () => lifetime.dispose();
+    const assertActive = () => {
+      if (lifetime.disposed) {
+        throw new WorkerDispatchTargetChangedError(
+          `Session ${sessionKey} changed before cloud worker stop. Retry.`,
+        );
+      }
+    };
+    const metadata = captureSessionEntryMetadataRead(
+      { sessionKey: target.canonicalKey, agentId: target.agentId, storePath: target.storePath },
+      assertActive,
+    );
+    const selectedKey = target.storeKeys.find((key) => target.store[key]) ?? target.canonicalKey;
+    const preparedEntry = target.store[selectedKey];
+    const source = target.capturedReadSource;
+    try {
+      if (!metadata) {
+        if (!preparedEntry || !source || typeof source.databaseIdentity !== "string") {
+          throw new WorkerDispatchTargetChangedError(
+            `Session ${sessionKey} changed before cloud worker stop. Retry.`,
+          );
+        }
+        retained = retainPreparedSessionGenerationFacts({
+          databaseIdentity: `file:${source.databaseIdentity}`,
+          sessionKey: selectedKey,
+          entry: preparedEntry,
+        });
+        unregister = registerOpenClawAgentDatabaseAsyncResource({
+          agentId: source.agentId,
+          path: source.path,
+          revoke: release,
+          close: async () => release(),
+        });
+      }
+    } catch (error) {
+      release();
+      throw error;
+    }
+    const readCurrentTarget = () => {
+      assertActive();
+      if (!metadata) {
+        assertRoutingCurrent(getRuntimeConfig());
+      }
+      if (source) {
+        assertCapturedSessionEntryReadSource(source);
+      }
+      const generation = retained?.readCurrent();
+      const entry = metadata ? metadata.readCurrent() : generation;
+      return { ...target, entry };
+    };
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
     const cancelAndDrain = async (
       closeWorkAdmissions: (reason: Error) => void,
@@ -63,7 +132,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         interruptionStarted = true;
         try {
           assertCurrent();
-          released = startSessionWorkAdmissionInterruption({
+          released = startSessionControllerInterruption({
             reason,
             scope: target.storePath,
             identities: lifecycleIdentities,
@@ -78,10 +147,24 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         () => undefined,
       );
       try {
+        const entry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
+          target.store,
+          target.storeKeys,
+        );
         await params.cancelSessionWork({
           sessionId,
           sessionKeys: lifecycleIdentities,
           agentId,
+          session: {
+            ok: true,
+            value: {
+              cfg: config,
+              storePath: target.storePath,
+              canonicalKey: target.canonicalKey,
+              agentId: target.agentId,
+              entry,
+            },
+          },
           assertCurrent: assertCancellationCurrent,
           // A queued dispatch can coexist with local chat before any placement exists.
           // Interrupt only after canonical abort snapshots partials and retires approvals.
@@ -97,7 +180,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         assertCurrent();
         await withTimeout(
           released!,
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
           "session work admission drain",
         );
       } catch (error) {
@@ -107,12 +190,19 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         throw error;
       }
       await params.placements.waitForTurnClaimRelease(sessionId, {
-        timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+        timeoutMs: SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
       });
       await runExclusiveSessionStoreWrite(target.storePath, async () => {}, { reentrant: true });
     };
 
-    return { sessionRuntime, target, resolveTarget, lifecycleIdentities, cancelAndDrain };
+    return {
+      sessionRuntime,
+      target,
+      readCurrentTarget,
+      lifecycleIdentities,
+      cancelAndDrain,
+      [Symbol.dispose]: release,
+    };
   };
 
   const runReclaimPreparation: WorkerPlacementReclaimBarriers["runReclaimPreparation"] = async ({
@@ -124,20 +214,17 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     pendingOperations,
     run,
   }) => {
-    const { sessionRuntime, target, resolveTarget, lifecycleIdentities, cancelAndDrain } =
-      await resolveLifecycleContext({ sessionId, sessionKey, agentId });
+    using context = await resolveLifecycleContext({ sessionId, sessionKey, agentId });
+    const { sessionRuntime, target, readCurrentTarget, lifecycleIdentities, cancelAndDrain } =
+      context;
     const entry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
       target.store,
       target.storeKeys,
     );
     const revision = entry?.lifecycleRevision ?? null;
-    const assertCurrent = () => {
-      authorize?.();
-      const current = resolveTarget();
-      const currentEntry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
-        current.store,
-        current.storeKeys,
-      );
+    const assertTargetCurrent = () => {
+      const current = readCurrentTarget();
+      const currentEntry = current.entry;
       if (
         current.storePath !== target.storePath ||
         current.canonicalKey !== target.canonicalKey ||
@@ -150,9 +237,23 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         );
       }
     };
+    const assertCurrent = Object.assign(
+      () => {
+        authorize?.();
+        assertTargetCurrent();
+      },
+      {
+        // Transport waits keep caller custody; both write grants check the retained generation.
+        assertWorkerLifetime: () => (authorize?.assertWorkerLifetime ?? authorize)?.(),
+        assertWorkerGrant: () => {
+          (authorize?.assertWorkerGrant ?? authorize)?.();
+          assertTargetCurrent();
+        },
+      },
+    );
+    const placement = await params.placements.getAsync(sessionId);
     assertCurrent();
     beforeDrain?.();
-    const placement = params.placements.get(sessionId);
     const pending = pendingOperations?.isCurrent() ? pendingOperations : undefined;
     const dispatch = pending?.hasPendingDispatch() === true;
     if (
@@ -166,7 +267,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     }
     // This lease blocks ingress without a mutex: predecessors must still be able to
     // settle their lifecycle work before Stop enters session cleanup.
-    const release = closeSessionWorkAdmissions({
+    const release = closeSessionControllerAdmission({
       scope: target.storePath,
       identities: lifecycleIdentities,
       reason: createAgentRunDirectAbortError(),
@@ -217,90 +318,93 @@ export function createGatewayWorkerPlacementReclaimBarriers(
     begin,
     reclaim,
   }) => {
-    const { sessionRuntime, target, lifecycleIdentities, cancelAndDrain } =
-      await resolveLifecycleContext({
+    using context = await resolveLifecycleContext({
+      sessionId,
+      sessionKey,
+      agentId,
+    });
+    const { sessionRuntime, target, lifecycleIdentities, cancelAndDrain } = context;
+    const resolveReclaimTarget = () =>
+      resolveWorkerPlacementSessionTarget({
+        sessionRuntime,
+        config: getRuntimeConfig(),
         sessionId,
         sessionKey,
         agentId,
+        expectedTarget: target,
+        errorMessage: `Session ${sessionKey} changed before cloud worker stop. Retry.`,
       });
     let assertBindingCurrent: (() => void) | undefined;
-    return await runExclusiveSessionLifecycleMutation("placement-reclaim", {
-      scope: target.storePath,
-      identities: lifecycleIdentities,
-      prepare: async (lifecycle) => {
-        beforeDrain?.();
-        const resolved = await resolveWorkerPlacementSessionTarget({
-          sessionRuntime,
-          config: getRuntimeConfig(),
-          sessionId,
-          sessionKey,
-          agentId,
-          expectedTarget: target,
-          errorMessage: `Session ${sessionKey} changed before cloud worker stop. Retry.`,
-        });
-        const placement = params.placements.get(sessionId);
-        if (
-          placement?.state !== "active" &&
-          placement?.state !== "draining" &&
-          placement?.state !== "reclaimed"
-        ) {
-          throw new Error(
-            `Session ${sessionKey} cannot stop cloud worker from placement ${placement?.state ?? "missing"}`,
-          );
-        }
-        assertBindingCurrent = () => {
+    let preparedTarget: Awaited<ReturnType<typeof resolveReclaimTarget>> | undefined;
+    try {
+      return await runSessionMutation({
+        diagnosticLabel: "placement-reclaim",
+        scope: target.storePath,
+        identities: lifecycleIdentities,
+        prepare: async (lifecycle) => {
+          beforeDrain?.();
+          const resolved = (preparedTarget = await resolveReclaimTarget());
+          const placement = await params.placements.getAsync(sessionId);
           authorize?.();
           resolved.assertBindingCurrent(getRuntimeConfig());
-        };
-        await cancelAndDrain(lifecycle.closeWorkAdmissions, assertBindingCurrent);
-      },
-      run: async () => {
-        if (!assertBindingCurrent) {
-          throw new Error(`Session ${sessionKey} cloud worker stop barrier did not prepare`);
-        }
-        assertBindingCurrent();
-        const resolved = await resolveWorkerPlacementSessionTarget({
-          sessionRuntime,
-          config: getRuntimeConfig(),
-          sessionId,
-          sessionKey,
-          agentId,
-          expectedTarget: target,
-          errorMessage: `Session ${sessionKey} changed before cloud worker stop. Retry.`,
-        });
-        // Sharing mutations use this lifecycle fence too. Reauthorize after every wait and
-        // immediately before drain so revoked callers cannot commit stale placement authority.
-        assertBindingCurrent();
-        // Eligibility ends at this operation's drain, unlike caller authority during teardown.
-        beforeDrain?.();
-        resolved.assertCurrent(getRuntimeConfig());
-        const assertDrainCurrent = () => {
-          assertBindingCurrent?.();
+          if (
+            placement?.state !== "active" &&
+            placement?.state !== "draining" &&
+            placement?.state !== "reclaimed"
+          ) {
+            throw new Error(
+              `Session ${sessionKey} cannot stop cloud worker from placement ${placement?.state ?? "missing"}`,
+            );
+          }
+          assertBindingCurrent = () => {
+            authorize?.();
+            resolved.assertBindingCurrent(getRuntimeConfig());
+          };
+          await cancelAndDrain(lifecycle.closeWorkAdmissions, assertBindingCurrent);
+        },
+        run: async () => {
+          if (!assertBindingCurrent) {
+            throw new Error(`Session ${sessionKey} cloud worker stop barrier did not prepare`);
+          }
+          assertBindingCurrent();
+          using resolved = await resolveReclaimTarget();
+          // Sharing mutations use this lifecycle fence too. Reauthorize after every wait and
+          // immediately before drain so revoked callers cannot commit stale placement authority.
+          assertBindingCurrent();
+          // Eligibility ends at this operation's drain, unlike caller authority during teardown.
+          beforeDrain?.();
           resolved.assertCurrent(getRuntimeConfig());
-        };
-        const placement = await begin(assertDrainCurrent);
-        assertDrainCurrent();
-        const reclaimedPlacement = await reclaim(resolved.workspace, placement, assertDrainCurrent);
-        params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
-        return reclaimedPlacement;
-      },
-    });
+          const assertDrainCurrent = () => {
+            assertBindingCurrent?.();
+            resolved.assertBindingCurrent(getRuntimeConfig());
+          };
+          const placement = await begin(assertDrainCurrent);
+          assertDrainCurrent();
+          const reclaimedPlacement = await reclaim(
+            resolved.workspace,
+            placement,
+            assertDrainCurrent,
+          );
+          params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
+          return reclaimedPlacement;
+        },
+      });
+    } finally {
+      preparedTarget?.[Symbol.dispose]();
+    }
   };
 
   const runFailedReclaimBarrier: WorkerPlacementReclaimBarriers["runFailedReclaimBarrier"] =
     async ({ sessionId, sessionKey, agentId, authorize, reclaim }) => {
-      const { sessionRuntime, target, resolveTarget, lifecycleIdentities, cancelAndDrain } =
-        await resolveLifecycleContext({
-          sessionId,
-          sessionKey,
-          agentId,
-        });
+      using context = await resolveLifecycleContext({
+        sessionId,
+        sessionKey,
+        agentId,
+      });
+      const { target, readCurrentTarget, lifecycleIdentities, cancelAndDrain } = context;
       const assertCurrent = () => {
-        const currentTarget = resolveTarget();
-        const currentEntry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
-          currentTarget.store,
-          currentTarget.storeKeys,
-        );
+        const currentTarget = readCurrentTarget();
+        const currentEntry = currentTarget.entry;
         if (
           currentTarget.storePath !== target.storePath ||
           currentTarget.canonicalKey !== target.canonicalKey ||
@@ -315,14 +419,16 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         // fence before provider cleanup or the failed-to-local transition becomes durable.
         authorize?.();
       };
-      return await runExclusiveSessionLifecycleMutation("placement-failed-reclaim", {
+      return await runSessionMutation({
+        diagnosticLabel: "placement-failed-reclaim",
         scope: target.storePath,
         identities: lifecycleIdentities,
         prepare: async (lifecycle) => {
-          assertCurrent();
           // A preceding failed cleanup may already have returned this placement to local.
           // Its idempotent result must not cancel work admitted after that completed Stop.
-          if (params.placements.get(sessionId)?.state === "failed") {
+          const placement = await params.placements.getAsync(sessionId);
+          assertCurrent();
+          if (placement?.state === "failed") {
             await cancelAndDrain(lifecycle.closeWorkAdmissions, assertCurrent);
           }
         },

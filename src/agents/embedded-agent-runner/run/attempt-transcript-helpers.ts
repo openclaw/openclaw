@@ -6,19 +6,55 @@ import {
   patchSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { readSessionEntryInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import {
+  sessionEntryCommitGuardOptions,
+  type SessionSourceAssertion,
+} from "../../../config/sessions/session-source-authority.js";
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { log } from "../logger.js";
 import { canContinueFromMessage, trimToContinuableTail } from "./compaction-timeout.js";
+import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.js";
 import { isMidTurnPrecheckAssistantError } from "./midturn-precheck.js";
+import { preserveTrailingTranscriptMetadata } from "./transcript-tail-metadata.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
+
+/** Reuse the admitted prompt target, otherwise resolve the dispatch's exact transcript. */
+export async function resolveAttemptDispatchSessionTarget(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionKey: string;
+  promptState: Pick<
+    PreparedEmbeddedAttemptDispatchInput["sessionPromptState"],
+    "sessionTarget" | "sessionTargetAdopted" | "sessionId" | "sessionWriterFence"
+  >;
+}) {
+  const state = params.promptState;
+  const existing = state.sessionTarget;
+  const reusable =
+    existing?.sessionKey === params.sessionKey || state.sessionTargetAdopted ? existing : undefined;
+  const resolved =
+    reusable ??
+    (params.sessionKey
+      ? await resolveSessionTranscriptRuntimeTarget({
+          agentId: params.agentId,
+          sessionId: state.sessionId,
+          sessionKey: params.sessionKey,
+          storePath: resolveSessionStorePathCore(params.config?.session?.store, {
+            agentId: params.agentId,
+          }),
+        })
+      : undefined);
+  return resolved || state.sessionTarget
+    ? { ...state.sessionTarget, ...resolved, ...state.sessionWriterFence }
+    : undefined;
+}
 
 export async function removeTrailingMidTurnPrecheckAssistantError(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
@@ -26,14 +62,9 @@ export async function removeTrailingMidTurnPrecheckAssistantError(params: {
 }): Promise<void> {
   const messages = params.activeSession.agent.state.messages;
   const removedActiveError = isMidTurnPrecheckAssistantError(messages.at(-1));
-  const preserveTrailing = (entry: ReturnType<AttemptSessionManager["getEntries"]>[number]) =>
-    entry.type === "custom" ||
-    entry.type === "label" ||
-    entry.type === "session_info" ||
-    (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message));
   const persistedTail = params.sessionManager
     .getEntries()
-    .findLast((entry) => !preserveTrailing(entry));
+    .findLast((entry) => !preserveTrailingTranscriptMetadata(entry));
   // New guarded writes omit the signal. Retain cleanup for an already-persisted legacy error.
   const hasPersistedError =
     persistedTail?.type === "message" && isMidTurnPrecheckAssistantError(persistedTail.message);
@@ -42,7 +73,7 @@ export async function removeTrailingMidTurnPrecheckAssistantError(params: {
     (await params.sessionManager.removeTrailingEntriesAsync(
       (entry) => entry.type === "message" && isMidTurnPrecheckAssistantError(entry.message),
       {
-        preserveTrailing,
+        preserveTrailing: preserveTrailingTranscriptMetadata,
       },
     )) > 0;
   if (removedActiveError) {
@@ -66,13 +97,7 @@ export async function normalizeCompactionRecoveryTranscriptTail(params: {
   // back to a continuation. AgentCore rejects assistant tails before providers run.
   const removedEntries = await params.sessionManager.removeTrailingEntriesAsync(
     (entry) => entry.type === "message" && !canContinueFromMessage(entry.message),
-    {
-      preserveTrailing: (entry) =>
-        entry.type === "custom" ||
-        entry.type === "label" ||
-        entry.type === "session_info" ||
-        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
-    },
+    { preserveTrailing: preserveTrailingTranscriptMetadata },
   );
   params.activeSession.agent.state.messages =
     removedEntries > 0
@@ -86,7 +111,7 @@ export async function normalizeCompactionRecoveryTranscriptTail(params: {
 // Applies quota-resume TTL maintenance to only the active attempt session.
 export async function loadAttemptSessionEntryAfterQuotaMaintenance(
   params: { agentId: string; storePath: string; sessionKey: string },
-  assertCurrent: () => void,
+  assertCurrent: SessionSourceAssertion,
 ): Promise<ConfigSessionEntry | undefined> {
   const entry = await readSessionEntryInWorker(params, assertCurrent);
   assertCurrent();
@@ -95,7 +120,7 @@ export async function loadAttemptSessionEntryAfterQuotaMaintenance(
   }
   const now = Date.now();
   const maintenance = resolveQuotaSuspensionEntryMaintenance({ entry, now });
-  if (!maintenance.patch) {
+  if (!maintenance) {
     return entry;
   }
   const updated = await patchSessionEntryCore(
@@ -104,11 +129,11 @@ export async function loadAttemptSessionEntryAfterQuotaMaintenance(
       resolveQuotaSuspensionEntryMaintenance({
         entry: currentEntry,
         now,
-      }).patch,
+      }),
     {
       skipMaintenance: true,
       takeCacheOwnership: true,
-      assertCommitAllowed: assertCurrent,
+      ...sessionEntryCommitGuardOptions(assertCurrent),
     },
   );
   assertCurrent();
@@ -139,10 +164,6 @@ export async function resolveAttemptTrajectorySessionFile(params: {
   ).sessionKey;
 }
 
-type ExistingAttemptTranscriptState = {
-  hasBootstrapTranscriptState: boolean;
-};
-
 export async function resolveExistingAttemptTranscriptState(params: {
   agentId: string;
   config?: OpenClawConfig;
@@ -151,7 +172,7 @@ export async function resolveExistingAttemptTranscriptState(params: {
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
-}): Promise<ExistingAttemptTranscriptState> {
+}) {
   // The supplied manager owns this transcript; a borrowed durable identity is not its history.
   if (params.sessionManager) {
     return {

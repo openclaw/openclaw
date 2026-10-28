@@ -2,7 +2,7 @@ import type { AgentRunTerminalDeliverySnapshot } from "../../agents/agent-run-te
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agents/agent-run-terminal-receipt.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -18,7 +18,7 @@ export type AgentTurnFrame = readonly [
 export type AgentTurnIo = {
   emitAcceptance: (acceptance: AgentTurnFrame, meta?: Parameters<RespondFn>[3]) => void;
   /** Publishes the exact controller before asynchronous runtime preparation. */
-  emitStartOwner?: (runId: string, entry: ChatAbortControllerEntry) => void;
+  emitStartOwner?: (runId: string, entry: RpcSourceRef) => void;
   /** Internal lifecycle observer; public transports do not expose this callback. */
   emitExecutionStarted?: () => void;
   emitFinal: (final: AgentTurnFrame, meta?: Parameters<RespondFn>[3]) => void;
@@ -28,10 +28,13 @@ export type AgentTurnPrincipal = Pick<
   GatewayClient,
   | "authenticatedUserId"
   | "authenticatedUserProfile"
+  | "authPolicy"
   | "connId"
   | "connect"
   | "internal"
   | "isDeviceTokenAuth"
+  | "usesSharedGatewayAuth"
+  | "sharedGatewaySessionGeneration"
 >;
 
 export type AgentTurnContext = Pick<
@@ -41,8 +44,6 @@ export type AgentTurnContext = Pick<
   | "broadcast"
   | "broadcastToConnIds"
   | "cancelRunBoundApprovals"
-  | "chatAbortControllers"
-  | "chatQueuedTurns"
   | "chatRunState"
   | "dedupe"
   | "deps"

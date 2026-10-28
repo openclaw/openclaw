@@ -331,21 +331,12 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     });
   }
 
-  function createJsonResponse(body: unknown, init?: { status?: number }): Response {
-    return new Response(JSON.stringify(body), {
-      status: init?.status ?? 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-  }
-
   function mockRealtimeClientSecretResponse(
     overrides: { clientSecret?: string; expiresAt?: number } = {},
   ): ReturnType<typeof vi.fn> {
     const release = vi.fn(async () => undefined);
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: createJsonResponse({
+      response: Response.json({
         client_secret: { value: overrides.clientSecret ?? "client-secret-123" },
         ...(overrides.expiresAt === undefined ? {} : { expires_at: overrides.expiresAt }),
       }),
@@ -354,28 +345,12 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     return release;
   }
 
-  function createQuicksilverBrowserBrokerFixture(
-    overrides: {
-      session?: {
-        provider?: "openai";
-        transport?: "webrtc";
-        clientSecret?: string;
-        offerUrl?: string;
-      };
-      capabilities?: {
-        handlesAgentConsult?: true;
-        supportsToolCalls?: boolean;
-        supportsVideoFrames?: boolean;
-        transports?: Array<"webrtc">;
-      };
-    } = {},
-  ) {
+  function createQuicksilverBrowserBrokerFixture(clientSecret = "quicksilver-token") {
     const session: RealtimeVoiceBrowserSession = {
       provider: "openai" as const,
       transport: "webrtc" as const,
-      clientSecret: "quicksilver-token",
+      clientSecret,
       offerUrl: "/plugins/openai/realtime/calls",
-      ...overrides.session,
     };
     const createBrowserSession = vi.fn(
       async (_request: unknown, _auth: unknown): Promise<RealtimeVoiceBrowserSession> => session,
@@ -387,12 +362,11 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
         handlesAgentConsult: true as const,
         supportsToolCalls: false,
         supportsVideoFrames: false,
-        ...overrides.capabilities,
       },
       createBrowserSession,
       cancelBrowserSession,
     };
-    return { broker, createBrowserSession, cancelBrowserSession };
+    return { broker, createBrowserSession };
   }
 
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -516,7 +490,6 @@ export function createOpenAIRealtimeTestSupport<T extends FakeWebSocketLike>(dep
     connectReadyBridge,
     expectedResponseCreateEvent,
     expectedResponseCancelEvent,
-    createJsonResponse,
     createQuicksilverBrowserBrokerFixture,
     mockRealtimeClientSecretResponse,
     rejectedKeyMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,

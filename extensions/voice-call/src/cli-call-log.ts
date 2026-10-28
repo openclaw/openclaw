@@ -1,19 +1,19 @@
-// Voice Call plugin module implements cli call log commands.
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Command } from "commander";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sleep } from "../api.js";
 import { parseCliInteger, writeCliJson } from "./cli-command-io.js";
 import { getCallHistoryFromStore, MAX_CALL_RECORD_EVENTS } from "./manager/store.js";
 
 const READ_BYTES = 64 * 1024;
 type LogLine = { fd: number; start: number; end: number };
 
-async function writeLogChunk(chunk: string | Buffer): Promise<void> {
+async function writeLogChunk(chunk: string | Buffer, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
   if (!process.stdout.write(chunk)) {
-    await once(process.stdout, "drain");
+    await once(process.stdout, "drain", { signal });
   }
 }
 
@@ -29,26 +29,38 @@ function* readLogLine({ fd, start, end }: LogLine): Generator<Buffer> {
   }
 }
 
-async function* readLogLines(file: string, last: number, pollMs?: number): AsyncGenerator<LogLine> {
+async function* readLogLines(
+  file: string,
+  last: number,
+  pollMs?: number,
+  signal?: AbortSignal,
+): AsyncGenerator<LogLine> {
   let initial = true;
   let offset = 0;
   let lineStart = 0;
   let previous: fs.Stats | undefined;
   const buffer = Buffer.alloc(READ_BYTES);
   for (;;) {
+    signal?.throwIfAborted();
     let fd: number;
     try {
-      fd = fs.openSync(file, "r");
+      // These diagnostics seek through retained records; opening a FIFO must not wait for a writer.
+      const flags =
+        process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
+      fd = fs.openSync(file, flags);
     } catch (error) {
       if (initial || pollMs === undefined || !isRecord(error) || error.code !== "ENOENT") {
         throw error;
       }
       // Rotation may temporarily remove the path; retain the old cursor until its replacement opens.
-      await sleep(pollMs);
+      await sleep(pollMs, undefined, { signal });
       continue;
     }
     try {
       const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) {
+        throw new Error("Voice-call log must be a regular file.");
+      }
       if (
         previous &&
         (stat.ino !== previous.ino || stat.dev !== previous.dev || stat.size < previous.size)
@@ -101,18 +113,11 @@ async function* readLogLines(file: string, last: number, pollMs?: number): Async
     if (pollMs === undefined) {
       return;
     }
-    await sleep(pollMs);
+    await sleep(pollMs, undefined, { signal });
   }
 }
 
-function summarizeSeries(values: number[]): {
-  count: number;
-  minMs: number;
-  maxMs: number;
-  avgMs: number;
-  p50Ms: number;
-  p95Ms: number;
-} {
+function summarizeSeries(values: number[]) {
   if (values.length === 0) {
     return { count: 0, minMs: 0, maxMs: 0, avgMs: 0, p50Ms: 0, p95Ms: 0 };
   }
@@ -171,33 +176,54 @@ export function registerVoiceCallLogs(params: {
       const since = parseCliInteger(options.since, "--since", { min: 0 });
       const pollMs = parseCliInteger(options.poll, "--poll", { min: 50 });
 
-      if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
-        for await (const line of readLogLines(file, since, pollMs)) {
-          for (const chunk of readLogLine(line)) {
-            await writeLogChunk(chunk);
-          }
-          await writeLogChunk("\n");
+      const cancellation = new AbortController();
+      const { signal } = cancellation;
+      const interrupt = (exitCode: number) => {
+        if (!signal.aborted) {
+          process.exitCode = exitCode;
+          cancellation.abort();
         }
-      } else {
-        params.ensureHistoryStateRuntime();
-        let initial = true;
-        let seen = new Set<string>();
-        for (;;) {
-          const lines = (
-            await getCallHistoryFromStore(path.dirname(file), MAX_CALL_RECORD_EVENTS)
-          ).map((call) => JSON.stringify(call));
-          for (const line of initial ? lines.slice(Math.max(0, lines.length - since)) : lines) {
-            if (!seen.has(line)) {
-              await writeLogChunk(`${line}\n`);
-              seen.add(line);
+      };
+      const onSigint = () => interrupt(130);
+      const onSigterm = () => interrupt(143);
+      process.on("SIGINT", onSigint);
+      process.on("SIGTERM", onSigterm);
+      try {
+        if (fs.existsSync(file) && path.basename(file) !== "calls.jsonl") {
+          for await (const line of readLogLines(file, since, pollMs, signal)) {
+            for (const chunk of readLogLine(line)) {
+              await writeLogChunk(chunk, signal);
             }
+            await writeLogChunk("\n", signal);
           }
-          // Prime from all retained history, but print only --since initially.
-          // Later snapshots retire dedup entries with their store records.
-          seen = new Set(lines);
-          initial = false;
-          await sleep(pollMs);
+        } else {
+          params.ensureHistoryStateRuntime();
+          let initial = true;
+          let seen = new Set<string>();
+          while (!signal.aborted) {
+            const lines = (
+              await getCallHistoryFromStore(path.dirname(file), MAX_CALL_RECORD_EVENTS)
+            ).map((call) => JSON.stringify(call));
+            for (const line of initial ? lines.slice(Math.max(0, lines.length - since)) : lines) {
+              if (!seen.has(line)) {
+                await writeLogChunk(`${line}\n`, signal);
+                seen.add(line);
+              }
+            }
+            // Prime from all retained history, but print only --since initially.
+            // Later snapshots retire dedup entries with their store records.
+            seen = new Set(lines);
+            initial = false;
+            await sleep(pollMs, undefined, { signal });
+          }
         }
+      } catch (error) {
+        if (!signal.aborted || !(error instanceof Error) || error.name !== "AbortError") {
+          throw error;
+        }
+      } finally {
+        process.off("SIGINT", onSigint);
+        process.off("SIGTERM", onSigterm);
       }
     });
 

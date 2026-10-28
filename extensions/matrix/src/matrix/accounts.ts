@@ -39,12 +39,7 @@ function resolveMatrixAccountAuthView(params: {
   cfg: CoreConfig;
   accountId: string;
   env: NodeJS.ProcessEnv;
-}): {
-  homeserver: string;
-  userId: string;
-  accessToken?: string;
-  password?: string;
-} {
+}) {
   const normalizedAccountId = normalizeAccountId(params.accountId);
   const matrix = resolveMatrixBaseConfig(params.cfg);
   const account = findMatrixAccountConfig(params.cfg, normalizedAccountId) ?? {};
@@ -205,6 +200,7 @@ function isMatrixAccountConfigured(
   return prepared.hasHomeserver && (prepared.hasConfiguredAuth || hasStored);
 }
 
+/** @deprecated Use resolveMatrixAccountAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveMatrixAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;

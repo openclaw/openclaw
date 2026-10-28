@@ -33,7 +33,7 @@ export function createSessionEventRefreshCoordinator({
     const delay = debounce ? SESSION_EVENT_REFRESH_DEBOUNCE_MS * (1 - 0.2 * Math.random()) : 0;
     timer = setTimeout(
       start,
-      retryAt === null ? Math.max(delay, nextAllowed - now) : Math.max(0, retryAt - now),
+      retryAt !== null ? Math.max(0, retryAt - now) : Math.max(delay, nextAllowed - now),
     );
   };
 

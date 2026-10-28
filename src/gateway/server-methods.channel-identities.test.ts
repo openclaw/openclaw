@@ -1,62 +1,44 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import {
-  validateUsersLinkChannelIdentityResult,
-  validateUsersLinkEmailResult,
-  validateUsersListChannelIdentitiesResult,
-  validateUsersUnlinkChannelIdentityResult,
-  validateUsersSetRoleResult,
-} from "../../packages/gateway-protocol/src/index.js";
+import { validateUsersLinkEmailResult as validProfile } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserChannelIdentity } from "../state/user-channel-identities.js";
-import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  getUserProfileRole,
-  resolveUserProfileId,
-} from "../state/user-profiles.js";
+  prepareUserProfileCatalog,
+  readResidentUserProfileIdentity,
+} from "../state/user-profile-list.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { gatewayRequest } from "./request-frame.test-support.js";
+import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const identity = { channelId: "discord", accountId: "team-bot", senderId: "100000000000000001" };
-async function dispatch(
-  method: string,
-  params: unknown,
-  scopes: string[],
-  profileId: string,
-  expectedProfileId?: string,
-  cfg: OpenClawConfig = {},
-) {
-  const respond = vi.fn();
-  await handleGatewayRequest({
-    req: {
-      type: "req",
-      id: method,
-      method,
-      params,
-      ...(expectedProfileId ? { expectedProfileId } : {}),
-    },
-    respond,
-    client: {
-      connId: "channel-identity-test",
-      authenticatedUserId: "admin@example.test",
-      authenticatedUserProfile: { profileId, displayName: "Admin", hasAvatar: false, updatedAt: 1 },
-      connect: {
-        role: "operator",
-        scopes,
-        client: { id: "test", version: "1", platform: "test", mode: "test" },
-        minProtocol: 1,
-        maxProtocol: 1,
+function createRequests(profileId: string, expectedProfileId?: string, cfg: OpenClawConfig = {}) {
+  return async (action: string, params: unknown, scopes = ["operator.admin"]) => {
+    const method = `users.${action}`;
+    const respond = vi.fn();
+    await handleGatewayRequest({
+      req: {
+        ...gatewayRequest(method, method, params),
+        ...(expectedProfileId ? { expectedProfileId } : {}),
       },
-    } as Parameters<typeof handleGatewayRequest>[0]["client"],
-    isWebchatConnect: () => false,
-    context: {
-      getRuntimeConfig: () => cfg,
-      logGateway: { warn: vi.fn() },
-    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
-  });
-  return respond.mock.calls[0];
+      respond,
+      isWebchatConnect: () => false,
+      client: authorizationClient("channel-identity-test", scopes, {
+        authenticatedUserId: "admin@example.test",
+        authenticatedUserProfile: gatewayProfile(profileId, "Admin"),
+      }),
+      context: {
+        getRuntimeConfig: () => cfg,
+        logGateway: { warn: vi.fn() },
+      } as unknown as GatewayRequestContext,
+    });
+    return respond.mock.calls[0];
+  };
 }
 
 it.each(["person", "shared owner"] as const)(
@@ -72,6 +54,7 @@ it.each(["person", "shared owner"] as const)(
       if (kind === "person") {
         setUserProfileRole(admin.id, "admin");
       }
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const cfg: OpenClawConfig = {
         gateway: {
           roles: {
@@ -84,70 +67,55 @@ it.each(["person", "shared owner"] as const)(
         },
       };
       const link = { profileId: person.id, identity };
-      const roleAssignment = { profileId: person.id, role: "admin" };
-      const emailLink = { email: "secondary@example.test", targetProfileId: person.id };
-      const request = (method: string, params: unknown, scopes = ["operator.admin"]) =>
-        dispatch(method, params, scopes, admin.id, admin.id, cfg);
-      for (const [method, params] of [
-        ["users.linkChannelIdentity", link],
-        ["users.listChannelIdentities", { profileId: person.id }],
-        ["users.unlinkChannelIdentity", link],
-        ["users.setRole", roleAssignment],
-        ["users.linkEmail", emailLink],
-      ] as const) {
+      const request = createRequests(admin.id, admin.id, cfg);
+      const email = { email: "secondary@example.test", targetProfileId: person.id };
+      const operations = [
+        ["linkChannelIdentity", link, link],
+        ["listChannelIdentities", { profileId: person.id }, { links: [link] }],
+        ["unlinkChannelIdentity", link, { removed: true }],
+        ["setRole", { profileId: person.id, role: "admin" }, validProfile],
+        ["linkEmail", email, validProfile],
+      ] as const;
+      for (const [method, params] of operations) {
         const denied = await request(method, params, ["operator.read", "operator.write"]);
         expect(denied).toEqual([false, undefined, expect.objectContaining({ code: "FORBIDDEN" })]);
       }
       expect(resolveUserChannelIdentity(identity)).toBeUndefined();
-      const queries = vi.spyOn(DatabaseSync.prototype, "prepare");
-      try {
-        // Cover initial selected-account/role admission, worker grants and response guards
-        // through the registered in-process route, which has no WS worker brand.
-        const linked = await request("users.linkChannelIdentity", link);
-        expect(linked).toEqual([true, link]);
-        expect(validateUsersLinkChannelIdentityResult(linked?.[1])).toBe(true);
-        const listed = await request("users.listChannelIdentities", { profileId: person.id });
-        expect(listed).toEqual([true, { links: [link] }]);
-        expect(validateUsersListChannelIdentitiesResult(listed?.[1])).toBe(true);
-        const removed = await request("users.unlinkChannelIdentity", link);
-        expect(removed).toEqual([true, { removed: true }]);
-        expect(validateUsersUnlinkChannelIdentityResult(removed?.[1])).toBe(true);
-        const assigned = await request("users.setRole", roleAssignment);
-        expect(assigned?.[0]).toBe(true);
-        expect(validateUsersSetRoleResult(assigned?.[1])).toBe(true);
-        const merged = await request("users.linkEmail", emailLink);
-        expect(merged?.[0]).toBe(true);
-        expect(validateUsersLinkEmailResult(merged?.[1])).toBe(true);
+      {
+        using queries = vi.spyOn(DatabaseSync.prototype, "prepare");
+        // Cover admission, worker grants and response guards without a WS worker brand.
+        for (const [method, params, expected] of operations) {
+          const result = await request(method, params);
+          expect(result?.[0]).toBe(true);
+          if (typeof expected === "function") {
+            expect(expected(result?.[1])).toBe(true);
+          } else {
+            expect(result).toEqual([true, expected]);
+          }
+        }
         expect(queries).not.toHaveBeenCalled();
-      } finally {
-        queries.mockRestore();
       }
       expect(resolveUserChannelIdentity(identity)).toBeUndefined();
-      expect(getUserProfileRole(person.id)).toBe("admin");
-      expect(resolveUserProfileId(secondary.id)).toBe(person.id);
+      expect(readResidentUserProfileIdentity(person.id)?.role).toBe("admin");
+      expect(readResidentUserProfileIdentity(secondary.id)?.profileId).toBe(person.id);
     });
   },
 );
 
 it("rejects malformed or conflicting assignments without changing the saved binding", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const admin = ensureProfileForEmail("admin@example.test");
     const other = ensureProfileForEmail("other@example.test");
     const link = { profileId: admin.id, identity };
-    await dispatch("users.linkChannelIdentity", link, ["operator.admin"], admin.id);
+    const request = createRequests(admin.id);
+    await request("linkChannelIdentity", link);
     for (const params of [
       { ...link, identity: { ...identity, senderId: " " } },
       { ...link, unexpected: true },
       { ...link, profileId: other.id },
     ]) {
-      const denied = await dispatch(
-        "users.linkChannelIdentity",
-        params,
-        ["operator.admin"],
-        admin.id,
-      );
-      expect(denied?.[0]).toBe(false);
-      expect(denied?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+      const denied = await request("linkChannelIdentity", params);
+      expect(denied).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
       expect(resolveUserChannelIdentity(identity)?.profileId).toBe(admin.id);
     }
   });

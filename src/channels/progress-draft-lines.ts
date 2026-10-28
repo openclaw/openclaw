@@ -2,7 +2,15 @@ import { isShellToolDisplayName } from "../agents/tool-display.js";
 export type ChannelProgressDraftLine = {
   /** Stable line id used to update an existing progress line in place. */
   id?: string;
-  kind: "tool" | "item" | "plan" | "approval" | "command-output" | "patch";
+  kind:
+    | "tool"
+    | "item"
+    | "plan"
+    | "approval"
+    | "command-output"
+    | "patch"
+    | "operation-status"
+    | "subagent-status";
   /** Rendered line text before final draft truncation/prefix formatting. */
   text: string;
   label: string;
@@ -91,7 +99,10 @@ export function getProgressDraftLineText(line: string | ChannelProgressDraftLine
       : `${prefix}${text}`;
   }
   if (displayStatus) {
-    return label ? `${prefix}${label}: ${displayStatus}` : `${prefix}${displayStatus}`;
+    // A label-less status row already carries its status in its prepared text.
+    return label
+      ? `${prefix}${label}: ${displayStatus}`
+      : line.text.trim() || `${prefix}${displayStatus}`;
   }
   const text = line.text.trim();
   if (!icon && text && text !== label) {

@@ -1,4 +1,5 @@
 import { expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { getRuntimeConfig as getCurrentRuntimeConfig } from "../config/io.js";
 import {
   onAgentRuntimeEvent,
@@ -6,11 +7,13 @@ import {
   type AgentEventStream,
 } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getRpcSourceForGateway } from "../sessions/session-controller.rpc-sources.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { ChatRunRegistration, ChatRunState } from "./server-chat-state.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
+import { createGatewayTerminalTracking } from "./server-runtime-terminal-tracking.js";
 import { agentDiscoveryMock } from "./test-helpers.runtime-state.js";
 
 type AgentEventHandler = (event: AgentEventPayload) => void | Promise<void>;
@@ -66,7 +69,9 @@ export function emitAgentEvents(
 export function subscribeAgentEvents(handler: AgentEventHandler) {
   const pending: Array<Promise<void>> = [];
   const unsubscribe = onAgentRuntimeEvent((event) => {
-    const accepted = Promise.resolve(handler(event));
+    const accepted = new Promise<void>((resolve) => {
+      resolve(handler(event));
+    });
     pending.push(accepted);
     // Observe rejection now; drain retains the original promise and still fails.
     accepted.catch(() => undefined);
@@ -79,6 +84,33 @@ export function subscribeAgentEvents(handler: AgentEventHandler) {
     },
     { drain },
   );
+}
+
+export async function createHistoryEventHandler(context: GatewayRequestContext) {
+  const {
+    createAgentEventHandler,
+    createSessionEventSubscriberRegistry,
+    createSessionMessageSubscriberRegistry,
+  } = await import("./server-chat.js");
+  const terminalTracking = createGatewayTerminalTracking({
+    getScopedRpcSource: (runId) => getRpcSourceForGateway(runId, context.resolveGatewayContext),
+  });
+  return createAgentEventHandler({
+    broadcast: context.broadcast,
+    broadcastToConnIds: context.broadcastToConnIds,
+    nodeHasSessionSubscribers: () => false,
+    nodeSendToSession: context.nodeSendToSession,
+    agentRunSeq: context.agentRunSeq,
+    chatRunState: context.chatRunState,
+    resolveSessionKeyForRun: () => "main",
+    clearAgentRunContext: vi.fn(),
+    toolEventRecipients: context.chatRunState.toolEventRecipients,
+    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+    clearTrackedActiveRun: terminalTracking.clearTrackedActiveRun,
+    settleTrackedTerminal: terminalTracking.settleTrackedTerminal,
+    trackTrackedRunTerminalPersistence: terminalTracking.trackTrackedRunTerminalPersistence,
+  });
 }
 
 export function registerChatRun(
@@ -155,8 +187,6 @@ export function createDirectChatContext(
       debug: vi.fn(),
     } satisfies GatewayRequestContext["logGateway"],
     agentRunSeq: new Map(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
@@ -171,11 +201,6 @@ export function createDirectChatContext(
     readChatMetadata: vi.fn(async () => {
       throw new Error("prepared chat metadata is unavailable in direct handler tests");
     }),
-    recoveryRuntime: {
-      dispatchAgent: vi.fn(),
-      waitForAgent: vi.fn(),
-      sendRecoveryNotice: vi.fn(),
-    },
     dedupe: new Map(),
     ...overrides,
   } as unknown as GatewayRequestContext;
@@ -197,6 +222,32 @@ export function createTextTranscriptEvent(
       ...message,
     },
   };
+}
+
+export function createOversizedReplayTranscriptEvent(options: {
+  id: string;
+  parentId: string;
+  siblingCount: number;
+}): string {
+  return JSON.stringify({
+    type: "message",
+    id: options.id,
+    parentId: options.parentId,
+    message: {
+      role: "assistant",
+      // Replay metadata repeats the text; keep each row below the per-message byte cap.
+      content: Array.from({ length: options.siblingCount }, (_, index) => ({
+        type: "text",
+        text: `projected sibling ${index + 1} ${"x".repeat(50_000)}`,
+        textSignature: JSON.stringify({
+          v: 1,
+          id: `history-progress-${index}`,
+          phase: "commentary",
+        }),
+      })),
+      timestamp: Date.now() + 1,
+    },
+  });
 }
 
 type ChatConnectionIdentityInput = {
@@ -225,11 +276,26 @@ export function registerChatConnectionIdentityTest(harness: {
       const context = createDirectChatContext();
       const send = async (params: ChatConnectionIdentityInput) => {
         const removeCount = (context.removeChatRun as ReturnType<typeof vi.fn>).mock.calls.length;
+        const removed = createDeferred<Parameters<GatewayRequestContext["removeChatRun"]>>();
+        vi.mocked(context.removeChatRun).mockImplementationOnce((...args) => {
+          removed.resolve(args);
+          return undefined;
+        });
+        const respond = vi.fn<RespondFn>();
         await harness.sendControlUiChat({
           context,
           ...params,
-          respond: vi.fn() as RespondFn,
+          respond,
         });
+        expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls)).toBe(true);
+        expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
+        expect(await removed.promise).toEqual([
+          params.idempotencyKey,
+          params.idempotencyKey,
+          "agent:main:main",
+        ]);
+        // Removal precedes fallback persistence. Capture this turn's release only
+        // after it reaches cleanup, rather than before pending work acquires custody.
         await harness.waitForSessionWork();
         expect(context.removeChatRun).toHaveBeenCalledTimes(removeCount + 1);
       };

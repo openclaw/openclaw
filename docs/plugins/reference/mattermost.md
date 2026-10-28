@@ -15,7 +15,7 @@ OpenClaw Mattermost channel plugin.
 ## Distribution
 
 - Package: `@openclaw/mattermost`
-- Install route: npm or ClawHub: `clawhub:@openclaw/mattermost`
+- Install route: npm or ClawHub: `@openclaw/mattermost`
 
 ## Surface
 

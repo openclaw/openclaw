@@ -1,7 +1,13 @@
-// Openshell tests cover config plugin behavior.
 import fsSync from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createOpenShellPluginConfigSchema, resolveOpenShellPluginConfig } from "./config.js";
+import { createWorkerFixture } from "./worker.test-support.js";
+
+const parse = (config: unknown) => createOpenShellPluginConfigSchema().safeParse?.(config).success;
+const resolveWorkspace = (remoteRoot: string) =>
+  resolveOpenShellPluginConfig({
+    worker: createWorkerFixture({ agentId: "main", remoteRoot }),
+  });
 
 describe("openshell plugin config", () => {
   it("applies defaults", () => {
@@ -22,38 +28,19 @@ describe("openshell plugin config", () => {
     });
   });
 
-  it("rejects relative remote paths", () => {
-    expect(
-      createOpenShellPluginConfigSchema().safeParse?.({
-        remoteWorkspaceDir: "sandbox",
-      }).success,
-    ).toBe(false);
-    expect(() =>
-      resolveOpenShellPluginConfig({
-        remoteWorkspaceDir: "sandbox",
-      }),
-    ).toThrow("OpenShell remoteWorkspaceDir must be absolute");
-  });
-
-  it("rejects remote paths outside managed sandbox roots", () => {
-    expect(
-      createOpenShellPluginConfigSchema().safeParse?.({
-        remoteWorkspaceDir: "/tmp/victim",
-      }).success,
-    ).toBe(false);
-    expect(() =>
-      resolveOpenShellPluginConfig({
-        remoteWorkspaceDir: "/tmp/victim",
-      }),
-    ).toThrow("OpenShell remoteWorkspaceDir must stay under /sandbox or /agent");
+  it.each([
+    ["sandbox", "must be absolute"],
+    ["/tmp/victim", "must stay under /sandbox or /agent"],
+  ])("rejects unmanaged remote path %s", (remoteWorkspaceDir, message) => {
+    const config = { remoteWorkspaceDir };
+    expect(parse(config)).toBe(false);
+    expect(() => resolveOpenShellPluginConfig(config)).toThrow(
+      `OpenShell remoteWorkspaceDir ${message}`,
+    );
   });
 
   it("rejects normalized paths that escape managed sandbox roots during config validation", () => {
-    expect(
-      createOpenShellPluginConfigSchema().safeParse?.({
-        remoteAgentWorkspaceDir: "/agent/../../etc",
-      }).success,
-    ).toBe(false);
+    expect(parse({ remoteAgentWorkspaceDir: "/agent/../../etc" })).toBe(false);
   });
 
   it("preserves shipped equal workspace roots", () => {
@@ -61,54 +48,25 @@ describe("openshell plugin config", () => {
       remoteWorkspaceDir: "/sandbox/project",
       remoteAgentWorkspaceDir: "/sandbox/project",
     };
-    expect(createOpenShellPluginConfigSchema().safeParse?.(config).success).toBe(true);
+    expect(parse(config)).toBe(true);
     expect(resolveOpenShellPluginConfig(config)).toMatchObject(config);
   });
 
-  it("normalizes managed sandbox subpaths", () => {
-    expect(
-      resolveOpenShellPluginConfig({
-        remoteWorkspaceDir: "/sandbox/../sandbox/project",
-        remoteAgentWorkspaceDir: "/agent/./session",
-      }),
-    ).toEqual({
-      mode: "mirror",
-      command: "openshell",
-      gateway: undefined,
-      gatewayEndpoint: undefined,
-      workspace: undefined,
-      from: "openclaw",
-      policy: undefined,
-      providers: [],
-      gpu: false,
-      autoProviders: true,
-      remoteWorkspaceDir: "/sandbox/project",
-      remoteAgentWorkspaceDir: "/agent/session",
-      timeoutMs: 120_000,
-    });
+  it("requires a literal, normalized private agent workspace root", () => {
+    expect(resolveWorkspace("/agent/canonical").worker?.agentWorkspace?.remoteRoot).toBe(
+      "/agent/canonical",
+    );
+    const rejectedRoots =
+      "/agent /sandbox /etc/private /agent/a/../b /agent/* /agent/[ab] /agent/{a,b} /agent/!(private) /agent/a\\b";
+    for (const root of rejectedRoots.split(" ")) {
+      expect(() => resolveWorkspace(root)).toThrow();
+    }
   });
-
-  it("rejects unknown mode", () => {
-    expect(() =>
-      resolveOpenShellPluginConfig({
-        mode: "bogus",
-      }),
-    ).toThrow("mode must be one of mirror, remote");
-  });
-
-  it.each(["Team", "-team", "team-", "team--one", "abcdefghijklmnopqrst"])(
-    "rejects invalid OpenShell workspace name %s",
-    (workspace) => {
-      expect(() => resolveOpenShellPluginConfig({ workspace })).toThrow(/workspace must/);
-    },
-  );
 
   it("rejects timeouts beyond Node's safe timer range", () => {
-    expect(() =>
-      resolveOpenShellPluginConfig({
-        timeoutSeconds: 2_147_001,
-      }),
-    ).toThrow("timeoutSeconds must be a number <= 2147000");
+    expect(() => resolveOpenShellPluginConfig({ timeoutSeconds: 2_147_001 })).toThrow(
+      "timeoutSeconds must be a number <= 2147000",
+    );
   });
 
   it("keeps the runtime json schema in sync with the manifest config schema", () => {

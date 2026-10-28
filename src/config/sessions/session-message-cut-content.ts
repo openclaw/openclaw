@@ -1,4 +1,5 @@
 import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
+import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
@@ -45,7 +46,7 @@ function extractHeadlineText(messageValue: unknown): string | undefined {
     message.role === "assistant"
       ? extractAssistantPhaseText(message)
       : extractEditorText(message.content ?? message.text);
-  const normalized = text?.replace(/\s+/g, " ").trim();
+  const normalized = text ? flattenMarkdownToPlainText(text) : undefined;
   return normalized || undefined;
 }
 

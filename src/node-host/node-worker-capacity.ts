@@ -4,24 +4,21 @@ import { NODE_WORKER_CAPACITY_MAX } from "../../packages/gateway-protocol/src/wo
 import { toErrorObject } from "../infra/errors.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
 import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
-import type { NodeWorkerJournalAuthority } from "./node-worker-journal.types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   NodeWorkerLaunchStore,
   type NodeWorkerLaunchClaim,
   type NodeWorkerLaunchClaimResult,
   type NodeWorkerLaunchReceipt,
 } from "./node-worker-launch-store.js";
-import {
-  inspectNodeWorkerProcessIdentity,
-  type NodeWorkerProcessIdentity,
-} from "./node-worker-process-identity.js";
+import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 
 const DEFAULT_CAPACITY_WAIT_MS = 10_000;
 const CAPACITY_POLL_MS = 100;
+const log = createSubsystemLogger("node/worker");
 
 type NodeWorkerCapacityOptions = {
   capacity?: number;
-  capacityWaitMs?: number;
   onCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
 };
 
@@ -43,7 +40,6 @@ export class NodeWorkerCapacityExhaustedError extends Error {
 /** Owns durable worker slot admission and exact live capacity publication. */
 export class NodeWorkerCapacity {
   private readonly capacity: number;
-  private readonly waitMs: number;
   private readonly onCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
   private readonly waiters = new Set<() => void>();
   private readonly closeAbort = new AbortController();
@@ -60,7 +56,6 @@ export class NodeWorkerCapacity {
     this.capacity =
       options.capacity ??
       Math.min(NODE_WORKER_CAPACITY_MAX, Math.max(1, os.availableParallelism()));
-    this.waitMs = options.capacityWaitMs ?? DEFAULT_CAPACITY_WAIT_MS;
     this.onCapacityChanged = options.onCapacityChanged;
     if (
       !Number.isSafeInteger(this.capacity) ||
@@ -70,9 +65,6 @@ export class NodeWorkerCapacity {
       throw new Error(`node worker capacity must be between 1 and ${NODE_WORKER_CAPACITY_MAX}`);
     }
     this.publishedCapacity = Object.freeze({ total: this.capacity, available: 0 });
-    if (!Number.isSafeInteger(this.waitMs) || this.waitMs < 0) {
-      throw new Error("node worker capacity wait must be a non-negative safe integer");
-    }
   }
 
   async initialize(
@@ -80,23 +72,6 @@ export class NodeWorkerCapacity {
   ): Promise<void> {
     this.onCapacityChanged?.(this.publishedCapacity);
     for (const receipt of await this.store.listNonterminal()) {
-      if (receipt.state === "pending") {
-        const supervisorState = inspectNodeWorkerProcessIdentity(receipt.supervisor);
-        if (supervisorState === "dead" || supervisorState === "reused") {
-          await this.finish(
-            {
-              launchId: receipt.launchId,
-              planHash: receipt.planHash,
-              supervisor: receipt.supervisor,
-              worker: null,
-              state: "interrupted",
-              errorText: "node host stopped before the worker launch started",
-            },
-            false,
-          );
-        }
-        continue;
-      }
       await recoverRunning(receipt);
     }
     await this.update(async () => {
@@ -116,7 +91,7 @@ export class NodeWorkerCapacity {
     signal?: AbortSignal,
     reclaimIdle?: () => Promise<boolean>,
   ): Promise<Exclude<NodeWorkerLaunchClaimResult, { action: "at-capacity" }>> {
-    const deadlineMs = Date.now() + this.waitMs;
+    const deadlineMs = performance.now() + DEFAULT_CAPACITY_WAIT_MS;
     const assertCurrent = () => {
       if (this.closeAbort.signal.aborted) {
         throw new Error("node worker supervisor is closed");
@@ -146,10 +121,9 @@ export class NodeWorkerCapacity {
   async finish(
     params: Parameters<NodeWorkerLaunchStore["finish"]>[0],
     notify = true,
-    authority?: NodeWorkerJournalAuthority,
   ): Promise<NodeWorkerLaunchReceipt> {
     return this.update(async () => {
-      const receipt = await this.store.finish(params, authority);
+      const receipt = await this.store.finish(params);
       if (notify && receipt.state !== "pending" && receipt.state !== "running") {
         await this.changed();
       }
@@ -229,6 +203,9 @@ export class NodeWorkerCapacity {
       await this.refresh();
     } catch {
       this.publishCount(this.capacity);
+      log.warn(
+        "Worker capacity refresh failed; advertising no available slots. Restart the node host if capacity does not recover.",
+      );
     }
   }
 
@@ -243,9 +220,9 @@ export class NodeWorkerCapacity {
     signal?: AbortSignal,
     reclaimIdle?: () => Promise<boolean>,
   ): Promise<boolean> {
-    const remainingMs = deadlineMs - Date.now();
+    const remainingMs = deadlineMs - performance.now();
     if (remainingMs <= 0) {
-      throw new NodeWorkerCapacityExhaustedError(this.waitMs);
+      throw new NodeWorkerCapacityExhaustedError(DEFAULT_CAPACITY_WAIT_MS);
     }
     if (signal?.aborted) {
       throw capacityAbortReason(signal);
@@ -267,8 +244,8 @@ export class NodeWorkerCapacity {
               ? new Error("node worker supervisor is closed")
               : capacityAbortReason(waiting),
           );
-        } else if (reclaimIdle && Date.now() >= deadlineMs) {
-          reject(new NodeWorkerCapacityExhaustedError(this.waitMs));
+        } else if (reclaimIdle && performance.now() >= deadlineMs) {
+          reject(new NodeWorkerCapacityExhaustedError(DEFAULT_CAPACITY_WAIT_MS));
         } else {
           complete();
         }

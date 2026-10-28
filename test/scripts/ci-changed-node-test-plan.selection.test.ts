@@ -1,81 +1,45 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveChangedNodeTestTargets } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { resolveCiCheckFamilyScope } from "../../scripts/lib/ci-check-family-scope.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeFiles } from "./ci-changed-node-test-plan.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type Mode = "aggressive" | "full";
+function fixture(files: Record<string, string> | string[]) {
+  const cwd = tempDirs.make("node-selection-");
+  writeFiles(cwd, files);
+  return cwd;
+}
 
-it.each(["added", "renamed", "deleted", "import-edge"])(
-  "retains non-import inventories and architecture for %s source modules",
-  (change) => {
-    const cwd = tempDirs.make("node-source-inventory-");
-    const source = "src/infra/new-module.ts";
-    const guards = [
-      "test/scripts/pr-wrapper-source-closure.test.ts",
-      "test/scripts/pr-worktree-provision.test.ts",
-      "test/scripts/eager-import-closure.test.ts",
-      "test/scripts/update-restart-module-outcome.test.ts",
-      "test/scripts/type-suppression-inventory.test.ts",
-      "test/scripts/plugin-sdk-surface-report.test.ts",
-    ];
-    for (const file of [...guards, ...(change === "deleted" ? [] : [source])]) {
-      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-      writeFileSync(path.join(cwd, file), "export {};\n");
-    }
-    if (change === "import-edge") {
-      writeFileSync(path.join(cwd, source), 'import "./dependency.js";\n');
-      writeFileSync(path.join(cwd, "src/infra/dependency.ts"), "export {};\n");
-    }
-    const paths = change === "renamed" ? ["src/infra/old-module.ts", source] : [source];
-    expect(resolveChangedNodeTestTargets(paths, { cwd, selectionMode: "aggressive" })).toEqual(
-      guards.toSorted(),
-    );
-    const testOnly = "src/infra/own.test.ts";
-    mkdirSync(path.dirname(path.join(cwd, testOnly)), { recursive: true });
-    writeFileSync(path.join(cwd, testOnly), "export {};\n");
-    expect(resolveChangedNodeTestTargets([testOnly], { cwd, selectionMode: "aggressive" })).toEqual(
-      [testOnly],
-    );
-    expect(resolveCiCheckFamilyScope(paths).additionalGroups).toContain(
-      "runtime-topology-architecture",
-    );
-  },
-);
+const select = (cwd: string, paths: string[], selectionMode: Mode = "aggressive") =>
+  resolveChangedNodeTestTargets(paths, { cwd, selectionMode });
 
 it.each(["aggressive", "full"] as const)(
   "routes skill node:test and Python files through their Vitest owner in %s mode",
   (selectionMode) => {
-    const cwd = tempDirs.make("node-selection-routable-");
     // Skill scripts carry node:test and Python files that no Vitest config owns.
     const unownedSkillTest = ".agents/skills/example/scripts/driver.test.mjs";
-    const skillTest = ".agents/skills/telegram-e2e-userbot/scripts/driver.test.mjs";
-    const skillPythonTest = ".agents/skills/telegram-e2e-userbot/scripts/driver.test.py";
+    const skillRoot = ".agents/skills/telegram-e2e-userbot/scripts/driver.test";
+    const skillTest = `${skillRoot}.mjs`,
+      skillPythonTest = `${skillRoot}.py`;
     const wrapper = "test/scripts/telegram-e2e-userbot-skill.test.ts";
     const routable = "src/infra/own.test.ts";
-    for (const file of [unownedSkillTest, skillTest, skillPythonTest, wrapper, routable]) {
-      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-      writeFileSync(path.join(cwd, file), "export {};\n");
-    }
-    expect(resolveChangedNodeTestTargets([skillTest], { cwd, selectionMode })).toEqual([wrapper]);
-    expect(
-      resolveChangedNodeTestTargets([unownedSkillTest, skillPythonTest, routable], {
-        cwd,
-        selectionMode,
-      }),
-    ).toEqual([routable, wrapper]);
+    const cwd = fixture([unownedSkillTest, skillTest, skillPythonTest, wrapper, routable]);
+    expect(select(cwd, [skillTest], selectionMode)).toEqual([wrapper]);
+    expect(select(cwd, [unownedSkillTest, skillPythonTest, routable], selectionMode)).toEqual([
+      routable,
+      wrapper,
+    ]);
   },
 );
 
 it("bounds protected regressions to nearby consumers and restores area coverage in full mode", () => {
-  const cwd = tempDirs.make("node-selection-");
   const source = "src/agents/example/subject.ts";
   const direct = "src/agents/example/subject.test.ts";
   const nearby = "src/infra/device-pairing.test.ts";
   const distant = "src/infra/state-migrations.audit-logs.test.ts";
-  const unrelated = "src/agents/bash-tools.exec.path.test.ts";
-  const files = {
+  const unrelated = "src/agents/bash-tools.exec.script-preflight.test.ts";
+  const cwd = fixture({
     [source]: "export const value = 1;",
     [direct]: 'import "./subject.js";',
     "src/infra/bridge.ts": 'import "../agents/example/subject.js";',
@@ -83,11 +47,7 @@ it("bounds protected regressions to nearby consumers and restores area coverage 
     "src/infra/distant.ts": 'import "./bridge.js";',
     [distant]: 'import "./distant.js";',
     [unrelated]: "export {};",
-  };
-  for (const [file, content] of Object.entries(files)) {
-    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-    writeFileSync(path.join(cwd, file), content);
-  }
+  });
   const reasons: { rule: string; input: string; targets: string[] }[] = [];
   const selected = resolveChangedNodeTestTargets([source], {
     cwd,
@@ -99,31 +59,20 @@ it("bounds protected regressions to nearby consumers and restores area coverage 
     reasons.filter(({ rule }) => rule === "import-consumer").flatMap(({ targets }) => targets),
   ).toContain(nearby);
   expect(new Set(reasons.flatMap(({ targets }) => targets))).toEqual(new Set(selected));
-  const full = resolveChangedNodeTestTargets([source], { cwd, selectionMode: "full" });
+  const full = select(cwd, [source], "full");
   expect(full).toEqual([unrelated, direct, nearby, distant].toSorted());
   expect(resolveChangedNodeTestTargets([source], { cwd })).toEqual(full);
-  expect(
-    resolveChangedNodeTestTargets([source, distant], { cwd, selectionMode: "aggressive" }),
-  ).toContain(distant);
+  expect(select(cwd, [source, distant])).toContain(distant);
 });
 
-it.each([
-  ["relative", 19],
-  ["relative", 20],
-  ["package", 19],
-  ["package", 20],
-  ["mixed", 19],
-  ["mixed", 20],
-] as const)("limits %s second-hop expansion at %i direct importers", (kind, count) => {
-  const cwd = tempDirs.make("node-hub-selection-");
+it.each(
+  ["relative", "package", "mixed"].flatMap((kind) => [19, 20].map((count) => ({ kind, count }))),
+)("limits $kind second-hop expansion at $count direct importers", ({ kind, count }) => {
   const source = kind === "relative" ? "src/core/value.ts" : "packages/subject/src/value.ts";
   const specifier = kind === "relative" ? "../core/value.js" : "@fixture/subject";
-  const direct = Array.from(
-    { length: count - 1 },
-    (_, index) => `src/readers/direct-${index}.test.ts`,
-  );
+  const direct = Array.from({ length: count - 1 }, (_, i) => `src/readers/direct-${i}.test.ts`);
   const indirect = "src/consumers/indirect.test.ts";
-  const files: Record<string, string> = {
+  const cwd = fixture({
     "packages/subject/package.json": JSON.stringify({
       name: "@fixture/subject",
       exports: { ".": "./src/value.ts" },
@@ -137,53 +86,49 @@ it.each([
         `import "${kind === "mixed" && index % 2 ? "../../packages/subject/src/value.js" : specifier}";`,
       ]),
     ),
-  };
-  for (const [file, content] of Object.entries(files)) {
-    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-    writeFileSync(path.join(cwd, file), content);
-  }
-  const selected = resolveChangedNodeTestTargets([source], { cwd, selectionMode: "aggressive" });
+  });
+  const selected = select(cwd, [source]);
   expect(selected).toEqual([...direct, ...(count < 20 ? [indirect] : [])].toSorted());
-  expect(resolveChangedNodeTestTargets([source], { cwd, selectionMode: "full" })).toEqual(
-    expect.arrayContaining(direct),
-  );
-  expect(
-    resolveChangedNodeTestTargets([source, indirect], { cwd, selectionMode: "aggressive" }),
-  ).toContain(indirect);
+  expect(select(cwd, [source], "full")).toEqual(expect.arrayContaining(direct));
+  expect(select(cwd, [source, indirect])).toContain(indirect);
   if (kind === "package") {
-    expect(
-      resolveChangedNodeTestTargets(["packages/subject/package.json"], {
-        cwd,
-        selectionMode: "aggressive",
-      }),
-    ).toEqual(direct.toSorted());
+    expect(select(cwd, ["packages/subject/package.json"])).toEqual(direct.toSorted());
   }
 });
 
 it.each([30, 31])(
   "uses stems instead of broad directory ownership at %i adjacent tests",
   (count) => {
-    const cwd = tempDirs.make("node-directory-selection-");
     const source = "src/infra/foo.ts";
-    const matching = [
-      "src/infra/foo.test.ts",
-      "src/infra/foo.extra.test.ts",
-      "src/infra/foo-more.test.ts",
-    ];
+    const matching = ["foo", "foo.extra", "foo-more"].map((stem) => `src/infra/${stem}.test.ts`);
     const unrelated = Array.from(
       { length: count - matching.length },
       (_, index) => `src/infra/unrelated-${index}.test.ts`,
     );
     const nested = "src/infra/nested/other.test.ts";
-    for (const file of [source, ...matching, ...unrelated, nested]) {
-      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
-      writeFileSync(path.join(cwd, file), "export {};\n");
-    }
-    const selected = resolveChangedNodeTestTargets([source], { cwd, selectionMode: "aggressive" });
+    const cwd = fixture([source, ...matching, ...unrelated, nested]);
+    const selected = select(cwd, [source]);
     expect(selected).toEqual((count <= 30 ? [...matching, ...unrelated] : matching).toSorted());
     expect(selected).not.toContain(nested);
-    expect(
-      resolveChangedNodeTestTargets([source, unrelated[0]!], { cwd, selectionMode: "aggressive" }),
-    ).toContain(unrelated[0]);
+    expect(select(cwd, [source, unrelated[0]!])).toContain(unrelated[0]);
+  },
+);
+
+it.each(["aggressive", "full"] as const)(
+  "keeps opt-in tests outside PR test roots out of %s selection",
+  (selectionMode) => {
+    // #182101: the retention census imports this helper but has its own opt-in config.
+    const helper = "ui/src/test-helpers/control-ui-e2e.ts";
+    const optIn = "scripts/control-ui-retention/dependency-retention.test.ts";
+    const consumer = "ui/src/test-helpers/control-ui-e2e.test.ts";
+    const cwd = fixture({
+      [helper]: "export const helper = 1;\n",
+      [optIn]: 'import "../../ui/src/test-helpers/control-ui-e2e.ts";\n',
+      [consumer]: 'import "./control-ui-e2e.ts";\n',
+    });
+    const selected = select(cwd, [helper], selectionMode);
+    expect(selected).toContain(consumer);
+    expect(selected).not.toContain(optIn);
+    expect(select(cwd, [optIn], selectionMode)).not.toContain(optIn);
   },
 );

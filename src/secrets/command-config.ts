@@ -53,17 +53,14 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
     ) {
       // Inactive surfaces are diagnostics, not hard failures; active unresolved refs block the
       // command because the runtime snapshot promised that target was usable.
-      if (params.inactiveRefPaths?.has(target.path)) {
+      const isInactive = params.inactiveRefPaths?.has(target.path);
+      if (isInactive) {
         diagnostics.push(
           `${target.path}: secret ref is configured on an inactive surface; skipping command-time assignment.`,
         );
-        inactive.push({
-          path: target.path,
-          pathSegments: [...target.pathSegments],
-        });
-        continue;
       }
-      unresolved.push({
+      const unavailable = isInactive ? inactive : unresolved;
+      unavailable.push({
         path: target.path,
         pathSegments: [...target.pathSegments],
       });

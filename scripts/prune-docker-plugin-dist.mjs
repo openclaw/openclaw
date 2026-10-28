@@ -1,29 +1,22 @@
-// Prunes omitted bundled plugin files and their unshared runtime dependencies
-// from Docker-oriented production package output, then links the retained
-// externally distributed plugins' own dependencies under their packaged roots.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { composePackagePlugins } from "../src/infra/package-plugin-composition.ts";
 import { collectRootPackageExcludedExtensionDirs } from "./lib/bundled-plugin-build-entries.mjs";
-import { linkSourcePluginDependencies } from "./lib/bundled-plugin-dependency-links.mjs";
+import {
+  linkInstalledPackageDirectory,
+  linkSourcePluginDependencies,
+} from "./lib/bundled-plugin-dependency-links.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
 const RUNTIME_DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies"];
 
-/**
- * Parses OPENCLAW_EXTENSIONS into the bundled plugin ids that Docker should keep.
- */
 export function parseDockerPluginKeepList(value) {
   if (typeof value !== "string") {
     return new Set();
   }
-  return new Set(
-    value
-      .split(/[\s,]+/u)
-      .map((entry) => entry.trim())
-      .filter(Boolean),
-  );
+  return new Set(value.split(/[\s,]+/u).filter(Boolean));
 }
 
 function readPackageJson(filePath) {
@@ -229,10 +222,75 @@ function linkRetainedPluginDependencies(repoRoot, bundledPluginDir, retainedPlug
   }
 }
 
-/**
- * Removes omitted plugin dist trees plus node_modules packages not needed by kept runtime code,
- * then links retained externally distributed plugin dependencies under their packaged roots.
- */
+function composeRetainedPluginDistribution(repoRoot, bundledPluginDir, retainedPluginIds) {
+  if (retainedPluginIds.length === 0) {
+    return;
+  }
+  const rootPackagePath = path.join(repoRoot, "package.json");
+  const rootPackageJson = readPackageJson(rootPackagePath);
+  if (!rootPackageJson) {
+    throw new Error("selected Docker distribution is missing its root package manifest");
+  }
+  const selected = retainedPluginIds
+    .toSorted((left, right) => left.localeCompare(right))
+    .map((id) => {
+      const pluginDir = path.join(repoRoot, bundledPluginDir, id);
+      const packageJson = readPackageJson(path.join(pluginDir, "package.json"));
+      if (!packageJson) {
+        throw new Error(`selected Docker plugin is missing its package manifest: ${id}`);
+      }
+      return { id, pluginDir, packageJson };
+    });
+  const composed = composePackagePlugins(
+    rootPackageJson,
+    selected.map(({ id, packageJson }) => ({ id, packageJson })),
+  );
+  const links = new Map();
+  for (const { id, pluginDir, packageJson } of selected) {
+    for (const field of RUNTIME_DEPENDENCY_FIELDS) {
+      for (const [packageName, version] of Object.entries(packageJson[field] ?? {})) {
+        const source = resolveNodeModulePackageDir(pluginDir, packageName);
+        if (!source) {
+          if (field === "optionalDependencies") {
+            continue;
+          }
+          throw new Error(
+            `selected Docker plugin ${id} is missing installed dependency ${packageName}`,
+          );
+        }
+        const sourcePackageJson = readPackageJson(path.join(source, "package.json"));
+        if (sourcePackageJson?.version !== version) {
+          throw new Error(
+            `selected Docker plugin ${id} installed ${packageName}@${sourcePackageJson?.version ?? "unknown"}, expected ${version}`,
+          );
+        }
+        const target = nodeModulePath(repoRoot, packageName);
+        const targetStat = fs.lstatSync(target, { throwIfNoEntry: false });
+        if (targetStat) {
+          const targetPackageJson = readPackageJson(path.join(target, "package.json"));
+          if (targetPackageJson?.version !== version) {
+            throw new Error(
+              `selected Docker plugin ${id} cannot replace root ${packageName}@${targetPackageJson?.version ?? "unknown"} with ${version}`,
+            );
+          }
+          continue;
+        }
+        const previous = links.get(packageName);
+        if (previous && previous !== source) {
+          throw new Error(
+            `selected Docker plugins resolve ${packageName}@${version} to different installed packages`,
+          );
+        }
+        links.set(packageName, source);
+      }
+    }
+  }
+  for (const [packageName, source] of links) {
+    linkInstalledPackageDirectory(source, nodeModulePath(repoRoot, packageName));
+  }
+  fs.writeFileSync(rootPackagePath, `${JSON.stringify(composed, null, 2)}\n`);
+}
+
 export function pruneDockerPluginDist(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const env = params.env ?? process.env;
@@ -268,11 +326,11 @@ export function pruneDockerPluginDist(params = {}) {
     }
   }
 
-  linkRetainedPluginDependencies(
-    repoRoot,
-    bundledPluginDir,
-    [...excludedPluginIds].filter((pluginId) => keepPluginIds.has(pluginId)),
+  const retainedPluginIds = [...excludedPluginIds].filter((pluginId) =>
+    keepPluginIds.has(pluginId),
   );
+  linkRetainedPluginDependencies(repoRoot, bundledPluginDir, retainedPluginIds);
+  composeRetainedPluginDistribution(repoRoot, bundledPluginDir, retainedPluginIds);
 
   return removed;
 }

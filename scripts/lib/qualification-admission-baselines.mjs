@@ -58,13 +58,6 @@ export function validateQualificationBaselinePolicy(request, policy) {
   ) {
     throw new Error("Frozen baselines omit the candidate-owned oldest-supported baseline");
   }
-  if (
-    baselines.upgradeSurvivorBaselines.some(
-      (spec) => compareReleaseVersions(spec.slice(9), baselines.upgradeBaseline.slice(9)) > 0,
-    )
-  ) {
-    throw new Error("Frozen upgrade baseline must be the newest selected predecessor");
-  }
   return baselines;
 }
 

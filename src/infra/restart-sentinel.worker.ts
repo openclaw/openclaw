@@ -1,40 +1,149 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type {
-  WorkerOperationContext,
+  WorkerWriteOperationContext,
   WorkerOperationHandlers,
 } from "../state/worker-operation-registry.js";
 import { gitCommitPrefixesMatch } from "./git-commit.js";
 import {
   deleteRestartSentinelRowSync,
+  recordManagedHandoffSentinelOutcomeRowSync,
   readRestartSentinelRowSync,
   readRestartSentinelSnapshotSync,
   writeRestartSentinelRowIfRevisionSync,
   writeRestartSentinelRowSync,
   writeUpdateInstallReceiptRowSync,
+  type RestartSentinel,
+  type ManagedHandoffSentinelOutcome,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
-import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import type { EngineConnection } from "./sql-connection.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "./sqlite-worker-operation-admission.js";
+import {
+  reserveUpdateFailureReportReceiptRowSync,
+  beginUpdateFailureReportReceiptCleanupRowSync,
+  beginStaleUpdateFailureReportReceiptCleanupRowSync,
+  completeUpdateFailureReportReceiptCleanupRowSync,
+  refreshUpdateFailureReportReceiptPreparationRowSync,
+  finalizeUpdateFailureReportReceiptRowSync,
+  markUpdateFailureReportReceiptPendingRowSync,
+  markUpdateFailureReportReceiptPreparedRowSync,
+  readUpdateFailureReportReceiptRowSync,
+} from "./update-failure-report-receipt-store.js";
+import type { UpdateFailureReportReceipt } from "./update-failure-report-receipt.js";
 
 function transaction<Input, Output>(
   label: string,
-  operation: (db: DatabaseSync, input: Input) => Output,
+  operation: (db: EngineConnection, input: Input) => Output,
 ) {
-  return (input: Input, { open, stateOptions }: WorkerOperationContext): Output =>
-    runOpenClawStateWriteTransaction(
+  return (input: Input, { writeAdmitted }: WorkerWriteOperationContext): Output =>
+    writeAdmitted(({ db }) => operation(db, input), { operationLabel: label });
+}
+
+function receiptTransaction<Input, Output>(
+  label: string,
+  operation: (db: EngineConnection, input: Input) => Output,
+) {
+  return (input: Input, { write }: WorkerWriteOperationContext): Output =>
+    write(
       ({ db }) => {
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const result = operation(db, input);
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        deferSqliteWorkerCommitReceipt(db, { kind: "update-report-result", value: result });
         return result;
       },
-      { database: open(), ...stateOptions() },
       { operationLabel: label },
     );
 }
 
+// SDK-reachable legacy sweep keys confirm the reservation without claiming custody.
+function sweepReservationCurrent(
+  db: EngineConnection,
+  input: {
+    attemptId: string;
+    expectedReservationId: string;
+    sweepOwnerId: string;
+    sweepGeneration: string;
+  },
+): boolean {
+  const receipt = readUpdateFailureReportReceiptRowSync(db, input.attemptId);
+  return (
+    receipt?.reservationId === input.expectedReservationId && receipt.artifactSweep === "pending"
+  );
+}
+
 export const restartSentinelOperations = {
+  "restartSentinel.managedHandoffOutcome": transaction(
+    "restart-sentinel.managed-handoff-outcome",
+    (db, input: ManagedHandoffSentinelOutcome) =>
+      recordManagedHandoffSentinelOutcomeRowSync(db, input),
+  ),
+  "restartSentinel.reserve": receiptTransaction(
+    "update-failure-report.reserve",
+    (db, input: { attemptId: string; reservationId: string; previewDigest: string }) =>
+      reserveUpdateFailureReportReceiptRowSync(
+        db,
+        input.attemptId,
+        input.reservationId,
+        input.previewDigest,
+      ),
+  ),
+  "restartSentinel.beginCleanup": receiptTransaction(
+    "update-failure-report.beginCleanup",
+    (db, input: { attemptId: string; reservationId: string }) =>
+      beginUpdateFailureReportReceiptCleanupRowSync(db, input.attemptId, input.reservationId),
+  ),
+  "restartSentinel.beginStaleCleanup": receiptTransaction(
+    "update-failure-report.beginStaleCleanup",
+    (db, input: { attemptId: string; reservationId: string }) =>
+      beginStaleUpdateFailureReportReceiptCleanupRowSync(db, input.attemptId, input.reservationId),
+  ),
+  "restartSentinel.completeCleanup": receiptTransaction(
+    "update-failure-report.completeCleanup",
+    (db, input: { attemptId: string; reservationId: string }) =>
+      completeUpdateFailureReportReceiptCleanupRowSync(db, input.attemptId, input.reservationId),
+  ),
+  "restartSentinel.claimSweep": receiptTransaction(
+    "update-failure-report.claimSweep",
+    sweepReservationCurrent,
+  ),
+  "restartSentinel.releaseSweep": receiptTransaction(
+    "update-failure-report.releaseSweep",
+    sweepReservationCurrent,
+  ),
+  "restartSentinel.refreshPreparation": receiptTransaction(
+    "update-failure-report.refreshPreparation",
+    (db, input: { attemptId: string; reservationId: string }) =>
+      refreshUpdateFailureReportReceiptPreparationRowSync(db, input.attemptId, input.reservationId),
+  ),
+  "restartSentinel.finalizeReceipt": receiptTransaction(
+    "update-failure-report.finalizeReceipt",
+    (db, input: { attemptId: string; receipt: UpdateFailureReportReceipt }) =>
+      finalizeUpdateFailureReportReceiptRowSync(db, input.attemptId, input.receipt),
+  ),
+  "restartSentinel.markPending": receiptTransaction(
+    "update-failure-report.markPending",
+    (db, input: { attemptId: string; reservationId: string; previewDigest: string }) =>
+      markUpdateFailureReportReceiptPendingRowSync(
+        db,
+        input.attemptId,
+        input.reservationId,
+        input.previewDigest,
+      ),
+  ),
+  "restartSentinel.markPrepared": receiptTransaction(
+    "update-failure-report.markPrepared",
+    (db, input: { attemptId: string; reservationId: string; previewDigest: string }) =>
+      markUpdateFailureReportReceiptPreparedRowSync(
+        db,
+        input.attemptId,
+        input.reservationId,
+        input.previewDigest,
+      ),
+  ),
   "restartSentinel.admit": (_input: undefined, { open }) => {
     open();
   },
@@ -47,7 +156,7 @@ export const restartSentinelOperations = {
     (db, input: { payload: RestartSentinelPayload; expectedRevision: number | null }) => {
       const current = readRestartSentinelSnapshotSync(db);
       return current.state.kind !== "invalid" && current.revision === input.expectedRevision
-        ? writeRestartSentinelRowSync(db, input.payload)
+        ? writeRestartSentinelRowSync(db, input.payload, current.revision)
         : null;
     },
   ),
@@ -97,7 +206,7 @@ export const restartSentinelOperations = {
         current.sentinel.revision !== input.expectedRevision ||
         current.sentinel.payload.kind !== "update"
       ) {
-        return null;
+        return { sentinel: null, installReceipt: null };
       }
 
       const payload = current.sentinel.payload;
@@ -150,15 +259,24 @@ export const restartSentinelOperations = {
         ? writeRestartSentinelRowIfRevisionSync(db, payload, current.sentinel.revision)
         : current.sentinel;
       if (!finalized) {
-        return null;
+        return { sentinel: null, installReceipt: null };
       }
-      // This receipt records the install fact proven by the running process. Post-install
-      // failures such as managed-service-handoff-failed keep the sentinel in error without
-      // erasing the upstream fallback for campaign-managed detached installs (#121634).
-      if (stats.mode === "git" && verifiesInstallRoot && verifiesGitRevision && changedInstall) {
-        writeUpdateInstallReceiptRowSync(db, payload);
-      }
-      return changed ? finalized : null;
+      return {
+        sentinel: changed ? finalized : null,
+        installReceipt:
+          stats.mode === "git" && verifiesInstallRoot && verifiesGitRevision && changedInstall
+            ? finalized
+            : null,
+      };
     },
   ),
-} satisfies WorkerOperationHandlers;
+  "restartSentinel.recordInstall": transaction(
+    "restart-sentinel.record-install",
+    (db, receipt: RestartSentinel) => {
+      const current = readRestartSentinelRowSync(db);
+      if (current.kind === "valid" && current.sentinel.revision === receipt.revision) {
+        writeUpdateInstallReceiptRowSync(db, receipt.payload);
+      }
+    },
+  ),
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

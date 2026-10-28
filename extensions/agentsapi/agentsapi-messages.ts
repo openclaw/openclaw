@@ -50,8 +50,6 @@ export class AgentsApiMessageProjection {
   readonly reply: AgentsApiReply = { assistantUsage: makeAgentsApiZeroUsage() };
   private readonly items = new Map<string, NativeTextState>();
   private readonly turnByItem = new Map<string, string>();
-  private readonly eventIds = new Set<string>();
-  private readonly unknownTypes = new Set<string>();
   private readonly usageByTurn = new Map<string, NormalizedUsage>();
   private canonicalUsageRecorded = false;
   private readonly nativeTools: AgentsApiNativeToolProjection;
@@ -145,17 +143,8 @@ export class AgentsApiMessageProjection {
 
   async observe(event: AgentsApiEvent): Promise<void> {
     this.assertCurrent();
-    if (this.finalTurnId || (event.event_id && this.eventIds.has(event.event_id))) {
+    if (this.finalTurnId) {
       return;
-    }
-    if (event.event_id) {
-      this.eventIds.add(event.event_id);
-      if (this.eventIds.size > 4096) {
-        const oldest = this.eventIds.values().next().value;
-        if (oldest !== undefined) {
-          this.eventIds.delete(oldest);
-        }
-      }
     }
     if (
       event.turn?.subagent_id === null &&
@@ -191,10 +180,7 @@ export class AgentsApiMessageProjection {
         event.part?.type === "output_text")
     ) {
       const state = this.eventItem(event);
-      if (!state || state.terminal) {
-        return;
-      }
-      if (state.recoveredPartial && !event.type.endsWith(".done")) {
+      if (!state) {
         return;
       }
       const index = event.content_index ?? 0;
@@ -209,10 +195,7 @@ export class AgentsApiMessageProjection {
     }
     if (event.type.startsWith("agent.session.turn.reasoning_summary_")) {
       const state = this.eventItem(event);
-      if (!state || state.terminal) {
-        return;
-      }
-      if (state.recoveredPartial && !event.type.endsWith(".done")) {
+      if (!state) {
         return;
       }
       const index = event.summary_index ?? 0;
@@ -228,10 +211,6 @@ export class AgentsApiMessageProjection {
     }
     if (event.type.startsWith("agent.session.environment.")) {
       await this.emitEnvironment(event);
-      return;
-    }
-    if (!INTERNAL_EVENT_TYPES.has(event.type)) {
-      this.recordUnknownType(event.type);
     }
   }
 
@@ -247,7 +226,7 @@ export class AgentsApiMessageProjection {
     }
     this.transcriptOrderingGapReported = true;
     embeddedAgentLog.warn(
-      "Agents API canonical transcript prefix is unavailable; host input and tool receipts retain their existing placement",
+      "Agents API saved transcript prefix is unavailable; host input and tool receipts retain their existing placement",
     );
   }
 
@@ -346,16 +325,23 @@ export class AgentsApiMessageProjection {
       promptError: turn.error,
       turnCompleted: isAgentsApiTerminalTurn(turn.status),
     });
+    const replyItemId = `agentsapi:${this.remoteSessionId}:${turn.id}:reply`;
     if (text) {
-      this.reply.lastAssistant = await this.append({
-        ...assistant,
-        idempotencyKey: `agentsapi:${this.remoteSessionId}:${turn.id}`,
-      });
+      const assistantItemIds = this.visibleAssistantItemId
+        ? [this.visibleAssistantItemId, replyItemId]
+        : [replyItemId];
+      this.reply.lastAssistant = await this.append(
+        {
+          ...assistant,
+          idempotencyKey: `agentsapi:${this.remoteSessionId}:${turn.id}`,
+        },
+        assistantItemIds,
+      );
       this.assertCurrent();
       await this.params.onAssistantMessageStart?.();
       this.assertCurrent();
     }
-    await this.emitAssistantSnapshot(`agentsapi:${this.remoteSessionId}:${turn.id}:reply`, text);
+    await this.emitAssistantSnapshot(replyItemId, text);
     if (text) {
       this.assertCurrent();
       await this.params.onPartialReply?.({ text });
@@ -409,7 +395,6 @@ export class AgentsApiMessageProjection {
       return;
     }
     if (item.type !== "message" && item.type !== "reasoning") {
-      this.recordUnknownType(`item:${item.type}`);
       return;
     }
     const id = this.identity(turnId, item.id);
@@ -500,6 +485,14 @@ export class AgentsApiMessageProjection {
     const id = this.identity(state.turnId, state.item.id);
     const text = joinTextParts(state.texts);
     if (state.item.phase === "commentary") {
+      if (this.visibleAssistantItemId === id) {
+        this.visibleAssistantItemId = undefined;
+        state.lastAssistantText = undefined;
+        await this.emit({
+          stream: "assistant",
+          data: { itemId: id, text: "", delta: "", replace: true },
+        });
+      }
       const phase = terminal ? "end" : "update";
       if (
         !text.trim() ||
@@ -554,7 +547,6 @@ export class AgentsApiMessageProjection {
     }
     this.lastReasoningText = text;
     this.reasoningOpen = true;
-    this.assertCurrent();
     await this.params.onReasoningStream?.({ text, isReasoningSnapshot: true });
     this.assertCurrent();
   }
@@ -595,7 +587,6 @@ export class AgentsApiMessageProjection {
   private async emitEnvironment(event: AgentsApiEvent): Promise<void> {
     const status = event.type.slice("agent.session.environment.".length);
     if (!ENVIRONMENT_TITLES.has(status)) {
-      this.recordUnknownType(event.type);
       return;
     }
     await this.emit({
@@ -616,23 +607,15 @@ export class AgentsApiMessageProjection {
     });
   }
 
-  private recordUnknownType(type: string): void {
-    const safeType = type.replace(/[^a-zA-Z0-9_.:-]/gu, "?").slice(0, 128);
-    if (this.unknownTypes.size >= 20 || this.unknownTypes.has(safeType)) {
-      return;
-    }
-    this.unknownTypes.add(safeType);
-    embeddedAgentLog.debug("Agents API projection omitted an unfamiliar native type", {
-      type: safeType,
-    });
-  }
-
   private eventItem(event: AgentsApiEvent): NativeTextState | undefined {
     if (!event.item_id) {
       throw new Error("Agents API output event has no item identity");
     }
     const turnId = event.turn_id ?? this.turnByItem.get(event.item_id);
-    return turnId ? this.items.get(this.identity(turnId, event.item_id)) : undefined;
+    const state = turnId ? this.items.get(this.identity(turnId, event.item_id)) : undefined;
+    return state && !state.terminal && (!state.recoveredPartial || event.type.endsWith(".done"))
+      ? state
+      : undefined;
   }
 
   private identity(turnId: string, itemId: string): string {
@@ -657,31 +640,18 @@ export class AgentsApiMessageProjection {
     this.assertCurrent();
   }
 
-  private append<TMessage extends AgentMessage>(message: TMessage): Promise<TMessage> {
-    return appendAgentsApiTranscriptMessage(this.params, message, this.assertCurrent);
+  private append<TMessage extends AgentMessage>(
+    message: TMessage,
+    assistantItemIds?: readonly string[],
+  ): Promise<TMessage> {
+    return appendAgentsApiTranscriptMessage(
+      this.params,
+      message,
+      this.assertCurrent,
+      assistantItemIds,
+    );
   }
 }
-
-const INTERNAL_EVENT_TYPES = new Set([
-  "error",
-  "agent.session.created",
-  "agent.session.idle",
-  "agent.session.in_progress",
-  "agent.session.requires_action",
-  "agent.session.failed",
-  "agent.session.error",
-  "agent.session.turn.created",
-  "agent.session.turn.in_progress",
-  "agent.session.turn.completed",
-  "agent.session.turn.failed",
-  "agent.session.turn.cancelled",
-  "agent.session.turn.content_part.added",
-  "agent.session.turn.content_part.done",
-  // Native delegation remains disabled until child history and settlement exist.
-  "agent.session.subagent.active",
-  "agent.session.subagent.closed",
-  "agent.session.subagent.created",
-]);
 
 const ENVIRONMENT_TITLES = new Map([
   ["pending", "Agent environment starting"],

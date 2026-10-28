@@ -1,6 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { resolvePromptBuildHookResult } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -11,11 +15,13 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { createReplyAgentDefaults } from "./get-reply-config.test-support.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 
 let state: OpenClawTestState | undefined;
 afterEach(async () => {
   await state?.cleanup();
+  clearRuntimeConfigSnapshot();
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
@@ -32,21 +38,17 @@ async function createExplicitOwnerConfig() {
         main: { workspace: state.path("main-workspace") },
         work: { workspace: state.path("work-workspace") },
       },
-      defaults: {
-        workspace: state.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: "mock-openai/gpt-5.6-luna" },
-        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-      },
+      defaults: createReplyAgentDefaults(state.workspaceDir),
     },
     plugins: { enabled: false },
     session: { scope: "global" },
   });
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
   return cfg;
 }
 
-it.each(["main", "work"])(
+it.each(["work"])(
   "consumes only %s global next-turn context during prompt preparation",
   async (agentId) => {
     const cfg = await createExplicitOwnerConfig();

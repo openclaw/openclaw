@@ -26,11 +26,13 @@ import {
 import {
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
+  testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
+  nativeQuestionConfigFixture,
   startOrResumeThread,
 } from "./thread-lifecycle.test-fixtures.js";
 setupRunAttemptTestHooks();
@@ -65,6 +67,161 @@ describe("Codex native configuration lifecycle", () => {
     }
     throw new Error(`unexpected method: ${method}`);
   }
+
+  it.each([undefined, false, true])(
+    "refreshes callable question policy and authored native configuration (%s)",
+    async (authored) => {
+      let enabled = authored;
+      const native = threadStartResult("question-thread", { cwd: workspaceDir });
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "thread/start" || method === "thread/resume") {
+            return native;
+          }
+          if (method === "thread/inject_items") {
+            return {};
+          }
+          return method === "config/read"
+            ? nativeQuestionConfigFixture(enabled)
+            : readNativeConfig(method);
+        },
+      });
+      const common = { ...lifecycleParams(fixture.client), askUserAvailable: true };
+      const binding = await startOrResumeThread(common);
+      await retainCodexAppServerLiveThread(
+        fixture.client,
+        binding.threadId,
+        binding.liveThreadOwnership?.release,
+        binding.liveThreadConfigFingerprint,
+      );
+      const start = fixture.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+      expect(start).toBeDefined();
+      const startConfig = isJsonObject(start) && isJsonObject(start.config) ? start.config : {};
+      expect(startConfig["tools.experimental_request_user_input.enabled"]).toBe(
+        authored ? undefined : false,
+      );
+      enabled = authored !== true;
+      const changed = await startOrResumeThread(common);
+      expect(changed.threadId).toBe(binding.threadId);
+      const refreshed = fixture.request.mock.calls.filter(([method]) => method === "thread/resume");
+      expect(refreshed).toHaveLength(1);
+      const refresh = refreshed[0]?.[1];
+      const refreshConfig =
+        isJsonObject(refresh) && isJsonObject(refresh.config) ? refresh.config : {};
+      expect(refreshConfig["tools.experimental_request_user_input.enabled"]).toBe(
+        enabled ? undefined : false,
+      );
+      await retainCodexAppServerLiveThread(
+        fixture.client,
+        changed.threadId,
+        changed.liveThreadOwnership?.release,
+        changed.liveThreadConfigFingerprint,
+      );
+      const next = await startOrResumeThread({ ...common, askUserAvailable: false });
+      expect(next.threadId).toBe(binding.threadId);
+      const resumes = fixture.request.mock.calls.filter(([method]) => method === "thread/resume");
+      expect(resumes).toHaveLength(enabled ? 1 : 2);
+      if (!enabled) {
+        const resumed = resumes.at(-1)?.[1];
+        const config = isJsonObject(resumed) && isJsonObject(resumed.config) ? resumed.config : {};
+        expect(config).not.toHaveProperty("tools.experimental_request_user_input.enabled");
+      }
+    },
+  );
+
+  it("resumes the bound thread after replacing the inference proxy client", async () => {
+    const createClient = (persistedThreads: string[] = []) =>
+      createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        persistedThreads,
+        respond: async (method) => {
+          if (method === "account/read") {
+            return { account: { type: "apiKey" } };
+          }
+          if (method === "thread/start" || method === "thread/resume") {
+            return threadStartResult("proxy-thread");
+          }
+          return readNativeConfig(method);
+        },
+      });
+    const first = await createClient();
+    ownCodexInferenceClient(first.client);
+    let firstUrl: string | undefined;
+    try {
+      const binding = await startOrResumeThread({
+        ...lifecycleParams(first.client),
+        nativeCodeModeEnabled: false,
+      });
+      firstUrl = getCodexInferenceThread(first.client, binding.threadId)?.baseUrl;
+      expect(binding.threadId).toBe("proxy-thread");
+      expect(binding.restrictedThreadConfigFingerprint).toBeDefined();
+    } finally {
+      first.client.close();
+    }
+    const second = await createClient(["proxy-thread"]);
+    ownCodexInferenceClient(second.client);
+    try {
+      const binding = await startOrResumeThread({
+        ...lifecycleParams(second.client),
+        nativeCodeModeEnabled: false,
+      });
+      expect(binding.threadId).toBe("proxy-thread");
+      expect(binding.lifecycle.action).toBe("resumed");
+      expect(getCodexInferenceThread(second.client, binding.threadId)?.baseUrl).not.toBe(firstUrl);
+      expect(second.request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
+    } finally {
+      second.client.close();
+    }
+  });
+
+  it.each([false, true])(
+    "suppresses plugin suggestions on start and resume without disabling plugins (authored: %s)",
+    async (authored) => {
+      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+      const native = threadStartResult("plugin-thread", { cwd: workspaceDir });
+      const config: JsonObject = {
+        "features.apps": true,
+        "features.plugins": true,
+        plugins: { "calendar@fixture": { enabled: true } },
+        apps: { calendar: { enabled: true } },
+        ...(authored
+          ? { "features.tool_suggest": true, "features.recommended_plugins": true }
+          : {}),
+      };
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "thread/start" || method === "thread/resume") {
+            return native;
+          }
+          return readNativeConfig(method);
+        },
+      });
+      const common = { ...lifecycleParams(fixture.client), config };
+      await startOrResumeThread(common);
+      fixture.seed(native, { loaded: false, subscribed: false });
+      await startOrResumeThread(common);
+
+      const requests = fixture.writes
+        .map((line): unknown => JSON.parse(line))
+        .filter(isJsonObject)
+        .filter((frame) => frame.method === "thread/start" || frame.method === "thread/resume");
+      expect(requests.map((frame) => frame.method)).toEqual(["thread/start", "thread/resume"]);
+      for (const request of requests) {
+        expect(request.params).toMatchObject({
+          config: {
+            "features.tool_suggest": false,
+            "features.recommended_plugins": false,
+            "features.apps": true,
+            "features.plugins": true,
+            plugins: { "calendar@fixture": { enabled: true } },
+            apps: { calendar: { enabled: true } },
+          },
+        });
+      }
+    },
+  );
 
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",
@@ -286,11 +443,12 @@ describe("Codex native configuration lifecycle", () => {
   });
 
   it.each([
-    { changeModel: true, rotateLineage: false },
-    { changeModel: false, rotateLineage: true },
+    { changeModel: true, rotateLineage: false, revokeDuringBindingRead: false },
+    { changeModel: false, rotateLineage: true, revokeDuringBindingRead: false },
+    { changeModel: false, rotateLineage: false, revokeDuringBindingRead: true },
   ])(
-    "rebinds before native warm reuse (changed model: $changeModel, rotated lineage: $rotateLineage)",
-    async ({ changeModel, rotateLineage }) => {
+    "rebinds before native warm reuse (changed model: $changeModel, rotated lineage: $rotateLineage, revoked binding read: $revokeDuringBindingRead)",
+    async ({ changeModel, rotateLineage, revokeDuringBindingRead }) => {
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
       await writeCodexAppServerBinding(sessionFile, {
         webSearchThreadConfigFingerprint: JSON.stringify({
@@ -359,16 +517,18 @@ describe("Codex native configuration lifecycle", () => {
         clientId: client.getInstanceId(),
       });
       expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "skills/list",
         "config/read",
         "configRequirements/read",
         "thread/read",
         "thread/resume",
         "thread/inject_items",
+        "skills/list",
         "config/read",
         "configRequirements/read",
         "thread/read",
       ]);
-      if (rotateLineage) {
+      if (rotateLineage || revokeDuringBindingRead) {
         await retainCodexAppServerLiveThread(
           client,
           warm.threadId,
@@ -384,22 +544,50 @@ describe("Codex native configuration lifecycle", () => {
           ([method]) => method === "thread/resume",
         ).length;
         const retainedBinding = await readCodexAppServerBinding(sessionFile);
+        const closeHost = revokeDuringBindingRead
+          ? await bindProductionHarnessHostCapabilitiesForTest(params)
+          : undefined;
+        let nativeReadCompleted = false;
+        const readBinding = testCodexAppServerBindingStore.readAsync.bind(
+          testCodexAppServerBindingStore,
+        );
+        const bindingRead = revokeDuringBindingRead
+          ? vi
+              .spyOn(testCodexAppServerBindingStore, "readAsync")
+              .mockImplementation(async (identity) => {
+                const binding = await readBinding(identity);
+                if (nativeReadCompleted) {
+                  closeHost?.();
+                }
+                return binding;
+              })
+          : undefined;
         const nativeRequest = CodexAppServerClient.prototype.request.bind(client);
         request.mockImplementation(async (...args) => {
           const response = await nativeRequest(...args);
           if (args[0] === "thread/read") {
+            nativeReadCompleted = true;
             // The wire read still completes normally. Change the durable lineage
             // while warm admission awaits it, without changing the native binding.
-            await patchSessionEntry({
-              agentId: "main",
-              sessionKey: "agent:main:session-1",
-              storePath: resolveStorePath(undefined, { agentId: "main" }),
-              update: () => ({ previousSessionId: "replaced-predecessor" }),
-            });
+            if (rotateLineage) {
+              await patchSessionEntry({
+                agentId: "main",
+                sessionKey: "agent:main:session-1",
+                storePath: resolveStorePath(undefined, { agentId: "main" }),
+                update: () => ({ previousSessionId: "replaced-predecessor" }),
+              });
+            }
           }
           return response;
         });
-        await expect(startOrResumeThread(common)).rejects.toThrow("active");
+        try {
+          await expect(startOrResumeThread(common)).rejects.toThrow(
+            "Codex warm thread ownership changed",
+          );
+        } finally {
+          bindingRead?.mockRestore();
+          closeHost?.();
+        }
         expect(request.mock.calls.filter(([method]) => method === "thread/resume")).toHaveLength(
           resumeCount,
         );

@@ -627,24 +627,15 @@ export function createSessionCatalogNodeHostBindings(
   };
   return {
     commands: [
-      {
-        command: options.listCommand,
+      ...(["list", "read"] as const).map((operation): OpenClawPluginNodeHostCommand => ({
+        command: options[`${operation}Command`],
         cap: options.capability,
         dangerous: false,
         hasActiveWork: options.hasActiveWork,
         isAvailable: options.listAvailable,
         handle: async (paramsJSON) =>
-          JSON.stringify(await options.list(options.parseParams(paramsJSON))),
-      },
-      {
-        command: options.readCommand,
-        cap: options.capability,
-        dangerous: false,
-        hasActiveWork: options.hasActiveWork,
-        isAvailable: options.listAvailable,
-        handle: async (paramsJSON) =>
-          JSON.stringify(await options.read(options.parseParams(paramsJSON))),
-      },
+          JSON.stringify(await options[operation](options.parseParams(paramsJSON))),
+      })),
       terminal,
     ],
     policies: [

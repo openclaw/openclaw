@@ -1,4 +1,3 @@
-// QA Lab Anthropic Messages wire adapter.
 import {
   buildAnthropicFailureResponse,
   buildAnthropicMessageResponse,

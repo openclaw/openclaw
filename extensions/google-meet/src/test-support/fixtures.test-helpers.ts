@@ -13,99 +13,88 @@ import type { GoogleMeetSession } from "../transports/types.js";
 export const MEET_URL = "https://meet.google.com/abc-defg-hij";
 export const MEET_URL_EN = `${MEET_URL}?hl=en`;
 
-const conferenceRecord = {
-  name: "conferenceRecords/rec-1",
-  space: "spaces/abc-defg-hij",
-  startTime: "2026-04-25T10:00:00Z",
-  endTime: "2026-04-25T10:30:00Z",
-};
+const record = "conferenceRecords/rec-1";
+const times = { startTime: "2026-04-25T10:00:00Z", endTime: "2026-04-25T10:30:00Z" };
+const conferenceRecord = { name: record, space: "spaces/abc-defg-hij", ...times };
 
-const meetApiFixtures: Record<string, unknown> = {
-  "/v2/spaces/abc-defg-hij": {
-    name: "spaces/abc-defg-hij",
-    meetingCode: "abc-defg-hij",
-    meetingUri: MEET_URL,
-  },
-  "/calendar/v3/calendars/primary/events": {
-    items: [
+function resourceList(name: string, fields: Record<string, unknown>, key?: string) {
+  const path = name.slice(0, name.lastIndexOf("/"));
+  const collection = key ?? path.slice(path.lastIndexOf("/") + 1);
+  return {
+    [`/v2/${record}/${path}`]: { [collection]: [{ name: `${record}/${name}`, ...fields }] },
+  };
+}
+
+export function meetApiFixtures(cli?: { participantDisplayName?: string }) {
+  return {
+    "/v2/spaces/abc-defg-hij": {
+      name: "spaces/abc-defg-hij",
+      meetingCode: "abc-defg-hij",
+      meetingUri: MEET_URL,
+    },
+    "/calendar/v3/calendars/primary/events": {
+      items: [
+        {
+          id: "event-1",
+          summary: "Project sync",
+          hangoutLink: MEET_URL,
+          start: { dateTime: times.startTime },
+          end: { dateTime: times.endTime },
+        },
+      ],
+    },
+    "/v2/conferenceRecords": { conferenceRecords: [conferenceRecord] },
+    [`/v2/${record}`]: conferenceRecord,
+    ...resourceList("participants/p1", {
+      ...(!cli ? { earliestStartTime: times.startTime, latestEndTime: times.endTime } : {}),
+      signedinUser: { user: "users/alice", displayName: cli?.participantDisplayName ?? "Alice" },
+    }),
+    ...resourceList("participants/p1/participantSessions/s1", {
+      ...times,
+      ...(cli ? { endTime: "2026-04-25T10:10:00Z" } : {}),
+    }),
+    ...resourceList("recordings/r1", {
+      ...(cli ? { state: "FILE_GENERATED" } : {}),
+      driveDestination: { file: cli ? "drive-file-1" : "drive/file-1" },
+    }),
+    ...resourceList("transcripts/t1", {
+      ...(cli ? { state: "FILE_GENERATED" } : {}),
+      docsDestination: { document: cli ? "doc-1" : "docs/doc-1" },
+    }),
+    ...resourceList(
+      "transcripts/t1/entries/e1",
       {
-        id: "event-1",
-        summary: "Project sync",
-        hangoutLink: MEET_URL,
-        start: { dateTime: "2026-04-25T10:00:00Z" },
-        end: { dateTime: "2026-04-25T10:30:00Z" },
-      },
-    ],
-  },
-  "/v2/conferenceRecords": { conferenceRecords: [conferenceRecord] },
-  "/v2/conferenceRecords/rec-1": conferenceRecord,
-  "/v2/conferenceRecords/rec-1/participants": {
-    participants: [
-      {
-        name: "conferenceRecords/rec-1/participants/p1",
-        earliestStartTime: "2026-04-25T10:00:00Z",
-        latestEndTime: "2026-04-25T10:30:00Z",
-        signedinUser: { user: "users/alice", displayName: "Alice" },
-      },
-    ],
-  },
-  "/v2/conferenceRecords/rec-1/participants/p1/participantSessions": {
-    participantSessions: [
-      {
-        name: "conferenceRecords/rec-1/participants/p1/participantSessions/s1",
-        startTime: "2026-04-25T10:00:00Z",
-        endTime: "2026-04-25T10:30:00Z",
-      },
-    ],
-  },
-  "/v2/conferenceRecords/rec-1/recordings": {
-    recordings: [
-      {
-        name: "conferenceRecords/rec-1/recordings/r1",
-        driveDestination: { file: "drive/file-1" },
-      },
-    ],
-  },
-  "/v2/conferenceRecords/rec-1/transcripts": {
-    transcripts: [
-      {
-        name: "conferenceRecords/rec-1/transcripts/t1",
-        docsDestination: { document: "docs/doc-1" },
-      },
-    ],
-  },
-  "/v2/conferenceRecords/rec-1/transcripts/t1/entries": {
-    transcriptEntries: [
-      {
-        name: "conferenceRecords/rec-1/transcripts/t1/entries/e1",
-        participant: "conferenceRecords/rec-1/participants/p1",
+        participant: `${record}/participants/p1`,
         text: "Hello from the transcript.",
-        languageCode: "en-US",
         startTime: "2026-04-25T10:01:00Z",
-        endTime: "2026-04-25T10:01:05Z",
+        ...(!cli ? { languageCode: "en-US", endTime: "2026-04-25T10:01:05Z" } : {}),
       },
-    ],
-  },
-  "/v2/conferenceRecords/rec-1/smartNotes": {
-    smartNotes: [
-      {
-        name: "conferenceRecords/rec-1/smartNotes/sn1",
-        docsDestination: { document: "docs/doc-2" },
-      },
-    ],
-  },
-};
+      "transcriptEntries",
+    ),
+    ...resourceList("smartNotes/sn1", {
+      ...(cli ? { state: "FILE_GENERATED" } : {}),
+      docsDestination: { document: cli ? "notes-1" : "docs/doc-2" },
+    }),
+  } satisfies Record<string, unknown>;
+}
+
+export function captureStdout() {
+  let output = "";
+  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+    output += String(chunk);
+    return true;
+  }) as typeof process.stdout.write);
+  return { output: () => output, restore: () => writeSpy.mockRestore() };
+}
 
 export function stubMeetArtifactsApi() {
+  const fixtures: Record<string, unknown> = meetApiFixtures();
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const path = new URL(typeof input === "string" || input instanceof URL ? input : input.url)
       .pathname;
-    const fixture = meetApiFixtures[path];
+    const fixture = fixtures[path];
     if (fixture) {
-      return new Response(JSON.stringify(fixture), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return Response.json(fixture);
     }
     const document = {
       "/drive/v3/files/doc-1/export": "Transcript document body.",
@@ -158,29 +147,17 @@ export function meetSession(overrides: SessionOverrides = {}): GoogleMeetSession
       toolPolicy: "safe-read-only",
       ...realtime,
     },
-    chrome: {
-      audioBackend: "blackhole-2ch",
-      launched: true,
-      ...chrome,
-    },
+    chrome: { audioBackend: "blackhole-2ch", launched: true, ...chrome },
     notes: [],
     ...session,
   };
 }
 
-function emptyRealtimeAudioHealth(): MeetingRealtimeAudioEngineHealth {
+export function meetLaunchedTab(targetId: string, openedByPlugin = true) {
   return {
-    providerConnected: false,
-    realtimeReady: false,
-    audioInputActive: false,
-    audioOutputActive: false,
-    lastInputBytes: 0,
-    lastOutputBytes: 0,
-    suppressedInputBytes: 0,
-    realtimeTranscriptLines: 0,
-    recentRealtimeTranscript: [],
-    recentTalkEvents: [],
-    bridgeClosed: false,
+    launched: true as const,
+    tab: { targetId, openedByPlugin },
+    browser: { inCall: true as const, micMuted: true as const },
   };
 }
 
@@ -191,34 +168,33 @@ export function meetAudioBridge(stop = vi.fn(async () => {})) {
     inputCommand: ["capture-meet"],
     outputCommand: ["play-meet"],
     speak: vi.fn(),
-    getHealth: vi.fn(emptyRealtimeAudioHealth),
+    getHealth: vi.fn((): MeetingRealtimeAudioEngineHealth => ({
+      providerConnected: false,
+      realtimeReady: false,
+      audioInputActive: false,
+      audioOutputActive: false,
+      lastInputBytes: 0,
+      lastOutputBytes: 0,
+      suppressedInputBytes: 0,
+      realtimeTranscriptLines: 0,
+      recentRealtimeTranscript: [],
+      recentTalkEvents: [],
+      bridgeClosed: false,
+    })),
     stop,
   };
 }
 
 export function createTestMeetRealtimeAudioTransport() {
-  let inputHandler: ((audio: Buffer) => void) | undefined;
-  const writeOutput = vi.fn(async () => {});
   const transport: MeetingRealtimeAudioTransport = {
     onFatal: vi.fn(),
-    startInput: vi.fn((handler) => {
-      inputHandler = handler;
-    }),
+    startInput: vi.fn(),
     stop: vi.fn(async () => {}),
-    writeOutput,
+    writeOutput: vi.fn(async () => {}),
     clearOutput: vi.fn(async () => {}),
     dispose: vi.fn(async () => {}),
   };
-  return {
-    transport,
-    writeOutput,
-    deliverInput: (audio: Buffer) => {
-      if (!inputHandler) {
-        throw new Error("Expected Google Meet realtime input to be started");
-      }
-      inputHandler(audio);
-    },
-  };
+  return { transport };
 }
 
 export function meetRuntime(
@@ -234,34 +210,25 @@ export function meetRuntime(
   });
 }
 
-type TestBridgeProcess = {
-  stdin?: { write(chunk: unknown): unknown } | null;
-  stdout?: PassThrough | null;
-  stderr: PassThrough;
-  killed: boolean;
-  exitCode: number | null;
-  signalCode: NodeJS.Signals | null;
-  kill: ReturnType<typeof vi.fn>;
-  on: EventEmitter["on"];
-  emit: EventEmitter["emit"];
-};
+class TestBridgeProcess extends EventEmitter {
+  killed = false;
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  kill = vi.fn((signal?: NodeJS.Signals) => {
+    this.killed = true;
+    this.signalCode = signal ?? "SIGTERM";
+    return true;
+  });
+}
 
 export function testBridgeProcess(stdio: {
   stdin?: { write(chunk: unknown): unknown } | null;
   stdout?: PassThrough | null;
   stderr?: PassThrough;
-}): TestBridgeProcess {
-  const proc = new EventEmitter() as unknown as TestBridgeProcess;
-  proc.stdin = stdio.stdin;
-  proc.stdout = stdio.stdout;
-  proc.stderr = stdio.stderr ?? new PassThrough();
-  proc.killed = false;
-  proc.exitCode = null;
-  proc.signalCode = null;
-  proc.kill = vi.fn((signal?: NodeJS.Signals) => {
-    proc.killed = true;
-    proc.signalCode = signal ?? "SIGTERM";
-    return true;
+}) {
+  return Object.assign(new TestBridgeProcess(), {
+    stdin: stdio.stdin,
+    stdout: stdio.stdout,
+    stderr: stdio.stderr ?? new PassThrough(),
   });
-  return proc;
 }

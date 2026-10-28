@@ -2,6 +2,8 @@ import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { SkillLibraryFileSchema, SKILL_LIBRARY_MAX_FILES } from "./skill-library.js";
 
+export const SKILL_RESOURCE_MAX_SKILLS = 256;
+
 /** Portable, bounded skill resources; paths are relative to a worker-owned resource directory. */
 export const SkillResourceDeliverySchema = closedObject({
   version: Type.Literal(1),
@@ -17,7 +19,7 @@ export const SkillResourceDeliverySchema = closedObject({
     }),
     // Aggregate transport holds the default catalog (up to 150) plus up to 64 managed pins.
     // This does not expand the existing total byte or model-context budgets.
-    { maxItems: 256 },
+    { maxItems: SKILL_RESOURCE_MAX_SKILLS },
   ),
 });
 export type SkillResourceDelivery = Static<typeof SkillResourceDeliverySchema>;

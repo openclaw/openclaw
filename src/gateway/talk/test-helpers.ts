@@ -11,15 +11,6 @@ export const preparedTalkSessionProjection = createSessionRowProjectionFixture({
   store: {},
 });
 
-/** Minimal successful speech-provider response shape used by talk.speak tests. */
-export type TalkSpeakTestPayload = {
-  audioBase64?: string;
-  provider?: string;
-  outputFormat?: string;
-  mimeType?: string;
-  fileExtension?: string;
-};
-
 /** Calls talk.speak without a WebSocket server and captures the handler response. */
 export async function invokeTalkSpeakDirect(params: Record<string, unknown>) {
   const { talkHandlers } = await import("./handlers/index.js");

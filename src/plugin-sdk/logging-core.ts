@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for logging, diagnostics, and redaction helpers.
- */
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   startGatewayDiagnosticHeartbeat,

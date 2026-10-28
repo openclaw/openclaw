@@ -52,7 +52,18 @@ export interface ReefIngressMessage {
   autonomy: ReefAutonomy;
 }
 
+export interface ReefRejectionRecovery {
+  assertCurrent(): void;
+  loadState(): Promise<ReefRejectionNoticeState | undefined>;
+  reserve(
+    state: ReefRejectionNoticeState,
+  ): Promise<{ kind: "reserved" } | { kind: "existing"; state: ReefRejectionNoticeState }>;
+  complete(state: ReefRejectionNoticeState): Promise<boolean>;
+}
+
 export interface ReefDeliveryRejection {
+  /** Runtime-only continuation bound to the source that produced this rejection. */
+  recovery: ReefRejectionRecovery;
   id: string;
   peer: string;
   /** Recipient identity pinned when the rejected envelope was composed. */

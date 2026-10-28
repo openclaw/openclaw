@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginAutoEnableResult } from "../../config/plugin-auto-enable.types.js";
 import { makeCatalogEntry, makeMeta } from "../../flows/channel-setup.test-helpers.js";
-import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
+import { createInstalledPluginIndexFixture } from "../../plugins/gateway-startup.test-helpers.js";
 
 const listPluginContributionIds = vi.hoisted(() =>
   vi.fn((_index?: unknown, _contribution?: unknown, _options?: unknown): string[] => []),
@@ -43,7 +43,8 @@ vi.mock("../../secrets/channel-env-vars.js", () => ({
   getChannelEnvVars: () => [],
 }));
 
-import { listManifestInstalledChannelIds, resolveChannelSetupEntries } from "./discovery.js";
+import { resolveChannelSetupEntries } from "./discovery.js";
+import { listManifestInstalledChannelIds } from "./trusted-catalog.js";
 
 describe("listManifestInstalledChannelIds", () => {
   beforeEach(() => {
@@ -58,17 +59,7 @@ describe("listManifestInstalledChannelIds", () => {
   });
 
   it.each([false, true])("uses the auto-enabled config with a provided index: %s", (provided) => {
-    const index: InstalledPluginIndex = {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    };
+    const index = createInstalledPluginIndexFixture({ plugins: [], diagnostics: [] });
     const autoEnabledConfig = {
       channels: { slack: { enabled: true } },
       plugins: { allow: ["slack"] },

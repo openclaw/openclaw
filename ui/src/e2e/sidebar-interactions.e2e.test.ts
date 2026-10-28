@@ -1,4 +1,3 @@
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import {
@@ -10,131 +9,123 @@ import {
   installMockGateway,
   waitForControlUiRoute,
   type ControlUiMockGatewayScenario,
-  type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import {
-  captureSidebarUiProof,
+  expectPath,
+  catalogList,
+  mockRequests,
+  expectText,
+  expectAttribute,
+  expectCount,
+  expectFocused,
+  pressAndExpectFocus,
+} from "./sidebar-assertions.test-support.ts";
+import {
   createSidebarCustomizationSuite,
   openSidebarCustomizationPage,
-  openSidebarMoreMenu,
+  openSidebarPinMenu,
 } from "./sidebar-customization.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Control UI sidebar interactions mocked Gateway E2E");
+const desktop = {
+  locale: "en-US",
+  serviceWorkers: "block" as const,
+  viewport: { height: 900, width: 1440 },
+};
+const pixelAvatar =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+function agentResponses(agents: Array<{ id: string; name?: string }>) {
+  const agentsList = { agents, defaultId: "main", mainKey: "main", scope: "agent" };
+  return {
+    "agents.list": agentsList,
+    "chat.startup": {
+      agentsList,
+      messages: [],
+      metadata: { models: [] },
+      sessionId: "session:agent:main:main",
+      thinkingLevel: null,
+    },
+  };
+}
 
 suite.define(() => {
-  it("opens every new-session plus as a native link without creating sessions", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const agentId = "research";
-    const group = "Client & ops / α";
-    const catalogId = "cli-tools";
-    const basePath = "/operator";
-    const scenario: ControlUiMockGatewayScenario = {
-      basePath,
-      defaultAgentId: agentId,
-      sessionKey: `agent:${agentId}:main`,
-      sessionGroups: [group],
-      sessions: [
-        { key: `agent:${agentId}:main`, label: "Grouped conversation", category: group },
-        { key: `agent:${agentId}:notes`, label: "Ungrouped notes" },
-      ],
-      featureMethods: [...defaultControlUiFeatureMethods, "sessions.catalog.list"],
-      methodResponses: {
-        "sessions.catalog.list": {
-          catalogs: [
-            {
-              id: catalogId,
-              label: "CLI tools",
-              capabilities: {
-                continueSession: true,
-                archive: false,
-                startTerminal: true,
-              },
-              hosts: [
-                {
-                  hostId: "gateway:local",
-                  label: "Gateway Mac",
-                  kind: "gateway",
-                  connected: true,
-                  sessions: [
-                    {
-                      threadId: "cli-thread",
-                      name: "CLI plan",
-                      status: "stored",
-                      archived: false,
-                      canContinue: true,
-                      canArchive: false,
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
+  it("keeps every new-session plus native and opens group and catalog targets without creating sessions", async () => {
+    await suite.withPage(desktop, async ({ context, page }) => {
+      const agentId = "research";
+      const group = "Client & ops / α";
+      const catalogId = "cli-tools";
+      const basePath = "/operator";
+      const scenario: ControlUiMockGatewayScenario = {
+        basePath,
+        defaultAgentId: agentId,
+        sessionKey: `agent:${agentId}:main`,
+        sessionGroups: [group],
+        sessions: [
+          { key: `agent:${agentId}:main`, label: "Main" },
+          { key: `agent:${agentId}:client-ops`, label: "Grouped conversation", category: group },
+          { key: `agent:${agentId}:notes`, label: "Ungrouped notes" },
+        ],
+        featureMethods: [...defaultControlUiFeatureMethods, "sessions.catalog.list"],
+        methodResponses: {
+          "sessions.catalog.list": catalogList({
+            id: catalogId,
+            label: "CLI tools",
+            host: "Gateway Mac",
+            thread: "cli-thread",
+            name: "CLI plan",
+            status: "stored",
+            archive: false,
+            startTerminal: true,
+          }),
         },
-      },
-    };
-    // The opener and real browser-created tabs must receive the same Gateway fixture.
-    await context.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
-      route.fulfill({ json: createControlUiMockBootstrapConfig(scenario) }),
-    );
-    await context.addInitScript({ content: createControlUiMockGatewayInitScript(scenario) });
-    const page = await context.newPage();
-    const sessionCreates = (target: Page) =>
-      target.evaluate(() => {
-        const gateway = (
-          window as Window & {
-            openclawControlUiE2eGateway?: {
-              findRequests: (method: string) => MockGatewayRequest[];
-            };
-          }
-        ).openclawControlUiE2eGateway;
-        if (!gateway) {
-          throw new Error("Mock Gateway is not installed");
-        }
-        return gateway.findRequests("sessions.create");
-      });
+      };
+      // The opener and real browser-created tabs must receive the same Gateway fixture.
+      await context.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
+        route.fulfill({ json: createControlUiMockBootstrapConfig(scenario) }),
+      );
+      await context.addInitScript({ content: createControlUiMockGatewayInitScript(scenario) });
 
-    try {
       await page.goto(
         controlUiSessionUrl(`${suite.server.baseUrl}operator/`, `agent:${agentId}:main`),
       );
       await waitForControlUiRoute(page, { routeId: "chat" });
+      await chooseSidebarMenuOption(page, "Status", "All");
+      await closeSidebarMenu(page);
       const composer = page.locator(".agent-chat__composer-combobox > textarea");
       const draft = "Keep this unsent conversation draft";
       await composer.fill(draft);
       const originalUrl = page.url();
-      await captureSidebarUiProof(suite, page, "new-session-links-source.png");
-
-      const actions: Array<{ selector: string; section?: string; params: Record<string, string> }> =
-        [
-          { selector: ".sidebar-brand__new-thread", params: { agent: agentId } },
-          {
-            selector: ".sidebar-session-toolbar .sidebar-new-session",
-            params: { agent: agentId },
-          },
-          {
-            selector: `[data-session-section="category:${group}"] .sidebar-new-session`,
-            section: `category:${group}`,
-            params: { agent: agentId, group },
-          },
-          {
-            selector: '[data-session-section="ungrouped"] .sidebar-new-session',
-            section: "ungrouped",
-            params: { agent: agentId },
-          },
-          {
-            selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,
-            section: `catalog:${catalogId}`,
-            params: { agent: agentId, catalog: catalogId },
-          },
-          { selector: ".shell-chrome-controls__new-thread", params: { agent: agentId } },
-        ];
+      const railAction = {
+        selector: ".sidebar-rail .sidebar-new-session",
+        params: { agent: agentId },
+      };
+      const sectionAction = (section: string, params: Record<string, string> = {}) => ({
+        selector: `[data-session-section="${section}"] .sidebar-new-session`,
+        section,
+        params: { agent: agentId, ...params },
+      });
+      const actions: Array<{
+        selector: string;
+        section?: string;
+        params: Record<string, string>;
+        newTab?: "middle" | "modified";
+      }> = [
+        railAction,
+        { ...sectionAction(`category:${group}`, { group }), newTab: "middle" },
+        sectionAction("ungrouped"),
+        {
+          selector: `[data-session-section="catalog:${catalogId}"] .sidebar-session-catalog-new`,
+          section: `catalog:${catalogId}`,
+          params: { agent: agentId, catalog: catalogId },
+          newTab: "modified",
+        },
+        railAction,
+      ];
       for (const [index, action] of actions.entries()) {
         if (index === actions.length - 1) {
-          await page.locator(".sidebar-brand__collapse").click();
+          await page.locator('[data-navigation-view][aria-pressed="true"]').click();
         }
         if (action.section) {
           await page
@@ -156,10 +147,14 @@ suite.define(() => {
           }),
         ).toBe(false);
 
+        if (!action.newTab) {
+          continue;
+        }
+
         // Native tab gestures do not retain an opener, so observe the browser context.
         const [popup] = await Promise.all([
           context.waitForEvent("page"),
-          index % 2 === 0
+          action.newTab === "modified"
             ? link.click({ modifiers: ["ControlOrMeta"] })
             : link.click({ button: "middle" }),
         ]);
@@ -171,19 +166,16 @@ suite.define(() => {
           });
           await popup.locator(".new-session-page__message").waitFor({ state: "visible" });
           expect(popup.url()).toBe(expectedUrl.href);
-          expect(await sessionCreates(popup)).toEqual([]);
+          expect(await mockRequests(popup, "sessions.create")).toEqual([]);
           expect(page.url()).toBe(originalUrl);
           expect(await composer.inputValue()).toBe(draft);
-          expect(await sessionCreates(page)).toEqual([]);
-          if ("group" in action.params) {
-            await captureSidebarUiProof(suite, popup, "new-session-links-group-tab.png");
-          }
+          expect(await mockRequests(page, "sessions.create")).toEqual([]);
         } finally {
           await popup.close();
         }
       }
 
-      await page.locator(".shell-chrome-controls__new-thread").click();
+      await page.locator(".sidebar-rail .sidebar-new-session").click();
       await waitForControlUiRoute(page, {
         routeId: "new-session",
         pathname: `${basePath}/new`,
@@ -191,292 +183,76 @@ suite.define(() => {
       });
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       expect(context.pages()).toHaveLength(1);
-      expect(await sessionCreates(page)).toEqual([]);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  async function openCapabilitiesPrompt(reducedMotion: "no-preference" | "reduce") {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      reducedMotion,
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
+      expect(await mockRequests(page, "sessions.create")).toEqual([]);
     });
-    const page = await context.newPage();
-    await installMockGateway(page);
-    await page.goto(`${suite.server.baseUrl}chat`);
-
-    // Record the 600ms cue before clicking; a host-side poll can arrive after it expires.
-    const observedCue = await page.evaluateHandle(() => {
-      const state = {
-        active: false,
-        background: "",
-        boxShadow: "",
-        duration: "",
-        focused: false,
-        name: "",
-        value: "",
-      };
-      const observer = new MutationObserver(() => {
-        const textarea = document.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox > textarea",
-        );
-        const input = textarea?.closest<HTMLElement>(".agent-chat__input");
-        if (!textarea || !input?.classList.contains("agent-chat__input--prefill-attention")) {
-          return;
-        }
-        const style = getComputedStyle(input);
-        Object.assign(state, {
-          active: true,
-          background: style.backgroundColor,
-          boxShadow: style.boxShadow,
-          duration: style.animationDuration,
-          focused: textarea === document.activeElement,
-          name: style.animationName,
-          value: textarea.value,
-        });
-        observer.disconnect();
-      });
-      observer.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ["class"],
-        childList: true,
-        subtree: true,
-      });
-      return { state, disconnect: () => observer.disconnect() };
-    });
-
-    try {
-      const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-agent-card__main").click();
-      await sidebar
-        .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="command:capabilities"]')
-        .click();
-
-      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-      const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
-      let cueStyle = { background: "", boxShadow: "", duration: "", name: "" };
-      await expect
-        .poll(async () => {
-          const state = await observedCue.evaluate((cue) => cue.state);
-          cueStyle = {
-            background: state.background,
-            boxShadow: state.boxShadow,
-            duration: state.duration,
-            name: state.name,
-          };
-          return { active: state.active, focused: state.focused, value: state.value };
-        })
-        .toEqual({ active: true, focused: true, value: "What can you do?" });
-      await expect
-        .poll(() =>
-          textarea.evaluate((element: HTMLTextAreaElement) => ({
-            focused: element === document.activeElement,
-            value: element.value,
-          })),
-        )
-        .toEqual({ focused: true, value: "What can you do?" });
-      return { context, cueStyle, input, page };
-    } finally {
-      await observedCue.evaluate((cue) => cue.disconnect());
-      await observedCue.dispose();
-    }
-  }
-
-  it("focuses and highlights the composer from the agent capabilities action", async () => {
-    const { context, cueStyle, input, page } = await openCapabilitiesPrompt("no-preference");
-
-    try {
-      expect(cueStyle).toMatchObject({
-        duration: "0.6s",
-        name: "chat-composer-prefill-attention",
-      });
-      await captureSidebarUiProof(suite, page, "capabilities-composer-focus.png");
-      await expect
-        .poll(() => input.getAttribute("class"))
-        .not.toContain("agent-chat__input--prefill-attention");
-      expect(await input.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
-        cueStyle.background,
-      );
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
   });
 
-  it("keeps a static composer cue when reduced motion is requested", async () => {
-    const { context, cueStyle, input, page } = await openCapabilitiesPrompt("reduce");
-
-    try {
-      expect(cueStyle.name).toBe("none");
-      expect(cueStyle.boxShadow).not.toBe("none");
-      await captureSidebarUiProof(suite, page, "capabilities-composer-reduced-motion.png");
-      await expect
-        .poll(() => input.getAttribute("class"))
-        .not.toContain("agent-chat__input--prefill-attention");
-      expect(await input.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
-        cueStyle.background,
-      );
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("restores focus to the Pages edit button after closing the pin editor with Escape", async () => {
+  it.each(["Escape", "Tab"] as const)("returns pin-menu focus on %s", async (exit) => {
     const { context, page } = await openSidebarCustomizationPage(suite);
-
     try {
-      const sidebar = page.locator("openclaw-app-sidebar");
-      const moreButton = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
-      const moreMenu = await openSidebarMoreMenu(page);
-      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
-      const pinItems = sidebar
-        .locator(
-          "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
-        )
-        .locator('[role="menuitem"], [role="menuitemcheckbox"]');
-      // The pin editor installs roving focus after the outgoing More menu yields.
-      await expect
-        .poll(() =>
-          pinItems.evaluateAll((items) => items.filter((item) => item.tabIndex === 0).length),
-        )
-        .toBe(1);
-      await expect
-        .poll(() => pinItems.first().evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("End");
-      await expect
-        .poll(() => pinItems.last().evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("Home");
-      await expect
-        .poll(() => pinItems.first().evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("Escape");
-
-      await expect.poll(() => page.locator(".sidebar-customize-menu").count()).toBe(0);
-      await expect
-        .poll(() => moreButton.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("moves focus through the sidebar pin editor with menu keys", async () => {
-    const { context, page } = await openSidebarCustomizationPage(suite);
-
-    try {
-      const sidebar = page.locator("openclaw-app-sidebar");
-      const moreMenu = await openSidebarMoreMenu(page);
-      await expect
-        .poll(() =>
-          moreMenu
-            .locator('[role="menuitem"]')
-            .first()
-            .evaluate((element) => element === document.activeElement),
-        )
-        .toBe(true);
-      await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
-      const menu = sidebar.locator(
-        "wa-dropdown.sidebar-customize-menu:not(.sidebar-more-menu):not(.sidebar-agent-menu)",
-      );
-      const menuItems = menu.locator('[role="menuitem"], [role="menuitemcheckbox"]');
-      await expect
-        .poll(() =>
-          menuItems.evaluateAll((items) => items.filter((item) => item.tabIndex === 0).length),
-        )
-        .toBe(1);
-      await expect
-        .poll(() => menuItems.first().evaluate((element) => element === document.activeElement))
-        .toBe(true);
-
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => menuItems.nth(1).evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("End");
-      await expect
-        .poll(() => menuItems.last().evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => menuItems.first().evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("Tab");
-      await expect.poll(() => menu.count()).toBe(0);
-      const nextLink = sidebar.locator('[data-sidebar-entry="route:agents-home"] .nav-item');
-      await expect
-        .poll(() => nextLink.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      const menu = await openSidebarPinMenu(page);
+      const items = menu.getByRole("menuitem");
+      if (exit === "Tab") {
+        expect((await items.allTextContents()).map((text) => text.trim())).toEqual([
+          "Move up",
+          "Move down",
+          "Unpin",
+        ]);
+      }
+      await expectFocused(items.first(), true);
+      const steps: Array<[string, number]> =
+        exit === "Escape"
+          ? [
+              ["End", -1],
+              ["Home", 0],
+            ]
+          : [
+              ["ArrowDown", 1],
+              ["End", -1],
+              ["ArrowDown", 0],
+            ];
+      for (const [key, index] of steps) {
+        await pressAndExpectFocus(page, key, items.nth(index), true);
+      }
+      await page.keyboard.press(exit);
+      await menu.waitFor({ state: "detached" });
+      const target =
+        exit === "Escape"
+          ? page
+              .locator('[data-sidebar-entry="route:dashboards"]')
+              .getByRole("link", { name: "Dashboards", exact: true })
+          : page.locator('[data-sidebar-entry="route:systems"] .nav-item');
+      await expectFocused(target);
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
   it("shows one row per agent plus Show all and reaches them with menu keys", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    const agentsList = {
-      agents: [{ id: "main" }, { id: "research" }, { id: "forge" }, { id: "support" }],
-      defaultId: "main",
-      mainKey: "main",
-      scope: "agent",
-    };
-    await installMockGateway(page, {
-      methodResponses: {
-        "agent.identity.get": {
-          cases: [
-            {
-              match: { agentId: "main" },
-              response: {
-                agentId: "main",
-                avatar: "",
-                emoji: "🦞",
-                name: "Scheduled Automations",
-              },
-            },
-            {
-              match: { agentId: "research" },
-              response: {
-                agentId: "research",
-                avatar:
-                  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-                name: "Research",
-              },
-            },
-            {
-              match: { agentId: "forge" },
-              response: { agentId: "forge", avatar: "", emoji: "🔧", name: "Forge" },
-            },
-            {
-              match: { agentId: "support" },
-              response: { agentId: "support", avatar: "", emoji: "🧭", name: "Support" },
-            },
-          ],
+    await suite.withPage(desktop, async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "agent.identity.get": {
+            cases: [
+              { agentId: "main", avatar: "", emoji: "🦞", name: "Scheduled Automations" },
+              { agentId: "research", avatar: pixelAvatar, name: "Research" },
+              { agentId: "forge", avatar: "", emoji: "🔧", name: "Forge" },
+              { agentId: "support", avatar: "", emoji: "🧭", name: "Support" },
+            ].map((response) => ({ match: { agentId: response.agentId }, response })),
+          },
+          ...agentResponses([
+            { id: "main" },
+            { id: "research" },
+            { id: "forge" },
+            { id: "support" },
+          ]),
         },
-        "agents.list": agentsList,
-        "chat.startup": {
-          agentsList,
-          messages: [],
-          metadata: { models: [] },
-          sessionId: "session:agent:main:main",
-          thinkingLevel: null,
-        },
-      },
-    });
+      });
 
-    try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-      const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
-      const allSwitch = menu.getByRole("menuitem", { name: "Show all", exact: true });
+      const menu = sidebar.locator(".sidebar-agent-menu");
       const mainSwitch = menu.getByRole("menuitem", { name: "Scheduled Automations", exact: true });
       const researchSwitch = menu.getByRole("menuitem", { name: "Research", exact: true });
       await expect
@@ -489,324 +265,106 @@ suite.define(() => {
       await expect
         .poll(() => researchSwitch.locator(".agent-select__avatar img").getAttribute("src"))
         .toContain("data:image/png;base64,");
-      await expect.poll(() => menu.getByText(/^New session —/).count()).toBe(0);
+      await expectCount(menu.getByText(/^New session —/), 0);
       await menu.evaluate(async (dropdown) => {
         await document.fonts.ready;
-        const surface = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
-        await Promise.all(surface.getAnimations().map((animation) => animation.finished));
+        await Promise.all(dropdown.getAnimations().map((animation) => animation.finished));
       });
-      const rowLayout = await menu.evaluate((dropdown) => {
-        const rows = [...dropdown.querySelectorAll(".sidebar-agent-menu__agent-switch")];
-        return rows.map((row) => {
-          const avatar = row
-            .querySelector(".sidebar-agent-menu__agent-avatar")!
-            .getBoundingClientRect();
-          const label = row.querySelector(".agent-select__option-copy")!.getBoundingClientRect();
-          const bounds = row.getBoundingClientRect();
-          return { height: bounds.height, width: bounds.width, gap: label.left - avatar.right };
-        });
-      });
-      expect(rowLayout.map((row) => row.height)).toEqual([56, 56, 56, 56, 56]);
-      expect(new Set(rowLayout.map((row) => row.width)).size).toBe(1);
-      expect(rowLayout.map((row) => row.gap)).toEqual([12, 12, 12, 12, 12]);
-      const capabilities = menu.getByRole("menuitem", {
-        name: "What can Scheduled Automations do?",
+      const createAgent = menu.getByRole("menuitem", {
+        name: "Create new agent",
         exact: true,
       });
       for (const scale of [1, 1.4]) {
         await page.evaluate((value) => {
           document.documentElement.style.setProperty("--control-ui-text-scale", String(value));
         }, scale);
-        await captureSidebarUiProof(suite, page, `agent-menu-long-label-${scale}.png`);
         await expect
           .poll(() =>
-            capabilities.evaluate((item) => {
-              const label = item.querySelector(".sidebar-customize-menu__text");
+            createAgent.evaluate((item) => {
+              const label = item.querySelector(".agent-select__option-label");
               if (!label) {
-                throw new Error("Capabilities label is missing");
+                throw new Error("Create agent label is missing");
               }
               return label.getBoundingClientRect().right - item.getBoundingClientRect().right;
             }),
           )
           .toBeLessThanOrEqual(0);
       }
-      await expect
-        .poll(() =>
-          menu.evaluate((dropdown) => {
-            const grid = dropdown.querySelector(".sidebar-agent-menu__agent-list");
-            const rows = [
-              ...dropdown.querySelectorAll("wa-dropdown-item.sidebar-agent-menu__agent-switch"),
-            ];
-            if (!grid || rows.length === 0) {
-              return Number.NaN;
-            }
-            return Math.round(
-              Math.abs(
-                grid.getBoundingClientRect().bottom -
-                  Math.max(...rows.map((row) => row.getBoundingClientRect().bottom)),
-              ),
-            );
-          }),
-        )
-        .toBe(0);
-      await expect
-        .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("End");
-      await expect
-        .poll(() =>
-          menu
-            .getByRole("menuitem", { name: "Scheduled Automations settings", exact: true })
-            .evaluate((element) => element === document.activeElement),
-        )
-        .toBe(true);
-      await page.keyboard.press("Home");
-      await expect
-        .poll(() => allSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("r");
-      await expect
-        .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("Home");
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      const researchPin = researchSwitch.getByRole("button");
-      await page.keyboard.press("Tab");
-      await expect
-        .poll(() => researchPin.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("Space");
-      await expect.poll(() => researchPin.getAttribute("aria-pressed")).toBe("true");
-      await expect
-        .poll(() => researchPin.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath("agent:main:main"));
-      expect(await menu.isVisible()).toBe(true);
-      await page.keyboard.press("ArrowDown");
-      await expect
-        .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await researchSwitch.focus();
-      await page.keyboard.press("Tab");
+      await expectFocused(mainSwitch);
+      await pressAndExpectFocus(page, "r", researchSwitch);
+      const researchSettings = researchSwitch.getByRole("button", { name: "Research settings" });
+      await pressAndExpectFocus(page, "Tab", researchSettings);
       await page.keyboard.press("Enter");
-      await expect.poll(() => researchPin.getAttribute("aria-pressed")).toBe("false");
-      await page.keyboard.press("Shift+Tab");
-      await expect
-        .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await researchSwitch.hover();
-      await researchPin.click();
-      await expect.poll(() => researchPin.getAttribute("aria-pressed")).toBe("true");
-      await page.keyboard.press("Escape");
-      await page.reload();
-      await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-      await expect.poll(() => researchPin.getAttribute("aria-pressed")).toBe("true");
-      await researchSwitch.hover();
-      await researchPin.click();
-      await expect.poll(() => researchPin.getAttribute("aria-pressed")).toBe("false");
-      await researchSwitch.focus();
-      await captureSidebarUiProof(suite, page, "agent-menu-without-new-session-rows.png");
-      await page.keyboard.press("Enter");
-      await expect
-        .poll(() => new URL(page.url()).pathname)
-        .toBe(controlUiSessionPath("agent:research:main"));
+      await waitForControlUiRoute(page, {
+        routeId: "agents",
+        pathname: "/settings/agents/research",
+      });
+      expect(await page.evaluate(() => window.openclawControlUi?.snapshot().sessionKey)).toBe(
+        "agent:main:main",
+      );
+      await page.locator(".settings-sidebar__back").click();
+      await waitForControlUiRoute(page, { routeId: "chat" });
       await sidebar.locator(".sidebar-agent-card__main").click();
-      await menu.getByRole("menuitem", { name: "Show all", exact: true }).click();
-      await sidebar.locator(".sidebar-workspace-header__main").click();
-      await captureSidebarUiProof(suite, page, "agent-menu-selected-stack.png");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("searches a crowded agent menu without losing keyboard navigation or actions", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1440, height: 480 },
-    });
-    const page = await context.newPage();
-    const agents = Array.from({ length: 40 }, (_, index) => ({
-      id: index === 0 ? "main" : `agent-${index}`,
-      name: index === 1 || index === 2 ? "Support" : `Research and documentation agent ${index}`,
-    }));
-    const agentsList = { agents, defaultId: "main", mainKey: "main", scope: "agent" };
-    await installMockGateway(page, {
-      methodResponses: {
-        "agents.list": agentsList,
-        "agent.identity.get": {
-          cases: agents.map((agent) => ({
-            match: { agentId: agent.id },
-            response: { agentId: agent.id, name: agent.name },
-          })),
-        },
-        "chat.startup": {
-          agentsList,
-          messages: [],
-          metadata: { models: [] },
-          sessionId: "session:agent:main:main",
-          thinkingLevel: null,
-        },
-      },
-    });
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const sidebar = page.locator("openclaw-app-sidebar");
-      const trigger = sidebar.locator(".sidebar-agent-card__main");
-      await trigger.click();
-      const menu = sidebar.locator("wa-dropdown.sidebar-agent-menu");
-      const search = menu.getByRole("searchbox", { name: "Find an agent…" });
-      const rows = menu.locator(".sidebar-agent-menu__agent-list > wa-dropdown-item");
-      await expect.poll(() => rows.count()).toBe(41);
-      await menu.evaluate(async (dropdown) => {
-        await document.fonts.ready;
-        const surface = dropdown.shadowRoot!.querySelector<HTMLElement>('[part="menu"]')!;
-        await Promise.all(surface.getAnimations().map((animation) => animation.finished));
-      });
-      const geometry = await menu.evaluate((dropdown) => {
-        const list = dropdown.querySelector<HTMLElement>(".sidebar-agent-menu__agent-list")!;
-        const actions = [...dropdown.querySelectorAll<HTMLElement>(":scope > wa-dropdown-item")];
-        return {
-          scrolls: list.scrollHeight > list.clientHeight,
-          actionsFit: actions.every((action) => {
-            const box = action.getBoundingClientRect();
-            return box.top >= 0 && box.bottom <= innerHeight;
-          }),
-          heights: [...list.children].map((row) => row.getBoundingClientRect().height),
-        };
-      });
-      expect(geometry.scrolls).toBe(true);
-      expect(geometry.actionsFit).toBe(true);
-      expect(geometry.heights.every((height) => height === 56)).toBe(true);
-      await captureSidebarUiProof(suite, page, "agent-menu-40-short-window.png");
-      await page.keyboard.press("Home");
-      await page.keyboard.press("ArrowUp");
-      await expect
-        .poll(() => search.evaluate((input) => input === document.activeElement))
-        .toBe(true);
-      await page.keyboard.type("support");
-      await expect.poll(() => rows.count()).toBe(2);
-      expect(await rows.locator(".agent-select__option-description").allTextContents()).toEqual([
-        "agent-1",
-        "agent-2",
-      ]);
-      await search.press("Home");
-      await expect
-        .poll(() => search.evaluate((input) => input === document.activeElement))
-        .toBe(true);
-      await search.fill("no-such-agent");
-      await expect.poll(() => menu.getByRole("status").textContent()).toBe("No matching agents");
-      expect(await menu.locator(":scope > wa-dropdown-item").count()).toBe(4);
-      await search.fill("agent-39");
-      await expect.poll(() => rows.count()).toBe(1);
-      expect(
-        await rows
-          .first()
-          .getByRole("button", { name: /Pin to switcher/ })
-          .count(),
-      ).toBe(1);
-      await search.press("ArrowDown");
-      await expect
-        .poll(() => rows.first().evaluate((row) => row === document.activeElement))
-        .toBe(true);
+      await expectAttribute(mainSwitch, "aria-current", "true");
+      await researchSwitch.focus();
       await page.keyboard.press("Enter");
-      await expect
-        .poll(() => new URL(page.url()).pathname)
-        .toBe(controlUiSessionPath("agent:agent-39:main"));
-      await trigger.click();
-      await expect.poll(() => search.inputValue()).toBe("");
-      const active = menu.locator('[aria-current="true"]');
-      await expect
-        .poll(() =>
-          active.evaluate((row) => {
-            const box = row.getBoundingClientRect();
-            const list = row.parentElement!.getBoundingClientRect();
-            return box.top >= list.top - 1 && box.bottom <= list.bottom + 1;
-          }),
-        )
-        .toBe(true);
-      await page.keyboard.press("Escape");
-      await expect.poll(() => menu.count()).toBe(0);
-      await expect
-        .poll(() => trigger.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
-      await composer.click();
-      await trigger.hover();
-      await expect.poll(() => menu.count()).toBe(1);
-      await expect
-        .poll(() =>
-          active.evaluate((row) => {
-            const bounds = row.getBoundingClientRect();
-            const viewport = row.parentElement!.getBoundingClientRect();
-            return bounds.top >= viewport.top - 1 && bounds.bottom <= viewport.bottom + 1;
-          }),
-        )
-        .toBe(true);
-      await expect
-        .poll(() => composer.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("shows a workspace identity avatar in the sidebar agent card", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    const agentsList = {
-      agents: [{ id: "main" }],
-      defaultId: "main",
-      mainKey: "main",
-      scope: "agent",
-    };
-    const avatar =
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "agent.identity.get": {
-          agentId: "main",
-          avatar,
-          avatarStatus: "data",
-          name: "Workspace Molty",
-        },
-        "agents.list": agentsList,
-        "chat.startup": {
-          agentsList,
-          messages: [],
-          metadata: { models: [] },
-          sessionId: "session:agent:main:main",
-          thinkingLevel: null,
-        },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("agent.identity.get");
-      const card = page.locator("openclaw-app-sidebar openclaw-sidebar-agent-card");
-      await expect
-        .poll(() => card.locator(".sidebar-agent-card__name").textContent())
-        .toContain("Workspace Molty");
+      await expectPath(page, controlUiSessionPath("agent:research:main"));
+      const card = sidebar.locator("openclaw-sidebar-agent-card");
+      await expectText(card.locator(".sidebar-agent-card__name"), "Research");
       const image = card.locator(".sidebar-agent-card__avatar img");
-      await expect.poll(() => image.getAttribute("src")).toBe(avatar);
+      await expect.poll(() => image.getAttribute("src")).toBe(pixelAvatar);
       await expect
         .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
         .toBe(1);
-      await captureSidebarUiProof(suite, page, "workspace-agent-avatar.png");
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+      await sidebar.locator(".sidebar-agent-card__main").click();
+      await menu.getByRole("menuitem", { name: "Show all", exact: true }).click();
+      await sidebar.locator(".sidebar-workspace-header__main").click();
+    });
+  });
+
+  it("keeps crowded agent-menu actions inside the available viewport", async () => {
+    await suite.withPage(
+      { ...desktop, viewport: { width: 1440, height: 480 } },
+      async ({ page }) => {
+        const agents = Array.from({ length: 40 }, (_, index) => ({
+          id: index === 0 ? "main" : `agent-${index}`,
+          name:
+            index === 1 || index === 2 ? "Support" : `Research and documentation agent ${index}`,
+        }));
+        await installMockGateway(page, {
+          methodResponses: {
+            ...agentResponses(agents),
+            "agent.identity.get": {
+              cases: agents.map(({ id, name }) => ({
+                match: { agentId: id },
+                response: { agentId: id, name },
+              })),
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await page.locator("openclaw-app-sidebar .sidebar-agent-card__main").click();
+        const menu = page.locator("openclaw-app-sidebar .sidebar-agent-menu");
+        await menu.evaluate(async (dropdown) => {
+          await document.fonts.ready;
+          await Promise.all(dropdown.getAnimations().map((animation) => animation.finished));
+        });
+        expect(
+          await menu.evaluate((dropdown) =>
+            [...dropdown.querySelectorAll<HTMLElement>(':scope > [role^="menuitem"]')].every(
+              (action) => {
+                const box = action.getBoundingClientRect();
+                return box.top >= 0 && box.bottom <= innerHeight;
+              },
+            ),
+          ),
+        ).toBe(true);
+        const duplicateNames = menu
+          .locator('.sidebar-agent-menu__agent-list > [role^="menuitem"]')
+          .filter({ hasText: "Support" });
+        expect(await duplicateNames.count()).toBe(2);
+        expect(await duplicateNames.locator(".agent-select__option-description").count()).toBe(0);
+      },
+    );
   });
 });

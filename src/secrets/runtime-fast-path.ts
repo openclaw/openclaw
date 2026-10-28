@@ -1,14 +1,13 @@
-/** Detects when secrets runtime preparation can safely use a fast path. */
-import { existsSync } from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
-import { copyCanonicalAuthProfileCredentialObservations } from "../agents/auth-profiles/credential-observation.js";
+import { readAuthProfileDatabaseIdentity } from "../agents/auth-profiles/file-state.js";
 import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
   prepareRuntimeAuthProfileStoreSnapshots,
+  recordRuntimeAuthProfilePersistedStore,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -57,9 +56,6 @@ export function mergeSecretsRuntimeEnv(
   return merged;
 }
 
-/**
- * Collects default and named agent directories that may contain auth profile stores.
- */
 export function collectCandidateAgentDirs(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
@@ -73,9 +69,6 @@ export function collectCandidateAgentDirs(
   return [...dirs];
 }
 
-/**
- * Combines explicit refresh agent dirs with config-derived dirs for runtime refresh.
- */
 export function resolveRefreshAgentDirs(
   config: OpenClawConfig,
   context: SecretsRuntimeRefreshContext,
@@ -87,9 +80,6 @@ export function resolveRefreshAgentDirs(
   return uniqueStrings([...context.explicitAgentDirs, ...configDerived]);
 }
 
-/**
- * Creates empty web-tool metadata for snapshots that do not need secret resolution.
- */
 export function createEmptyRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata {
   return {
     search: {
@@ -149,7 +139,6 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
   });
 }
 
-/** Returns whether current config/auth/plugin state allows skipping full secret preparation. */
 export function canUseSecretsRuntimeFastPath(params: {
   sourceConfig: OpenClawConfig;
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
@@ -170,15 +159,10 @@ export function canUseSecretsRuntimeFastPath(params: {
 export function prepareSecretsRuntimeFastPathSnapshot(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  agentDirs?: string[];
-  includeAuthStoreRefs?: boolean;
-  loadAuthStore?: (agentDir?: string) => AuthProfileStore;
-  loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): {
   snapshot: PreparedSecretsRuntimeSnapshot;
   refreshContext: SecretsRuntimeRefreshContext;
-  usesAuthStoreFallback: boolean;
 } | null {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
   const authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
@@ -187,33 +171,25 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
   const authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
   const sourceConfig = cloneConfigWithResolutionFacts(params.config);
   const resolvedConfig = cloneConfigWithResolutionFacts(params.config);
-  const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
-  const candidateDirs = params.agentDirs?.length
-    ? uniqueStrings(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))
-    : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
-  let authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
-  if (includeAuthStoreRefs) {
-    if (!params.loadAuthStore) {
-      if (
-        candidateDirs.some((agentDir) => existsSync(resolveAuthProfileDatabasePath(agentDir))) ||
-        existsSync(resolveSharedAuthStorePath(runtimeEnv))
-      ) {
-        return null;
-      }
-      authStores = candidateDirs.map((agentDir) => ({
-        agentDir,
-        store: { version: 1, profiles: {} },
-      }));
-    } else {
-      const loadAuthStore = params.loadAuthStore;
-      authStores = candidateDirs.map((agentDir) => {
-        const source = loadAuthStore(agentDir);
-        const store = structuredClone(source);
-        copyCanonicalAuthProfileCredentialObservations(source.profiles, store.profiles);
-        return { agentDir, store };
-      });
-    }
+  const candidateDirs = collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
+  const databasePaths = uniqueStrings([
+    ...candidateDirs.map(resolveAuthProfileDatabasePath),
+    resolveSharedAuthStorePath(runtimeEnv),
+  ]);
+  if (
+    databasePaths.some(
+      (pathname) => !readAuthProfileDatabaseIdentity(pathname)?.key.startsWith("path:"),
+    )
+  ) {
+    return null;
   }
+  // Empty startup snapshots carry the admitted absence into later session-only creation.
+  for (const pathname of databasePaths) {
+    recordRuntimeAuthProfilePersistedStore(pathname, null);
+  }
+  const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = candidateDirs.map(
+    (agentDir) => ({ agentDir, store: { version: 1, profiles: {} } }),
+  );
   if (!canUseSecretsRuntimeFastPath({ sourceConfig, authStores })) {
     return null;
   }
@@ -230,14 +206,12 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
   };
   return {
     snapshot,
-    usesAuthStoreFallback: !params.loadAuthStore,
     refreshContext: {
       env: runtimeEnv,
-      explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
-      includeAuthStoreRefs,
-      loadablePluginOrigins: params.loadablePluginOrigins ?? new Map<string, PluginOrigin>(),
+      explicitAgentDirs: null,
+      includeAuthStoreRefs: true,
+      loadablePluginOrigins: new Map<string, PluginOrigin>(),
       ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
-      ...(params.loadAuthStore ? { loadAuthStore: params.loadAuthStore } : {}),
     },
   };
 }

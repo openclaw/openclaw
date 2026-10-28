@@ -2,6 +2,7 @@
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -64,6 +65,9 @@ export async function loadFreshAgentsBindCommandModuleForTest() {
 }
 
 export function resetAgentsBindTestHarness(): void {
+  vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+  vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+  vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
   readConfigFileSnapshotMock.mockClear();
   writeConfigFileMock.mockClear();
   replaceConfigFileMock.mockClear();

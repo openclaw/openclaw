@@ -1,9 +1,13 @@
-// Enforces the package runtime contract, then warns for non-pnpm lifecycle installs.
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, readFileSync, realpathSync, rmSync } from "node:fs";
 import { posix, win32 } from "node:path";
-import { pathToFileURL } from "node:url";
-import { isNodeVersionAtLeast, parseNodeReleaseVersion } from "../node-version.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  isNodeVersionAtLeast,
+  MINIMUM_BUN_VERSION,
+  parseNodeReleaseVersion,
+} from "../node-version.mjs";
+import { createRuntimeProcessScriptFile } from "../runtime-process-scripts.generated.mjs";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "./lib/package-lifecycle-marker.mjs";
 
 const allowedLifecyclePackageManagers = new Set(["pnpm", "npm", "yarn", "bun"]);
@@ -12,8 +16,6 @@ const lifecyclePackageManagerLauncherAliases = new Map([
   ["yarn-berry", "yarn"],
 ]);
 const NODE_ENGINE_CLAUSE_RE = /^\s*>=\s*v?(\d+\.\d+\.\d+)(?:\s+<\s*v?(\d+(?:\.\d+\.\d+)?))?\s*$/iu;
-const NODE_RUNTIME_PROBE_SOURCE =
-  "process.stdout.write(JSON.stringify({version:process.versions.node??null,bunVersion:process.versions.bun??null,execPath:process.execPath??null}))";
 const PACKAGE_CLI_NODE_PROBE_TIMEOUT_MS = 10_000;
 /**
  * @typedef {{
@@ -83,7 +85,6 @@ export function nodeVersionSatisfiesPackageEngine(version, engine) {
 }
 
 /**
- * Reads the Node runtime contract from the package being installed.
  * @param {URL} [packageJsonUrl]
  * @returns {string | null}
  */
@@ -130,11 +131,11 @@ function isStableAbsolutePath(value, pathApi, platform) {
   return root !== "\\" && root !== "/";
 }
 
-function stripBunLifecyclePathPrefix(pathEntries, cwd, pathApi, platform) {
-  const expectedPrefix = [];
+function stripBunLifecyclePaths(pathEntries, cwd, pathApi, platform, dependencyLifecycle) {
+  const lifecyclePaths = [];
   let directory = pathApi.resolve(cwd);
   while (true) {
-    expectedPrefix.push(pathApi.join(directory, "node_modules", ".bin"));
+    lifecyclePaths.push(pathApi.join(directory, "node_modules", ".bin"));
     const parent = pathApi.dirname(directory);
     if (parent === directory) {
       break;
@@ -142,18 +143,34 @@ function stripBunLifecyclePathPrefix(pathEntries, cwd, pathApi, platform) {
     directory = parent;
   }
 
-  if (pathEntries.length < expectedPrefix.length) {
+  if (pathEntries.length < lifecyclePaths.length) {
     return null;
   }
-  for (const [index, expected] of expectedPrefix.entries()) {
+  const matches = (entry, expected) =>
+    normalizePathForComparison(entry, pathApi, platform) ===
+    normalizePathForComparison(expected, pathApi, platform);
+  for (
+    let prefixLength = dependencyLifecycle ? 1 : lifecyclePaths.length;
+    prefixLength <= lifecyclePaths.length;
+    prefixLength++
+  ) {
     if (
-      normalizePathForComparison(pathEntries[index], pathApi, platform) !==
-      normalizePathForComparison(expected, pathApi, platform)
+      !lifecyclePaths
+        .slice(0, prefixLength)
+        .every((expected, index) => matches(pathEntries[index], expected))
     ) {
       return null;
     }
+    const suffixStart = pathEntries.length - (lifecyclePaths.length - prefixLength);
+    const suffixMatches = lifecyclePaths
+      .slice(prefixLength)
+      .every((expected, index) => matches(pathEntries[suffixStart + index], expected));
+    if (suffixMatches) {
+      // Dependency lifecycles can include private-store bins before inherited PATH.
+      return pathEntries.slice(prefixLength, suffixStart);
+    }
   }
-  return pathEntries.slice(expectedPrefix.length);
+  return null;
 }
 
 /**
@@ -165,6 +182,7 @@ function stripBunLifecyclePathPrefix(pathEntries, cwd, pathApi, platform) {
  *   platform?: NodeJS.Platform;
  *   cwd?: string;
  *   execPath?: string;
+ *   bunVersion?: string | null;
  *   access?: (path: string, mode: number) => void;
  *   realpath?: (path: string) => string;
  *   run?: PackageCliNodeProbeRun;
@@ -178,6 +196,7 @@ export function probePackageCliNodeRuntime(options = {}) {
     platform = process.platform,
     cwd = process.cwd(),
     execPath = process.execPath,
+    bunVersion = process.versions.bun ?? null,
     access = accessSync,
     realpath = realpathSync,
     run = spawnSync,
@@ -186,9 +205,29 @@ export function probePackageCliNodeRuntime(options = {}) {
   const delimiter = platform === "win32" ? ";" : ":";
   const executableName = platform === "win32" ? "node.exe" : "node";
   const seen = new Set();
-  // Bun prepends one cwd-to-root node_modules/.bin path per ancestor before
-  // the original PATH. Strip only that exact prefix; anything else persists.
-  const pathEntries = stripBunLifecyclePathPrefix(pathEnv.split(delimiter), cwd, pathApi, platform);
+  // Bun 1.4.4 moved dependency ancestor bins after inherited PATH. Root scripts
+  // and older Bun keep the full prefix. PATH alone cannot distinguish them when
+  // inherited entries also name ancestor bins; use the runtime and package root.
+  const reorderedLifecycle = isNodeVersionAtLeast(parseNodeReleaseVersion(bunVersion), {
+    major: 1,
+    minor: 4,
+    patch: 4,
+  });
+  const localPrefix = normalizeEnvValue(env.npm_config_local_prefix);
+  if (reorderedLifecycle && !isStableAbsolutePath(localPrefix, pathApi, platform)) {
+    return null;
+  }
+  const dependencyLifecycle =
+    reorderedLifecycle &&
+    normalizePathForComparison(localPrefix, pathApi, platform) !==
+      normalizePathForComparison(pathApi.resolve(cwd), pathApi, platform);
+  const pathEntries = stripBunLifecyclePaths(
+    pathEnv.split(delimiter),
+    cwd,
+    pathApi,
+    platform,
+    dependencyLifecycle,
+  );
   if (!pathEntries) {
     return null;
   }
@@ -199,13 +238,18 @@ export function probePackageCliNodeRuntime(options = {}) {
         delete childEnv[key];
       }
     }
-    return run(candidate, ["-e", NODE_RUNTIME_PROBE_SOURCE], {
-      cwd,
-      encoding: "utf8",
-      env: childEnv,
-      timeout: PACKAGE_CLI_NODE_PROBE_TIMEOUT_MS,
-      windowsHide: true,
-    });
+    const script = createRuntimeProcessScriptFile("packageCliNodeProbe");
+    try {
+      return run(candidate, [fileURLToPath(script.url)], {
+        cwd,
+        encoding: "utf8",
+        env: childEnv,
+        timeout: PACKAGE_CLI_NODE_PROBE_TIMEOUT_MS,
+        windowsHide: true,
+      });
+    } finally {
+      script.dispose();
+    }
   };
 
   for (const entry of pathEntries) {
@@ -299,16 +343,12 @@ export function enforceSupportedNodeRuntime(
     : { version, execPath };
   if (detectedRuntime?.bunVersion) {
     if (
-      isNodeVersionAtLeast(parseNodeReleaseVersion(detectedRuntime.bunVersion), {
-        major: 1,
-        minor: 4,
-        patch: 0,
-      })
+      isNodeVersionAtLeast(parseNodeReleaseVersion(detectedRuntime.bunVersion), MINIMUM_BUN_VERSION)
     ) {
       return true;
     }
     reportError(
-      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4+ (detected ${detectedRuntime.bunVersion}).`,
+      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4.4+ (detected ${detectedRuntime.bunVersion}).`,
     );
     return false;
   }
@@ -361,9 +401,6 @@ export function removeLegacyPackageInstallGuard(
 
 function normalizeLifecyclePackageManagerName(value) {
   const normalized = normalizeEnvValue(value).toLowerCase();
-  if (!/^[a-z0-9][a-z0-9._-]*$/u.test(normalized)) {
-    return null;
-  }
   return allowedLifecyclePackageManagers.has(normalized) ? normalized : null;
 }
 
@@ -393,7 +430,6 @@ function detectLifecyclePackageManagerFromExecPath(value) {
 }
 
 /**
- * Detects the package manager running the current lifecycle script.
  * @param {NodeJS.ProcessEnv} [env]
  * @returns {string | null}
  */
@@ -408,35 +444,22 @@ export function detectLifecyclePackageManager(env = process.env) {
 }
 
 /**
- * Builds the warning shown for non-pnpm lifecycle installs.
- * @param {unknown} packageManager
- * @returns {string | null}
- */
-function createPackageManagerWarningMessage(packageManager) {
-  const normalizedPackageManager = normalizeEnvValue(packageManager);
-  if (!normalizedPackageManager || normalizedPackageManager === "pnpm") {
-    return null;
-  }
-
-  return [
-    `[openclaw] warning: detected ${normalizedPackageManager} for install lifecycle.`,
-    "[openclaw] this repo works best with pnpm; npm-compatible installs are slower and much larger here.",
-    "[openclaw] prefer: corepack pnpm install",
-  ].join("\n");
-}
-
-/**
- * Emits the non-pnpm lifecycle warning when needed.
  * @param {NodeJS.ProcessEnv} [env]
  * @param {(...data: unknown[]) => void} [warn]
  * @returns {boolean}
  */
 export function warnIfNonPnpmLifecycle(env = process.env, warn = console.warn) {
-  const message = createPackageManagerWarningMessage(detectLifecyclePackageManager(env));
-  if (!message) {
+  const packageManager = detectLifecyclePackageManager(env);
+  if (!packageManager || packageManager === "pnpm") {
     return false;
   }
-  warn(message);
+  warn(
+    [
+      `[openclaw] warning: detected ${packageManager} for install lifecycle.`,
+      "[openclaw] this repo works best with pnpm; npm-compatible installs are slower and much larger here.",
+      "[openclaw] prefer: corepack pnpm install",
+    ].join("\n"),
+  );
   return true;
 }
 

@@ -1,5 +1,4 @@
-// Verifies generated config documentation baselines stay stable.
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { renderConfigDocBaselineArtifacts } from "./doc-baseline.js";
 
 vi.mock("./doc-baseline.runtime.js", async () => {
@@ -45,103 +44,34 @@ vi.mock("./doc-baseline.runtime.js", async () => {
   };
 });
 
-describe("config doc baseline", () => {
-  it("renders optional wildcards and merges tuple metadata through the public renderer", async () => {
-    const { baseline } = await renderConfigDocBaselineArtifacts();
+it("renders optional wildcards and merges tuple metadata through the public renderer", async () => {
+  const { baseline } = await renderConfigDocBaselineArtifacts();
 
-    expect(baseline.coreEntries).toEqual([
-      {
-        path: "*",
-        kind: "core",
-        type: "string",
-        required: false,
-        deprecated: false,
-        sensitive: false,
-        tags: [],
-        hasChildren: false,
-      },
-      {
-        path: "mapValues",
-        kind: "core",
-        type: "object",
-        required: true,
-        deprecated: false,
-        sensitive: false,
-        tags: [],
-        hasChildren: true,
-      },
-      {
-        path: "mapValues.*",
-        kind: "core",
-        type: "boolean",
-        required: false,
-        deprecated: false,
-        sensitive: false,
-        tags: [],
-        hasChildren: false,
-      },
-      {
-        path: "mixedValues",
-        kind: "core",
-        type: "array",
-        required: true,
-        deprecated: false,
-        sensitive: false,
-        tags: [],
-        hasChildren: true,
-      },
-      {
-        path: "mixedValues.*",
-        kind: "core",
-        type: ["number", "string"],
-        required: false,
-        enumValues: ["extra", 42],
-        deprecated: false,
-        sensitive: false,
-        tags: [],
-        hasChildren: false,
-      },
-      {
-        path: "singleValues",
-        kind: "core",
-        type: "array",
-        required: true,
-        deprecated: false,
-        sensitive: false,
-        tags: [],
-        hasChildren: true,
-      },
-      {
-        path: "singleValues.*",
-        kind: "core",
-        type: "string",
-        required: false,
-        deprecated: false,
-        sensitive: false,
-        tags: [],
-        hasChildren: false,
-      },
-      {
-        path: "tupleValues",
-        kind: "core",
-        type: "array",
-        required: false,
-        deprecated: false,
-        sensitive: false,
-        tags: [],
-        hasChildren: true,
-      },
-      {
-        path: "tupleValues.*",
-        kind: "core",
-        type: ["number", "string"],
-        required: false,
-        enumValues: ["alpha", 42],
-        deprecated: false,
-        sensitive: false,
-        tags: [],
-        hasChildren: false,
-      },
-    ]);
+  const entry = (path: string, type: string | string[], required = false, hasChildren = false) => ({
+    path,
+    type,
+    required,
+    hasChildren,
+    kind: "core",
+    deprecated: false,
+    sensitive: false,
+    tags: [],
   });
+  expect(baseline.coreEntries).toEqual([
+    entry("*", "string"),
+    entry("mapValues", "object", true, true),
+    entry("mapValues.*", "boolean"),
+    entry("mixedValues", "array", true, true),
+    {
+      ...entry("mixedValues.*", ["number", "string"]),
+      enumValues: ["extra", 42],
+    },
+    entry("singleValues", "array", true, true),
+    entry("singleValues.*", "string"),
+    entry("tupleValues", "array", false, true),
+    {
+      ...entry("tupleValues.*", ["number", "string"]),
+      enumValues: ["alpha", 42],
+    },
+  ]);
 });

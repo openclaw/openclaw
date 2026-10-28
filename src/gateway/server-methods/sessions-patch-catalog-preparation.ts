@@ -15,8 +15,7 @@ export function createSessionPatchCatalogPreparation(
     getOrCreatePromise(preparations, agentId, async () => {
       const timing = diagnostics?.scope("catalog");
       try {
-        const catalog = await loadCatalog(agentId);
-        return ok(catalog);
+        return ok(await loadCatalog(agentId));
       } catch (error) {
         return err(error);
       } finally {
@@ -57,7 +56,7 @@ export function createSessionPatchCatalogPreparation(
           }),
         };
       }
-      const projection = prepareSessionsPatchEntry(params.projection);
+      const projection = await prepareSessionsPatchEntry(params.projection);
       if (projection.kind === "complete") {
         return projection;
       }

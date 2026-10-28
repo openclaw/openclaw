@@ -119,26 +119,14 @@ enum TailscaleServeGatewayDiscovery {
     }
 
     private static func readTailscaleStatus() async -> String? {
-        let candidates = [
-            "/usr/local/bin/tailscale",
-            "/opt/homebrew/bin/tailscale",
-            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-            "tailscale",
-        ]
-
-        for candidate in candidates {
-            guard let executable = self.resolveExecutablePath(candidate) else { continue }
-            if let stdout = await BoundedCommand.run(
+        await BoundedCommand.tailscaleStatus { candidate in
+            guard let executable = self.resolveExecutablePath(candidate) else { return nil }
+            return await BoundedCommand.run(
                 path: executable,
                 arguments: ["status", "--json"],
                 environment: self.commandEnvironment(),
                 timeout: 1.0)
-            {
-                return stdout
-            }
         }
-
-        return nil
     }
 
     static func resolveExecutablePath(

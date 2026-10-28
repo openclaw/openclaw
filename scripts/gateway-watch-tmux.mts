@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { shellEscapeBackslash as shellQuote } from "../src/shared/shell-quote.ts";
 
 type GatewayWatchParams = {
   args?: string[];
@@ -61,8 +62,6 @@ const sanitizeSessionPart = (value: string | number) => {
     .replace(/^-+|-+$/g, "");
   return normalized || DEFAULT_PROFILE_NAME;
 };
-
-const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 
 const readArgValue = (args: string[], flag: string): string | null => {
   const prefix = `${flag}=`;

@@ -1,16 +1,20 @@
 /** Assembles an agent session from the run owner's selected model and prepared resources. */
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
+import {
+  setInternalBeforeToolBatch,
+  type InternalBeforeToolBatchHook,
+} from "../../../packages/agent-core/src/internal-hooks.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import type { SessionMetadataCommit } from "../../config/sessions/transcript-write-context-store.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
-  type SessionMetadataChange,
-  type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
-import type { Message, Model } from "../../llm/types.js";
+import type { Model } from "../../llm/types.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
+import { applyLocalNoAuthHeaders } from "../model-auth-markers.js";
 import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import {
   Agent,
@@ -19,18 +23,14 @@ import {
   type AgentTool,
   type ThinkingLevel,
 } from "../runtime/index.js";
-import {
-  setInternalBeforeToolBatch,
-  type InternalBeforeToolBatchHook,
-} from "../runtime/internal-hooks.js";
 import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import type { ExtensionRunner } from "./extensions/index.js";
-import { convertToLlm } from "./messages.js";
+import { convertToLlmWithBlockImages } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
+import { sessionManagerAppendInitialMetadata } from "./session-manager-metadata.js";
 import type { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
 
@@ -46,6 +46,7 @@ export interface CreateAgentSessionOptions extends Omit<
   model: Model;
   /** Admitted thinking level, clamped to the selected model capabilities. */
   thinkingLevel: ThinkingLevel;
+  thinkingExplicit?: boolean;
 
   /** Runtime-owned allowlist; extensions cannot expand it. */
   tools: string[];
@@ -149,6 +150,46 @@ function getAttributionHeaders(
   return undefined;
 }
 
+function createSessionStreamFn(
+  modelRegistry: CreateAgentSessionOptions["modelRegistry"],
+  settingsManager: SettingsManager,
+  thinkingExplicit: boolean | undefined,
+): NonNullable<AgentOptions["streamFn"]> {
+  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
+  const streamFn: NonNullable<AgentOptions["streamFn"]> = async (
+    modelResult,
+    context,
+    optionsLocal,
+  ) => {
+    const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
+    if (!auth.ok) {
+      throw new Error(auth.error);
+    }
+    // Isolated session streams bypass the process-default stream facade.
+    await import("../ai-transport-runtime-host.js");
+    optionsLocal?.signal?.throwIfAborted();
+    const providerRetrySettings = settingsManager.getProviderRetrySettings();
+    const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
+    const providerOptions = {
+      ...optionsLocal,
+      openclawThinkingExplicit: thinkingExplicit,
+      apiKey: auth.apiKey,
+      timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
+      maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
+      headers: applyLocalNoAuthHeaders(
+        modelResult.api,
+        auth.apiKey,
+        attributionHeaders || auth.headers || optionsLocal?.headers
+          ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
+          : undefined,
+      ),
+    };
+    return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, providerOptions);
+  };
+  bindStreamLlmRuntime(streamFn, modelRegistryRuntime.llmRuntime);
+  return streamFn;
+}
+
 export async function createAgentSession(
   options: CreateAgentSessionOptions,
 ): Promise<{ session: AgentSession }> {
@@ -177,50 +218,12 @@ export async function createAgentSession(
   const model = options.model;
   const thinkingLevel = clampThinkingLevel(model, options.thinkingLevel) as ThinkingLevel;
 
-  const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
-    const converted = convertToLlm(messages);
-    // Check setting dynamically so mid-session changes take effect
-    if (!settingsManager.getBlockImages()) {
-      return converted;
-    }
-    return converted.map((msg) => {
-      if (msg.role === "user" || msg.role === "toolResult") {
-        const content = msg.content;
-        if (Array.isArray(content)) {
-          const hasImages = content.some((c) => c.type === "image");
-          if (hasImages) {
-            const filteredContent = content
-              .map((c) =>
-                c.type === "image"
-                  ? { type: "text" as const, text: "Image reading is disabled." }
-                  : c,
-              )
-              .filter((c, i, arr) => {
-                const previous = arr.at(i - 1);
-                return !(
-                  c.type === "text" &&
-                  c.text === "Image reading is disabled." &&
-                  i > 0 &&
-                  previous?.type === "text" &&
-                  previous.text === "Image reading is disabled."
-                );
-              });
-            return Object.assign({}, msg, { content: filteredContent });
-          }
-        }
-      }
-      return msg;
-    });
-  };
-
   const extensionRunnerRef: { current?: ExtensionRunner } = {};
   const runWithSessionWriteSettlement = async <T>(run: () => Promise<T> | T): Promise<T> =>
     options.withSessionWriteSettlement
       ? await options.withSessionWriteSettlement(run)
       : await run();
 
-  assertInitialSessionCurrent();
-  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
   const agent: Agent = new Agent({
     initialState: {
       systemPrompt: options.systemPrompt,
@@ -228,28 +231,10 @@ export async function createAgentSession(
       thinkingLevel,
       tools: [],
     },
-    convertToLlm: convertToLlmWithBlockImages,
-    streamFn: async (modelResult, context, optionsLocal) => {
-      const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
-      if (!auth.ok) {
-        throw new Error(auth.error);
-      }
-      // Isolated session streams bypass the process-default stream facade.
-      await import("../ai-transport-runtime-host.js");
-      optionsLocal?.signal?.throwIfAborted();
-      const providerRetrySettings = settingsManager.getProviderRetrySettings();
-      const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-      return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, {
-        ...optionsLocal,
-        apiKey: auth.apiKey,
-        timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
-        maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-        headers:
-          attributionHeaders || auth.headers || optionsLocal?.headers
-            ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
-            : undefined,
-      });
-    },
+    // Resolve dynamically so attempt-local image policy changes affect the next request.
+    convertToLlm: (messages) =>
+      convertToLlmWithBlockImages(messages, settingsManager.getBlockImages()),
+    streamFn: createSessionStreamFn(modelRegistry, settingsManager, options.thinkingExplicit),
     onPayload: async (payload) => {
       const runner = extensionRunnerRef.current;
       if (!runner?.hasHandlers("before_provider_request")) {
@@ -290,42 +275,30 @@ export async function createAgentSession(
     maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
   });
   setInternalBeforeToolBatch(agent, options.beforeToolBatch);
-  if (agent.streamFn) {
-    bindStreamLlmRuntime(agent.streamFn, modelRegistryRuntime.llmRuntime);
-  }
 
   let metadataCommit: SessionMetadataCommit | undefined;
-  const appendInitialMetadata = (change: SessionMetadataChange, append: () => Promise<string>) =>
-    withSessionMetadataPublication(
-      sessionManager,
-      change,
-      (commit) => {
-        metadataCommit = commit;
-      },
-      append,
-    );
   const initializeMetadata = () => {
     // Prepared history needs no write permit when its initial metadata already exists.
     // Otherwise restoration waits behind unrelated writes, including reclamation.
     if (hasExistingSession && hasThinkingEntry) {
       return Promise.resolve();
     }
-    return withSessionManagerWrite(sessionManager, async () => {
-      assertInitialSessionCurrent();
-      if (!hasExistingSession) {
-        await appendInitialMetadata(
-          { type: "model_change", provider: model.provider, modelId: model.id },
-          () => sessionManager.appendModelChange(model.provider, model.id),
-        );
-        assertInitialSessionCurrent();
-      }
-      await appendInitialMetadata({ type: "thinking_level_change", thinkingLevel }, () =>
-        sessionManager.appendThinkingLevelChange(thinkingLevel),
-      );
-      if (hasExistingSession) {
-        assertInitialSessionCurrent();
-      }
-    });
+    assertInitialSessionCurrent();
+    return withSessionMetadataPublication(
+      sessionManager,
+      { type: "thinking_level_change", thinkingLevel },
+      (commit) => {
+        metadataCommit = commit;
+      },
+      () =>
+        hasExistingSession
+          ? sessionManager.appendThinkingLevelChange(thinkingLevel)
+          : sessionManager[sessionManagerAppendInitialMetadata](
+              model.provider,
+              model.id,
+              thinkingLevel,
+            ),
+    );
   };
   try {
     await (initialTarget

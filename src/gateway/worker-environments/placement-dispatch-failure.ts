@@ -1,10 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { STALE_WORKER_BUILD_REASON, supportsCurrentWorkerLaunch } from "./admission.js";
+import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import { DevicePlacementUnavailableError } from "./device-placement-eligibility.js";
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
-  placementTurnOwner,
+  projectPlacementTurnClaim,
   type WorkerPlacementExecutionMode,
 } from "./placement-record.js";
 import type {
@@ -34,11 +34,6 @@ export type WorkerProvisioningDispatchPlacement = Extract<
   { state: "provisioning" }
 >;
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
-type WorkerReconcilingDispatchPlacement = Extract<
-  WorkerDispatchPlacement,
-  { state: "reconciling" }
->;
-
 export type WorkerDispatchPlacementStore = Pick<
   ReturnType<typeof createWorkerSessionPlacementStore>,
   | "adoptActive"
@@ -50,10 +45,12 @@ export type WorkerDispatchPlacementStore = Pick<
   | "completePlacementMoveSourceToLocal"
   | "completeAbandonedPlacementMoveSourceToLocal"
   | "completePlacementMoveToWorker"
-  | "getPlacementMove"
   | "recordPlacementMoveError"
   | "fail"
   | "get"
+  | "getAsync"
+  | "getWithMoveAsync"
+  | "getPlacementMoveAsync"
   | "readProjection"
   | "readRecoveryCandidates"
   | "readChangeSnapshot"
@@ -61,7 +58,6 @@ export type WorkerDispatchPlacementStore = Pick<
   | "beginWorkspaceReconciliation"
   | "abortWorkspaceReconciliation"
   | "listWorkspaceReconciliationOwners"
-  | "list"
   | "listPendingWorkspaceResultsAsync"
   | "markWorkspaceResultPending"
   | "handoffWorkspaceResultRecovery"
@@ -77,7 +73,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "completeWorkspaceResultAndReleaseTurn"
   | "failWorkspaceResultAndReleaseTurn"
   | "abandonWorkspaceResult"
-  | "listForReconcile"
+  | "listForReconcileAsync"
   | "releaseTurn"
   | "retainInterruptedTurnWorkspace"
   | "bindPreparedEnvironment"
@@ -99,6 +95,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "schedulePreparedRefill"
   | "createWithRequest"
   | "destroy"
+  | "reclaim"
   | "get"
   | "fenceWorkerTurnForRecovery"
   | "reconcileEnvironment"
@@ -106,7 +103,8 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "startTunnel"
   | "stopTunnel"
   | "supportsProviderExecutionMode"
->;
+> &
+  Partial<Pick<WorkerEnvironmentService, "runProjectLifecycleCommand">>;
 
 export type WorkerActivationBarrier = (params: {
   sessionId: string;
@@ -175,34 +173,6 @@ export function isUnavailableEnvironment(
   );
 }
 
-export function isExactAttachedEnvironment(
-  environment: ReturnType<WorkerDispatchEnvironmentService["get"]>,
-  placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
-): boolean {
-  return Boolean(
-    environment &&
-    environment.environmentId === placement.environmentId &&
-    environment.state === "attached" &&
-    environment.destroyRequestedAtMs === null &&
-    environment.ownerEpoch === placement.activeOwnerEpoch &&
-    environment.attachedSessionIds.length === 1 &&
-    environment.attachedSessionIds[0] === placement.sessionId,
-  );
-}
-
-export function isCurrentActiveWorkerEnvironment(
-  placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
-  environment: ReturnType<WorkerEnvironmentService["get"]>,
-): boolean {
-  return (
-    isExactAttachedEnvironment(environment, placement) &&
-    environment?.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
-    // A persisted bundle hash can still match a worker using an older launch shape.
-    // Recovery may reuse only the currently admitted execution-context dialect.
-    supportsCurrentWorkerLaunch(environment?.bootstrapReceipt)
-  );
-}
-
 export function createPlacementFailureActions(deps: {
   placements: WorkerDispatchPlacementStore;
   environments: WorkerDispatchEnvironmentService;
@@ -265,7 +235,15 @@ export function createPlacementFailureActions(deps: {
           ownerEpoch: params.ownerEpoch,
         })
       : [];
-    return updateFailure(params.placement, params.primaryError, teardownErrors);
+    try {
+      return await updateFailure(params.placement, params.primaryError, teardownErrors);
+    } catch (recordError) {
+      throw new AggregateError(
+        [params.primaryError, recordError],
+        `Worker dispatch failed: ${boundedError(params.primaryError)}; failure recording: ${boundedError(recordError)}`,
+        { cause: recordError },
+      );
+    }
   };
 
   const cancelProvisioning = (
@@ -344,7 +322,7 @@ export function createPlacementFailureActions(deps: {
 
   const startReconcile = async (
     placement: WorkerDrainingDispatchPlacement,
-  ): Promise<WorkerReconcilingDispatchPlacement> => {
+  ): Promise<Extract<WorkerDispatchPlacement, { state: "reconciling" }>> => {
     const reconciling = await placements.startReconcile({
       sessionId: placement.sessionId,
       environmentId: placement.environmentId,
@@ -367,18 +345,13 @@ export function createPlacementFailureActions(deps: {
       // reconciliation; startup recovery explicitly fences stale claims.
       return;
     }
-    const current = placements.get(placement.sessionId);
+    const current = await placements.getAsync(placement.sessionId);
     if (current?.state !== "draining") {
       return;
     }
-    if (current.turnClaim) {
-      await placements.closeWorkerTurnToolState({
-        sessionId: current.sessionId,
-        claimId: current.turnClaim.claimId,
-        runId: current.turnClaim.runId,
-        placementGeneration: current.turnClaim.generation,
-        owner: placementTurnOwner(current),
-      });
+    const claim = projectPlacementTurnClaim(current);
+    if (claim) {
+      await placements.closeWorkerTurnToolState(claim);
     }
     const reconciling = await startReconcile(current);
     const teardownErrors = await cleanupEnvironment({

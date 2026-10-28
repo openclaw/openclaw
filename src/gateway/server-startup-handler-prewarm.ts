@@ -1,4 +1,3 @@
-import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
@@ -28,7 +27,6 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
         }
       },
     },
-    { name: "connection", load: () => import("./server/ws-connection/message-handler.js") },
     ...["chat.history", "chat.send", "sessions.list"].map((method): GatewayHandlerPrewarmItem => ({
       name: method,
       load: async (isCancelled) => {
@@ -47,30 +45,6 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
     })),
     { name: "agent-events", load: () => import("./server-chat.js") },
     { name: "session-key", load: () => import("./server-session-key.js") },
-    ...listAgentIds(getConfig()).map((agentId): GatewayHandlerPrewarmItem => ({
-      name: `skills.${agentId}`,
-      load: async (isCancelled) => {
-        const [
-          { prepareWorkspaceSkillEntries },
-          { getAgentWorkspaceAccess },
-          { ensureSkillsWatcher },
-        ] = await Promise.all([
-          import("../skills/loading/workspace-skill-loader.js"),
-          import("../agents/workspace-access.js"),
-          import("../skills/runtime/refresh.js"),
-        ]);
-        const config = getConfig();
-        if (isCancelled() || !listAgentIds(config).includes(agentId)) {
-          return;
-        }
-        const workspaceDir = resolveAgentWorkspaceDir(config, agentId);
-        // Remote workspaces retain request-owned discovery and connection lifetimes.
-        if (!getAgentWorkspaceAccess(workspaceDir, "loadSkills")) {
-          ensureSkillsWatcher({ workspaceDir, config, agentId });
-          await prepareWorkspaceSkillEntries(workspaceDir, { config, agentId });
-        }
-      },
-    })),
     {
       name: "context-window-cache",
       notBeforeMs: 5_000,
@@ -94,9 +68,9 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
           return;
         }
         const { prewarmMemorySearchWorker } = loadBundledPluginPublicArtifactModuleSync<{
-          prewarmMemorySearchWorker: () => Promise<void>;
+          prewarmMemorySearchWorker: (config: OpenClawConfig) => Promise<void>;
         }>({ dirName: "memory-core", artifactBasename: "prewarm-api.js" });
-        await prewarmMemorySearchWorker();
+        await prewarmMemorySearchWorker(getConfig());
       },
     },
     {
@@ -116,19 +90,21 @@ export function scheduleGatewayHandlerPrewarm(params: {
   getConfig: () => OpenClawConfig;
   startupTrace?: Pick<GatewayStartupTrace, "measure">;
   log: { warn: (msg: string) => void };
-  items?: readonly GatewayHandlerPrewarmItem[];
   waitForPostReadyWork?: () => Promise<void>;
 }): GatewayIdleTaskHandle {
   let stopped = false;
   const startedAt = params.scheduler.now();
   // Warm code and local facts without executing requests or acquiring live provider catalogs.
-  const items = params.items ?? gatewayPrewarmItems(params.getConfig);
+  const items = gatewayPrewarmItems(params.getConfig);
   let nextIndex = 0;
   let currentItemName = "unknown";
   let idleTask: GatewayIdleTaskHandle | undefined;
 
   const scheduleNext = () => {
-    if (stopped || nextIndex >= items.length) {
+    if (stopped) {
+      return;
+    }
+    if (nextIndex >= items.length) {
       return;
     }
     void (async () => {

@@ -1,4 +1,3 @@
-// Doctor detection and cleanup for stale global plugin-runtime symlinks.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -16,11 +15,8 @@ const PLUGIN_RUNTIME_DEPS_MARKER = "plugin-runtime-deps";
 const MAX_REPORTED = 6;
 
 interface StalePluginRuntimeSymlink {
-  /** Package or scoped package name for the stale symlink. */
   readonly name: string;
-  /** Symlink path under the containing node_modules directory. */
   readonly path: string;
-  /** Target recorded by the symlink, for diagnostic output. */
   readonly target: string;
   readonly assertCurrent: () => void;
 }
@@ -62,27 +58,22 @@ async function collectStalePluginRuntimeSymlinks(
   return stale.toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-function stalePluginRuntimeSymlinkToHealthFinding(item: StalePluginRuntimeSymlink): HealthFinding {
-  return {
-    checkId: "core/doctor/stale-plugin-runtime-symlinks",
-    severity: "warning",
-    message: `Stale plugin-runtime symlink ${item.name} points at ${item.target}.`,
-    path: item.path,
-    target: item.path,
-    requirement: "stale-plugin-runtime-symlink-removed",
-    fixHint: "Run `openclaw doctor --fix` to remove stale plugin-runtime symlinks.",
-  };
-}
-
 export async function collectStalePluginRuntimeSymlinkHealthFindings(
   params: { packageRoot?: string | null } = {},
 ): Promise<HealthFinding[]> {
   return (await collectStalePluginRuntimeSymlinks(params.packageRoot)).map(
-    stalePluginRuntimeSymlinkToHealthFinding,
+    (item): HealthFinding => ({
+      checkId: "core/doctor/stale-plugin-runtime-symlinks",
+      severity: "warning",
+      message: `Stale plugin-runtime symlink ${item.name} points at ${item.target}.`,
+      path: item.path,
+      target: item.path,
+      requirement: "stale-plugin-runtime-symlink-removed",
+      fixHint: "Run `openclaw doctor --fix` to remove stale plugin-runtime symlinks.",
+    }),
   );
 }
 
-/** Emit a doctor note describing stale plugin-runtime symlinks, if any exist. */
 export async function noteStalePluginRuntimeSymlinks(
   packageRoot: string | null | undefined,
 ): Promise<void> {
@@ -106,7 +97,6 @@ export async function noteStalePluginRuntimeSymlinks(
   note(lines.join("\n"), "Plugin-runtime symlinks");
 }
 
-/** Remove stale plugin-runtime symlinks and report changes/warnings. */
 export async function removeStalePluginRuntimeSymlinks(
   packageRoot?: string | null,
 ): Promise<{ changes: string[]; warnings: string[] }> {

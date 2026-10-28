@@ -17,17 +17,17 @@ You do not need to add an external plugin to the OpenClaw repository. Publish
 the package to [ClawHub](/clawhub) and users install it with:
 
 ```bash
-openclaw plugins install clawhub:<package-name>
+openclaw plugins install <package-name>
 ```
 
-Bare package specs install from npm. Use the `clawhub:` prefix when you want
-ClawHub resolution.
+Package specs install from ClawHub by default. Use `npm:<package>` to install
+from npm, or `clawhub:<package>` to select ClawHub explicitly.
 
 ## Requirements
 
 - All plugin APIs are [experimental](/plugins/sdk-overview#api-stability).
   Pin your OpenClaw host version and test each version you declare compatible.
-- Node 24.16+ or Node 26.1+, and `npm` or `pnpm`.
+- Node 24.22.1+ or Node 26.12.1+, and `npm` or `pnpm`.
 - TypeScript ESM modules.
 - For in-repo bundled plugin work, clone the repository and run `pnpm install`.
   Source-checkout plugin development is pnpm-only because OpenClaw discovers
@@ -69,7 +69,7 @@ local proof.
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "typebox": "1.3.34"
+    "typebox": "1.3.37"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"
@@ -238,7 +238,7 @@ local proof.
     clawhub package publish your-org/your-plugin
     ```
 
-    Canonical ClawHub package snippets live in `docs/snippets/plugin-publish/`.
+    Shared ClawHub package snippets live in `docs/snippets/plugin-publish/`.
 
   </Step>
 
@@ -246,7 +246,7 @@ local proof.
     Install the published package through ClawHub:
 
     ```bash
-    openclaw plugins install clawhub:your-org/your-plugin
+    openclaw plugins install your-org/your-plugin
     ```
 
   </Step>
@@ -282,6 +282,26 @@ turn or when the channel uses Gateway-owned delivery. OpenClaw binds the route,
 account, thread, and media access policy; the capability expires when the turn
 ends.
 
+Version 2 factories can also receive `toolContext.sandbox` and
+`toolContext.modelExecution`. The sandbox capability executes literal argument
+vectors in the actual prepared sandbox and exposes only selected host-installed
+skill roots protected by its owner. Its working directory is a sandbox path,
+not a host repository mirror. Commands retain invocation, cancellation, and
+process-cleanup ownership. The model capability admits
+a selection through the original caller's current model policy, preserving
+explicit override denial and using the existing permitted-default owner for
+configured preferences. It supplies the effective model, captured agent, abort
+signal, and final-effect assertion; native CLI execution retains configuration
+and credential ownership. Its
+`cliEntryPath` identifies the running host installation through the package-root
+owner; plugins do not infer it from guest paths or package self-resolution.
+`assertCompleteResult(text)` refuses output that would exceed the initiating
+model's direct output budget. The catalog's full-value calls retain Code Mode
+inbox admission instead of the direct text cap.
+Neither capability grants new model, tool, or filesystem permissions. Retained
+capabilities fail after their owning run or plugin closes. The bundled
+[Auto Review tool](/tools/autoreview) is a consumer of these capabilities.
+
 ```typescript
 register(api) {
   api.registerTool(
@@ -313,6 +333,17 @@ register(api) {
 calls reject invalid schemas before execution and validate the final value after
 tool hooks. Omit it for tools without a stable JSON result. See
 [Tool plugins](/plugins/tool-plugins#output-contracts) for the full contract.
+
+Declare when a tool needs the session workspace with `workspaceAccess` in its
+registration options. Use `true` when the factory reads working files, or omit
+the option to retain that safe default. OpenClaw finishes workspace preparation
+before calling those factories or starting the model. Use `"execute"` when the
+factory only builds a definition and working files are accessed during tool
+preparation or execution. Use `false` only when both factory and execution are
+independent of the session workspace. These explicit declarations let the model
+start while checkout continues. Plain tool objects default to `"execute"` because
+they have no runtime factory. `defineToolPlugin` accepts the same option on each
+tool definition.
 
 Every tool registered with `api.registerTool(...)` must also be declared in the
 plugin manifest:
@@ -361,7 +392,7 @@ turn; it can include `provider`, `modelId`, and `modelRef`. Treat it as
 informational runtime metadata, not a security boundary against the local
 operator, installed plugin code, or a modified OpenClaw runtime. Sensitive
 local tools should still require an explicit plugin or operator opt-in and
-fail closed when active-model metadata is missing or unsuitable.
+refuse to run when active-model metadata is missing or unsuitable.
 
 The manifest declares ownership and discovery; execution still calls the live
 registered tool implementation. Keep `toolMetadata.<tool>.optional: true`
@@ -380,7 +411,7 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 Within your plugin package, use local barrel files such as `api.ts` and
 `runtime-api.ts` for internal imports. Do not import your own plugin through an
 SDK path. Provider-specific helpers should stay in the provider package unless
-the seam is truly generic.
+the interface is truly generic.
 
 Custom Gateway RPC methods are an advanced entry point. Keep them on a
 plugin-specific prefix; core admin namespaces such as `config.*`,
@@ -405,6 +436,7 @@ Oxlint is not type-aware, so it cannot enforce these annotations.
 
 <Check>**package.json** has correct `openclaw` metadata</Check>
 <Check>**openclaw.plugin.json** manifest is present and valid</Check>
+<Check>Manifest declares `reload.turnHandover` if the plugin keeps no per-turn in-memory state ([Reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins))</Check>
 <Check>Entry point uses `defineChannelPluginEntry` or `definePluginEntry`</Check>
 <Check>All imports use focused `plugin-sdk/<subpath>` paths</Check>
 <Check>Internal imports use local modules, not SDK self-imports</Check>

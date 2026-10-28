@@ -63,18 +63,22 @@ class ChatControllerSessionActionsTest {
 
       assertTrue(
         controller.patchSession(
-          key = "custom",
-          ownerAgentId = "main",
-          expectedSessionId = "session-custom",
-          snoozedUntil = wakeAt,
+          ChatSessionPatch(
+            key = "custom",
+            ownerAgentId = "main",
+            expectedSessionId = "session-custom",
+            snoozedUntil = wakeAt,
+          ),
         ),
       )
       assertTrue(
         controller.patchSession(
-          key = "custom",
-          ownerAgentId = "main",
-          expectedSessionId = "session-custom",
-          clearSnooze = true,
+          ChatSessionPatch(
+            key = "custom",
+            ownerAgentId = "main",
+            expectedSessionId = "session-custom",
+            clearSnooze = true,
+          ),
         ),
       )
 
@@ -98,11 +102,13 @@ class ChatControllerSessionActionsTest {
         for (clearSnooze in listOf(false, true)) {
           assertFalse(
             controller.patchSession(
-              key = "custom",
-              ownerAgentId = "main",
-              expectedSessionId = sessionId,
-              snoozedUntil = if (clearSnooze) null else 1_800_003_600_000L,
-              clearSnooze = clearSnooze,
+              ChatSessionPatch(
+                key = "custom",
+                ownerAgentId = "main",
+                expectedSessionId = sessionId,
+                snoozedUntil = if (clearSnooze) null else 1_800_003_600_000L,
+                clearSnooze = clearSnooze,
+              ),
             ),
           )
           assertEquals("Session lifecycle action requires a durable session identity.", controller.errorText.value)
@@ -206,10 +212,12 @@ class ChatControllerSessionActionsTest {
       val archive =
         scope.async {
           controller.patchSession(
-            key = "custom",
-            ownerAgentId = ownerAgentId,
-            expectedSessionId = expectedSessionId,
-            archived = true,
+            ChatSessionPatch(
+              key = "custom",
+              ownerAgentId = ownerAgentId,
+              expectedSessionId = expectedSessionId,
+              archived = true,
+            ),
           )
         }
       try {

@@ -23,7 +23,6 @@ const EmbeddedAgentConfigSchema = z.strictObject({
   cyberFailover: z
     .strictObject({
       mode: z.union([z.literal("auto"), z.literal("off")]).optional(),
-      model: z.string().min(1).optional(),
       cooloffMs: z.number().int().positive().optional(),
     })
     .optional(),
@@ -44,7 +43,7 @@ export const AgentDefaultsBaseSchema = z.strictObject({
   params: z.record(z.string(), z.unknown()).optional(),
   model: AgentModelSchema.optional(),
   modelSelectionScope: z.enum(["session", "agent", "global"]).optional(),
-  utilityModel: z.string().optional(),
+  utilityModel: AgentModelSchema.optional(),
   decisionModel: DecisionModelSchema.optional(),
   imageModel: AgentToolModelSchema.optional(),
   mediaModels: z
@@ -134,8 +133,8 @@ export const AgentDefaultsBaseSchema = z.strictObject({
       mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
       /**
        * Id of a registered compaction provider plugin.
-       * When set, the provider's summarize() is called instead of
-       * the built-in summarizeInStages(). Falls back to built-in on failure.
+       * When set, the provider's summarize() is called instead of the
+       * built-in summary request. Falls back to built-in on failure.
        */
       provider: z.string().optional(),
       /** Thinking level for embedded OpenClaw compaction summaries. Default: low. */
@@ -180,8 +179,6 @@ export const AgentDefaultsBaseSchema = z.strictObject({
         .strictObject({
           /** Enable the pre-compaction memory flush (default: true). */
           enabled: z.boolean().optional(),
-          /** Optional provider/model override used only for pre-compaction memory flush turns. */
-          model: z.string().optional(),
           /** Run the memory flush when context is within this many tokens of the compaction threshold. */
           softThresholdTokens: z.number().int().nonnegative().optional(),
           /**

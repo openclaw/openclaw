@@ -26,33 +26,17 @@ const FEISHU_WS_CONFIG = {
   pingTimeout: 3,
 } as const;
 
-/** User-Agent header value for all Feishu API requests. */
 export function getFeishuUserAgent(): string {
   return FEISHU_USER_AGENT;
-}
-
-function setRequestUserAgent<T>(req: T): T {
-  const request = req as { headers?: unknown };
-  const headers = request.headers;
-  if (!headers) {
-    request.headers = { "User-Agent": getFeishuUserAgent() };
-    return req;
-  }
-
-  const maybeAxiosHeaders = headers as { set?: unknown };
-  if (typeof maybeAxiosHeaders.set === "function") {
-    maybeAxiosHeaders.set("User-Agent", getFeishuUserAgent());
-    return req;
-  }
-
-  (headers as Record<string, string>)["User-Agent"] = getFeishuUserAgent();
-  return req;
 }
 
 // Override the SDK's default User-Agent through the public interceptor API.
 // The SDK fallback interceptor only fills User-Agent when it is absent, so this
 // interceptor can preserve the rest of the SDK's request interceptor stack.
-Lark.defaultHttpInstance.interceptors.request.use(setRequestUserAgent);
+Lark.defaultHttpInstance.interceptors.request.use((req) => {
+  req.headers["User-Agent"] = getFeishuUserAgent();
+  return req;
+});
 
 function readHeader(headers: unknown, name: string): string | undefined {
   if (!isRecord(headers)) {
@@ -158,7 +142,6 @@ function isManagedProxyActive() {
 
 let cachedFeishuProxyAgent: Agent | undefined;
 let pendingFeishuProxyAgent: Promise<Agent | undefined> | undefined;
-let feishuProxyAgentGeneration = 0;
 
 // Ambient proxy configuration is process-stable. Share one dual-protocol agent
 // across REST, bootstrap, and WebSocket traffic so connections stay pooled.
@@ -170,17 +153,12 @@ async function getFeishuProxyAgent(): Promise<Agent | undefined> {
     return pendingFeishuProxyAgent;
   }
 
-  const generation = feishuProxyAgentGeneration;
   let resolutionError: unknown;
   const pending = resolveAmbientNodeProxyAgent<Agent>({
     onError: (error) => {
       resolutionError = error;
     },
   }).then((agent) => {
-    if (generation !== feishuProxyAgentGeneration) {
-      agent?.destroy();
-      return undefined;
-    }
     if (!agent && isManagedProxyActive()) {
       throw new Error("Feishu managed proxy is active but no proxy agent could be created", {
         cause: resolutionError,
@@ -193,18 +171,8 @@ async function getFeishuProxyAgent(): Promise<Agent | undefined> {
   try {
     return await pending;
   } finally {
-    if (pendingFeishuProxyAgent === pending) {
-      pendingFeishuProxyAgent = undefined;
-    }
+    pendingFeishuProxyAgent = undefined;
   }
-}
-
-/** @internal Resets process-scoped proxy state between tests. */
-export function resetFeishuProxyAgentForTest(): void {
-  feishuProxyAgentGeneration += 1;
-  pendingFeishuProxyAgent = undefined;
-  cachedFeishuProxyAgent?.destroy();
-  cachedFeishuProxyAgent = undefined;
 }
 
 type FeishuProxyAwareHttpRequestOptions<D> = Lark.HttpRequestOptions<D> &
@@ -285,7 +253,6 @@ function createFeishuHttpInstance(
     }
     if (authority?.beforeDispatch) {
       await authority.beforeDispatch();
-      authority.assertCurrent();
     }
     if (authority) {
       const defaults = Lark.defaultHttpInstance.defaults;
@@ -373,7 +340,6 @@ function createFeishuHttpInstance(
               : {}),
           }
         : undefined;
-    authority?.assertCurrent();
     try {
       return await request(authority);
     } catch (error) {
@@ -402,6 +368,21 @@ function createFeishuHttpInstance(
     });
   }
 
+  const createMethod =
+    (method: "get" | "delete" | "head" | "options"): Lark.HttpInstance["get"] =>
+    (url, opts) =>
+      runRequest((authority) =>
+        dispatch(authority, opts, (prepared) => base[method](resolveRequestUrl(url), prepared)),
+      );
+  const createDataMethod =
+    (method: "post" | "put" | "patch"): Lark.HttpInstance["post"] =>
+    (url, data, opts) =>
+      runRequest((authority) =>
+        dispatch(authority, opts, (prepared) =>
+          base[method](resolveRequestUrl(url), data, prepared),
+        ),
+      );
+
   return {
     request: (opts) =>
       // SDK message requests reach this seam after formatPayload/auth. Token
@@ -413,34 +394,13 @@ function createFeishuHttpInstance(
           ),
         "request",
       ),
-    get: (url, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.get(resolveRequestUrl(url), prepared)),
-      ),
-    post: (url, data, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.post(resolveRequestUrl(url), data, prepared)),
-      ),
-    put: (url, data, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.put(resolveRequestUrl(url), data, prepared)),
-      ),
-    patch: (url, data, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.patch(resolveRequestUrl(url), data, prepared)),
-      ),
-    delete: (url, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.delete(resolveRequestUrl(url), prepared)),
-      ),
-    head: (url, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.head(resolveRequestUrl(url), prepared)),
-      ),
-    options: (url, opts) =>
-      runRequest((assert) =>
-        dispatch(assert, opts, (prepared) => base.options(resolveRequestUrl(url), prepared)),
-      ),
+    get: createMethod("get"),
+    post: createDataMethod("post"),
+    put: createDataMethod("put"),
+    patch: createDataMethod("patch"),
+    delete: createMethod("delete"),
+    head: createMethod("head"),
+    options: createMethod("options"),
   };
 }
 
@@ -497,10 +457,7 @@ type FeishuWsClientCallbacks = Pick<
   "onError" | "onReady" | "onReconnected" | "onReconnecting"
 >;
 
-/**
- * Create a Feishu WebSocket client for an account.
- * Note: WSClient is not cached since each call creates a new connection.
- */
+/** WSClient is not cached since each call creates a new connection. */
 export async function createFeishuWSClient(
   account: ResolvedFeishuAccount,
   callbacks: FeishuWsClientCallbacks = {},

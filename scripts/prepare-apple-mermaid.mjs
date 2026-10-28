@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isGitRuntimeStagingName } from "../src/infra/update-runtime-staging.ts";
 import {
   parsePnpmLockfileSections,
   pnpmLockfileDocuments,
@@ -22,7 +23,10 @@ async function hashFiles(paths, base = root) {
     if ((await stat(absolute)).isDirectory()) {
       const entries = await readdir(absolute, { withFileTypes: true });
       for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name, "en"))) {
-        if (!["node_modules", "dist"].includes(entry.name)) {
+        if (
+          !["node_modules", "dist"].includes(entry.name) &&
+          !isGitRuntimeStagingName(entry.name)
+        ) {
           await visit(path.join(relative, entry.name));
         }
       }
@@ -101,6 +105,7 @@ const packageManager = JSON.parse(
 const sourceHash = await hashFiles([
   ...Object.keys(selectedImporters).toSorted(),
   "scripts/prepare-apple-mermaid.mjs",
+  "src/infra/update-runtime-staging.ts",
   "scripts/lib/pnpm-lockfile-documents.mjs",
   "scripts/pnpm-runner.mts",
   "scripts/windows-cmd-helpers.mjs",

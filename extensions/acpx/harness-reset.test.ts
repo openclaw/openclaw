@@ -31,7 +31,7 @@ it("resets every registered ACP harness with a read-only package directory", asy
         state: {
           resolveStateDir,
           // Host-owned identity/lease storage is outside this filesystem contract.
-          openKeyedStore: createEmptyAcpxKeyedStore,
+          openKeyedStoreV2: createEmptyAcpxKeyedStore,
         },
       }),
       registerAgentHarness: (harness) => harnesses.push(harness),

@@ -15,16 +15,11 @@ import {
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type {
   DispatchFromConfigParams,
-  DispatchFromConfigResult,
+  DispatchProcessedOptions,
+  DispatchProcessedOutcome,
+  InboundMessageAuditTerminalRecorder,
 } from "./dispatch-from-config.types.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
-
-export type DispatchProcessedOutcome = "completed" | "skipped" | "error";
-
-export type DispatchProcessedOptions = {
-  reason?: string;
-  error?: string;
-};
 
 const completedInboundAuditReasons = new Map<
   string | undefined,
@@ -55,34 +50,20 @@ function resolveInboundMessageAuditTerminal(
 ): InboundMessageAuditTerminal {
   // Diagnostics keep their legacy outcomes and reason strings; audit projects
   // those signals into the stricter terminal contract independently.
-  if (reason === "plugin-bound-error") {
+  if (reason === "plugin-bound-error" || reason?.startsWith("acp_error:")) {
     return {
       status: "failed",
       outcome: "failed",
       errorCode: "message_processing_failed",
-      reasonCode: "plugin_bound_error",
+      reasonCode: reason === "plugin-bound-error" ? "plugin_bound_error" : "acp_dispatch_failed",
     };
   }
-  if (reason?.startsWith("acp_error:")) {
-    return {
-      status: "failed",
-      outcome: "failed",
-      errorCode: "message_processing_failed",
-      reasonCode: "acp_dispatch_failed",
-    };
-  }
-  if (reason === "reply_operation_aborted") {
+  if (reason === "reply_operation_aborted" || reason === "acp_aborted") {
     return {
       status: "blocked",
       outcome: "skipped",
-      reasonCode: "reply_operation_aborted",
-    };
-  }
-  if (reason === "acp_aborted") {
-    return {
-      status: "blocked",
-      outcome: "skipped",
-      reasonCode: "acp_dispatch_aborted",
+      reasonCode:
+        reason === "reply_operation_aborted" ? "reply_operation_aborted" : "acp_dispatch_aborted",
     };
   }
   if (outcome === "completed") {
@@ -107,13 +88,6 @@ function resolveInboundMessageAuditTerminal(
     errorCode: "message_processing_failed",
   };
 }
-
-export type InboundMessageAuditTerminalRecorder = {
-  note: (outcome: DispatchProcessedOutcome, options?: DispatchProcessedOptions) => void;
-  observeRunId: (runId: string) => void;
-  finishSuccess: (result: DispatchFromConfigResult) => void;
-  finishError: () => void;
-};
 
 export function emitInboundMessageAuditTerminal(params: {
   cfg: DispatchFromConfigParams["cfg"];

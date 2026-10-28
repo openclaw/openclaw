@@ -7,8 +7,8 @@ import {
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { buildCodexUserMcpServersThreadConfigPatchForRun } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { resolveModelServiceTierContextTokens } from "openclaw/plugin-sdk/provider-model-metadata";
 import { normalizeCodexAppServerBindingModelProvider } from "./auth-profile.js";
-import { getCodexAppServerClientInstanceId } from "./client.js";
 import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
   readCodexEffectiveConfig,
@@ -32,11 +32,21 @@ import {
   resolveCodexNativeModelInputTools,
   type CodexNativeModelInputTools,
 } from "./native-model-input-tools.js";
-import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
+import {
+  applyCodexNativeSkillIsolation,
+  resolveCodexNativeSkillIsolation,
+} from "./native-skill-isolation.js";
+import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { mergeCodexNativeProjectDocThreadConfig } from "./project-doc-thread-config.js";
-import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
+import {
+  flattenCodexDynamicToolFunctions,
+  isJsonObject,
+  type CodexServiceTier,
+  type JsonObject,
+} from "./protocol.js";
 import { readScheduledCodexAppManagedRequirementsFingerprint } from "./scheduled-app-authority.js";
+import { resolveCodexUltrafastServiceTier } from "./service-tier.js";
 import {
   hashCodexAppServerBindingFingerprint,
   type CodexAppServerBindingIdentity,
@@ -55,17 +65,22 @@ import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
   CodexThreadFinalConfigPatchResult,
-  CodexThreadRequestContext,
 } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
+import { assertAdoptedCodexThreadResumeAllowed } from "./thread-policy.js";
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   buildCodexRingZeroThreadConfigPatch,
+  buildThreadResumeParams,
   CODEX_RING_ZERO_BASE_INSTRUCTIONS,
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
 import { mergeCodexNativeShellEnvironment } from "./thread-shell-environment.js";
 import { resolveCodexWebSearchPlan } from "./web-search.js";
+
+export type CodexThreadRequestContext = Awaited<
+  ReturnType<typeof prepareCodexThreadRequestContext>
+>;
 
 function assertCodexThreadInferenceAuthority(
   params: CodexStartOrResumeThreadParams,
@@ -106,11 +121,12 @@ export async function prepareCodexThreadRequestContext(
     clientId: string;
     config: CodexStartOrResumeThreadParams["config"];
     preflight: Awaited<ReturnType<typeof prepareCodexThreadLifecyclePreflight>>;
+    serviceTierAdmission?: { tier: CodexServiceTier | null | undefined };
     assertCurrent: () => void;
     throwIfAborted: () => void;
   },
-): Promise<CodexThreadRequestContext> {
-  const startModelSelection = resolveCodexAppServerThreadModelSelection({
+) {
+  const startModelSelection = await resolveCodexAppServerThreadModelSelection({
     homeScope: params.appServer.start.homeScope,
     provider: params.params.provider,
     model: params.runtimeModelId ?? params.params.modelId,
@@ -120,6 +136,51 @@ export async function prepareCodexThreadRequestContext(
     agentDir: params.params.agentDir,
     config: params.params.config,
   });
+  const startModelProvider = startModelSelection.modelProvider;
+  const nativeProvider = options.preflight.effectiveConfig.config.model_provider;
+  const fastMode =
+    typeof params.params.fastMode === "function"
+      ? params.params.fastMode()
+      : params.params.fastMode;
+  const preservedNativeBinding =
+    options.selectionBinding?.preserveNativeModel ||
+    options.selectionBinding?.connectionScope === "supervision"
+      ? options.selectionBinding
+      : undefined;
+  const admittedNativeThread =
+    fastMode === "ultrafast" && preservedNativeBinding
+      ? await assertAdoptedCodexThreadResumeAllowed(
+          params,
+          preservedNativeBinding.threadId,
+          { ...options.preflight, throwIfAborted: options.throwIfAborted },
+          options.assertCurrent,
+        )
+      : undefined;
+  const serviceTier = options.serviceTierAdmission
+    ? options.serviceTierAdmission.tier
+    : await resolveCodexUltrafastServiceTier({
+        enabled: fastMode === "ultrafast" && params.appServer.enableUltrafast !== false,
+        serviceTier:
+          params.appServer.serviceTier === "ultrafast" ? "priority" : params.appServer.serviceTier,
+        model:
+          admittedNativeThread?.model ?? preservedNativeBinding?.model ?? startModelSelection.model,
+        modelProvider:
+          admittedNativeThread?.modelProvider ??
+          preservedNativeBinding?.modelProvider ??
+          startModelProvider ??
+          options.selectionBinding?.modelProvider ??
+          (typeof nativeProvider === "string"
+            ? nativeProvider
+            : params.params.provider === "codex"
+              ? "openai"
+              : params.params.provider),
+        client: params.client,
+        timeoutMs: Math.min(params.appServer.requestTimeoutMs, 2500),
+        signal: params.signal ?? new AbortController().signal,
+        assertCurrent: options.assertCurrent,
+        config: params.params.config,
+      });
+  params.appServer = { ...params.appServer, serviceTier };
   const source = params.params.hostCapabilities.retainSourceAuthority?.();
   const modelPolicyEnforced =
     params.nativeModelAdmission === undefined ||
@@ -149,6 +210,21 @@ export async function prepareCodexThreadRequestContext(
   }
   // Each retry starts from caller configuration, never a previously injected private URL.
   params.config = inference?.config ?? options.config;
+  const contextTokenCap = resolveModelServiceTierContextTokens("openai", serviceTier ?? undefined);
+  if (contextTokenCap !== undefined) {
+    const configuredLimit =
+      params.config?.model_auto_compact_token_limit ??
+      options.preflight.effectiveConfig.config.model_auto_compact_token_limit;
+    params.config = {
+      ...params.config,
+      model_auto_compact_token_limit:
+        typeof configuredLimit === "number"
+          ? Math.min(configuredLimit, contextTokenCap)
+          : contextTokenCap,
+      // Body-only limits exclude the initial prefix, which can exceed the serving ceiling.
+      model_auto_compact_token_limit_scope: "total",
+    };
+  }
   params.inferenceRoute = inference?.route;
   params.inferenceProviderRoutes = inference?.providers;
   params.assertCurrent = () => {
@@ -159,16 +235,46 @@ export async function prepareCodexThreadRequestContext(
   params.assertCurrent();
   return {
     ...options.preflight,
+    admittedNativeThread,
+    serviceTierAdmission: options.serviceTierAdmission ?? { tier: serviceTier },
     bindingIdentity: options.bindingIdentity,
     startModelSelection,
-    startModelProvider: startModelSelection.modelProvider,
-    normalizeBindingModelProvider: (authProfileId, modelProvider) =>
-      normalizeCodexAppServerBindingModelProvider({
+    startModelProvider,
+    normalizeBindingModelProvider: async (
+      authProfileId: string | undefined,
+      modelProvider: string | undefined,
+    ) =>
+      await normalizeCodexAppServerBindingModelProvider({
         authProfileId,
         modelProvider,
         authProfileStore: params.params.authProfileStore,
         agentDir: params.params.agentDir,
         config: params.params.config,
+      }),
+    assertInferenceConfig: (config: JsonObject | undefined, modelProvider?: string) =>
+      assertCodexInferenceRouteConfig(
+        params.client,
+        params.inferenceRoute,
+        config,
+        modelProvider,
+        params.inferenceProviderRoutes,
+      ),
+    buildResumeParams: async (
+      binding: CodexAppServerThreadBinding,
+      authProfileId: string | undefined,
+      config: JsonObject | undefined,
+    ) =>
+      await buildThreadResumeParams(params.params, {
+        ...params,
+        threadId: binding.threadId,
+        authProfileId,
+        model: startModelSelection.model,
+        modelProvider: startModelProvider,
+        preserveNativeModel: binding.preserveNativeModel === true,
+        config,
+        hostSystemAgentActive: options.preflight.hostSystemAgentActive,
+        restrictedToolSurfaceInheritedMcpServerNames:
+          options.preflight.restrictedToolSurfaceInheritedMcpServerNames,
       }),
     throwIfAborted: options.throwIfAborted,
   };
@@ -201,7 +307,7 @@ export async function publishCodexThreadInferenceBinding(
         params.inferenceProviderRoutes,
       );
     }
-    return binding;
+    return { ...binding, preparedServiceTier: params.appServer.serviceTier };
   };
   return params.authority ? await params.authority.withCurrent(publish) : publish();
 }
@@ -251,13 +357,30 @@ export async function prepareCodexThreadFinalConfigPatch(
   binding?: CodexAppServerThreadBinding,
 ): Promise<CodexThreadFinalConfigPatchResult> {
   return (
-    (await params.buildFinalConfigPatch?.({
-      ...(binding ? { action: "resume", binding } : { action: "start" }),
-      ...(nativeModelInputTools ? { nativeModelInputTools } : {}),
-    })) ?? {
-      configPatch: params.finalConfigPatch,
-      nativeHookRelayGeneration: params.nativeHookRelayGeneration,
-    }
+    (await params.buildFinalConfigPatch?.(
+      {
+        ...(binding ? { action: "resume", binding } : { action: "start" }),
+        ...(nativeModelInputTools ? { nativeModelInputTools } : {}),
+      },
+      params.client,
+    )) ?? { configPatch: undefined, nativeHookRelayGeneration: undefined }
+  );
+}
+
+export function buildCodexThreadRequestConfig(
+  params: CodexStartOrResumeThreadParams,
+  context: Pick<CodexThreadRequestContext, "userMcpServersConfigPatch" | "nativeSkillIsolation">,
+  pluginConfigPatch: JsonObject | undefined,
+  finalConfigPatch: JsonObject | undefined,
+): JsonObject | undefined {
+  return applyCodexNativeSkillIsolation(
+    mergeCodexThreadConfigs(
+      params.config,
+      context.userMcpServersConfigPatch,
+      pluginConfigPatch,
+      finalConfigPatch,
+    ),
+    context.nativeSkillIsolation,
   );
 }
 
@@ -284,10 +407,9 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     }
   }
   // Slow resumes must be diagnosable without enabling a profiler beforehand.
-  const lifecycleTiming = createCodexThreadLifecycleTimingTracker({
-    ...params.timing,
-    enabled: params.timing?.enabled ?? isCodexAppServerProfilerEnabled(params.params.config),
-  });
+  const lifecycleTiming = createCodexThreadLifecycleTimingTracker(
+    isCodexAppServerProfilerEnabled(params.params.config),
+  );
   const legacyDynamicToolsFingerprint = lifecycleTiming.measureSync(
     "legacy-dynamic-tools-fingerprint",
     () => legacyFingerprintDynamicTools(params.dynamicTools),
@@ -376,7 +498,8 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     );
   }
   params.config = mergeCodexNativeProjectDocThreadConfig(params.config, effectiveConfig);
-  if (params.shellEnvironment) {
+  params.nativeQuestionConfig = effectiveConfig;
+  if (params.shellEnvironment || params.shellGitConfigParameters) {
     params.config = mergeCodexNativeShellEnvironment(
       params.config,
       effectiveConfig.config.shell_environment_policy,
@@ -435,9 +558,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         )!,
       })
     : undefined;
-  const ringZeroClientInstanceId = ringZeroActive
-    ? getCodexAppServerClientInstanceId(params.client)
-    : undefined;
+  const ringZeroClientInstanceId = ringZeroActive ? params.client.getInstanceId() : undefined;
   return {
     nativeModelInputTools:
       nativeHooksRequired || modelAdmissionAvailable
@@ -464,4 +585,17 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     userMcpServersFingerprint,
     webSearchThreadConfigFingerprint,
   };
+}
+
+/** Refresh async requester facts after lifecycle preparation, before binding write admission. */
+export async function withCodexThreadWriteCurrent(
+  params: CodexStartOrResumeThreadParams,
+  write: () => void,
+): Promise<void> {
+  await params.assertCurrentAsync?.();
+  if (params.authority) {
+    await params.authority.withCurrent(write);
+  } else {
+    write();
+  }
 }

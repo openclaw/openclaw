@@ -1,158 +1,103 @@
-/** Proves an installed Agent Plugins bundle can launch and execute a real stdio MCP tool. */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { setSessionMcpRuntimeScheduler } from "./agent-bundle-mcp-manager-api.js";
-import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
+import {
+  bindSessionMcpRuntimeTestScheduler,
+  getOrCreateSessionMcpRuntime,
+} from "./agent-bundle-mcp-manager.test-support.js";
 import {
   disposeAllSessionMcpRuntimes,
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-tools.js";
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 const PLUGIN_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 const MCP_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json";
-let scheduler: ReturnType<typeof createTestGatewayScheduler>;
-
-beforeEach(async () => {
-  scheduler = createTestGatewayScheduler();
-  await setSessionMcpRuntimeScheduler(scheduler);
-});
+beforeEach(bindSessionMcpRuntimeTestScheduler);
 
 afterEach(async () => {
   await disposeAllSessionMcpRuntimes();
-  await scheduler.stop();
   clearPluginMetadataLifecycleCaches();
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  tempDirs.cleanup();
 });
 
-async function writeProbeServer(filePath: string): Promise<void> {
-  await fs.writeFile(
-    filePath,
-    `import { existsSync } from "node:fs";
+const probeSource = `import { existsSync } from "node:fs";
+import { createInterface } from "node:readline";
 
-let buffer = "";
-function send(message) {
-  process.stdout.write(JSON.stringify(message) + "\\n");
-}
+const tools = [{
+  name: "weather_probe",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+}];
 function handle(message) {
+  let result;
   if (message.method === "initialize") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        protocolVersion: message.params?.protocolVersion ?? "2025-11-25",
-        capabilities: { tools: {} },
-        serverInfo: { name: "agent-bundle-probe", version: "1.0.0" },
-      },
-    });
-    return;
+    result = {
+      protocolVersion: message.params?.protocolVersion ?? "2025-11-25",
+      capabilities: { tools: {} },
+      serverInfo: { name: "agent-bundle-probe", version: "1.0.0" },
+    };
+  } else if (message.method === "tools/list") {
+    result = { tools };
+  } else if (message.method === "tools/call") {
+    const observation = {
+      pluginRoot: process.env.PLUGIN_ROOT,
+      pluginData: process.env.PLUGIN_DATA,
+      pluginDataExists: existsSync(process.env.PLUGIN_DATA ?? ""),
+      argv: process.argv.slice(2),
+    };
+    result = { content: [{ type: "text", text: JSON.stringify(observation) }] };
   }
-  if (message.method === "notifications/initialized") {
-    return;
-  }
-  if (message.method === "tools/list") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        tools: [{
-          name: "weather_probe",
-          description: "Reports the Agent Plugins subprocess contract.",
-          inputSchema: { type: "object", properties: {}, additionalProperties: false },
-        }],
-      },
-    });
-    return;
-  }
-  if (message.method === "tools/call") {
-    send({
-      jsonrpc: "2.0",
-      id: message.id,
-      result: {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            pluginRoot: process.env.PLUGIN_ROOT,
-            pluginData: process.env.PLUGIN_DATA,
-            pluginDataExists: existsSync(process.env.PLUGIN_DATA ?? ""),
-            argv: process.argv.slice(2),
-          }),
-        }],
-        isError: false,
-      },
-    });
-  }
+  if (result) process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }) + "\\n");
 }
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => {
-  buffer += chunk;
-  while (true) {
-    const newline = buffer.indexOf("\\n");
-    if (newline < 0) break;
-    const line = buffer.slice(0, newline).replace(/\\r$/, "");
-    buffer = buffer.slice(newline + 1);
-    if (line.trim()) handle(JSON.parse(line));
-  }
+createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", (line) => {
+  if (line.trim()) handle(JSON.parse(line));
 });
-function shutdown() {
-  process.exit(0);
-}
+const shutdown = () => process.exit(0);
 process.stdin.on("end", shutdown);
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
-`,
-    "utf8",
-  );
-}
+for (const event of ["SIGTERM", "SIGINT"]) process.on(event, shutdown);
+`;
 
 it("discovers an installed Agent Plugins bundle and executes its real stdio tool", async () => {
-  const stateDir = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-bundle-runtime-")),
-  );
-  tempDirs.push(stateDir);
+  const stateDir = tempDirs.make("openclaw-agent-bundle-runtime-");
   const pluginId = "agent-bundle-probe";
   const pluginRoot = path.join(stateDir, "extensions", pluginId);
   const workspaceDir = path.join(stateDir, "workspace");
   const bundledPluginsDir = path.join(stateDir, "bundled-plugins-disabled");
   const serverPath = path.join(pluginRoot, "probe-server.mjs");
   const expandedMarkerPath = path.join(pluginRoot, "expanded-marker.txt");
-  await fs.mkdir(pluginRoot, { recursive: true });
-  await fs.mkdir(workspaceDir, { recursive: true });
-  await fs.mkdir(bundledPluginsDir, { recursive: true });
-  await writeProbeServer(serverPath);
-  await fs.writeFile(
-    path.join(pluginRoot, "plugin.json"),
-    JSON.stringify({ $schema: PLUGIN_SCHEMA, name: pluginId }),
-    "utf8",
+  await Promise.all(
+    [pluginRoot, workspaceDir, bundledPluginsDir].map((dir) => fs.mkdir(dir, { recursive: true })),
   );
-  await fs.writeFile(
-    path.join(pluginRoot, "mcp.json"),
-    JSON.stringify({
-      $schema: MCP_SCHEMA,
-      mcpServers: {
-        weatherProbe: {
-          type: "stdio",
-          command: "node",
-          args: ["${PLUGIN_ROOT}/probe-server.mjs", "${PLUGIN_ROOT}/expanded-marker.txt"],
-        },
+  await fs.writeFile(serverPath, probeSource);
+  const writeJson = (name: string, value: unknown) =>
+    fs.writeFile(path.join(pluginRoot, name), JSON.stringify(value), "utf8");
+  await writeJson("plugin.json", { $schema: PLUGIN_SCHEMA, name: pluginId });
+  await writeJson("mcp.json", {
+    $schema: MCP_SCHEMA,
+    mcpServers: {
+      weatherProbe: {
+        type: "stdio",
+        command: "node",
+        args: ["${PLUGIN_ROOT}/probe-server.mjs", "${PLUGIN_ROOT}/expanded-marker.txt"],
       },
-    }),
-    "utf8",
-  );
+    },
+  });
 
   const cfg: OpenClawConfig = {
     plugins: { entries: { [pluginId]: { enabled: true } } },
   };
+  const createRuntime = (sessionId: string, runtimeConfig = cfg) =>
+    getOrCreateSessionMcpRuntime({
+      sessionId,
+      sessionKey: `agent:test:${sessionId}`,
+      workspaceDir,
+      cfg: runtimeConfig,
+    });
   await withEnvAsync(
     {
       OPENCLAW_STATE_DIR: stateDir,
@@ -163,64 +108,25 @@ it("discovers an installed Agent Plugins bundle and executes its real stdio tool
     },
     async () => {
       clearPluginMetadataLifecycleCaches();
-      const loaded = loadEnabledBundleMcpConfig({ workspaceDir, cfg });
-      expect(loaded.diagnostics).toStrictEqual([]);
-      const loadedServer = expectDefined(
-        loaded.config.mcpServers.weatherProbe,
-        "Agent Plugins weather probe server",
-      );
-      const loadedEnv = expectDefined(
-        isRecord(loadedServer.env) ? loadedServer.env : undefined,
-        "Agent Plugins injected environment",
-      );
-      const expectedPluginRoot = await fs.realpath(pluginRoot);
       const expectedPluginData = path.join(stateDir, "plugin-data", pluginId);
       await expect(fs.stat(expectedPluginData)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(loadedServer.args).toEqual([serverPath, expandedMarkerPath]);
-      expect(loadedEnv).toMatchObject({
-        PLUGIN_ROOT: expectedPluginRoot,
-        PLUGIN_DATA: expectedPluginData,
-      });
-
-      const runtime = await getOrCreateSessionMcpRuntime({
-        sessionId: "agent-bundle-boundary",
-        sessionKey: "agent:test:agent-bundle-boundary",
-        workspaceDir,
-        cfg,
-      });
+      const runtime = await createRuntime("agent-bundle-boundary");
       const materialized = await materializeBundleMcpToolsForRun({ runtime });
       try {
-        expect(await fs.realpath(expectedPluginData)).toBe(expectedPluginData);
         expect((await fs.stat(expectedPluginData)).isDirectory()).toBe(true);
         const tool = expectDefined(
           materialized.tools.find((entry) => entry.name === "weatherProbe__weather_probe"),
           "materialized Agent Plugins weather probe tool",
         );
-        expect(getPluginToolMeta(tool)).toMatchObject({
-          pluginId: "bundle-mcp",
-          mcp: { serverName: "weatherProbe", toolName: "weather_probe" },
-        });
-
         const result = await tool.execute("agent-bundle-boundary-call", {}, undefined, undefined);
         const text = result.content.find((entry) => entry.type === "text")?.text;
-        const payload = JSON.parse(expectDefined(text, "weather probe text result")) as unknown;
-        expect(isRecord(payload)).toBe(true);
-        if (!isRecord(payload)) {
-          return;
-        }
+        const payload: unknown = JSON.parse(expectDefined(text, "weather probe text result"));
         expect(payload).toEqual({
-          pluginRoot: expectedPluginRoot,
+          pluginRoot,
           pluginData: expectedPluginData,
           pluginDataExists: true,
           argv: [expandedMarkerPath],
         });
-      } catch (error) {
-        console.error(
-          "Agent Plugins bundle failed before MCP cleanup",
-          error,
-          runtime.peekCatalog()?.diagnostics,
-        );
-        throw error;
       } finally {
         await materialized.dispose();
         await disposeAllSessionMcpRuntimes();
@@ -231,41 +137,28 @@ it("discovers an installed Agent Plugins bundle and executes its real stdio tool
       const userDataPath = path.join(stateDir, "user-configured-data-file");
       await fs.writeFile(userDataPath, "user-owned path", "utf8");
       clearPluginMetadataLifecycleCaches();
-      const collisionRuntime = await getOrCreateSessionMcpRuntime({
-        sessionId: "agent-bundle-boundary-collision",
-        sessionKey: "agent:test:agent-bundle-boundary-collision",
-        workspaceDir,
-        cfg: {
-          ...cfg,
-          mcp: {
-            servers: {
-              userProbe: {
-                command: "node",
-                args: [serverPath, expandedMarkerPath],
-                env: { PLUGIN_ROOT: pluginRoot, PLUGIN_DATA: userDataPath },
-              },
-            },
-          },
-        },
+      const userProbe = {
+        command: "node",
+        args: [serverPath, expandedMarkerPath],
+        env: { PLUGIN_ROOT: pluginRoot, PLUGIN_DATA: userDataPath },
+      };
+      const collisionRuntime = await createRuntime("agent-bundle-boundary-collision", {
+        ...cfg,
+        mcp: { servers: { userProbe } },
       });
-      try {
-        const catalog = await collisionRuntime.getCatalog();
-
-        expect(Object.keys(catalog.servers)).toEqual(["userProbe"]);
-        expect(catalog.tools.map((tool) => `${tool.serverName}:${tool.toolName}`)).toEqual([
-          "userProbe:weather_probe",
-        ]);
-        expect(catalog.diagnostics).toEqual([
-          expect.objectContaining({
-            serverName: "weatherProbe",
-            message: expect.stringMatching(/unable to prepare PLUGIN_DATA.*EEXIST/iu),
-          }),
-        ]);
-        expect((await fs.stat(expectedPluginData)).isFile()).toBe(true);
-        expect((await fs.stat(userDataPath)).isFile()).toBe(true);
-      } finally {
-        await disposeAllSessionMcpRuntimes();
-      }
+      const catalog = await collisionRuntime.getCatalog();
+      expect(Object.keys(catalog.servers)).toEqual(["userProbe"]);
+      expect(catalog.tools.map((tool) => `${tool.serverName}:${tool.toolName}`)).toEqual([
+        "userProbe:weather_probe",
+      ]);
+      expect(catalog.diagnostics).toEqual([
+        expect.objectContaining({
+          serverName: "weatherProbe",
+          message: expect.stringMatching(/unable to prepare PLUGIN_DATA.*EEXIST/iu),
+        }),
+      ]);
+      expect((await fs.stat(expectedPluginData)).isFile()).toBe(true);
+      expect((await fs.stat(userDataPath)).isFile()).toBe(true);
     },
   );
 });

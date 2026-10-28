@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import {
@@ -38,38 +39,69 @@ beforeAll(() => {
   return () => vi.resetConfig();
 });
 
-function expectedHarnessSparseCheckoutArgs(linux: boolean) {
-  return [
-    "sparse-checkout",
-    "set",
-    "--no-cone",
-    "/.github/actions/",
-    "/scripts/lib/pnpm-lockfile-documents.mjs",
-    "/scripts/ios-screenshot-evidence.mjs",
-    "/scripts/lib/direct-run.mjs",
-    "/scripts/ci-static-step.sh",
-    ...(linux
-      ? [
-          "/scripts/lib/release-upgrade-baseline.mjs",
-          "/scripts/lib/release-version.mjs",
-          "/scripts/lib/canonical-json.mjs",
-          "/scripts/lib/upgrade-survivor-policy.mjs",
-          "/scripts/lib/upgrade-survivor-scenarios.json",
-          "/scripts/ci-npm-lock-admission.mjs",
-          "/scripts/generate-npm-package-lock.mjs",
-          "/scripts/generate-npm-package-lock.mts",
-          "/scripts/changed-lanes.mts",
-          "/scripts/lib/merge-head-diff-base.mjs",
-          "/scripts/ci-additional-checks.sh",
-          "/scripts/stage-openclaw-bun.sh",
-          "/scripts/lib/openclaw-bun.json",
-        ]
-      : [
-          "/scripts/lib/swift-toolchain.sh",
-          "/scripts/lib/ci-ios-smoke-plan.mjs",
-          "/scripts/ci-xcodebuild.py",
-        ]),
-  ];
+function readFiles(names: string[]) {
+  return Object.fromEntries(names.map((name) => [name, readFileSync(name, "utf8")]));
+}
+
+function expectFiles(directory: string, files: Record<string, string>) {
+  for (const [name, contents] of Object.entries(files)) {
+    expect(readFileSync(path.join(directory, name), "utf8"), name).toBe(contents);
+  }
+}
+
+// Workflow consumers define the required files; the real Git fixture below
+// checks both index exports and sparse fetches against the owner, not a copied list.
+const harnessReferences = new Map<string, Map<string, string>>();
+const workflowDefinition = parse(readFileSync(".github/workflows/ci.yml", "utf8")) as {
+  jobs: Record<
+    string,
+    {
+      "runs-on"?: unknown;
+      steps?: {
+        env?: Record<string, string>;
+        with?: { path?: string; "sparse-checkout"?: string };
+      }[];
+    }
+  >;
+};
+for (const [jobId, job] of Object.entries(workflowDefinition.jobs)) {
+  const checkout = job.steps?.find((step) => step.env?.CHECKOUT_REPO);
+  const kind =
+    checkout?.env?.CHECKOUT_KIND ??
+    (/(?:macos|windows|xcode)-/u.test(JSON.stringify(job["runs-on"])) ? "platform" : "linux-node");
+  const references = new Map<string, string>();
+  for (const step of job.steps ?? []) {
+    for (const match of JSON.stringify(step).matchAll(/\.ci-harness\/([\w./-]+)/gu)) {
+      references.set(expectDefined(match[1], "harness reference"), jobId);
+    }
+  }
+  if (references.size === 0) {
+    continue;
+  }
+  const sparse = job.steps?.find((step) => step.with?.path === ".ci-harness");
+  if (sparse) {
+    it(`exports every harness reference for ${jobId}'s sparse checkout`, () => {
+      const paths = (sparse.with?.["sparse-checkout"] ?? "")
+        .split(/\s+/u)
+        .filter(Boolean)
+        .map((entry) => entry.replace(/^\/|\/$/gu, ""));
+      for (const reference of references.keys()) {
+        expect(
+          paths.some((entry) => reference === entry || reference.startsWith(`${entry}/`)),
+          `${jobId}: .ci-harness/${reference}`,
+        ).toBe(true);
+      }
+    });
+    // Preflight uses the owner's index export when workflow and target match.
+    if (kind !== "preflight") {
+      continue;
+    }
+  }
+  const required = harnessReferences.get(kind) ?? new Map<string, string>();
+  for (const [reference, consumer] of references) {
+    required.set(reference, consumer);
+  }
+  harnessReferences.set(kind, required);
 }
 
 // Execute both workflow policies against the same owned tree fixture. A leader's
@@ -313,9 +345,6 @@ syncFixtureBuiltinExports();
           expect(fetches.at(-1)?.args).toContain(
             `+${"b".repeat(40)}:refs/remotes/origin/ci-harness`,
           );
-          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
-            expectedHarnessSparseCheckoutArgs(linux),
-          );
           expect(report.commands.at(-1)?.args).toEqual([
             "checkout",
             "--force",
@@ -406,37 +435,33 @@ it.concurrent.for([
     };
     const evidenceScripts = {
       "scripts/ios-screenshot-evidence.mjs": "workflow evidence script\n",
+      "scripts/lib/ios-test-results.mjs": "workflow XCTest result verifier\n",
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
       "scripts/ci-static-step.sh": "workflow static-step script\n",
+      "scripts/ci-collect-checks.sh": "workflow collect-checks script\n",
+      "scripts/macos-native-runtime-artifact.mjs": "workflow native runtime artifact script\n",
     };
-    const nodeSetupScripts = {
-      "scripts/lib/pnpm-lockfile-documents.mjs": readFileSync(
-        "scripts/lib/pnpm-lockfile-documents.mjs",
-        "utf8",
-      ),
-    };
+    const nodeSetupScripts = readFiles(["scripts/lib/pnpm-lockfile-documents.mjs"]);
     const platformScripts = {
       "scripts/lib/swift-toolchain.sh": "workflow Swift toolchain helper\n",
       "scripts/ci-xcodebuild.py": "workflow Xcode diagnostics helper\n",
     };
-    const preflightScripts = {
-      "scripts/ci-build-manifest.mjs": readFileSync("scripts/ci-build-manifest.mjs", "utf8"),
-    };
-    const simulatorScripts = {
-      "scripts/lib/ci-ios-smoke-plan.mjs": readFileSync(
-        "scripts/lib/ci-ios-smoke-plan.mjs",
-        "utf8",
-      ),
-    };
-    const releasePolicy = Object.fromEntries(
-      [
-        "scripts/lib/release-context.mjs",
-        "scripts/lib/release-version.mjs",
-        "scripts/lib/release-upgrade-baseline.mjs",
-        "scripts/lib/canonical-json.mjs",
-        "scripts/lib/upgrade-survivor-policy.mjs",
-        "scripts/lib/upgrade-survivor-scenarios.json",
-      ].map((name) => [name, readFileSync(name, "utf8")]),
+    const preflightScripts = readFiles(["scripts/ci-build-manifest.mjs"]);
+    const simulatorScripts = readFiles(["scripts/lib/ci-ios-smoke-plan.mjs"]);
+    const releasePolicy = readFiles([
+      "scripts/lib/release-context.mjs",
+      "scripts/lib/release-version.mjs",
+      "scripts/lib/release-upgrade-baseline.mjs",
+      "scripts/lib/canonical-json.mjs",
+      "scripts/lib/upgrade-survivor-policy.mjs",
+      "scripts/lib/upgrade-survivor-scenarios.json",
+    ]);
+    const references = harnessReferences.get(kind) ?? new Map<string, string>();
+    const referencedFiles = Object.fromEntries(
+      [...references.keys()].map((reference) => {
+        const file = statSync(reference).isDirectory() ? `${reference}/action.yml` : reference;
+        return [file, readFileSync(file, "utf8")];
+      }),
     );
     const candidateFiles = {
       "candidate-only.txt": "candidate stays intact\n",
@@ -499,6 +524,7 @@ it.concurrent.for([
           }).trim();
         run("init");
         for (const [name, contents] of Object.entries({
+          ...referencedFiles,
           ...files,
           ...evidenceScripts,
           ...nodeSetupScripts,
@@ -626,21 +652,12 @@ it.concurrent.for([
         expect(readFileSync(path.join(workspace, ".git/config"), "utf8")).not.toContain(
           "AUTHORIZATION",
         );
-        for (const [name, contents] of Object.entries(candidateFiles)) {
-          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(contents);
+        expectFiles(workspace, candidateFiles);
+        for (const name of Object.keys(candidateFiles)) {
           expect(existsSync(path.join(harness, name))).toBe(false);
         }
         const workflowOwnsEvidence = kind === "platform" || kind === "linux-node";
-        for (const name of Object.keys(evidenceScripts)) {
-          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(
-            candidateEvidenceScripts[name],
-          );
-        }
-        for (const name of Object.keys(platformScripts)) {
-          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(
-            candidatePlatformScripts[name],
-          );
-        }
+        expectFiles(workspace, { ...candidateEvidenceScripts, ...candidatePlatformScripts });
         if (workflow === "missing-action") {
           expect(existsSync(path.join(workspace, action))).toBe(false);
           expect(existsSync(path.join(harness, action))).toBe(false);
@@ -652,6 +669,12 @@ it.concurrent.for([
           expect(existsSync(harness)).toBe(false);
           return;
         }
+        for (const [reference, consumer] of references) {
+          expect(
+            existsSync(path.join(harness, reference)),
+            `${consumer} (${kind}, workflow=${workflow}): .ci-harness/${reference}`,
+          ).toBe(true);
+        }
         const sourceStatus = expectDefined(readSourceStatus, "native source status");
         expect(sourceStatus()).toEqual([]);
         expect(readFileSync(path.join(workspace, ".git/info/exclude"), "utf8")).toBe(
@@ -660,9 +683,7 @@ it.concurrent.for([
         if (workflow === "same") {
           expect(existsSync(path.join(harness, ".git"))).toBe(false);
         }
-        for (const [name, contents] of Object.entries(files)) {
-          expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-        }
+        expectFiles(harness, files);
         const fingerprint = spawnSync(
           process.execPath,
           [
@@ -676,47 +697,26 @@ it.concurrent.for([
         );
         expect(fingerprint.status, fingerprint.stderr).toBe(0);
         expect(fingerprint.stdout.trim()).toMatch(/^v2-[a-f0-9]{64}$/u);
-        for (const [name, contents] of Object.entries(evidenceScripts)) {
-          expect(existsSync(path.join(harness, name))).toBe(workflowOwnsEvidence);
-          if (workflowOwnsEvidence) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(platformScripts)) {
-          expect(existsSync(path.join(harness, name)), name).toBe(kind === "platform");
-          if (kind === "platform") {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(preflightScripts)) {
-          expect(existsSync(path.join(harness, name)), name).toBe(preflight);
-          if (preflight) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(simulatorScripts)) {
-          const ownsSimulator = preflight || kind === "platform";
-          expect(existsSync(path.join(harness, name)), name).toBe(ownsSimulator);
-          if (ownsSimulator) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-            writeFileSync(path.join(workspace, name), "throw new Error('candidate planner');\n");
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(releasePolicy)) {
-          const ownsPolicy = preflight
-            ? ![
-                "scripts/lib/release-upgrade-baseline.mjs",
-                "scripts/lib/canonical-json.mjs",
-                "scripts/lib/upgrade-survivor-policy.mjs",
-                "scripts/lib/upgrade-survivor-scenarios.json",
-              ].includes(name)
+        const ownsPolicy = (name: string) =>
+          preflight
+            ? ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"].includes(name)
             : kind === "linux-node" && name !== "scripts/lib/release-context.mjs";
-          expect(existsSync(path.join(harness, name))).toBe(ownsPolicy);
-          if (ownsPolicy) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-            writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+        for (const [scripts, owns, mutate] of [
+          [evidenceScripts, () => workflowOwnsEvidence, false],
+          [platformScripts, () => kind === "platform", false],
+          [preflightScripts, () => preflight, false],
+          [simulatorScripts, () => preflight || kind === "platform", true],
+          [releasePolicy, ownsPolicy, true],
+        ] as const) {
+          for (const [name, contents] of Object.entries(scripts)) {
+            expect(existsSync(path.join(harness, name)), name).toBe(owns(name));
+            if (owns(name)) {
+              expectFiles(harness, { [name]: contents });
+              if (mutate) {
+                writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
+                expectFiles(harness, { [name]: contents });
+              }
+            }
           }
         }
         if (kind === "linux-node") {
@@ -740,11 +740,6 @@ it.concurrent.for([
           // Git tracks only executable state; checkout materialization applies the process umask.
           expect(statSync(path.join(harness, executable)).mode & 0o111).not.toBe(0);
           expect(readlinkSync(path.join(harness, link))).toBe("line\nbreak.sh");
-        }
-        if (workflow !== "same" && workflowOwnsEvidence) {
-          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
-            expectedHarnessSparseCheckoutArgs(linux),
-          );
         }
         writeFileSync(path.join(workspace, action), "later candidate edit\n");
         expect(readFileSync(path.join(harness, action), "utf8")).toBe(files[action]);

@@ -64,14 +64,14 @@ it("refuses replacement of the captured store before queued dispatch", async () 
   const dispatch = createDeferredCore();
   const task = queueTask(dispatch.promise);
   const result = readChannelAllowFromStore("demo", env, "alpha");
-  const rejected = expect(result).rejects.toThrow();
+  const rejected = expect(result).rejects.toThrow(/file identity changed/);
   try {
     await task.submitted;
     fs.renameSync(pathname, `${pathname}.retired`);
     fs.writeFileSync(pathname, "successor store");
     dispatch.resolve();
     await rejected;
-    await expect(task.captured).rejects.toThrow();
+    await expect(task.captured).rejects.toThrow(/file identity changed/);
     expect(mock.runTask).toHaveBeenCalledOnce();
   } finally {
     dispatch.resolve();

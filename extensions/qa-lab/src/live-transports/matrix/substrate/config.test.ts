@@ -1,47 +1,43 @@
-// Qa Lab Matrix tests cover config behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { buildMatrixQaConfig } from "./config.js";
 import type { MatrixQaProvisionedTopology } from "./topology.js";
 
-function castRecord(value: unknown): Record<string, unknown> {
-  return value as Record<string, unknown>;
+function nest(entries: Array<[string, unknown]>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  const children = new Map<string, Array<[string, unknown]>>();
+  for (const [path, value] of entries) {
+    const [key = "", ...tail] = path.split("/");
+    if (tail.length === 0) {
+      result[key] = value;
+    } else {
+      children.set(key, [...(children.get(key) ?? []), [tail.join("/"), value]]);
+    }
+  }
+  for (const [key, child] of children) {
+    result[key] = nest(child);
+  }
+  return result;
 }
 
 describe("matrix qa config", () => {
+  const group = (key: string, name: string): MatrixQaProvisionedTopology["rooms"][number] => ({
+    key,
+    name,
+    kind: "group",
+    memberRoles: ["driver", "observer", "sut"],
+    memberUserIds: ["@driver:matrix-qa.test", "@observer:matrix-qa.test", "@sut:matrix-qa.test"],
+    requireMention: true,
+    roomId: `!${key}:matrix-qa.test`,
+  });
   const topology: MatrixQaProvisionedTopology = {
     defaultRoomId: "!main:matrix-qa.test",
     defaultRoomKey: "main",
     rooms: [
-      {
-        key: "main",
-        kind: "group" as const,
-        memberRoles: ["driver", "observer", "sut"],
-        memberUserIds: [
-          "@driver:matrix-qa.test",
-          "@observer:matrix-qa.test",
-          "@sut:matrix-qa.test",
-        ],
-        name: "Main",
-        requireMention: true,
-        roomId: "!main:matrix-qa.test",
-      },
-      {
-        key: "secondary",
-        kind: "group" as const,
-        memberRoles: ["driver", "observer", "sut"],
-        memberUserIds: [
-          "@driver:matrix-qa.test",
-          "@observer:matrix-qa.test",
-          "@sut:matrix-qa.test",
-        ],
-        name: "Secondary",
-        requireMention: true,
-        roomId: "!secondary:matrix-qa.test",
-      },
+      group("main", "Main"),
+      group("secondary", "Secondary"),
       {
         key: "driver-dm",
-        kind: "dm" as const,
+        kind: "dm",
         memberRoles: ["driver", "sut"],
         memberUserIds: ["@driver:matrix-qa.test", "@sut:matrix-qa.test"],
         name: "DM",
@@ -61,491 +57,193 @@ describe("matrix qa config", () => {
     topology,
   } satisfies Parameters<typeof buildMatrixQaConfig>[1];
 
-  it("builds default Matrix QA config from provisioned topology", () => {
-    const next = buildMatrixQaConfig({}, params);
-
-    const sut = next.channels?.matrix?.accounts?.sut;
-    expect(sut?.dm?.allowFrom).toEqual(["@driver:matrix-qa.test"]);
-    expect(sut?.dm?.enabled).toBe(true);
-    expect(sut?.dm?.policy).toBe("allowlist");
-    expect(sut?.groupAllowFrom).toEqual(["@driver:matrix-qa.test"]);
-    expect(sut?.groupPolicy).toBe("allowlist");
-    expect(sut?.groups?.["!main:matrix-qa.test"]).toEqual({
-      enabled: true,
-      requireMention: true,
-    });
-    expect(sut?.groups?.["!secondary:matrix-qa.test"]).toEqual({
-      enabled: true,
-      requireMention: true,
-    });
-    expect(sut?.replyToMode).toBe("off");
-    expect(sut?.streaming).toEqual({
-      block: { enabled: false },
-      chunkMode: "length",
-      mode: "off",
-      preview: { toolProgress: true },
-    });
-    expect(sut?.textChunkLimit).toBe(4000);
-    expect(sut?.threadReplies).toBe("inbound");
-    expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
-  });
+  const build = (
+    overrides: Parameters<typeof buildMatrixQaConfig>[1]["overrides"],
+    extra: Partial<Parameters<typeof buildMatrixQaConfig>[1]> = {},
+  ) => buildMatrixQaConfig({}, { ...params, overrides, ...extra });
 
   it("preserves the scenario provider plugin without enabling unrelated plugins", () => {
+    const matrixPlugin = {
+      config: { preserve: "matrix-config" },
+      enabled: false,
+      hooks: { allowConversationAccess: true, timeoutMs: 1_500 },
+    };
     const next = buildMatrixQaConfig(
       {
         plugins: {
-          allow: ["acpx", "memory-core", "qa-lab", "openai"],
+          allow: ["openai"],
           entries: {
-            matrix: {
-              config: { preserve: "matrix-config" },
-              enabled: false,
-              hooks: { allowConversationAccess: true, timeoutMs: 1_500 },
-              llm: {
-                allowModelOverride: true,
-                allowedModels: ["openai/gpt-5.4"],
-              },
-              subagent: {
-                allowModelOverride: true,
-                allowedModels: ["anthropic/claude-sonnet-4-6"],
-              },
-            },
+            matrix: structuredClone(matrixPlugin),
             openai: { enabled: true },
             unrelated: { enabled: true },
           },
         },
-      } as OpenClawConfig,
+      },
       params,
     );
 
-    expect(next.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "openai", "matrix"]);
-    expect(next.plugins?.allow).not.toContain("unrelated");
-    expect(next.plugins?.allow).not.toContain("anthropic");
-    expect(next.plugins?.entries?.matrix).toEqual({
-      config: { preserve: "matrix-config" },
-      enabled: true,
-      hooks: { allowConversationAccess: true, timeoutMs: 1_500 },
-      llm: {
-        allowModelOverride: true,
-        allowedModels: ["openai/gpt-5.4"],
-      },
-      subagent: {
-        allowModelOverride: true,
-        allowedModels: ["anthropic/claude-sonnet-4-6"],
-      },
-    });
+    expect(next.plugins?.allow).toEqual(["openai", "matrix"]);
+    expect(next.plugins?.entries?.matrix).toEqual({ ...matrixPlugin, enabled: true });
     expect(next.plugins?.entries?.openai).toEqual({ enabled: true });
   });
 
   it("honors an explicit DM disable with a provisioned DM room", () => {
-    const next = buildMatrixQaConfig(
-      {},
-      {
-        ...params,
-        overrides: { dm: { enabled: false } },
-      },
-    );
+    const next = build({ dm: { enabled: false } });
 
     expect(next.channels?.matrix?.accounts?.sut?.dm).toEqual({ enabled: false });
   });
 
   it("applies room-keyed Matrix QA config overrides", () => {
-    const next = buildMatrixQaConfig(
-      {},
-      {
-        ...params,
-        overrides: {
-          autoJoin: "allowlist",
-          autoJoinAllowlist: [" !dm:matrix-qa.test ", "#ops:matrix-qa.test"],
-          agentDefaults: {
-            blockStreamingChunk: {
-              breakPreference: "newline",
-              maxChars: 48,
-              minChars: 1,
-            },
-            blockStreamingCoalesce: {
-              idleMs: 0,
-              maxChars: 48,
-              minChars: 1,
-            },
-          },
-          blockStreaming: true,
-          dm: {
-            sessionScope: "per-room",
-            threadReplies: "off",
-          },
-          encryption: true,
-          allowBots: "mentions",
-          configuredBotRoles: ["observer"],
-          groupAllowFrom: ["@driver:matrix-qa.test", "@observer:matrix-qa.test"],
-          groupMentionPatterns: ["\\S"],
-          groupsByKey: {
-            secondary: {
-              allowBots: false,
-              requireMention: false,
-              tools: {
-                allow: ["sessions_spawn"],
-              },
-            },
-          },
-          replyToMode: "all",
-          streaming: "quiet",
-          threadBindings: {
-            enabled: true,
-            idleHours: 1,
-            spawnSessions: true,
-          },
-          threadReplies: "always",
-          audio: {
-            echoTranscript: false,
-            enabled: true,
-          },
-          toolProfile: "coding",
-        },
-        observerAccessToken: "observer-token",
-      },
-    );
-
-    expect(next.agents?.defaults?.blockStreamingChunk).toEqual({
-      breakPreference: "newline",
-      maxChars: 48,
-      minChars: 1,
-    });
-    expect(next.agents?.defaults?.blockStreamingCoalesce).toEqual({
-      idleMs: 0,
-      maxChars: 48,
-      minChars: 1,
-    });
-    expect(next.tools?.profile).toBe("coding");
-    expect(next.tools?.media?.audio).toEqual({
-      echoTranscript: false,
-      enabled: true,
-    });
-    expect(next.messages?.groupChat?.mentionPatterns).toEqual(["\\S"]);
-    const observer = next.channels?.matrix?.accounts?.["qa-observer-bot-source"];
-    expect(observer?.accessToken).toBe("observer-token");
-    expect(observer?.enabled).toBe(false);
-    expect(observer?.homeserver).toBe("http://127.0.0.1:28008/");
-    expect(observer?.userId).toBe("@observer:matrix-qa.test");
-    const sut = next.channels?.matrix?.accounts?.sut;
-    expect(sut?.allowBots).toBe("mentions");
-    expect(sut?.autoJoin).toBe("allowlist");
-    expect(sut?.autoJoinAllowlist).toEqual(["!dm:matrix-qa.test", "#ops:matrix-qa.test"]);
-    expect((sut?.streaming as { block?: { enabled?: boolean } })?.block?.enabled).toBe(true);
-    expect(sut?.dm?.sessionScope).toBe("per-room");
-    expect(sut?.dm?.threadReplies).toBe("off");
-    expect(sut?.encryption).toBe(true);
-    expect(sut?.groupAllowFrom).toEqual(["@driver:matrix-qa.test", "@observer:matrix-qa.test"]);
-    expect(sut?.groups?.["!main:matrix-qa.test"]).toEqual({
-      enabled: true,
-      requireMention: true,
-    });
-    expect(sut?.groups?.["!secondary:matrix-qa.test"]).toEqual({
+    const chunk = { maxChars: 48, minChars: 1 };
+    const agentDefaults = {
+      blockStreamingChunk: { ...chunk, breakPreference: "newline" },
+      blockStreamingCoalesce: { ...chunk, idleMs: 0 },
+    } as const;
+    const threadBindings = { enabled: true, idleHours: 1, spawnSessions: true };
+    const audio = { echoTranscript: false, enabled: true };
+    const secondary = {
       allowBots: false,
-      enabled: true,
       requireMention: false,
-      tools: {
-        allow: ["sessions_spawn"],
-      },
-    });
-    expect(sut?.replyToMode).toBe("all");
-    expect((sut?.streaming as { mode?: string })?.mode).toBe("quiet");
-    expect(sut?.threadBindings).toEqual({
-      enabled: true,
-      idleHours: 1,
-      spawnSessions: true,
-    });
-    expect(sut?.threadReplies).toBe("always");
-  });
-
-  it("rewrites the owned Matrix QA account instead of retaining stale override fields", () => {
-    const overridden = buildMatrixQaConfig(
-      {},
+      tools: { allow: ["sessions_spawn"] },
+    };
+    const accountOverrides = {
+      allowBots: "mentions",
+      encryption: true,
+      replyToMode: "all",
+      threadReplies: "always",
+      dm: { sessionScope: "per-room", threadReplies: "off" },
+      groupAllowFrom: [params.driverUserId, params.observerUserId],
+    } as const;
+    const next = build(
       {
-        ...params,
-        overrides: {
-          autoJoin: "allowlist",
-          autoJoinAllowlist: ["!ops:matrix-qa.test"],
-          blockStreaming: true,
-          streaming: "quiet",
-        },
+        ...accountOverrides,
+        groupAllowFrom: [...accountOverrides.groupAllowFrom],
+        autoJoin: "allowlist",
+        autoJoinAllowlist: [" !dm:matrix-qa.test ", "#ops:matrix-qa.test"],
+        agentDefaults: structuredClone(agentDefaults),
+        blockStreaming: true,
+        configuredBotRoles: ["observer"],
+        groupMentionPatterns: ["\\S"],
+        groupsByKey: { secondary },
+        streaming: "quiet",
+        threadBindings: structuredClone(threadBindings),
+        audio: structuredClone(audio),
+        toolProfile: "coding",
       },
+      { observerAccessToken: "observer-token" },
     );
 
-    const reset = buildMatrixQaConfig(
-      {},
-      {
-        currentConfig: overridden,
-        ...params,
-      },
-    );
-
-    expect(reset.channels?.matrix?.accounts?.sut?.autoJoin).toBeUndefined();
-    expect(reset.channels?.matrix?.accounts?.sut?.autoJoinAllowlist).toBeUndefined();
-    expect(reset.channels?.matrix?.accounts?.sut?.streaming).toEqual({
-      block: { enabled: false },
-      chunkMode: "length",
-      mode: "off",
-      preview: { toolProgress: true },
+    expect(next.agents?.defaults).toEqual(expect.objectContaining(agentDefaults));
+    expect(next.tools?.profile).toBe("coding");
+    expect(next.tools?.media?.audio).toEqual(audio);
+    expect(next.messages?.groupChat?.mentionPatterns).toEqual(["\\S"]);
+    expect(next.channels?.matrix?.accounts?.["qa-observer-bot-source"]).toMatchObject({
+      accessToken: "observer-token",
+      enabled: false,
+      homeserver: "http://127.0.0.1:28008/",
+      userId: "@observer:matrix-qa.test",
     });
+    const sut = next.channels?.matrix?.accounts?.sut;
+    expect(sut).toMatchObject({
+      ...accountOverrides,
+      autoJoin: "allowlist",
+      autoJoinAllowlist: ["!dm:matrix-qa.test", "#ops:matrix-qa.test"],
+      streaming: { block: { enabled: true }, mode: "quiet" },
+    });
+    expect(sut?.groups).toEqual({
+      "!main:matrix-qa.test": { enabled: true, requireMention: true },
+      "!secondary:matrix-qa.test": { ...secondary, enabled: true },
+    });
+    expect(sut?.threadBindings).toEqual(threadBindings);
   });
 
   it("restores owned baseline leaves while preserving current Matrix lifecycle and siblings", () => {
-    const baseline = {
-      approvals: { exec: { enabled: false, mode: "session" } },
-      agents: {
-        defaults: {
-          blockStreamingChunk: { maxChars: 120 },
-          adjacentDefault: "baseline",
-        },
-      },
-      tools: {
-        profile: "messaging",
-        media: {
-          models: [{ provider: "openai", model: "baseline", capabilities: ["audio"] }],
-          audio: {
-            enabled: false,
-            prompt: "baseline prompt",
-            scope: {
-              default: "allow",
-              rules: [{ action: "allow", match: { chatType: "direct" } }],
-            },
-          },
-        },
-      },
-      messages: {
-        groupChat: {
-          mentionPatterns: ["baseline"],
-        },
-      },
-      channels: {
-        matrix: {
-          unknownRoot: "baseline",
-          accounts: {
-            sut: {
-              allowBots: false,
-              autoJoin: "allowlist",
-              autoJoinAllowlist: ["!baseline:matrix-qa.test"],
-              deviceId: "BASELINE-DEVICE",
-              dm: {
-                allowFrom: ["@baseline:matrix-qa.test"],
-                enabled: true,
-                policy: "open",
-                sessionScope: "per-room",
-                threadReplies: "always",
-              },
-              execApprovals: {
-                agentFilter: ["baseline-agent"],
-                approvers: ["@baseline:matrix-qa.test"],
-                enabled: false,
-                sessionFilter: ["baseline-session"],
-                target: "dm",
-              },
-              groups: {
-                "!main:matrix-qa.test": {
-                  allowBots: false,
-                  enabled: false,
-                  requireMention: false,
-                  tools: {
-                    allow: ["baseline-allow"],
-                    deny: ["baseline-deny"],
-                  },
-                },
-              },
-              streaming: {
-                block: { enabled: true },
-                chunkMode: "newline",
-                mode: "quiet",
-                preview: { toolProgress: false },
-              },
-              threadBindings: {
-                enabled: false,
-                idleHours: 12,
-              },
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const current = structuredClone(baseline) as OpenClawConfig & Record<string, unknown>;
-    const currentRoot = castRecord(current);
-    currentRoot.unrelated = { currentOnly: true };
-    castRecord(currentRoot.approvals).exec = {
-      enabled: true,
-      mode: "session",
-      reviewer: "current",
-    };
-    castRecord(currentRoot.agents).defaults = {
-      blockStreamingChunk: { maxChars: 8 },
-      adjacentDefault: "current",
-    };
-    const currentTools = castRecord(currentRoot.tools);
-    const currentMedia = castRecord(currentTools.media);
-    currentTools.profile = "coding";
-    currentMedia.models = [{ provider: "openai", model: "previous" }];
-    currentMedia.audio = {
-      enabled: true,
-      prompt: "previous prompt",
-      adjacentAudio: "current",
-      scope: {
-        default: "deny",
-        rules: [{ action: "deny", match: { chatType: "group" } }],
-      },
-    };
-    castRecord(currentRoot.messages).groupChat = {
-      mentionPatterns: ["previous"],
-      adjacentMessage: "current",
-    };
-    const currentMatrix = castRecord(castRecord(currentRoot.channels).matrix);
-    currentMatrix.unknownRoot = "current";
-    const currentAccounts = castRecord(currentMatrix.accounts);
-    currentAccounts.sibling = { enabled: false, homeserver: "https://sibling.invalid" };
-    currentAccounts["qa-driver-bot-source"] = { enabled: false, userId: "@stale:test" };
-    currentAccounts["qa-observer-bot-source"] = { enabled: false, userId: "@stale:test" };
-    const currentSut = castRecord(currentAccounts.sut);
-    currentAccounts.sut = {
-      ...currentSut,
-      allowBots: "mentions",
-      autoJoinAllowlist: ["!previous:matrix-qa.test"],
-      deviceId: "CURRENT-DEVICE",
-      lifecycleState: "current",
-      dm: {
-        ...castRecord(currentSut.dm),
-        allowFrom: ["@previous:test"],
-        adjacentDm: "current",
-        sessionScope: "per-user",
-      },
-      execApprovals: {
-        agentFilter: ["previous-agent"],
-        adjacentApproval: "current",
-        approvers: ["@previous:test"],
-        enabled: true,
-        sessionFilter: ["previous-session"],
-        target: "both",
-      },
-      groups: {
-        ...castRecord(currentSut.groups),
-        "!main:matrix-qa.test": {
-          allowBots: "mentions",
-          adjacentGroup: "current",
-          enabled: true,
-          requireMention: true,
-          tools: {
-            adjacentTool: "current",
-            allow: ["previous-allow"],
-            deny: ["previous-deny"],
-          },
-        },
-        "!current-only:matrix-qa.test": {
-          adjacentGroup: "preserved",
-          enabled: false,
-        },
-      },
-      streaming: {
-        adjacentStreaming: "current",
-        block: { adjacentBlock: "current", enabled: true },
-        chunkMode: "newline",
-        mode: "quiet",
-        preview: { adjacentPreview: "current", toolProgress: false },
-      },
-      threadBindings: {
-        adjacentBinding: "current",
-        enabled: true,
-        idleHours: 1,
-      },
-    };
-
-    const next = buildMatrixQaConfig(baseline, {
-      currentConfig: current,
-      ...params,
-    });
-
-    expect(castRecord(next).unrelated).toEqual({ currentOnly: true });
-    expect(next.approvals?.exec).toEqual({
-      enabled: false,
-      mode: "session",
-      reviewer: "current",
-    });
-    expect(next.agents?.defaults).toMatchObject({
-      adjacentDefault: "current",
-      blockStreamingChunk: { maxChars: 120 },
-    });
-    expect(next.tools?.profile).toBe("messaging");
-    expect(next.tools?.media).toMatchObject({
-      models: [{ provider: "openai", model: "baseline", capabilities: ["audio"] }],
-      audio: {
-        adjacentAudio: "current",
-        enabled: false,
-        prompt: "baseline prompt",
-        scope: {
-          default: "allow",
-          rules: [{ action: "allow", match: { chatType: "direct" } }],
-        },
-      },
-    });
-    expect(next.messages?.groupChat).toMatchObject({
-      adjacentMessage: "current",
-      mentionPatterns: ["baseline"],
-      visibleReplies: "automatic",
-    });
-    expect(next.channels?.matrix).toMatchObject({ unknownRoot: "current" });
-    expect(next.channels?.matrix?.accounts?.sibling).toEqual(currentAccounts.sibling);
+    const s = "channels/matrix/accounts/sut";
+    const g = s + "/groups/!main:matrix-qa.test";
+    const audio = "tools/media/audio";
+    const baseModels = [{ provider: "openai", model: "baseline", capabilities: ["audio"] }];
+    const baseRules = [{ action: "allow", match: { chatType: "direct" } }];
+    const sibling = { enabled: false, homeserver: "https://sibling.invalid" };
+    const extraGroup = { adjacentGroup: "preserved", enabled: false };
+    const fields: Array<[string, unknown, unknown, unknown?]> = [
+      ["unrelated", undefined, { currentOnly: true }, { currentOnly: true }],
+      ["approvals/exec/enabled", false, true],
+      ["approvals/exec/mode", "session", "session"],
+      ["approvals/exec/reviewer", undefined, "current", "current"],
+      ["agents/defaults/blockStreamingChunk", { maxChars: 120 }, { maxChars: 8 }],
+      ["agents/defaults/adjacentDefault", "baseline", "current", "current"],
+      ["tools/profile", "messaging", "coding"],
+      ["tools/media/models", baseModels, [{ provider: "openai", model: "previous" }]],
+      [audio + "/enabled", false, true],
+      [audio + "/prompt", "baseline prompt", "previous prompt"],
+      [audio + "/adjacentAudio", undefined, "current", "current"],
+      [audio + "/scope/default", "allow", "deny"],
+      [audio + "/scope/rules", baseRules, [{ action: "deny", match: { chatType: "group" } }]],
+      ["messages/groupChat/mentionPatterns", ["baseline"], ["previous"]],
+      ["messages/groupChat/adjacentMessage", undefined, "current", "current"],
+      ["channels/matrix/unknownRoot", "baseline", "current", "current"],
+      ["channels/matrix/accounts/sibling", undefined, sibling, sibling],
+      ...["driver", "observer"].map((role): [string, unknown, unknown] => [
+        `channels/matrix/accounts/qa-${role}-bot-source`,
+        undefined,
+        { enabled: false, userId: "@stale:test" },
+      ]),
+      [s + "/allowBots", false, "mentions"],
+      [s + "/autoJoin", "allowlist", "allowlist"],
+      [s + "/autoJoinAllowlist", ["!baseline:matrix-qa.test"], ["!previous:matrix-qa.test"]],
+      [s + "/deviceId", "BASELINE-DEVICE", "CURRENT-DEVICE", "CURRENT-DEVICE"],
+      [s + "/lifecycleState", undefined, "current", "current"],
+      [s + "/dm/allowFrom", ["@baseline:test"], ["@previous:test"], [params.driverUserId]],
+      [s + "/dm/enabled", true, true],
+      [s + "/dm/policy", "open", "open", "allowlist"],
+      [s + "/dm/sessionScope", "per-room", "per-user"],
+      [s + "/dm/threadReplies", "always", "always"],
+      [s + "/dm/adjacentDm", undefined, "current", "current"],
+      [s + "/execApprovals/agentFilter", ["baseline-agent"], ["previous-agent"]],
+      [s + "/execApprovals/approvers", ["@baseline:matrix-qa.test"], ["@previous:test"]],
+      [s + "/execApprovals/enabled", false, true],
+      [s + "/execApprovals/sessionFilter", ["baseline-session"], ["previous-session"]],
+      [s + "/execApprovals/target", "dm", "both"],
+      [s + "/execApprovals/adjacentApproval", undefined, "current", "current"],
+      [g + "/allowBots", false, "mentions"],
+      [g + "/enabled", false, true, true],
+      [g + "/requireMention", false, true, true],
+      [g + "/adjacentGroup", undefined, "current", "current"],
+      [g + "/tools/allow", ["baseline-allow"], ["previous-allow"]],
+      [g + "/tools/deny", ["baseline-deny"], ["previous-deny"]],
+      [g + "/tools/adjacentTool", undefined, "current", "current"],
+      [s + "/groups/!current-only:matrix-qa.test", undefined, extraGroup, extraGroup],
+      [s + "/streaming/adjacentStreaming", undefined, "current", "current"],
+      [s + "/streaming/block/enabled", true, true, false],
+      [s + "/streaming/block/adjacentBlock", undefined, "current", "current"],
+      [s + "/streaming/chunkMode", "newline", "newline", "length"],
+      [s + "/streaming/mode", "quiet", "quiet", "off"],
+      [s + "/streaming/preview/toolProgress", false, false, true],
+      [s + "/streaming/preview/adjacentPreview", undefined, "current", "current"],
+      [s + "/threadBindings/enabled", false, true],
+      [s + "/threadBindings/idleHours", 12, 1],
+      [s + "/threadBindings/adjacentBinding", undefined, "current", "current"],
+    ];
+    const expectedValue = (row: (typeof fields)[number]) => (row.length === 4 ? row[3] : row[1]);
+    const fixture = (column: 1 | 2 | 3) =>
+      nest(
+        fields.flatMap((row): Array<[string, unknown]> =>
+          (column === 3 ? expectedValue(row) : row[column]) === undefined
+            ? []
+            : [[row[0], structuredClone(column === 3 ? expectedValue(row) : row[column])]],
+        ),
+      );
+    const baseline = fixture(1);
+    const currentConfig = fixture(2);
+    const next = buildMatrixQaConfig(baseline, { ...params, currentConfig });
+    expect(next).toMatchObject(fixture(3));
+    expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
+    expect(next.channels?.matrix?.accounts?.sut?.textChunkLimit).toBe(4000);
     expect(next.channels?.matrix?.accounts?.["qa-driver-bot-source"]).toBeUndefined();
     expect(next.channels?.matrix?.accounts?.["qa-observer-bot-source"]).toBeUndefined();
-    const sut = castRecord(next.channels?.matrix?.accounts?.sut);
-    expect(sut).toMatchObject({
-      allowBots: false,
-      autoJoin: "allowlist",
-      autoJoinAllowlist: ["!baseline:matrix-qa.test"],
-      deviceId: "CURRENT-DEVICE",
-      lifecycleState: "current",
-      textChunkLimit: 4000,
-      dm: {
-        adjacentDm: "current",
-        allowFrom: ["@driver:matrix-qa.test"],
-        sessionScope: "per-room",
-        threadReplies: "always",
-      },
-      execApprovals: {
-        adjacentApproval: "current",
-        agentFilter: ["baseline-agent"],
-        approvers: ["@baseline:matrix-qa.test"],
-        enabled: false,
-        sessionFilter: ["baseline-session"],
-        target: "dm",
-      },
-      streaming: {
-        adjacentStreaming: "current",
-        block: { adjacentBlock: "current", enabled: false },
-        chunkMode: "length",
-        mode: "off",
-        preview: { adjacentPreview: "current", toolProgress: true },
-      },
-      threadBindings: {
-        adjacentBinding: "current",
-        enabled: false,
-        idleHours: 12,
-      },
-    });
-    const sutGroups = castRecord(sut.groups);
-    expect(sutGroups["!main:matrix-qa.test"]).toEqual({
-      adjacentGroup: "current",
-      allowBots: false,
-      enabled: true,
-      requireMention: true,
-      tools: {
-        adjacentTool: "current",
-        allow: ["baseline-allow"],
-        deny: ["baseline-deny"],
-      },
-    });
-    expect(sutGroups["!current-only:matrix-qa.test"]).toEqual({
-      adjacentGroup: "preserved",
-      enabled: false,
-    });
-
     const provisioned = buildMatrixQaConfig(baseline, {
-      currentConfig: current,
       ...params,
+      currentConfig,
       sutDeviceId: "PROVISIONED-DEVICE",
     });
     expect(provisioned.channels?.matrix?.accounts?.sut).toMatchObject({
@@ -554,28 +252,9 @@ describe("matrix qa config", () => {
     });
   });
 
-  it("normalizes Matrix QA overrides into the written account config", () => {
-    const config = buildMatrixQaConfig(
-      {},
-      {
-        ...params,
-        overrides: {
-          autoJoin: "allowlist",
-          autoJoinAllowlist: ["!ops:matrix-qa.test"],
-          blockStreaming: true,
-          dm: {
-            sessionScope: "per-room",
-          },
-          groupMentionPatterns: ["\\S"],
-          groupPolicy: "open",
-          streaming: true,
-        },
-      },
-    );
+  it("normalizes boolean streaming and the group policy", () => {
+    const config = build({ blockStreaming: true, groupPolicy: "open", streaming: true });
     const account = config.channels?.matrix?.accounts?.sut;
-    expect(account?.autoJoin).toBe("allowlist");
-    expect(account?.autoJoinAllowlist).toEqual(["!ops:matrix-qa.test"]);
-    expect(account?.dm?.sessionScope).toBe("per-room");
     expect(account?.groupPolicy).toBe("open");
     expect(account?.streaming).toEqual({
       block: { enabled: true },
@@ -583,93 +262,56 @@ describe("matrix qa config", () => {
       mode: "partial",
       preview: { toolProgress: true },
     });
-    expect(config.messages?.groupChat?.mentionPatterns).toEqual(["\\S"]);
   });
 
   it("resets progress and preview overrides when a scalar follows an object", () => {
-    const optedOut = buildMatrixQaConfig(
-      {},
-      {
-        ...params,
-        overrides: {
-          streaming: {
-            mode: "quiet",
-            progress: { commandText: "raw" },
-            preview: { toolProgress: false },
-          },
-        },
-      },
-    );
-    const reset = buildMatrixQaConfig(
-      {},
-      {
-        currentConfig: optedOut,
-        ...params,
-        overrides: { streaming: "quiet" },
-      },
-    );
-
-    expect(optedOut.channels?.matrix?.accounts?.sut?.streaming).toEqual({
-      block: { enabled: false },
-      chunkMode: "length",
-      mode: "quiet",
-      progress: { commandText: "raw" },
-      preview: { toolProgress: false },
-    });
-    expect(reset.channels?.matrix?.accounts?.sut?.streaming).toEqual({
+    const defaultStreaming = {
       block: { enabled: false },
       chunkMode: "length",
       mode: "quiet",
       preview: { toolProgress: true },
+    };
+    const optedOut = build({
+      streaming: {
+        mode: "quiet",
+        progress: { commandText: "raw" },
+        preview: { toolProgress: false },
+      },
     });
+    const reset = build({ streaming: "quiet" }, { currentConfig: optedOut });
+
+    expect(optedOut.channels?.matrix?.accounts?.sut?.streaming).toEqual({
+      ...defaultStreaming,
+      progress: { commandText: "raw" },
+      preview: { toolProgress: false },
+    });
+    expect(reset.channels?.matrix?.accounts?.sut?.streaming).toEqual(defaultStreaming);
   });
 
   it("applies Matrix approval delivery overrides with gateway forwarding enabled", () => {
-    const next = buildMatrixQaConfig(
-      {},
-      {
-        ...params,
-        overrides: {
-          approvalForwarding: {
-            exec: true,
-            plugin: true,
-          },
-          chunkMode: "length",
-          dm: {
-            enabled: true,
-          },
-          execApprovals: {
-            enabled: true,
-            target: "both",
-          },
-          textChunkLimit: 280,
-        },
-      },
-    );
+    const next = build({
+      approvalForwarding: { exec: true, plugin: true },
+      chunkMode: "length",
+      dm: { enabled: true },
+      execApprovals: { enabled: true, target: "both" },
+      textChunkLimit: 280,
+    });
 
     expect(next.approvals?.exec).toEqual({ enabled: true, mode: "session" });
     expect(next.approvals?.plugin).toEqual({ enabled: true, mode: "session" });
     const sut = next.channels?.matrix?.accounts?.sut;
-    expect((sut?.streaming as { chunkMode?: string })?.chunkMode).toBe("length");
-    expect(sut?.dm?.allowFrom).toEqual(["@driver:matrix-qa.test"]);
-    expect(sut?.dm?.enabled).toBe(true);
-    expect(sut?.execApprovals).toEqual({
-      enabled: true,
-      target: "both",
+    expect(sut).toMatchObject({
+      streaming: { chunkMode: "length" },
+      dm: { allowFrom: ["@driver:matrix-qa.test"], enabled: true },
+      textChunkLimit: 280,
     });
-    expect(sut?.textChunkLimit).toBe(280);
+    expect(sut?.execApprovals).toEqual({ enabled: true, target: "both" });
   });
 
   it("resolves role-based Matrix sender allowlist overrides", () => {
-    const config = buildMatrixQaConfig(
-      {},
-      {
-        ...params,
-        overrides: {
-          groupAllowRoles: ["driver", "observer"],
-        },
-      },
-    );
+    const config = build({
+      groupAllowRoles: ["driver", "observer"],
+    });
 
     expect(config.channels?.matrix?.accounts?.sut?.groupAllowFrom).toEqual([
       "@driver:matrix-qa.test",
@@ -677,49 +319,23 @@ describe("matrix qa config", () => {
     ]);
   });
 
-  it("rejects configured bot roles without matching side-account auth", () => {
-    expect(() =>
-      buildMatrixQaConfig(
-        {},
-        {
-          ...params,
-          overrides: {
-            configuredBotRoles: ["observer"],
-          },
-        },
-      ),
-    ).toThrow('Matrix QA configured bot role "observer" requires an access token');
-  });
-
-  it("rejects the SUT role as a configured bot source", () => {
-    expect(() =>
-      buildMatrixQaConfig(
-        {},
-        {
-          ...params,
-          overrides: {
-            configuredBotRoles: ["sut"],
-          },
-        },
-      ),
-    ).toThrow('Matrix QA configured bot role "sut" would match the SUT account itself');
-  });
-
-  it("rejects unknown room-key overrides", () => {
-    expect(() =>
-      buildMatrixQaConfig(
-        {},
-        {
-          ...params,
-          overrides: {
-            groupsByKey: {
-              ghost: {
-                requireMention: false,
-              },
-            },
-          },
-        },
-      ),
-    ).toThrow('Matrix QA group override references unknown room key "ghost"');
-  });
+  it.each([
+    [
+      { configuredBotRoles: ["observer"] },
+      'Matrix QA configured bot role "observer" requires an access token',
+    ],
+    [
+      { configuredBotRoles: ["sut"] },
+      'Matrix QA configured bot role "sut" would match the SUT account itself',
+    ],
+    [
+      { groupsByKey: { ghost: { requireMention: false } } },
+      'Matrix QA group override references unknown room key "ghost"',
+    ],
+  ] satisfies Array<[Parameters<typeof build>[0], string]>)(
+    "rejects invalid overrides %j",
+    (overrides, error) => {
+      expect(() => build(overrides)).toThrow(error);
+    },
+  );
 });

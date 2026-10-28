@@ -1,4 +1,3 @@
-/** Computer Use readiness probes and their native subscription lifecycle. */
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   CodexAppServerUnsafeSubscriptionError,
@@ -9,9 +8,7 @@ import type { CodexAppServerClient } from "./client.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
 import type { ToolCallResult as CodexMcpToolCallResult } from "./protocol-mcp.js";
 import type { CodexThreadStartResponse, JsonValue } from "./protocol.js";
-import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 
-/** Minimal app-server request function needed by Computer Use setup. */
 export type CodexComputerUseRequest = <T = JsonValue | undefined>(
   method: string,
   params?: unknown,
@@ -76,11 +73,10 @@ export type CodexComputerUseLiveTestStatus = {
   repaired: boolean;
   message: string;
   error?: string;
-  durationMs?: number;
 };
 
 const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
-const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness probe";
+const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness check";
 const COMPUTER_USE_LIST_APPS_TOOL = "list_apps";
 const COMPUTER_USE_UNIFIED_JS_TOOL = "js";
 const COMPUTER_USE_UNIFIED_JS_PROBE = "await cua.listApps();";
@@ -92,7 +88,6 @@ export async function runCodexComputerUseLiveTest(params: {
   config: ResolvedCodexComputerUseConfig;
   tools?: readonly string[];
 }): Promise<{ liveTest: CodexComputerUseLiveTestStatus; repair?: CodexComputerUseRepairStatus }> {
-  const startedAt = Date.now();
   let lastError: unknown;
   let repair: CodexComputerUseRepairStatus | undefined;
   const probe =
@@ -108,7 +103,6 @@ export async function runCodexComputerUseLiveTest(params: {
     timeoutMs: params.config.liveTestTimeoutMs,
     retried: attempts > 1,
     repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
-    durationMs: Math.max(0, Date.now() - startedAt),
     message:
       error === undefined
         ? "Computer Use live test passed."
@@ -117,9 +111,7 @@ export async function runCodexComputerUseLiveTest(params: {
   });
   for (let attempt = 0; attempt <= COMPUTER_USE_LIVE_TEST_RETRY_COUNT; attempt += 1) {
     let threadId: string | undefined;
-    let outcome:
-      | { ok: true; liveTest: CodexComputerUseLiveTestStatus }
-      | { ok: false; error: unknown };
+    let outcome: { liveTest: CodexComputerUseLiveTestStatus } | { error: unknown };
     try {
       const thread = await params.request<CodexThreadStartResponse>(
         "thread/start",
@@ -150,12 +142,9 @@ export async function runCodexComputerUseLiveTest(params: {
           `Computer Use readiness tool ${params.config.mcpServerName}.${probe.tool} returned an error result`,
         );
       }
-      outcome = {
-        ok: true,
-        liveTest: liveTestStatus(attempt + 1),
-      };
+      outcome = { liveTest: liveTestStatus(attempt + 1) };
     } catch (error) {
-      outcome = { ok: false, error };
+      outcome = { error };
     }
     let cleanupError: Error | undefined;
     if (threadId) {
@@ -165,16 +154,13 @@ export async function runCodexComputerUseLiveTest(params: {
         cleanupError = toErrorObject(error, "Computer Use readiness cleanup failed");
       }
     }
-    if (
-      !outcome.ok &&
-      (params.signal?.aborted || isCodexAppServerStartSelectionChangedError(outcome.error))
-    ) {
+    if ("error" in outcome && params.signal?.aborted) {
       throw toErrorObject(outcome.error, "Computer Use live test failed");
     }
     if (cleanupError) {
       throw cleanupError;
     }
-    if (outcome.ok) {
+    if ("liveTest" in outcome) {
       return { liveTest: outcome.liveTest, ...(repair ? { repair } : {}) };
     }
     lastError = outcome.error;

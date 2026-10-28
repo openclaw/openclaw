@@ -2,7 +2,6 @@ import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
-import { escapeRegExp } from "../shared/regexp.js";
 
 export type TranscriptRecord = {
   byteLength: number;
@@ -18,52 +17,30 @@ const OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS = 64 * 1024;
 const MAX_OVERSIZED_TRANSCRIPT_RECOVERY_CANDIDATES = 32;
 const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
 
-// Transcript readers repeatedly extract a fixed set of metadata fields from
-// oversized JSONL prefixes. Keep the compiled regexes process-local instead of
-// rebuilding them for every field on every oversized record.
-const TRANSCRIPT_FIELD_REGEX_CACHE = new Map<
-  string,
-  { stringRe: RegExp; nullRe: RegExp; numberRe: RegExp }
->();
+const TRANSCRIPT_STRING_FIELD_REGEXES = {
+  id: /"id"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  parentId: /"parentId"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  type: /"type"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  timestamp: /"timestamp"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  role: /"role"\s*:\s*"((?:\\.|[^"\\])*)"/,
+  idempotencyKey: /"idempotencyKey"\s*:\s*"((?:\\.|[^"\\])*)"/,
+};
+const TRANSCRIPT_PARENT_ID_NULL_RE = /"parentId"\s*:\s*null/;
+const TRANSCRIPT_TIMESTAMP_NUMBER_RE = /"timestamp"\s*:\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/;
 
-function getTranscriptFieldRegexes(field: string): {
-  stringRe: RegExp;
-  nullRe: RegExp;
-  numberRe: RegExp;
-} {
-  let cached = TRANSCRIPT_FIELD_REGEX_CACHE.get(field);
-  if (!cached) {
-    const escapedField = escapeRegExp(field);
-    cached = {
-      stringRe: new RegExp(`"${escapedField}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`),
-      nullRe: new RegExp(`"${escapedField}"\\s*:\\s*null`),
-      numberRe: new RegExp(`"${escapedField}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)`),
-    };
-    TRANSCRIPT_FIELD_REGEX_CACHE.set(field, cached);
-  }
-  return cached;
-}
-
-function extractJsonStringFieldPrefix(prefix: string, field: string): string | undefined {
-  const match = getTranscriptFieldRegexes(field).stringRe.exec(prefix);
+function extractJsonStringFieldPrefix(
+  prefix: string,
+  field: keyof typeof TRANSCRIPT_STRING_FIELD_REGEXES,
+): string | undefined {
+  const match = TRANSCRIPT_STRING_FIELD_REGEXES[field].exec(prefix);
   if (!match) {
     return undefined;
   }
   return readNonBlankString(safeParseJson(`"${match[1]}"`));
 }
 
-function extractJsonNullableStringFieldPrefix(
-  prefix: string,
-  field: string,
-): string | null | undefined {
-  if (getTranscriptFieldRegexes(field).nullRe.test(prefix)) {
-    return null;
-  }
-  return extractJsonStringFieldPrefix(prefix, field);
-}
-
-function extractJsonNumberFieldPrefix(prefix: string, field: string): number | undefined {
-  const match = getTranscriptFieldRegexes(field).numberRe.exec(prefix);
+function extractJsonNumberFieldPrefix(prefix: string): number | undefined {
+  const match = TRANSCRIPT_TIMESTAMP_NUMBER_RE.exec(prefix);
   if (!match) {
     return undefined;
   }
@@ -293,11 +270,13 @@ export function parseTranscriptRecord(line: string): TranscriptRecord | null {
   const messageMatch = /"message"\s*:/.exec(prefix);
   const recordPrefix = messageMatch ? prefix.slice(0, messageMatch.index) : prefix;
   const id = extractJsonStringFieldPrefix(prefix, "id");
-  const parentId = extractJsonNullableStringFieldPrefix(prefix, "parentId");
+  const parentId = TRANSCRIPT_PARENT_ID_NULL_RE.test(prefix)
+    ? null
+    : extractJsonStringFieldPrefix(prefix, "parentId");
   const type = extractJsonStringFieldPrefix(prefix, "type");
   const timestamp =
     extractJsonStringFieldPrefix(recordPrefix, "timestamp") ??
-    extractJsonNumberFieldPrefix(recordPrefix, "timestamp");
+    extractJsonNumberFieldPrefix(recordPrefix);
   const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
   const idempotencyKey =
     extractJsonStringFieldPrefix(prefix, "idempotencyKey") ??

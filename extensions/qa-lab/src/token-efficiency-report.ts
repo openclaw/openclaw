@@ -50,10 +50,6 @@ function percentile(values: readonly number[], p: number): number {
   return sorted[index] ?? 0;
 }
 
-function isLiveProviderMode(providerMode: string | undefined) {
-  return providerMode?.startsWith("live-") === true;
-}
-
 function formatPercent(value: number) {
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toFixed(1)}%`;
@@ -140,7 +136,6 @@ function toolNamesForCells(openclaw: RuntimeParityCell, codex: RuntimeParityCell
 
 function buildRow(params: {
   result: RuntimeParityResult;
-  thresholdPercent: number;
   usageSource: "live-usage" | "mock-estimate";
 }) {
   const openclaw = runtimeUsage(params.result.cells.openclaw);
@@ -149,11 +144,11 @@ function buildRow(params: {
     openclaw.processedTokenEvidence !== "unavailable" &&
     codex.processedTokenEvidence !== "unavailable";
   const delta = comparable ? deltaPercent(openclaw.processedTokens, codex.processedTokens) : 0;
-  const flagged = params.usageSource === "live-usage" && delta > params.thresholdPercent;
+  const flagged = params.usageSource === "live-usage" && delta > DEFAULT_THRESHOLD_PERCENT;
   const classification =
-    delta > params.thresholdPercent
+    delta > DEFAULT_THRESHOLD_PERCENT
       ? "regression"
-      : delta < -params.thresholdPercent
+      : delta < -DEFAULT_THRESHOLD_PERCENT
         ? "savings"
         : "neutral";
   return {
@@ -274,17 +269,21 @@ function liveUsageShapeFailures(
 export function buildTokenEfficiencyReport(params: {
   summary: QaParitySuiteSummary;
   generatedAt?: string;
-  thresholdPercent?: number;
 }) {
   const providerMode = params.summary.run?.providerMode;
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
-  const thresholdPercent = params.thresholdPercent ?? DEFAULT_THRESHOLD_PERCENT;
-  const liveUsage = isLiveProviderMode(providerMode);
+  const liveUsage = providerMode?.startsWith("live-") === true;
   const usageSource: TokenEfficiencyRow["usageSource"] = liveUsage ? "live-usage" : "mock-estimate";
   const parityResults = params.summary.scenarios
     .map((scenario) => scenario.runtimeParity)
     .filter((result): result is RuntimeParityResult => Boolean(result));
 
+  // Keep measured rows, but a live report cannot pass on a completed prefix alone.
+  const missingCaptures = liveUsage
+    ? params.summary.scenarios
+        .filter((scenario) => !scenario.runtimeParity)
+        .map((scenario) => `${scenario.name}: runtime parity capture missing`)
+    : [];
   const notApplicableScenarios = parityResults.flatMap((result) => {
     const usage = resolveRuntimeParityUsagePolicy(result.runtimeParityUsage);
     return usage.expectation === "not-applicable"
@@ -306,12 +305,12 @@ export function buildTokenEfficiencyReport(params: {
       runtimePair,
       generatedAt: params.generatedAt ?? new Date().toISOString(),
       ...(providerMode ? { providerMode } : {}),
-      thresholdPercent,
+      thresholdPercent: DEFAULT_THRESHOLD_PERCENT,
       rows: [],
       notApplicableScenarios,
       aggregate: ZERO_AGGREGATE,
       pass: !liveUsage,
-      failures: liveUsage ? [noApplicableReason] : [],
+      failures: liveUsage ? [noApplicableReason, ...missingCaptures] : [],
       ...(liveUsage ? {} : { skipReason: noApplicableReason }),
       notes: [
         parityResults.length === 0
@@ -324,7 +323,6 @@ export function buildTokenEfficiencyReport(params: {
   const rows = usageApplicableResults.map((result) =>
     buildRow({
       result,
-      thresholdPercent,
       usageSource,
     }),
   );
@@ -341,18 +339,19 @@ export function buildTokenEfficiencyReport(params: {
         : [];
     if (row.flagged) {
       rowFailures.push(
-        `${row.scenarioId} token delta=${formatPercent(row.deltaPercent)} exceeds ${thresholdPercent.toFixed(1)}% Codex increase threshold`,
+        `${row.scenarioId} token delta=${formatPercent(row.deltaPercent)} exceeds ${DEFAULT_THRESHOLD_PERCENT.toFixed(1)}% Codex increase threshold`,
       );
     }
     return rowFailures;
   });
+  failures.push(...missingCaptures);
 
   return {
     status: liveUsage ? "evaluated" : "estimated",
     runtimePair,
     generatedAt: params.generatedAt ?? new Date().toISOString(),
     ...(providerMode ? { providerMode } : {}),
-    thresholdPercent,
+    thresholdPercent: DEFAULT_THRESHOLD_PERCENT,
     rows,
     notApplicableScenarios,
     aggregate,

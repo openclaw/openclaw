@@ -113,13 +113,6 @@ function createOriginatingRun(currentChat = CURRENT) {
           messageActionTurnCapability: turnCapability,
           ...toolContext,
           config,
-          getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-          resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-            resolvedConfig,
-            diagnostics: [],
-            targetStatesByPath: {},
-            hadUnresolvedTargets: false,
-          }),
         }),
         {
           agentId: "main",

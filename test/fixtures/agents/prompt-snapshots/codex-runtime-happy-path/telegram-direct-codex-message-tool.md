@@ -38,9 +38,6 @@
 {
   "agents": {
     "defaults": {
-      "heartbeat": {
-        "every": "30m"
-      },
       "userTimezone": "UTC"
     },
     "entries": {
@@ -69,8 +66,11 @@
     },
     "features.code_mode_only": false,
     "features.goals": false,
+    "features.reasoning_effort_override": true,
+    "features.recommended_plugins": false,
     "features.shell_tool": true,
     "features.standalone_web_search": false,
+    "features.tool_suggest": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
@@ -116,8 +116,11 @@
     "features.code_mode": true,
     "features.code_mode_only": false,
     "features.goals": false,
+    "features.reasoning_effort_override": true,
+    "features.recommended_plugins": false,
     "features.shell_tool": true,
     "features.standalone_web_search": false,
+    "features.tool_suggest": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
@@ -152,7 +155,7 @@
     },
     "openclaw_source_delivery": {
       "kind": "application",
-      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nVisible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.\n\n`send`: `message`; current source is default target. Set `target` only elsewhere.\n\nCommentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered."
+      "value": "Current source-delivery policy for this turn (replaces earlier source-delivery guidance):\nThis turn has no current conversation. Reply normally in your final assistant message; OpenClaw delivers your final response automatically to the caller.\n\n`send`: `target` + `message`; target required this turn.\n\nCommentary is optional progress and may be hidden. Include answers to every still-pending user question, including questions received during ongoing work, in your final response."
     },
     "openclaw_temporal_context": {
       "kind": "application",
@@ -236,8 +239,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
 ```json
 {
   "additionalContext": {
-    "chars": 1348,
-    "roughTokens": 337
+    "chars": 973,
+    "roughTokens": 244
   },
   "codexCollaborationModeDeveloperInstructions": {
     "chars": 0,
@@ -256,24 +259,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 72513,
-    "roughTokens": 18129
+    "chars": 84685,
+    "roughTokens": 21172
   },
   "openClawDeveloperInstructions": {
-    "chars": 3194,
-    "roughTokens": 799
+    "chars": 3490,
+    "roughTokens": 873
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 27580,
-    "roughTokens": 6895
+    "chars": 27501,
+    "roughTokens": 6876
   },
   "totalWithDynamicToolsJson": {
-    "chars": 100095,
-    "roughTokens": 25024
+    "chars": 112188,
+    "roughTokens": 28047
   },
   "userInputText": {
     "chars": 879,
@@ -482,11 +485,11 @@ Approval policy is currently never. Do not provide the `sandbox_permissions` for
 ````text
 You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.
 
-Deferred searchable OpenClaw dynamic tools available: automations, gateway, nodes, session_status, sessions_history, sessions_list, sessions_search, sessions_send, subagents, tts, web_fetch, web_search.
+Deferred searchable OpenClaw dynamic tools available: openclaw.automations, openclaw.gateway, openclaw.nodes, openclaw.session_status, openclaw.sessions_history, openclaw.sessions_list, openclaw.sessions_search, openclaw.sessions_send, openclaw.subagents, openclaw.tts, openclaw.web_fetch, openclaw.web_search.
 
-Deferred tools may be absent from the direct tool list. Call a tool that is in the direct tool list directly. Use `tool_search` to find a tool that is not listed; if `tool_search` is not directly callable, use `exec` to filter `ALL_TOOLS` by name and description and call the matching entry through `tools`. Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have.
+Call directly listed tools by their exact qualified names. Use `tool_search` for deferred tools when it is directly callable. Otherwise use Codex's native JavaScript `exec` to filter `ALL_TOOLS` and invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Do not repeat a completed call to retrieve a result you already have.
 
-Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.
+Use Codex native `spawn_agent` for work that only needs Codex-native tools. `spawn_agent` and the other native collaboration tools may be deferred. Native children cannot execute OpenClaw-owned dynamic tools, even when they inherit their schemas. For new delegated work that needs OpenClaw tools, use `sessions_spawn` with `runtime="subagent"` from the start. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Do not respawn existing work to switch tool routes.
 
 When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion.
 
@@ -535,11 +538,11 @@ This turn asks Codex app-server to resolve its built-in Default collaboration-mo
 
 ```text
 <openclaw_source_delivery>Current source-delivery policy for this turn (replaces earlier source-delivery guidance):
-Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.
+This turn has no current conversation. Reply normally in your final assistant message; OpenClaw delivers your final response automatically to the caller.
 
-`send`: `message`; current source is default target. Set `target` only elsewhere.
+`send`: `target` + `message`; target required this turn.
 
-Commentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered.</openclaw_source_delivery>
+Commentary is optional progress and may be hidden. Include answers to every still-pending user question, including questions received during ongoing work, in your final response.</openclaw_source_delivery>
 ```
 
 ### Developer: OpenClaw Additional Context (openclaw_temporal_context)
@@ -611,7 +614,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
 ```json
 [
   {
-    "description": "Send/manage channel messages. Supports actions: send.",
+    "description": "Send/manage channel messages. Supports actions: react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -619,7 +622,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "action": {
           "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
-          "enum": ["send"],
+          "enum": ["react", "send"],
           "type": "string"
         },
         "asDocument": {
@@ -676,11 +679,15 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "description": "sendWithEffect id/name.",
           "type": "string"
         },
+        "emoji": {
+          "description": "One Unicode emoji for the current WebChat prompt; explicit external channels validate their own emoji.",
+          "type": "string"
+        },
         "filename": {
           "type": "string"
         },
         "final": {
-          "description": "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true only when the user explicitly requested the reaction to the current source message as the complete response; omit or set false for acknowledgements or reactions followed by more work.",
+          "description": "For source replies, set false for progress; set true, or omit, for a completed send. For react, set true when adding a reaction to the current source message is your complete response; omit or set false when more work follows. A confirmed final source reply ends the turn.",
           "type": "boolean"
         },
         "forceDocument": {
@@ -696,12 +703,23 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "gifPlayback": {
           "type": "boolean"
         },
+        "groupId": {
+          "type": "string"
+        },
         "media": {
           "description": "Media URL/path. data: use buffer.",
           "type": "string"
         },
         "message": {
           "description": "Text for action=\"send\". A send needs message or another send payload such as media, attachments, or presentation.",
+          "type": "string"
+        },
+        "message_id": {
+          "description": "snake_case alias of messageId; same defaults.",
+          "type": "string"
+        },
+        "messageId": {
+          "description": "Target read/react/edit/delete/pin/unpin id; reactions default current inbound.",
           "type": "string"
         },
         "mimeType": {
@@ -711,6 +729,9 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "description": "Telegram reply quote text.",
           "type": "string"
         },
+        "remove": {
+          "type": "boolean"
+        },
         "replyTo": {
           "type": "string"
         },
@@ -719,6 +740,12 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "target": {
           "description": "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack/Mattermost <channelId|user:ID|channel:ID>, or iMessage handle/chat_id",
+          "type": "string"
+        },
+        "targetAuthor": {
+          "type": "string"
+        },
+        "targetAuthorUuid": {
           "type": "string"
         },
         "targets": {
@@ -734,6 +761,14 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "timeoutMs": {
           "minimum": 1,
           "type": "integer"
+        },
+        "track_tool_calls": {
+          "description": "snake_case alias of trackToolCalls.",
+          "type": "boolean"
+        },
+        "trackToolCalls": {
+          "description": "Use the reacted message for this turn's status reaction lifecycle.",
+          "type": "boolean"
         },
         "voiceId": {
           "description": "Per-send speech voice override.",

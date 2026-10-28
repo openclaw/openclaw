@@ -1,4 +1,3 @@
-// Config footprint guardrail tests cover forbidden direct plugin config access patterns.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,34 +21,26 @@ function collectSchemaPaths(schema: unknown, prefix = ""): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
   }
-
   const out: string[] = [];
   const candidate = schema as {
     properties?: Record<string, unknown>;
     additionalProperties?: unknown;
     items?: unknown;
   };
-
   if (candidate.properties && typeof candidate.properties === "object") {
     for (const [key, value] of Object.entries(candidate.properties)) {
       const path = prefix ? `${prefix}.${key}` : key;
-      out.push(path);
-      out.push(...collectSchemaPaths(value, path));
+      out.push(path, ...collectSchemaPaths(value, path));
     }
   }
 
-  if (
-    candidate.additionalProperties &&
-    typeof candidate.additionalProperties === "object" &&
-    !Array.isArray(candidate.additionalProperties)
-  ) {
-    const path = prefix ? `${prefix}.*` : "*";
-    out.push(...collectSchemaPaths(candidate.additionalProperties, path));
-  }
-
-  if (candidate.items && typeof candidate.items === "object" && !Array.isArray(candidate.items)) {
-    const path = prefix ? `${prefix}[]` : "[]";
-    out.push(...collectSchemaPaths(candidate.items, path));
+  for (const [child, path] of [
+    [candidate.additionalProperties, prefix ? `${prefix}.*` : "*"],
+    [candidate.items, prefix ? `${prefix}[]` : "[]"],
+  ] as const) {
+    if (child && typeof child === "object" && !Array.isArray(child)) {
+      out.push(...collectSchemaPaths(child, path));
+    }
   }
 
   return out;
@@ -78,50 +69,27 @@ describe("config footprint guardrails", () => {
   it("keeps retired legacy paths out of the generated base config schema", () => {
     const basePaths = new Set(collectSchemaPaths(BASE_CONFIG_SCHEMA.schema));
 
-    expect(
-      [
-        "talk.voiceId",
-        "talk.voiceAliases",
-        "talk.modelId",
-        "talk.outputFormat",
-        "talk.apiKey",
-        "talk.providers.*.voiceId",
-        "talk.providers.*.voiceAliases",
-        "talk.providers.*.modelId",
-        "talk.providers.*.outputFormat",
-        "agents.defaults.sandbox.perSession",
-        "hooks.internal.handlers",
-        "channels.telegram.groupMentionsOnly",
-        "channels.telegram.streamMode",
-        "channels.telegram.chunkMode",
-        "channels.telegram.blockStreaming",
-        "channels.telegram.draftChunk",
-        "channels.telegram.blockStreamingCoalesce",
-        "channels.slack.streamMode",
-        "channels.slack.chunkMode",
-        "channels.slack.blockStreaming",
-        "channels.slack.blockStreamingCoalesce",
-        "channels.slack.nativeStreaming",
-        "channels.discord.streamMode",
-        "channels.discord.chunkMode",
-        "channels.discord.blockStreaming",
-        "channels.discord.draftChunk",
-        "channels.discord.blockStreamingCoalesce",
-        "channels.googlechat.streamMode",
-        "channels.slack.channels.*.allow",
-        "channels.slack.accounts.*.channels.*.allow",
-        "channels.googlechat.groups.*.allow",
-        "channels.googlechat.accounts.*.groups.*.allow",
-        "channels.discord.channels.*.allow",
-        "channels.discord.accounts.*.channels.*.allow",
-      ].filter((path) => basePaths.has(path)),
-    ).toStrictEqual([]);
+    const retired = {
+      talk: "voiceId voiceAliases modelId outputFormat apiKey",
+      "talk.providers.*": "voiceId voiceAliases modelId outputFormat",
+      "agents.defaults.sandbox": "perSession",
+      "hooks.internal": "handlers",
+      "channels.telegram":
+        "groupMentionsOnly streamMode chunkMode blockStreaming draftChunk blockStreamingCoalesce",
+      "channels.slack":
+        "streamMode chunkMode blockStreaming blockStreamingCoalesce nativeStreaming channels.*.allow accounts.*.channels.*.allow",
+      "channels.discord":
+        "streamMode chunkMode blockStreaming draftChunk blockStreamingCoalesce channels.*.allow accounts.*.channels.*.allow",
+      "channels.googlechat": "streamMode groups.*.allow accounts.*.groups.*.allow",
+    };
+    const retiredPaths = Object.entries(retired).flatMap(([prefix, fields]) =>
+      fields.split(" ").map((field) => `${prefix}.${field}`),
+    );
+    expect(retiredPaths.filter((path) => basePaths.has(path))).toStrictEqual([]);
   });
 
   it("keeps bundled channel private-network config canonical in generated metadata", () => {
-    const pluginIds = ["matrix", "nextcloud-talk", "tlon"];
-
-    for (const pluginId of pluginIds) {
+    for (const pluginId of ["matrix", "nextcloud-talk", "tlon"]) {
       const metadata = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
         (entry) => entry.pluginId === pluginId,
       );
@@ -129,23 +97,14 @@ describe("config footprint guardrails", () => {
         throw new Error(`${pluginId} metadata missing`);
       }
       const paths = new Set(collectSchemaPaths(metadata.schema));
-      expect(paths.has("allowPrivateNetwork"), `${pluginId} leaked flat allowPrivateNetwork`).toBe(
-        false,
-      );
-      expect(
-        paths.has("network.dangerouslyAllowPrivateNetwork"),
-        `${pluginId} missing canonical network.dangerouslyAllowPrivateNetwork`,
-      ).toBe(true);
+      expect([...paths], pluginId).not.toContain("allowPrivateNetwork");
+      expect([...paths], pluginId).toContain("network.dangerouslyAllowPrivateNetwork");
     }
   });
 
   it("keeps retired flat streaming aliases out of channel-owned schemas", () => {
-    const telegramSource = readSource("extensions/telegram/src/config-schema.ts");
-    const discordSource = readSource("extensions/discord/src/config-schema.ts");
-    const msTeamsSource = readSource("extensions/msteams/src/config-schema.ts");
-    const slackSource = readSource("extensions/slack/src/config-schema.ts");
-
-    for (const schemaSource of [telegramSource, discordSource, msTeamsSource, slackSource]) {
+    for (const plugin of ["telegram", "discord", "msteams", "slack"]) {
+      const schemaSource = readSource(`extensions/${plugin}/src/config-schema.ts`);
       expect(schemaSource).not.toContain(
         'streamMode: z.enum(["replace", "status_final", "append"])',
       );
@@ -157,11 +116,9 @@ describe("config footprint guardrails", () => {
   it("keeps retired config aliases out of the shared setup input", () => {
     const source = readSource("src/channels/plugins/types.core.ts");
 
-    expect(source).not.toContain("streamMode?:");
-    expect(source).not.toContain("groupMentionsOnly?:");
-    expect(source).not.toContain("perSession?:");
-    expect(source).not.toContain("voiceId?:");
-    expect(source).not.toContain("apiKey?:");
+    for (const field of ["streamMode", "groupMentionsOnly", "perSession", "voiceId", "apiKey"]) {
+      expect(source).not.toContain(`${field}?:`);
+    }
     expect(source).not.toContain("allow?: boolean;");
   });
 

@@ -1,15 +1,10 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
 import { registerSandboxBackend } from "../agents/sandbox/backend.js";
 import { removeSandboxContainer } from "../agents/sandbox/manage.js";
 import { updateRegistry } from "../agents/sandbox/registry.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -17,7 +12,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
-import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
+import { readClosedDatabase } from "./server-close.lifecycle.test-support.js";
+import { createGatewayCloseRace } from "./server-close.race.test-support.js";
 
 // mock-isolation: Upstream polling is independent of sandbox removal settlement.
 vi.mock("../sessions/session-upstream-monitor.js", () => ({
@@ -27,23 +23,18 @@ vi.mock("../sessions/session-upstream-monitor.js", () => ({
 it("joins accepted sandbox removal across scheduler cancellation after database reopen", async ({
   signal,
 }) => {
-  const fixture = await createGatewayMetadataCloseFixture("gateway-sandbox-registry-close");
-  const entered = createDeferred();
-  const release = createDeferred();
-  const parentClosed = createDeferred();
+  const race = await createGatewayCloseRace("gateway-sandbox-registry-close", signal);
+  const { fixture, kernel } = race;
   const removeRuntime = vi.fn(async () => {});
-  let closing: Promise<void> | undefined;
   let removing: Promise<void> | undefined;
-  let restoreWorker: (() => void) | undefined;
-  let unregisterBackend: (() => void) | undefined;
+  race.onCleanup(async () => {
+    await Promise.allSettled([removing]);
+  });
   try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
     await closeOpenClawStateDatabaseAsync();
-    const kernel = expectDefined(fixture.kernels.get(port), "Gateway kernel");
     const backendId = "sandbox-close-fixture";
     const containerName = "accepted-sandbox-removal";
-    unregisterBackend = registerSandboxBackend(backendId, {
+    const unregisterBackend = registerSandboxBackend(backendId, {
       reserveRuntimeId: () => containerName,
       factory: async () => {
         throw new Error("Removal must not provision a backend");
@@ -53,6 +44,7 @@ it("joins accepted sandbox removal across scheduler cancellation after database 
         removeRuntime,
       },
     });
+    race.onCleanup(unregisterBackend);
     await updateRegistry({
       containerName,
       backendId,
@@ -65,28 +57,15 @@ it("joins accepted sandbox removal across scheduler cancellation after database 
     const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
     let acceptedSignal: AbortSignal | undefined;
     let paused = false;
-    const run = stateWorker.runOpenClawStateWorkerOperation;
-    const worker = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((context, operation, options) =>
-        run(
-          context,
-          (scope) =>
-            operation({
-              execute: async (command, executeOptions) => {
-                if (command.type === "sandboxRegistry.beginRemoval" && !paused) {
-                  paused = true;
-                  acceptedSignal = getAsyncWorkSignal();
-                  entered.resolve();
-                  await release.promise;
-                }
-                return scope.execute(command, executeOptions);
-              },
-            }),
-          options,
-        ),
-      );
-    restoreWorker = () => worker.mockRestore();
+    const worker = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "sandboxRegistry.beginRemoval" && !paused) {
+        paused = true;
+        acceptedSignal = getAsyncWorkSignal();
+        await race.block();
+      }
+      return scope.execute(command, executeOptions);
+    });
+    race.onCleanup(() => worker.mockRestore());
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     kernel.scheduler.schedule({
       id: "accepted-sandbox-removal",
@@ -98,51 +77,29 @@ it("joins accepted sandbox removal across scheduler cancellation after database 
     });
     await vi.advanceTimersByTimeAsync(0);
     vi.useRealTimers();
-    await withinTest(
-      awaitGateBeforeSettlement(
-        entered.promise,
-        expectDefined(removing, "Accepted sandbox removal"),
-        "Sandbox removal settled before its worker command",
-      ),
-      signal,
+    await race.waitForEntry(
+      expectDefined(removing, "Accepted sandbox removal"),
+      "Sandbox removal settled before its worker command",
     );
     expect(acceptedSignal?.aborted).toBe(false);
-    kernel.scheduler.signal.addEventListener("abort", () => parentClosed.resolve(), { once: true });
-    closing = server.close({ reason: "sandbox registry settlement regression" });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        parentClosed.promise,
-        closing,
-        "Gateway closed before scheduler cancellation",
-      ),
-      signal,
-    );
+    await race.close(kernel.scheduler.signal, undefined, { reason: "sandbox close" });
     expect(acceptedSignal?.aborted).toBe(false);
     expect(shared.isOpen).toBe(true);
     expect(removeRuntime).not.toHaveBeenCalled();
     await expect(removeSandboxContainer(containerName)).rejects.toThrow(
       "Sandbox registry admission is closed",
     );
-    release.resolve();
-    await withinTest(Promise.all([removing, closing]), signal);
+    await race.finish(removing);
     expect(removeRuntime).toHaveBeenCalledOnce();
     expect(shared.isOpen).toBe(false);
-    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
-      readOnly: true,
-    });
-    try {
-      expect(database.prepare("SELECT container_name FROM sandbox_registry_entries").all()).toEqual(
-        [],
-      );
-    } finally {
-      database.close();
-    }
+    const databasePath = resolveOpenClawStateSqlitePath(fixture.state.env);
+    const rows = readClosedDatabase(
+      databasePath,
+      "SELECT container_name FROM sandbox_registry_entries",
+    );
+    expect(rows).toEqual([]);
   } finally {
     vi.useRealTimers();
-    release.resolve();
-    await Promise.allSettled([removing, closing]);
-    restoreWorker?.();
-    unregisterBackend?.();
-    await fixture.cleanup();
+    await race.dispose();
   }
 });

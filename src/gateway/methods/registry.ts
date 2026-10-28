@@ -15,7 +15,9 @@ export {
   isCoreGatewayMethodClassified,
 } from "./core-method-policy.js";
 
-export type GatewayMethodRegistry = GatewayMethodRegistryView;
+export type GatewayMethodRegistry = GatewayMethodRegistryView & {
+  pluginRegistry?: PluginRegistry;
+};
 
 function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethodDescriptor {
   const name = input.name.trim();
@@ -68,7 +70,6 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
   };
 }
 
-/** Creates a read-only registry for gateway method lookup, listing, and policy metadata. */
 export function createGatewayMethodRegistry(
   inputs: readonly GatewayMethodDescriptorInput[],
   pluginRegistry?: PluginRegistry,
@@ -85,6 +86,7 @@ export function createGatewayMethodRegistry(
   }
   return {
     ...(pluginRegistry ? { pluginRegistry } : {}),
+    getDescriptor: (name) => byName.get(name),
     getHandler: (name) => byName.get(name)?.handler,
     listMethods: () => descriptors.map((descriptor) => descriptor.name),
     listAdvertisedMethods: () =>
@@ -111,23 +113,15 @@ export function createGatewayMethodRegistry(
   };
 }
 
-/** Converts a plain handler map into scoped descriptors owned by one gateway surface. */
 export function createGatewayMethodDescriptorsFromHandlers(params: {
   handlers: Record<string, GatewayMethodHandler>;
   owner: GatewayMethodOwner;
-  defaultScope?: OperatorScope;
-  scopes?: Partial<Record<string, OperatorScope>>;
+  defaultScope: OperatorScope;
 }): GatewayMethodDescriptorInput[] {
-  return Object.entries(params.handlers).map(([name, handler]) => {
-    const scope = params.scopes?.[name] ?? params.defaultScope;
-    if (!scope) {
-      throw new Error(`gateway method is missing a scope: ${name}`);
-    }
-    return {
-      name,
-      handler,
-      owner: params.owner,
-      scope,
-    };
-  });
+  return Object.entries(params.handlers).map(([name, handler]) => ({
+    name,
+    handler,
+    owner: params.owner,
+    scope: params.defaultScope,
+  }));
 }

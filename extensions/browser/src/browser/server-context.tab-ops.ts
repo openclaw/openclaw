@@ -1,5 +1,5 @@
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import { resolveBrowserNavigationProxyMode } from "./browser-proxy-mode.js";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertChromeMcpCdpTransportAllowed,
   resolveCdpControlPolicy,
@@ -31,6 +31,7 @@ import {
   requiresInspectableBrowserNavigationRedirectsForUrl,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { resolveBrowserNavigationPolicy } from "./navigation-policy.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
@@ -45,11 +46,14 @@ import type {
   ProfileRuntimeState,
   ProfileContext,
 } from "./server-context.types.js";
+import { browserSessionTabNativeIdentity } from "./session-tab-identity.js";
+import { readColdNativeActivity, volatileTabsBySession } from "./session-tab-process-state.js";
 import {
   dispatchBrowserTabClose,
   findRetainedBrowserDashboardTab,
   readBrowserDashboardTabs,
 } from "./session-tab-store.js";
+import { readDurableTabs } from "./session-tab-tracking.js";
 import {
   assignTabAlias,
   assignTabAliases,
@@ -94,17 +98,43 @@ function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | u
   }
 }
 
+/**
+ * Collects the freshest recorded session activity per target for one profile.
+ * Durable records and volatile registrations both carry lastUsedAt; durable
+ * native identities also fold in activity observed after the record froze.
+ */
+async function readProfileTabLastUsedAt(profileName: string): Promise<Map<string, number>> {
+  const profile = normalizeOptionalLowercaseString(profileName);
+  const lastUsedByTarget = new Map<string, number>();
+  const observe = (targetId: string, recordProfile: string | undefined, lastUsedAt: number) => {
+    if (!targetId || normalizeOptionalLowercaseString(recordProfile) !== profile) {
+      return;
+    }
+    const previous = lastUsedByTarget.get(targetId);
+    if (previous === undefined || lastUsedAt > previous) {
+      lastUsedByTarget.set(targetId, lastUsedAt);
+    }
+  };
+  for (const record of await readDurableTabs()) {
+    const observedAt =
+      record.interactionTargetKind === "native"
+        ? readColdNativeActivity(browserSessionTabNativeIdentity(record))
+        : undefined;
+    observe(record.nativeTargetId, record.profile, Math.max(record.lastUsedAt, observedAt ?? 0));
+  }
+  for (const sessionTabs of volatileTabsBySession().values()) {
+    for (const tab of sessionTabs.values()) {
+      observe(tab.targetId, tab.profile, tab.lastUsedAt);
+    }
+  }
+  return lastUsedByTarget;
+}
+
 export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): ProfileTabOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
   const getCdpControlPolicy = () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy);
-  const getNavigationPolicy = () =>
-    withBrowserNavigationPolicy(state().resolved.ssrfPolicy, {
-      browserProxyMode: resolveBrowserNavigationProxyMode({
-        resolved: state().resolved,
-        profile,
-      }),
-    });
+  const getNavigationPolicy = () => resolveBrowserNavigationPolicy(state(), profile);
   const getRemoteCdpActionTimeouts = (): CdpActionTimeouts | undefined => {
     if (profile.cdpIsLoopback && !profile.attachOnly) {
       return undefined;
@@ -260,7 +290,22 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         !findRetainedBrowserDashboardTab(tab.targetId, profile.name, retained),
     );
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
-    for (const tab of candidates.slice(0, excessCount)) {
+    const lastUsedByTarget = await readProfileTabLastUsedAt(profile.name);
+    /**
+     * Orders eviction candidates for the managed tab cap. Chrome reports CDP
+     * targets most-recently-activated first, so raw /json/list order is exactly
+     * backwards for cleanup: slicing from the front closes the tabs other sessions
+     * opened seconds ago while long-idle tabs survive. Untracked tabs (no recorded
+     * session activity) evict first in reverse CDP order; tracked tabs follow in
+     * ascending last-use order.
+     */
+    const evictionOrder = candidates
+      .toReversed()
+      .toSorted(
+        (left, right) =>
+          (lastUsedByTarget.get(left.targetId) ?? 0) - (lastUsedByTarget.get(right.targetId) ?? 0),
+      );
+    for (const tab of evictionOrder.slice(0, excessCount)) {
       options?.signal?.throwIfAborted();
       await dispatchBrowserTabClose(
         tab.targetId,
@@ -327,10 +372,12 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
   const openTab: ProfileTabOps["openTab"] = async (url, opts) => {
     opts?.signal?.throwIfAborted();
     const normalizedLabel = opts?.label === undefined ? undefined : normalizeTabLabel(opts.label);
-    const ssrfPolicyOpts = getNavigationPolicy();
+    let ssrfPolicyOpts = getNavigationPolicy();
     const cdpPolicy = getCdpControlPolicy();
     // Runtime shutdown fences state() before draining this operation's cleanup.
     const cleanupTimeoutMs = state().resolved.remoteCdpTimeoutMs;
+    const adoptOwnedTab = async (tab: BrowserTab) =>
+      adoptValidatedTab(await withTabOwnership(tab, opts), { ...opts, label: normalizedLabel });
 
     if (capabilities.usesChromeMcp) {
       await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
@@ -350,7 +397,16 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     let createdTargetId: string | undefined;
     let closeCreatedPage: (() => Promise<void>) | undefined;
     try {
-      if (capabilities.usesPersistentPlaywright) {
+      const headless =
+        resolveBrowserEngine(profile.engine).descriptor.id === "chromium" &&
+        (runtime.running?.headless ?? (await runtime.externalBrowserMode?.headless)) === true;
+      opts?.signal?.throwIfAborted();
+      // Playwright installs the context guard before creating or navigating the first page.
+      if (
+        capabilities.usesPersistentPlaywright ||
+        headless ||
+        ssrfPolicyOpts.assertNavigationCurrent
+      ) {
         const mod = await getPwAiModule({ mode: "strict" });
         if (mod) {
           const page = await mod.createPageViaPlaywright({
@@ -358,27 +414,29 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
             ...(profile.engine ? { engine: profile.engine } : {}),
             url,
             cdpPolicy,
+            ...(headless ? { headless: true } : {}),
             ...(opts?.signal ? { signal: opts.signal } : {}),
+            ...(opts?.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs }),
             ...ssrfPolicyOpts,
           });
           closeCreatedPage = page.close;
           createdTargetId = page.targetId;
-          return adoptValidatedTab(
-            await withTabOwnership(
-              {
-                targetId: page.targetId,
-                title: page.title,
-                url: page.url,
-                type: page.type,
-              },
-              opts,
-            ),
-            { ...opts, label: normalizedLabel },
-          );
+          return await adoptOwnedTab({
+            targetId: page.targetId,
+            title: page.title,
+            url: page.url,
+            type: page.type,
+          });
+        }
+        if (ssrfPolicyOpts.assertNavigationCurrent) {
+          // Raw CDP cannot carry the automatic grant's final-effect authority fence.
+          ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy, {
+            browserProxyMode: ssrfPolicyOpts.browserProxyMode,
+          });
         }
       }
 
-      if (requiresInspectableBrowserNavigationRedirectsForUrl(url, state().resolved.ssrfPolicy)) {
+      if (requiresInspectableBrowserNavigationRedirectsForUrl(url, ssrfPolicyOpts.ssrfPolicy)) {
         throw new InvalidBrowserNavigationUrlError(
           "Navigation blocked: strict browser SSRF policy requires Playwright-backed redirect-hop inspection",
         );
@@ -398,47 +456,33 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       opts?.signal?.throwIfAborted();
 
       if (createdViaCdp) {
-        if (!createdViaCdp.finalUrl) {
-          // The target exists, but its committed document is not authoritative.
-          // Preserve the explicit result without sticky, alias, or cleanup adoption.
-          return await withTabOwnership(
-            {
-              targetId: createdViaCdp.targetId,
-              title: "",
-              url,
-              type: "page",
-            },
-            opts,
-          );
-        }
-        await assertBrowserNavigationResultAllowed({
-          url: createdViaCdp.finalUrl,
-          ...ssrfPolicyOpts,
-        });
-        const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
-        while (Date.now() < deadline) {
-          opts?.signal?.throwIfAborted();
-          const tabs = await readTabs(opts).catch(() => [] as BrowserTab[]);
-          const found = tabs.find((t) => t.targetId === createdViaCdp.targetId);
-          if (found) {
-            await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
-            // The attached target owns the committed URL; /json/list supplies the
-            // remaining metadata and may briefly lag that exact document snapshot.
-            return adoptValidatedTab(
-              await withTabOwnership({ ...found, url: createdViaCdp.finalUrl }, opts),
-              { ...opts, label: normalizedLabel },
-            );
+        if (createdViaCdp.finalUrl) {
+          await assertBrowserNavigationResultAllowed({
+            url: createdViaCdp.finalUrl,
+            ...ssrfPolicyOpts,
+          });
+          const deadline = performance.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
+          while (performance.now() < deadline) {
+            opts?.signal?.throwIfAborted();
+            const tabs = await readTabs(opts).catch(() => [] as BrowserTab[]);
+            const found = tabs.find((t) => t.targetId === createdViaCdp.targetId);
+            if (found) {
+              await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
+              // The attached target owns the committed URL; /json/list supplies the
+              // remaining metadata and may briefly lag that exact document snapshot.
+              return await adoptOwnedTab({ ...found, url: createdViaCdp.finalUrl });
+            }
+            await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, opts?.signal);
           }
-          await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, opts?.signal);
+          opts?.signal?.throwIfAborted();
         }
-        opts?.signal?.throwIfAborted();
-        // Preserve the explicit target-id result for callers, but do not adopt an
-        // undiscovered target into sticky, alias, or managed-cleanup state.
+        // Uncommitted or undiscovered targets are returned without sticky,
+        // alias, or managed-cleanup adoption.
         return await withTabOwnership(
           {
             targetId: createdViaCdp.targetId,
             title: "",
-            url: createdViaCdp.finalUrl,
+            url: createdViaCdp.finalUrl || url,
             type: "page",
           },
           opts,

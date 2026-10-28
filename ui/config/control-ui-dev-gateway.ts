@@ -42,6 +42,12 @@ export function createControlUiDevGateway(
         rewrite: (requestPath) => requestPath.slice(proxyPath.length),
         cookieDomainRewrite: "",
         configure(proxy) {
+          proxy.on("proxyReqWs", (request, _incoming, downstream) => {
+            request.once("upgrade", (_response, upstream) => {
+              // Vite only ends the writable half; unread frames can leave the reader paused.
+              upstream.once("close", () => downstream.destroySoon());
+            });
+          });
           proxy.on("proxyRes", (response) => {
             const cookies = response.headers["set-cookie"];
             if (cookies) {

@@ -1,8 +1,7 @@
-// Qa Parity Report script supports OpenClaw repository automation.
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 
 type Options = Parameters<
-  typeof import("../extensions/qa-lab/src/cli.runtime.ts").runQaParityReportCommand
+  typeof import("../extensions/qa-lab/reporting-api.ts").runQaParityReportCommand
 >[0];
 
 function parseArgs(args: string[]): Options {
@@ -60,7 +59,7 @@ try {
     }
   }
 
-  const { runQaParityReportCommand } = await import("../extensions/qa-lab/src/cli.runtime.ts");
+  const { runQaParityReportCommand } = await import("../extensions/qa-lab/reporting-api.ts");
   await runQaParityReportCommand(opts);
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

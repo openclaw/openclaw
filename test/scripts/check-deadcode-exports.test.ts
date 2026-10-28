@@ -1,18 +1,24 @@
-// Check Deadcode Exports tests cover parsing and hard-zero enforcement.
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import YAML from "yaml";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  collectRuntimeProcessManifestEntries,
+  compileDynamicConsumerEdges,
+} from "../../config/knip-dynamic-consumers.mjs";
 import allExportsKnipConfig from "../../config/knip.all-exports.config.ts";
 import knipConfig from "../../config/knip.config.ts";
 import scriptExportsKnipConfig from "../../config/knip.scripts-exports.config.ts";
 import {
   checkExportScan,
-  parseKnipCompactUnusedExports,
   parseKnipCompactUnusedExportsResult,
 } from "../../scripts/check-deadcode-exports.mts";
+import { readUpdateCompatibilityInventory } from "../../scripts/lib/update-compat-chunks.mts";
 import { vitestWorkerBuildEntries } from "../../scripts/lib/vitest-worker-build-entries.mts";
 import { vitestWorkerDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
+import {
+  runtimeProcessScriptEntrypoints,
+  runtimeProcessToolingEntrypoints,
+} from "../../src/infra/runtime-process-manifest.ts";
 
 const fullRootWorkspace = allExportsKnipConfig.workspaces["."];
 const fullExtensionWorkspace = allExportsKnipConfig.workspaces["extensions/*"];
@@ -22,75 +28,93 @@ if (!fullRootWorkspace || !fullExtensionWorkspace || !fullUiWorkspace || !script
   throw new Error("deadcode Knip configs must define root, extension, and UI workspaces");
 }
 
-function listQaScenarioExecutionPaths(dir = "qa/scenarios"): string[] {
-  return fs
-    .readdirSync(dir, { withFileTypes: true })
-    .flatMap((entry) => {
-      const entryPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        return listQaScenarioExecutionPaths(entryPath);
-      }
-      if (!entry.isFile() || (!entry.name.endsWith(".yaml") && !entry.name.endsWith(".yml"))) {
-        return [];
-      }
-      const document = YAML.parse(fs.readFileSync(entryPath, "utf8")) as {
-        scenario?: { execution?: { kind?: unknown; path?: unknown } };
-      };
-      const execution = document.scenario?.execution;
-      return execution?.kind !== "flow" && typeof execution?.path === "string"
-        ? [execution.path]
-        : [];
-    })
-    .toSorted();
+function expectEntries(entries: readonly string[], required: string[]) {
+  expect(entries).toEqual(expect.arrayContaining(required));
 }
+function replaceFixture(source: string, from: string, to: string) {
+  expect(source).toContain(from);
+  const replaced = source.replace(from, to);
+  expect(replaced).not.toBe(source);
+  return replaced;
+}
+function createDynamicConsumerCompiler() {
+  const readFileSync = fs.readFileSync.bind(fs);
+  const readFile = vi.spyOn(fs, "readFileSync");
+  return (overrides: ReadonlyMap<string, string> = new Map()) => {
+    readFile.mockImplementation(
+      (file, options) => overrides.get(path.resolve(String(file))) ?? readFileSync(file, options),
+    );
+    return knipConfig.compilers.mjs("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+  };
+}
+const isEntry = (entries: readonly string[], file: string) =>
+  entries.some((entry) => path.matchesGlob(file, entry.replace(/!$/u, "")));
+afterEach(() => vi.restoreAllMocks());
 
 describe("check-deadcode-exports", () => {
-  it("excludes test support only from the production scan", () => {
-    expect(knipConfig.ignore).toContain("dist/**");
-    expect(knipConfig.ignore).toContain("**/test-helpers/**");
-    expect(knipConfig.ignore).toContain("**/*.test-utils.ts");
-    expect(knipConfig.ignoreFiles).not.toContain("**/test-helpers/**");
-    expect(knipConfig.ignoreFiles).toContain("scripts/**");
-    expect(allExportsKnipConfig.ignoreFiles).not.toContain("scripts/**");
-    expect(knipConfig.ignoreFiles).toContain("dist/**");
-    expect(knipConfig.ignore).not.toContain("**/live-*.ts");
-    expect(knipConfig.ignoreFiles).toContain("**/live-*.ts");
-    expect(allExportsKnipConfig.ignore).toEqual([
-      "dist/**",
-      "packages/*/dist/**",
-      "**/.boundary-stubs/**",
-    ]);
-    expect(allExportsKnipConfig.ignoreIssues).toHaveProperty("test/fixtures/ts-topology/basic/**");
-    expect(knipConfig.workspaces["."].project).toContain("scripts/**/*.{js,mjs,cjs,ts,mts,cts}!");
+  it("models the renderer and path-selected native compiler as executable roots", () => {
+    expect(knipConfig.workspaces).toHaveProperty(
+      "packages/mermaid-renderer.entry",
+      expect.arrayContaining(["src/renderer.ts!", "src/native.ts!", "src/pele.min.ts!"]),
+    );
+  });
+
+  it("models the PostgreSQL broker fixture only when both consumers exist", () => {
+    const compile = createDynamicConsumerCompiler();
+    expect(compile()).toContain(
+      'import { createSqliteWorkerBackend as __dynamicPgPool_0 } from "../scripts/perf/pg-pool-broker.fixture.mts";',
+    );
+    for (const [file, from, to] of [
+      [
+        "scripts/perf/pg-pool-lifecycle.mts",
+        'moduleUrl: new URL("./pg-pool-broker.fixture.mts", self),',
+        "",
+      ],
+      ["src/infra/sqlite-store.worker.ts", '"createSqliteWorkerBackend"', '""'],
+    ] as const) {
+      const removed = replaceFixture(fs.readFileSync(file, "utf8"), from, to);
+      expect(compile(new Map([[path.resolve(file), removed]]))).not.toContain(
+        "pg-pool-broker.fixture.mts",
+      );
+    }
   });
 
   it("makes tests in every workspace roots of the full-tree export audit", () => {
-    expect(knipConfig.workspaces["."].entry).not.toContain(
-      "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-    );
-    expect(knipConfig.workspaces["."].entry).toEqual(
-      expect.arrayContaining([
-        "config/knip.config.ts!",
-        "config/knip.all-exports.config.ts!",
-        "config/knip.scripts-exports.config.ts!",
-      ]),
-    );
+    expectEntries(knipConfig.workspaces["."].entry, [
+      "config/knip.config.ts!",
+      "config/knip.all-exports.config.ts!",
+      "config/knip.scripts-exports.config.ts!",
+      "scripts/generate-runtime-script-assets.mjs!",
+      "scripts/generate-static-validators.mts!",
+      "scripts/perf/cron-delivery-gateway-entry.ts!",
+      "scripts/perf/plugin-policy-read-measure.mjs!",
+      "scripts/perf/prompt-cache-observation-measure.ts!",
+      "scripts/perf/reconnect-read-wave-measure.ts!",
+      "scripts/perf/session-actor-retention-measure.ts!",
+      "scripts/perf/session-row-churn-probe.ts!",
+      "tsdown.config.ts!",
+    ]);
     expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
-    expect(fullRootWorkspace.entry).toEqual(
-      expect.arrayContaining([
-        ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
-        "src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-        "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-        "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-        "test/vitest/vitest*.config.ts!",
-        "scripts/crabbox-wrapper.mjs!",
-        "scripts/crabbox-wrapper.mts!",
-        "scripts/check-openclaw-package-tarball.mjs!",
-        "scripts/check-openclaw-package-tarball.mts!",
-      ]),
+    expectEntries(fullRootWorkspace.entry, [
+      "test/vitest/vitest*.config.ts!",
+      "scripts/crabbox-wrapper.mjs!",
+      "scripts/crabbox-wrapper.mts!",
+      "scripts/check-openclaw-package-tarball.mjs!",
+      "scripts/check-openclaw-package-tarball.mts!",
+      "test/scripts/service-relay-artifact.test-support.mjs!",
+    ]);
+    expect(knipConfig.workspaces["."].entry).not.toContain(
+      "test/scripts/service-relay-artifact.test-support.mjs!",
     );
-    expect(fullExtensionWorkspace.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
-    expect(fullUiWorkspace.entry).toContain("**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!");
+    for (const extension of ["js", "mjs", "cjs", "ts", "tsx", "mts", "cts"]) {
+      for (const directory of ["src", "scripts", "test"]) {
+        expect(isEntry(fullRootWorkspace.entry, `${directory}/x.test.${extension}`)).toBe(true);
+      }
+      expect(isEntry(fullExtensionWorkspace.entry, `src/example.spec.${extension}`)).toBe(true);
+      expect(isEntry(fullUiWorkspace.entry, `src/example.test.${extension}`)).toBe(true);
+      expect(isEntry(knipConfig.workspaces["."].entry, `test/x.test.${extension}`)).toBe(false);
+    }
+    expect(isEntry(fullRootWorkspace.entry, ".agents/skills/example/scripts/probe.ts")).toBe(true);
   });
 
   it("models both compiled subprocess registries as workspace-relative full-tree roots", () => {
@@ -118,53 +142,81 @@ describe("check-deadcode-exports", () => {
     );
   });
 
-  it("models every QA scenario execution path as a full-tree root", () => {
-    const rootEntries = fullRootWorkspace.entry;
-    const executionPaths = listQaScenarioExecutionPaths();
-
-    expect(executionPaths.length).toBeGreaterThan(0);
-    for (const executionPath of executionPaths) {
-      expect(fs.existsSync(executionPath), executionPath).toBe(true);
-      expect(rootEntries, executionPath).toContain(`${executionPath}!`);
-    }
-    expect(rootEntries).toContain(
-      "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
+  it("derives generated script and tooling roots from the runtime manifest", () => {
+    expectEntries(knipConfig.workspaces["."].entry, [
+      "scripts/generate-kysely-types.mts!",
+      "scripts/generate-npm-package-lock.worker.mts!",
+      "scripts/lib/fs-safe-npm-cli-preload.entry.mjs!",
+      "scripts/lib/package-cli-node-probe.entry.mjs!",
+      "scripts/lib/package-cli-node-probe.generated.mjs!",
+      "scripts/lib/test-selector-source-facts.worker.mts!",
+      "src/infra/daemon-runtime-probe.entry.ts!",
+      "src/infra/node-runtime-probe.entry.ts!",
+    ]);
+    expect(knipConfig.workspaces["."].entry).not.toContain(
+      "src/gateway/worker-environments/workspace-quiescence-scripts.ts!",
     );
-  });
+    expect(knipConfig.workspaces["."].entry).not.toContain(
+      "src/infra/update-managed-service-handoff.ts!",
+    );
 
-  it("models path-launched Mantis runtime roots separately from its cross-repository test fixture", () => {
-    const runtimeEntries = [
-      "scripts/mantis/observe-request-telegram-qa.mts!",
-      "scripts/mantis/observe-request-web-ui.mts!",
-      "scripts/mantis/telegram-proof-bridge.mjs!",
-    ];
-    for (const workspace of [knipConfig.workspaces["."], fullRootWorkspace, scriptRootWorkspace]) {
-      expect(workspace.entry).toEqual(expect.arrayContaining(runtimeEntries));
-    }
-    const fixture = "test/fixtures/mantis-request-producer.mts!";
-    expect(fullRootWorkspace.entry).toContain(fixture);
-    expect(knipConfig.workspaces["."].entry).not.toContain(fixture);
-    expect(scriptRootWorkspace.entry).not.toContain(fixture);
+    const { packageCliNodeProbe: _packageCliNodeProbe, ...withoutPackageCliNodeProbe } =
+      runtimeProcessScriptEntrypoints;
+    const withoutScriptDeclaration = collectRuntimeProcessManifestEntries(
+      withoutPackageCliNodeProbe,
+      runtimeProcessToolingEntrypoints,
+    );
+    expect(withoutScriptDeclaration).not.toContain("scripts/lib/package-cli-node-probe.entry.mjs");
+    expect(withoutScriptDeclaration).not.toContain(
+      "scripts/lib/package-cli-node-probe.generated.mjs",
+    );
+    expect(withoutScriptDeclaration).toContain("src/infra/node-runtime-probe.entry.ts");
+    const withoutGeneratedBinding = compileDynamicConsumerEdges(
+      "// dynamic consumers",
+      "config/knip-dynamic-consumers.mjs",
+      withoutPackageCliNodeProbe,
+    );
+    expect(withoutGeneratedBinding).not.toContain("PACKAGE_CLI_NODE_PROBE_SOURCE");
+    expect(withoutGeneratedBinding).toContain("NODE_RUNTIME_PROBE_SOURCE");
+
+    const { npmPackageLock: _npmPackageLock, ...withoutNpmPackageLock } =
+      runtimeProcessToolingEntrypoints;
+    const withoutToolingDeclaration = collectRuntimeProcessManifestEntries(
+      runtimeProcessScriptEntrypoints,
+      withoutNpmPackageLock,
+    );
+    expect(withoutToolingDeclaration).not.toContain("scripts/generate-npm-package-lock.worker.mts");
+    expect(withoutToolingDeclaration).toContain(
+      "scripts/lib/test-selector-source-facts.worker.mts",
+    );
   });
 
   it("keeps the script unused-export scan scoped to real executable roots", () => {
-    expect(scriptRootWorkspace.entry).toEqual(
-      expect.arrayContaining([
-        ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
-        ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
-        "apps/android/scripts/build-release-artifacts.ts!",
-        "security/opengrep/check-rule-metadata.mjs!",
-        "skills/meme-maker/scripts/meme.mjs!",
-        "scripts/check-openclaw-package-tarball.mts!",
-        "scripts/crabbox-wrapper.mjs!",
-        "scripts/crabbox-wrapper.mts!",
-        "scripts/lib/vitest-resource-reporter.mts!",
-        "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-        "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-        "src/plugin-sdk/api-baseline.ts!",
-      ]),
+    expectEntries(
+      scriptRootWorkspace.entry,
+      `.agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!
+.github/actions/setup-node-env/dependency-fingerprint.mjs! apps/android/scripts/build-release-artifacts.ts!
+security/opengrep/check-rule-metadata.mjs! skills/meme-maker/scripts/meme.mjs!
+scripts/check-openclaw-package-tarball.mts! scripts/crabbox-wrapper.mjs! scripts/crabbox-wrapper.mts!
+scripts/lib/vitest-resource-reporter.mts! scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!
+test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.split(/\s+/u),
     );
     expect(scriptRootWorkspace.entry).not.toContain("scripts/**/*.{js,mjs,cjs,ts,mts,cts}!");
+    const sourceTestConsumers = [
+      "src/scripts/docs-link-audit.test.ts!",
+      "src/scripts/ci-changed-scope.contract-fixtures.test.ts!",
+      "src/scripts/ci-changed-scope.control-ui.test.ts!",
+      "src/scripts/ci-changed-scope.git-owner.test.ts!",
+      "src/scripts/ci-changed-scope.native-i18n.test.ts!",
+      "src/scripts/ci-changed-scope.test.ts!",
+      "src/scripts/ci-changed-scope.windows.test.ts!",
+      "src/scripts/ci-ios-screenshot-scope.test.ts!",
+      "src/plugins/prune-docker-plugin-dist.test.ts!",
+      "src/infra/package-update-activation-lifetime.test.ts!",
+    ];
+    expectEntries(scriptRootWorkspace.entry, sourceTestConsumers);
+    expectEntries(scriptRootWorkspace.project, sourceTestConsumers);
+    expect(scriptRootWorkspace.entry).not.toContain("src/**/*.test.ts!");
     expect(
       scriptExportsKnipConfig.ignoreIssues["scripts/lib/vitest-resource-reporter.mts"],
     ).toEqual(["exports"]);
@@ -172,252 +224,601 @@ describe("check-deadcode-exports", () => {
     expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty(
       "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
     );
-  });
-
-  it("models upgrade survivor inline imports from the shell source", () => {
-    const runner = "scripts/e2e/lib/upgrade-survivor/run.sh";
-    const source = fs.readFileSync(runner, "utf8");
-    const compile = knipConfig.compilers.sh;
-    for (const workspace of [knipConfig.workspaces["."], fullRootWorkspace, scriptRootWorkspace]) {
-      expect(workspace.entry).toContain(`${runner}!`);
-    }
-    expect(compile(source, runner)).toContain(
-      'import { readPostCoreSnapshot } from "./diagnostics.mjs";',
-    );
-    const withoutSnapshot = source.replace(/^import \{ readPostCoreSnapshot \}[^\n]+\n/mu, "");
-    const remaining = compile(withoutSnapshot, runner);
-    expect(remaining).not.toContain("readPostCoreSnapshot");
-    expect(remaining).toContain('from "../../../lib/release-version.mjs";');
-    expect(compile(source, "scripts/e2e/lib/upgrade-survivor/other.sh")).toBe("");
-  });
-
-  it("audits executable code outside the main source trees", () => {
-    expect(knipConfig.workspaces["."].project).toEqual(
-      expect.arrayContaining([
-        ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
-        "apps/**/*.{js,mjs,cjs,ts,mts,cts}!",
-        "config/**/*.{ts,mts,cts}!",
-        "docs/**/*.js!",
-        "security/**/*.{js,mjs,cjs,ts,mts,cts}!",
-        "skills/**/*.{js,mjs,cjs,ts,mts,cts}!",
-      ]),
-    );
-    expect(knipConfig.workspaces["."].entry).toEqual(
-      expect.arrayContaining([
-        "config/knip.config.ts!",
-        "config/knip.all-exports.config.ts!",
-        "config/knip.scripts-exports.config.ts!",
-      ]),
-    );
-    expect(knipConfig.workspaces["examples/ai-chat"]).toEqual({
-      entry: ["index.mjs!"],
-      project: ["**/*.{js,mjs,cjs,ts,mts,cts}!"],
+    expect(scriptRootWorkspace.vitest).toEqual({
+      config: [
+        "scripts/control-ui-parity/vitest.config.ts",
+        "scripts/control-ui-retention/vitest.config.ts",
+      ],
     });
-    expect(knipConfig.workspaces["qa/convex-credential-broker"].project).toContain(
-      "convex/**/*.ts!",
-    );
-    expect(knipConfig.workspaces["qa/convex-credential-broker"].ignoreBinaries).toEqual(["convex"]);
-  });
-
-  it("tracks production script consumers of plugin exports", () => {
-    expect(knipConfig.workspaces["."].entry).toContain("scripts/qa/render-maturity-docs.ts!");
-  });
-
-  it("tracks the workflow-invoked producer verifier as an executable root", () => {
-    expect(knipConfig.workspaces["."].entry).toContain(
-      "scripts/verify-full-release-producer-job.mjs!",
-    );
-  });
-
-  it("runs exhaustive dead-code hygiene against production and full-tree configs", () => {
-    const packageJson = JSON.parse(
-      fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
-    ) as { scripts: Record<string, string> };
-    expect(packageJson.scripts["deadcode:dependencies"]).toBe("pnpm deadcode:full");
-    expect(packageJson.scripts["deadcode:full"]).toContain(
-      "--config config/knip.config.ts --production",
-    );
-    expect(packageJson.scripts["deadcode:full"]).toContain(
-      "--config config/knip.all-exports.config.ts",
-    );
-    expect(packageJson.scripts["deadcode:full"]).toContain("--exclude duplicates");
-  });
-
-  it("models the spawned system-agent MCP stdio entry", () => {
-    expect(knipConfig.workspaces["."].entry).toContain("src/mcp/openclaw-tools-serve.ts!");
-  });
-
-  it("scans every nested bundled-plugin source file without broad entry masking", () => {
-    const extensionWorkspaces = Object.entries(knipConfig.workspaces).filter(([workspace]) =>
-      workspace.startsWith("extensions/"),
-    );
-    expect(extensionWorkspaces.length).toBeGreaterThan(1);
-    for (const [workspace, settings] of extensionWorkspaces) {
-      expect(settings.entry, workspace).not.toContain("*.ts!");
-      expect(settings.project, workspace).toContain("**/*.{js,mjs,ts}!");
-      expect(settings.entry, workspace).toEqual(
-        expect.arrayContaining([
-          "index.ts!",
-          "setup-entry.ts!",
-          "*-api.ts!",
-          "cli-metadata.ts!",
-          "channel-entry.ts!",
-          "provider-discovery.ts!",
-          "{web-search,web-fetch}-provider.ts!",
-        ]),
-      );
-    }
-    expect(knipConfig.workspaces["extensions/*"].project).toContain("**/*.{js,mjs,ts}!");
-    expect(knipConfig.workspaces["extensions/llama-cpp"].project).toContain("**/*.{js,mjs,ts}!");
-    expect(knipConfig.workspaces["extensions/reef"].project).toContain("**/*.{js,mjs,ts}!");
-  });
-
-  it("models non-imported runtime and build entrypoints explicitly", () => {
-    expect(knipConfig.workspaces["."].entry).toEqual(
-      expect.arrayContaining([
-        "src/agents/subagents/registry/subagent-registry.runtime.ts!",
-        "src/mcp/plugin-tools-serve.ts!",
-        "src/plugins/build-smoke-entry.ts!",
-        "src/config/doc-baseline.ts!",
-        "src/plugins/runtime-sidecar-paths-baseline.ts!",
-        "tsdown.ai.config.ts!",
-      ]),
-    );
-    expect(knipConfig.workspaces["extensions/canvas"].entry).toEqual(
-      expect.arrayContaining([
-        "src/host/a2ui-app/bootstrap.js!",
-        "src/host/a2ui-app/rolldown.config.mjs!",
-      ]),
-    );
-    expect(knipConfig.workspaces["extensions/diffs"].entry).toContain("src/viewer-client.ts!");
-    expect(knipConfig.workspaces["extensions/mxc"].entry).toContain("src/mxc-spawn-launcher.mjs!");
-    expect(knipConfig.workspaces["extensions/qa-lab"].entry).toContain("src/ci-smoke-plan.ts!");
-  });
-
-  it("models the Browser facades loaded by basename", () => {
-    const workspace = knipConfig.workspaces["extensions/browser"];
-    expect(workspace.entry).toEqual(
-      expect.arrayContaining([
-        "browser-control-auth.ts!",
-        "browser-config.ts!",
-        "browser-doctor.ts!",
-        "browser-maintenance.ts!",
-        "browser-profiles.ts!",
-      ]),
-    );
+    expect(knipConfig.workspaces["."].vitest).toEqual({
+      config: [
+        "vitest.config.{js,mjs,ts,cjs,mts,cts}",
+        "vitest.{workspace,projects}.{js,mjs,ts,cjs,mts,cts,json}",
+        "scripts/control-ui-parity/vitest.config.ts",
+        "scripts/control-ui-retention/vitest.config.ts",
+      ],
+    });
   });
 
   it.each([
-    "gateway-client",
-    "gateway-protocol",
-    "sdk",
-    "retry",
-    "normalization-core",
-    "net-policy",
-    "media-understanding-common",
-    "media-generation-core",
-    "media-core",
-    "acp-core",
-    "markdown-core",
-    "terminal-core",
-    "model-catalog-core",
-  ] as const)("derives public audit roots from the %s export map", (packageDir) => {
-    const workspace = "packages/" + packageDir;
-    const manifest = JSON.parse(fs.readFileSync(workspace + "/package.json", "utf8")) as {
-      exports: Record<string, { import: string }>;
-    };
-    const expected = Object.values(manifest.exports)
-      .map(({ import: target }) => target.replace("./dist/", "src/").replace(/\.mjs$/u, ".ts!"))
-      .toSorted();
-    if (packageDir === "normalization-core") {
-      // The QA Lab Vite alias is a distinct source consumer, not a package export.
-      expect(fs.readFileSync("extensions/qa-lab/web/vite.config.ts", "utf8")).toContain(
-        "../../../packages/normalization-core/src/browser-error-runtime.ts",
-      );
-      expected.push("src/browser-error-runtime.ts!");
-      expected.sort();
+    ["sh", "scripts/e2e/lib/upgrade-survivor/run.sh", "readPostCoreSnapshot", "./diagnostics.mjs"],
+    [
+      "yml",
+      ".github/workflows/openclaw-release-publish.yml",
+      "prefetchPreparedPlugins",
+      "../../scripts/openclaw-release-ready.mjs",
+    ],
+  ] as const)("models %s inline imports from %s", (kind, file, symbol, importedFrom) => {
+    const source = fs.readFileSync(file, "utf8");
+    const compile = knipConfig.compilers[kind];
+    for (const workspace of [knipConfig.workspaces["."], fullRootWorkspace, scriptRootWorkspace]) {
+      expect(workspace.entry).toContain(`${file}!`);
     }
-    const production = Object.entries(knipConfig.workspaces).find(
-      ([name]) => name === workspace,
-    )?.[1];
-    const full = allExportsKnipConfig.workspaces[workspace];
-    expect(production?.entry.toSorted(), workspace).toEqual(expected);
-    expect(production?.project).toEqual(["src/**/*.ts!"]);
-    expect(full?.entry).toEqual(expect.arrayContaining(expected));
-    for (const entry of expected) {
-      expect(fs.existsSync(workspace + "/" + entry.slice(0, -1)), entry).toBe(true);
+    expect(compile(source, file)).toContain(`import { ${symbol} } from "${importedFrom}";`);
+    const remaining = compile(
+      source.replace(new RegExp(`^\\s*import \\{ ${symbol} \\}[^\\n]+\\n`, "mu"), ""),
+      file,
+    );
+    expect(remaining).not.toContain(symbol);
+    if (kind === "sh") {
+      expect(remaining).toContain('from "../../../lib/release-version.mjs";');
     }
+    expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
   });
 
-  it("does not promote private implementation or build-only artifacts to public audit roots", () => {
-    expect(knipConfig.workspaces["packages/gateway-client"].entry).not.toContain(
-      "src/protocol-client.ts!",
+  it("models named Solid lazy consumers without retaining a deleted loader", () => {
+    const source = `const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
+  export: "ShellSettingsSidebar",
+});`;
+    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { ShellSettingsSidebar as __solidLazy0 } from "../ui/src/components/settings-sidebar-shell.tsx";',
     );
-    expect(knipConfig.workspaces["packages/acp-core"].entry).not.toContain("src/error-format.ts!");
+    read.mockReturnValue("const SettingsSidebar = null;");
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "ShellSettingsSidebar",
+    );
   });
 
-  it("preserves the agent-core relocated source-entry contract", () => {
-    const workspace = "packages/agent-core";
-    const packageJson = JSON.parse(
-      fs.readFileSync(new URL(`../../${workspace}/package.json`, import.meta.url), "utf8"),
-    ) as { exports: Record<string, unknown> };
-    const conventionalEntries = Object.keys(packageJson.exports).map((subpath) =>
-      subpath === "." ? "src/index.ts!" : `src/${subpath.slice("./".length)}.ts!`,
+  it("models only Vite runner members consumed by the build", () => {
+    const source = `const { module: routes, dependencies: routeDependencies } = await runnerImport<
+  typeof import("./src/app-route-paths.ts")
+>(routePath, options);
+const offlineShell = { routes: routes.APP_ROUTE_PATHS };`;
+    const read = vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    expect(knipConfig.workspaces["."].project).toContain("config/knip-vite-consumers.mjs!");
+    const compile = knipConfig.compilers.mjs;
+    const compiled = compile("// config", "config/knip-vite-consumers.mjs");
+    expect(read).toHaveBeenCalledWith(path.resolve("ui/vite.config.ts"), "utf8");
+    expect(compiled).toContain(
+      'import { APP_ROUTE_PATHS as __vite0_0 } from "../ui/src/app-route-paths.ts";',
     );
-    const missingConventionalEntries = conventionalEntries.filter(
-      (entry) =>
-        !fs.existsSync(
-          new URL(`../../${workspace}/${entry.slice(0, -"!".length)}`, import.meta.url),
-        ),
+    expect(compiled).not.toContain("APP_ROUTE_OFFLINE_PREFIXES");
+    expect(compile(source, "config/unrelated.mjs")).toBe(source);
+  });
+
+  it("models the locale catalogue members consumed through Vite's runner", () => {
+    const source = `const { module, dependencies } = await runnerImport<
+  typeof import("../../scripts/lib/control-ui-i18n-catalog.ts")
+>(sourceCatalogPath, options);
+const startup = module.loadControlUiStartupCatalog();
+const catalog = module.loadControlUiSourceCatalog();`;
+    vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    expect(scriptRootWorkspace.entry).toContain("config/knip.config.ts!");
+    expect(scriptRootWorkspace.entry).toContain("config/knip-vite-consumers.mjs!");
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { loadControlUiStartupCatalog as __vite0_0, loadControlUiSourceCatalog as __vite0_1 } from "../scripts/lib/control-ui-i18n-catalog.ts";',
     );
-    expect(missingConventionalEntries).toEqual([
-      "src/harness/compaction.ts!",
-      "src/harness/branch-summarization.ts!",
-    ]);
-    for (const sourcePath of [
-      "src/harness/compaction/compaction.ts",
-      "src/harness/compaction/branch-summarization.ts",
+    const withoutStartup = source.replace(
+      "const startup = module.loadControlUiStartupCatalog();",
+      "",
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue(withoutStartup);
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "loadControlUiStartupCatalog",
+    );
+  });
+
+  it("models ordinary UI Vite imports into the script workspace", () => {
+    const source = `import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";`;
+    vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";',
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue("const config = {};");
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "isControlUiOptionalAsset",
+    );
+  });
+
+  it("roots benchmark parents and follows only their live computed child launches", () => {
+    const entries = knipConfig.workspaces["."].entry;
+    for (const parent of [
+      "scripts/perf/archive-worker-churn-measure.ts!",
+      "scripts/perf/session-create-measure.ts!",
+      "scripts/perf/session-create-repository-measure.ts!",
     ]) {
       expect(
-        fs.existsSync(new URL(`../../${workspace}/${sourcePath}`, import.meta.url)),
-        sourcePath,
-      ).toBe(true);
+        entries.filter((entry) => entry === parent),
+        parent,
+      ).toHaveLength(1);
     }
-    const expected = conventionalEntries
-      .filter((entry) => !missingConventionalEntries.includes(entry))
-      .toSorted();
-    expect([...knipConfig.workspaces[workspace].entry].toSorted()).toEqual(expected);
+    expect(entries).not.toContain("scripts/perf/archive-worker-churn-preload.mjs!");
+    expect(entries).not.toContain("scripts/perf/session-create-measure-loader.mjs!");
+
+    const archivePath = path.resolve("scripts/perf/archive-worker-churn-measure.ts");
+    const sessionCreatePath = path.resolve("scripts/perf/session-create-measure.ts");
+    const archiveSource = fs.readFileSync(archivePath, "utf8");
+    const sessionCreateSource = fs.readFileSync(sessionCreatePath, "utf8");
+    const compile = createDynamicConsumerCompiler();
+    const compileWithSources = (archive: string, sessionCreate: string) =>
+      compile(
+        new Map([
+          [archivePath, archive],
+          [sessionCreatePath, sessionCreate],
+        ]),
+      );
+
+    const compiled = compileWithSources(archiveSource, sessionCreateSource);
+    expect(compiled).toContain('import "../scripts/perf/archive-worker-churn-preload.mjs";');
+    expect(compiled).toContain('import "../scripts/perf/session-create-measure-loader.mjs";');
+
+    const archiveWithoutLaunch = replaceFixture(
+      archiveSource,
+      '              execArgv: [...(options.execArgv ?? process.execArgv), "--import", preload],',
+      `              execArgv: [...(options.execArgv ?? process.execArgv)],
+              // "--import", preload remains a decoy after the launch is removed.`,
+    );
+    const archiveWithDetachedFragments = `${archiveWithoutLaunch}
+const preload = pathToFileURL(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "archive-worker-churn-preload.mjs"),
+).href;
+const options = {};
+const unrelatedWorkerOptions = {
+  execArgv: [...(options.execArgv ?? process.execArgv), "--import", preload],
+};`;
+    const withoutArchiveLaunch = compileWithSources(
+      archiveWithDetachedFragments,
+      sessionCreateSource,
+    );
+    expect(withoutArchiveLaunch).not.toContain("archive-worker-churn-preload.mjs");
+    expect(withoutArchiveLaunch).toContain(
+      'import "../scripts/perf/session-create-measure-loader.mjs";',
+    );
+
+    const sessionCreateWithoutLaunch = replaceFixture(
+      sessionCreateSource,
+      `      "--import",
+      new URL("./session-create-measure-loader.mjs", import.meta.url).pathname,`,
+      `      "--inspect",
+      new URL("./session-create-measure-loader.mjs", import.meta.url).pathname,
+      // "--import" and the loader path remain decoys after the launch is removed.`,
+    );
+    const sessionCreateWithDetachedArgs = `${sessionCreateWithoutLaunch}
+const unrelatedArgs = [
+  "--import",
+  new URL("./session-create-measure-loader.mjs", import.meta.url).pathname,
+];`;
+    const withoutSessionCreateLaunch = compileWithSources(
+      archiveSource,
+      sessionCreateWithDetachedArgs,
+    );
+    expect(withoutSessionCreateLaunch).toContain(
+      'import "../scripts/perf/archive-worker-churn-preload.mjs";',
+    );
+    expect(withoutSessionCreateLaunch).not.toContain("session-create-measure-loader.mjs");
   });
 
-  it("parses all compact export sections and expands symbol lists", () => {
+  it("models exact generated and module-hook named consumers", () => {
+    expect(knipConfig.workspaces["."].project).toContain("config/knip-dynamic-consumers.mjs!");
+    const compile = knipConfig.compilers.mjs;
+    const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    for (const imported of [
+      'import { runtimeProcessDeployManifest as __dynamic0_0, runtimeProcessHelperManifest as __dynamic0_1, runtimeProcessWorkerDependencies as __dynamic0_2 } from "../src/infra/runtime-process-manifest.ts";',
+      'import { gatewayBenchTaskOperation as __dynamic1_0 } from "../scripts/lib/gateway-bench-worker-messages.ts";',
+      'import { fetchWithSsrFGuard as __dynamic2_0 } from "../extensions/team-reports/src/report-run.benchmark-fixtures.test-support.ts";',
+      'import { addDoctorLegacyIssues as __dynamic3_0 } from "../src/commands/doctor/shared/legacy-config-issues.js";',
+      'import { projectBundleMcpServerCatalog as __dynamic4_0 } from "../src/agents/agent-bundle-mcp-catalog-projection.js";',
+      'import { observeNativeMcpProbe as __dynamic10_0 } from "../src/agents/native-mcp-connect.js";',
+      'import { r2Task as __dynamic12_0, r2SearchStart as __dynamic12_1, r2SearchMatch as __dynamic12_2, r2SearchBuild as __dynamic12_3, r2SearchEnd as __dynamic12_4, r2PresentCalled as __dynamic12_5, r2PresentMiss as __dynamic12_6, r2Presentation as __dynamic12_7, r2Consume as __dynamic12_8, r2Materialized as __dynamic12_9 } from "../scripts/perf/session-row-churn-probe.js";',
+    ]) {
+      expect(compiled).toContain(imported);
+    }
+    expect(compiled).toMatch(
+      /import \{ recordTrajectoryFlush as __dynamic\d+_0 \} from "\.\.\/scripts\/perf\/trajectory-flush-preload\.mts";/u,
+    );
+
+    const readFileSync = fs.readFileSync.bind(fs);
+    const doctorConsumerPath = path.resolve("src/commands/config-preflight-snapshot.ts");
+    const directDoctorConsumer = `const addIssues = (
+  await import("./doctor/shared/legacy-config-issues.js")
+).addDoctorLegacyIssues;`;
+    const readFile = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const source = readFileSync(file, options);
+      return path.resolve(String(file)) === doctorConsumerPath ? directDoctorConsumer : source;
+    });
+    expect(compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs")).toContain(
+      'import { addDoctorLegacyIssues as __dynamic3_0 } from "../src/commands/doctor/shared/legacy-config-issues.js";',
+    );
+
+    readFile.mockImplementation((file, options) => {
+      const source = readFileSync(file, options);
+      if (path.resolve(String(file)) === path.resolve("tsdown.config.ts")) {
+        return String(source).replace(
+          `import {
+  runtimeProcessDeployManifest,
+  runtimeProcessHelperManifest,
+  runtimeProcessWorkerDependencies,
+} from "./src/infra/runtime-process-manifest.ts";`,
+          "",
+        );
+      }
+      if (
+        path.resolve(String(file)) === path.resolve("scripts/lib/gateway-bench-worker-messages.ts")
+      ) {
+        return String(source).replace(
+          "import { gatewayBenchTaskOperation as benchmarkTaskOperation } from ${JSON.stringify(import.meta.url)};",
+          "",
+        );
+      }
+      if (
+        path.resolve(String(file)) === path.resolve("extensions/team-reports/src/sources/http.ts")
+      ) {
+        return String(source).replace(
+          'import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
+          "",
+        );
+      }
+      if (
+        path.resolve(String(file)) === path.resolve("scripts/perf/trajectory-flush-preload.mts")
+      ) {
+        return String(source).replace(
+          "import { recordTrajectoryFlush as __recordTrajectoryFlush } from ${JSON.stringify(import.meta.url)};",
+          "",
+        );
+      }
+      if (path.resolve(String(file)) === doctorConsumerPath) {
+        return String(source).replaceAll(").addDoctorLegacyIssues", ").consumeLegacyIssues");
+      }
+      return source;
+    });
+    const withoutConsumers = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(withoutConsumers).not.toContain("runtimeProcessDeployManifest");
+    expect(withoutConsumers).not.toContain("runtimeProcessHelperManifest");
+    expect(withoutConsumers).not.toContain("runtimeProcessWorkerDependencies");
+    expect(withoutConsumers).not.toContain("gatewayBenchTaskOperation");
+    expect(withoutConsumers).not.toContain("fetchWithSsrFGuard");
+    expect(withoutConsumers).not.toContain("addDoctorLegacyIssues");
+    expect(withoutConsumers).not.toContain("recordTrajectoryFlush");
+  });
+
+  it("models Codex lazy runtime members only from their live loaders and consumers", () => {
+    const consumerPaths = {
+      plugin: path.resolve("extensions/codex/src/native-plugin-tool.ts"),
+      thread: path.resolve("extensions/codex/src/native-thread-tool.ts"),
+      adoption: path.resolve("extensions/codex/src/session-catalog-list-operation.ts"),
+      control: path.resolve("extensions/codex/src/session-catalog-control.ts"),
+    };
+    const sources = new Map(
+      Object.values(consumerPaths).map((consumerPath) => [
+        consumerPath,
+        fs.readFileSync(consumerPath, "utf8"),
+      ]),
+    );
+    const compileWithSources = createDynamicConsumerCompiler();
+
+    const compiled = compileWithSources();
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\bcodexBindingConnectionSelection as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/extensions\/codex\/src\/app-server\/binding-connection\.js";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\blistNodeAdoptedSessionEntries as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/extensions\/codex\/src\/session-catalog-node-adoption\.js";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\bclearSharedCodexAppServerClientAndWait as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/extensions\/codex\/src\/app-server\/shared-client\.js";/u,
+    );
+
+    const bindingWithoutPluginConsumer = replaceFixture(
+      sources.get(consumerPaths.plugin) ?? "",
+      "const { codexBindingConnectionSelection, resolveCodexBindingAppServerConnection } =",
+      "const { resolveCodexBindingAppServerConnection } =",
+    );
+    const pluginRemoved = compileWithSources(
+      new Map([[consumerPaths.plugin, bindingWithoutPluginConsumer]]),
+    );
+    expect(pluginRemoved).toContain("codexBindingConnectionSelection as");
+
+    const bindingWithoutThreadConsumer = replaceFixture(
+      sources.get(consumerPaths.thread) ?? "",
+      "const { codexBindingConnectionSelection, resolveCodexBindingAppServerConnection } =",
+      "const { resolveCodexBindingAppServerConnection } =",
+    );
+    const bothBindingConsumersRemoved = compileWithSources(
+      new Map([
+        [consumerPaths.plugin, bindingWithoutPluginConsumer],
+        [consumerPaths.thread, bindingWithoutThreadConsumer],
+      ]),
+    );
+    expect(bothBindingConsumersRemoved).not.toContain("codexBindingConnectionSelection as");
+
+    const adoptionWithoutLoader = replaceFixture(
+      sources.get(consumerPaths.adoption) ?? "",
+      `const loadNodeAdoption = createLazyRuntimeModule(
+  () => import("./session-catalog-node-adoption.js"),
+);`,
+      `const loadNodeAdoption = async () => import("./session-catalog-node-adoption.js");`,
+    );
     expect(
-      parseKnipCompactUnusedExports(`
-Unused exports (2)
-src/b.ts: beta, alpha
-/tmp/outside.ts: noise
-C:\\tmp\\outside.ts: noise
-C:outside.ts: noise
-\\\\server\\share\\outside.ts: noise
+      compileWithSources(new Map([[consumerPaths.adoption, adoptionWithoutLoader]])),
+    ).not.toContain("listNodeAdoptedSessionEntries as");
 
-Unused exported types (1)
-extensions/example/src/types.ts: ExampleType
+    const controlWithoutMember = replaceFixture(
+      sources.get(consumerPaths.control) ?? "",
+      `        const { clearSharedCodexAppServerClientAndWait } = await loadSharedClient();
+        await clearSharedCodexAppServerClientAndWait();`,
+      `        await loadSharedClient();`,
+    );
+    const withoutControlMember = compileWithSources(
+      new Map([[consumerPaths.control, controlWithoutMember]]),
+    );
+    expect(withoutControlMember).not.toContain("clearSharedCodexAppServerClientAndWait as");
+    expect(withoutControlMember).toContain("runtimeProcessDeployManifest");
+  });
 
-Unused exported enum members (1)
-packages/example/src/state.ts: Ready
+  it("models a computed checkout module member only while its binding and call exist", () => {
+    const consumerPath = path.resolve(
+      ".agents/skills/telegram-e2e-userbot/scripts/published-upgrade-scenario.mjs",
+    );
+    const consumerSource = fs.readFileSync(consumerPath, "utf8");
+    const compile = knipConfig.compilers.mjs;
+    const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(compiled).toMatch(
+      /import \{[^}\n]*\bcreateScenarioCommandEnvironment as __dynamic\d+_\d+\b[^}\n]*\} from "\.\.\/\.agents\/skills\/telegram-e2e-userbot\/scripts\/run-mock-sut-user-e2e\.mjs";/u,
+    );
 
-Exports in used namespace (1)
-src/namespace.ts: runtimeHelper
+    const compileWithSources = createDynamicConsumerCompiler();
+    const compileWithConsumer = (source: string) =>
+      compileWithSources(new Map([[consumerPath, source]]));
 
-Exported types in used namespace (1)
-src/namespace.ts: RuntimeType
+    const withoutBinding = compileWithConsumer(
+      replaceFixture(
+        consumerSource,
+        'const harness = await import(pathToFileURL(join(scripts, "run-mock-sut-user-e2e.mjs")));',
+        "const harness = {};",
+      ),
+    );
+    expect(withoutBinding).not.toContain("run-mock-sut-user-e2e.mjs");
 
-Unused exported namespace members (1)
-src/protocol.ts: Result (v2)
+    const withoutCall = compileWithConsumer(
+      replaceFixture(
+        consumerSource,
+        "  const commandEnv = harness.createScenarioCommandEnvironment({",
+        '  // harness.createScenarioCommandEnvironment({ is not a call.\n  const mention = "harness.createScenarioCommandEnvironment(";\n  const commandEnv = Object.freeze({',
+      ),
+    );
+    expect(withoutCall).not.toContain("createScenarioCommandEnvironment as");
+    expect(withoutCall).toContain("run-mock-sut-user-e2e.mjs");
+    expect(withoutCall).toContain("runtimeProcessDeployManifest");
+    expect(withoutCall).toContain("observeNativeMcpProbe");
+  });
 
-Unused files (1)
-src/noise.ts: src/noise.ts
-`),
-    ).toEqual([
+  it("follows PR cache named imports only through their supplying heredoc argument", () => {
+    const wrapperPath = path.resolve("scripts/pr");
+    const wrapper = fs.readFileSync(wrapperPath, "utf8");
+    const expected = [
+      "claimCreatedAnchor",
+      "collectUnusedDependencyCaches",
+      "dependencyCacheRoot",
+      "holdDependencyCache",
+      "publishDependencyCache",
+      "privateDependencyDonor",
+      "withDependencyCacheLock",
+    ];
+    const compileWithSources = createDynamicConsumerCompiler();
+    const compile = (source: string) => {
+      const output = compileWithSources(new Map([[wrapperPath, source]]));
+      expect(output).toContain("runtimeProcessDeployManifest");
+      return (
+        output.match(
+          /import \{([^}\n]+)\} from "\.\.\/scripts\/pr-lib\/cache-lifetime\.mjs";/u,
+        )?.[1] ?? ""
+      )
+        .split(",")
+        .map((binding) => binding.trim().split(/\s+as\s+/u)[0])
+        .filter(Boolean);
+    };
+    expect(compile(wrapper)).toEqual(expected);
+    expect(compile(replaceFixture(wrapper, "dependencyCacheRoot, ", ""))).toEqual(
+      expected.filter((name) => name !== "dependencyCacheRoot"),
+    );
+    for (const disconnected of [
+      replaceFixture(wrapper, '"$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs"', '""'),
+      replaceFixture(wrapper, "pathToFileURL(process.argv[6])", "pathToFileURL(process.argv[5])"),
+      replaceFixture(wrapper, "const { claimCreatedAnchor,", "// const { claimCreatedAnchor,"),
+      replaceFixture(
+        wrapper,
+        '  node --input-type=module - "$1"',
+        '  # node --input-type=module - "$1"',
+      ),
+    ]) {
+      expect(compile(disconnected)).toEqual([]);
+    }
+  });
+
+  it("removes projected MCP and Python edges with their actual consumers", () => {
+    const runtimePath = path.resolve("src/agents/agent-bundle-mcp-runtime.ts");
+    const instrumenterPath = path.resolve("scripts/perf/session-row-churn-instrument.py");
+    const runtime = fs.readFileSync(runtimePath, "utf8");
+    const instrumenter = fs.readFileSync(instrumenterPath, "utf8");
+    const runtimeWithoutCatalogConsumer = replaceFixture(
+      runtime,
+      "catalog: { projectBundleMcpServerCatalog },",
+      "catalog: {},",
+    );
+    const instrumenterWithoutTaskConsumer = replaceFixture(
+      instrumenter,
+      "edit('src/infra/main-thread-stall.ts',task)",
+      "# removed main-thread task instrumentation",
+    );
+    const compiled = createDynamicConsumerCompiler()(
+      new Map([
+        [runtimePath, runtimeWithoutCatalogConsumer],
+        [instrumenterPath, instrumenterWithoutTaskConsumer],
+      ]),
+    );
+    expect(compiled).not.toContain("projectBundleMcpServerCatalog");
+    expect(compiled).not.toContain("r2Task");
+    expect(compiled).toContain("observeNativeMcpProbe");
+    expect(compiled).toContain("r2Materialized");
+  });
+
+  it("models only declared materializer and emitted named-import consumers", () => {
+    const compile = knipConfig.compilers.mjs;
+    const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(compiled).toMatch(
+      /import \{ materializeRuntimeProcessScriptFile as __dynamic\d+_0 \} from "\.\.\/src\/infra\/runtime-process-script-file\.ts";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{ resolveRuntimeBootstrapToolingEntrypointUrl as __dynamic\d+_0 \} from "\.\.\/runtime-process-bootstrap\.generated\.mjs";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{ isSqliteWalResetSafeVersion as __dynamic\d+_0 \} from "\.\.\/node-sqlite\.mjs";/u,
+    );
+    expect(compiled).toMatch(
+      /import \{ PACKAGE_CLI_NODE_PROBE_SOURCE as __dynamic\d+_0 \} from "\.\.\/scripts\/lib\/package-cli-node-probe\.generated\.mjs";/u,
+    );
+    expect(compiled).not.toContain("HANDOFF_SCRIPT");
+
+    const removed = new Map(
+      (
+        [
+          [
+            "scripts/generate-runtime-script-assets.mjs",
+            'import { materializeRuntimeProcessScriptFile } from "./src/infra/runtime-process-script-file.ts";',
+            "",
+          ],
+          [
+            "scripts/prepare-git-hooks.mjs",
+            'import { resolveRuntimeBootstrapToolingEntrypointUrl } from "../runtime-process-bootstrap.generated.mjs";',
+            "",
+          ],
+          [
+            "test/scripts/vitest-worker-artifacts.test.ts",
+            'import { isSqliteWalResetSafeVersion as isSafeVersion } from "../../node-sqlite.mjs";\\n',
+            "const isSafeVersion = () => true;\\n",
+          ],
+        ] as const
+      ).map(([file, from, to]) => [
+        path.resolve(file),
+        replaceFixture(fs.readFileSync(file, "utf8"), from, to),
+      ]),
+    );
+    const withoutConsumers = createDynamicConsumerCompiler()(removed);
+    expect(withoutConsumers).not.toContain("materializeRuntimeProcessScriptFile");
+    expect(withoutConsumers).not.toContain("resolveRuntimeBootstrapToolingEntrypointUrl");
+    expect(withoutConsumers).not.toContain("isSqliteWalResetSafeVersion");
+    expect(withoutConsumers).toContain("runtimeProcessDeployManifest");
+    expect(withoutConsumers).toContain("observeNativeMcpProbe");
+  });
+
+  it.each([
+    [
+      "scripts/docs-link-audit.mjs",
+      "./docs-link-audit.mts",
+      '{ implementation: "./docs-link-audit.mts" }',
+    ],
+    [
+      "scripts/verify-pr-hosted-gates.mjs",
+      "./verify-pr-hosted-gates.mts",
+      '{ implementation: "./verify-pr-hosted-gates.mts" }',
+    ],
+  ] as const)(
+    "models literal typed shim %s without treating its implementation exports as entries",
+    (file, implementation, literalOptions) => {
+      const source = fs.readFileSync(file, "utf8");
+      const compile = knipConfig.compilers.mjs;
+      const compiled = compile(source, file);
+      expect(compiled).toBe(`${source}\nimport ${JSON.stringify(implementation)};`);
+      expect(scriptRootWorkspace.entry).toContain(`${file}!`);
+      const implementationFile = path.join(path.dirname(file), implementation);
+      expect(scriptRootWorkspace.entry).not.toContain(`${implementationFile}!`);
+      expect(isEntry(scriptRootWorkspace.project, implementationFile)).toBe(true);
+
+      const withoutImplementation = replaceFixture(source, literalOptions, "{}");
+      expect(compile(withoutImplementation, file)).toBe(withoutImplementation);
+    },
+  );
+
+  it("models retained updater named exports without fabricating private imports", () => {
+    const manifest = fs.readFileSync("package.json", "utf8");
+    const compile = knipConfig.compilers.json;
+    const compiled = compile(manifest, "package.json");
+    expect(compiled).toMatch(
+      /import \{ isPackageManagerUpdateMode as __updateCompatibilityConsumer\d+ \} from "\.\/src\/cli\/update-cli\/update-command-service-recovery\.ts";/u,
+    );
+    for (const [module, symbol] of [
+      ["src/cli/update-cli/update-command-package.ts", "readPackageUpdateIdentity"],
+      [
+        "src/infra/update-managed-service-handoff.ts",
+        "isCurrentManagedServiceUpdateHandoffProcess",
+      ],
+      ["src/infra/update-runner-git-target.ts", "readGitTargetSchemaVersions"],
+    ]) {
+      expect(
+        compiled
+          .split("\n")
+          .some(
+            (line) =>
+              line.startsWith(`import { ${symbol} as `) && line.endsWith(` from "./${module}";`),
+          ),
+      ).toBe(false);
+      expect(compiled).toContain(`from "./${module}";`);
+    }
+    const finishAliases = [
+      ...compiled.matchAll(
+        /import \{ finishUpdateRun as (__updateCompatibilityConsumer\d+) \} from "\.\/src\/infra\/update-run-(?:ledger|write)\.ts";/gu,
+      ),
+    ].map((match) => match[1]);
+    expect(finishAliases).toHaveLength(2);
+    expect(new Set(finishAliases).size).toBe(2);
+  });
+
+  it("rejects retained updater bindings that are neither exports nor real imports", () => {
+    const manifest = fs.readFileSync("package.json", "utf8");
+    const inventoryPath = path.resolve("scripts/lib/update-compat-inventory.json");
+    const inventory = structuredClone(readUpdateCompatibilityInventory(inventoryPath));
+    inventory.releases[0]!.chunks[0]!.exports.push({
+      exported: "missingUpdaterConsumer",
+      origin: {
+        module: "src/cli/update-cli/update-command-service-recovery.ts",
+        symbol: "missingUpdaterConsumer",
+      },
+    });
+    const readFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      return path.resolve(String(file)) === inventoryPath
+        ? JSON.stringify(inventory)
+        : readFileSync(file, options);
+    });
+    expect(() => knipConfig.compilers.json(manifest, "package.json")).toThrow(
+      "Recorded updater binding src/cli/update-cli/update-command-service-recovery.ts:missingUpdaterConsumer is neither a named export nor an imported named binding",
+    );
+  });
+
+  it("rejects findings from every compact export section and expands symbol lists", () => {
+    const output = [
+      "Unused exports (2)\nsrc/b.ts: beta, alpha\n/tmp/outside.ts: noise\nC:\\tmp\\outside.ts: noise\nC:outside.ts: noise\n\\\\server\\share\\outside.ts: noise",
+      "Unused exported types (1)\nextensions/example/src/types.ts: ExampleType",
+      "Unused exported enum members (1)\npackages/example/src/state.ts: Ready",
+      "Exports in used namespace (1)\nsrc/namespace.ts: runtimeHelper",
+      "Exported types in used namespace (1)\nsrc/namespace.ts: RuntimeType",
+      "Unused exported namespace members (1)\nsrc/protocol.ts: Result (v2)",
+      "Unused files (1)\nsrc/noise.ts: src/noise.ts",
+    ].join("\n\n");
+    const entries = [
       "extensions/example/src/types.ts: ExampleType",
       "packages/example/src/state.ts: Ready",
       "src/b.ts: alpha",
@@ -425,66 +826,44 @@ src/noise.ts: src/noise.ts
       "src/namespace.ts: runtimeHelper",
       "src/namespace.ts: RuntimeType",
       "src/protocol.ts: Result (v2)",
-    ]);
-  });
-
-  it("keeps findings from dot-directories and root entry files", () => {
-    expect(
-      parseKnipCompactUnusedExports(`Unused exports (2)
-.agents/skills/example/scripts/check.mts: checkExample
-tsdown.ai.config.ts: default
-`),
-    ).toEqual([
-      ".agents/skills/example/scripts/check.mts: checkExample",
-      "tsdown.ai.config.ts: default",
-    ]);
-  });
-
-  it("distinguishes a failed scan with no export sections from zero findings", () => {
-    expect(parseKnipCompactUnusedExportsResult("Configuration error: invalid project\n")).toEqual({
-      entries: [],
-      sawExportSection: false,
+    ];
+    expect(checkExportScan("finding scan", `\n${output}\n`)).toEqual({
+      entries,
+      message: `finding scan:\nUnused exports are not allowed:\n${entries.map((entry) => `  ${entry}`).join("\n")}\nDelete the exports or model their real production consumers in Knip.`,
+      ok: false,
     });
-    expect(parseKnipCompactUnusedExportsResult("Unused exports (0)\n")).toEqual({
+  });
+
+  it.each([
+    ["Configuration error: invalid project\n", false],
+    ["Unused exports (0)\n", true],
+  ] as const)("distinguishes section presence in %s", (output, sawExportSection) => {
+    expect(parseKnipCompactUnusedExportsResult(output)).toEqual({
       entries: [],
-      sawExportSection: true,
+      sawExportSection,
     });
   });
 
   it("discards export findings after workspace module resolution failures", () => {
-    const output = `ERROR: Error loading vitest.config.ts (Cannot find module 'vitest/config')
-ERROR: Error loading ui/vite.config.ts (Cannot find module 'vite')
-Unused exports (1)
-src/config/types.ts: TelegramConfig
-`;
-
-    const result = checkExportScan("production unused-export scan", output);
-    expect(result.ok).toBe(false);
-    expect(result.entries).toEqual([]);
-    expect(result.message).toContain(
-      "deadcode production unused-export scan could not resolve workspace modules; export findings would be unreliable and are discarded.",
-    );
-    expect(result.message).toContain("ERROR: Error loading vitest.config.ts");
-    expect(result.message).toContain("ERROR: Error loading ui/vite.config.ts");
-    expect(result.message).toContain("Install workspace dependencies in-tree (pnpm install)");
-    expect(result.message).not.toContain("Unused exports are not allowed");
-    expect(result.message).not.toContain("src/config/types.ts: TelegramConfig");
+    const errors = [
+      "ERROR: Error loading vitest.config.ts (Cannot find module 'vitest/config')",
+      "ERROR: Error loading ui/vite.config.ts (Cannot find module 'vite')",
+    ].join("\n");
+    expect(
+      checkExportScan(
+        "production unused-export scan",
+        `${errors}\nUnused exports (1)\nsrc/config/types.ts: TelegramConfig\n`,
+      ),
+    ).toEqual({
+      ok: false,
+      entries: [],
+      message: `deadcode production unused-export scan could not resolve workspace modules; export findings would be unreliable and are discarded.
+${errors}
+Install workspace dependencies in-tree (pnpm install) — on delegated boxes the crabbox wrapper links the hydrated modules dir into the workdir — and rerun.`,
+    });
   });
 
   it("accepts clean export scan output unchanged", () => {
     expect(checkExportScan("clean scan", "")).toEqual({ entries: [], message: "", ok: true });
-  });
-
-  it("reports genuine export findings unchanged", () => {
-    expect(
-      checkExportScan("finding scan", "Unused exports (1)\nsrc/config/types.ts: TelegramConfig\n"),
-    ).toEqual({
-      entries: ["src/config/types.ts: TelegramConfig"],
-      message: `finding scan:
-Unused exports are not allowed:
-  src/config/types.ts: TelegramConfig
-Delete the exports or model their real production consumers in Knip.`,
-      ok: false,
-    });
   });
 });

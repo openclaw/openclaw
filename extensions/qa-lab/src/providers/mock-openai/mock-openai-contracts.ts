@@ -33,6 +33,7 @@ export type QaMockProviderFailure = {
   code?: string;
   message: string;
   retryAfterSeconds?: number;
+  retryAfterMs?: number;
   presentation?: "anthropic-thinking";
 };
 
@@ -44,6 +45,8 @@ export type QaMockProviderDispatchResult = {
   previewPauseMs?: number;
   previewPause?: () => Promise<void>;
   responsePauseMs?: number;
+  /** Holds an accepted SSE stream open with comment keepalives during the pause. */
+  responseKeepaliveMs?: number;
 };
 
 export type StreamEvent =
@@ -173,7 +176,6 @@ export type MockOpenAiRequestSnapshot = QaMockRequestSnapshot & {
 
 export type MockOpenAiRequestSnapshotInput = Omit<MockOpenAiRequestSnapshot, "cursor">;
 
-// Anthropic wire fields used by the shared Responses scenario dispatcher.
 export type AnthropicMessageContentBlock =
   | { type: "text"; text: string }
   | {
@@ -229,7 +231,6 @@ export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker strea
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 export const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress( error)? qa check/i;
 export const QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE = /global tool loop breaker qa check/i;
-export const QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE = /provider http 503 after tool qa check/i;
 export const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
 export const QA_GROUP_PROGRESS_THEN_EMPTY_PROMPT_RE = /qa group progress then empty check/i;
 export const QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE = /qa msteams thread message-tool final dedupe/i;
@@ -294,9 +295,9 @@ export const QA_YIELD_REJECTION_IMAGE_DELAY_MS = 4_000;
 export const QA_SUBAGENT_SELF_YIELD_WORKER_RE = /subagent self yield qa worker/i;
 export const QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE = /subagent self yield qa remote job finished/i;
 export const QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE =
-  /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback|private)/i;
+  /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback|race|private)/i;
 export const QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE =
-  /subagent terminal reply qa worker:\s*(visible|silent|empty|restart|fallback)/i;
+  /subagent terminal reply qa worker:\s*(visible|silent|empty|restart|fallback|race)/i;
 export const QA_SUBAGENT_PRIVATE_WORKER_RE =
   /subagent private completion qa worker:\s*(first|second)/i;
 export const QA_SUBAGENT_PRIVATE_RESULT_RE = /QA-PARENT-PRIVATE-CHILD1-[A-F0-9]{32}/u;
@@ -335,6 +336,7 @@ export const QA_SUBAGENT_TERMINAL_MARKERS = {
   empty: "QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED",
   restart: "QA-SUBAGENT-TERMINAL-RESTART-OK",
   fallback: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
+  race: "QA-SUBAGENT-TERMINAL-RACE-OK",
 } as const;
 export const QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER = "QA-SUBAGENT-EMPTY-PARENT-ACK";
 export const QA_SUBAGENT_TERMINAL_METADATA_SENTINEL = "QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK";
@@ -345,10 +347,9 @@ export const QA_IMAGE_GENERATION_PROMPT_RE =
   /image generation check|capability flip image check|\/tool\s+image_generate/i;
 export const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
-export const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
-  "The previous attempt did not produce a user-visible answer.";
+export const QA_EMPTY_RESPONSE_RETRY_NEEDLE = "Continue from the current state";
 export const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE =
-  "The previous assistant turn completed its tool calls but did not produce a user-visible answer.";
+  "Do not repeat completed tool calls or restart from scratch. Do not call tools in this step.";
 export const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
   /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
 export const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
@@ -357,9 +358,8 @@ export const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 export const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 export const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
 export const QA_RESTART_CODE_MODE_WAIT_PROMPT_RE = /code mode restart wait qa check/i;
-export const QA_RESTART_RECOVERY_PROMPT_RE = /previous turn was interrupted by a gateway restart/i;
-export const QA_KILL_RESTART_PROMPT_RE = /\bKILL-RESTART-PROMPT\b/u;
-export const QA_KILL_RESTART_RECOVERED_MARKER = "KILL-RESTART-RECOVERED-OK";
+export const QA_RESTART_RESUME_PROMPT_RE =
+  /The Gateway restarted while you were working\. Resume your work:/u;
 const QA_AUDIO_TRANSCRIPTION_TEXT =
   "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
@@ -380,6 +380,7 @@ export type MockScenarioState = {
   repeatedRequestRecoveryAttempts: number;
   stalledTurnRecoveryAttempts: number;
   toolLoopReadAttempts: number;
+  rateLimitAfterToolInjected: boolean;
 };
 
 export function sourceDiscoveryReadPathForProvider(providerVariant: MockProviderVariant) {
@@ -446,6 +447,15 @@ export function isPreviewCompletion(
   );
 }
 
+export function writeSseHeaders(res: ServerResponse, contentLength?: number) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+    ...(contentLength === undefined ? {} : { "content-length": contentLength }),
+  });
+}
+
 export async function writeSse(
   res: ServerResponse,
   events: Array<StreamEvent | AnthropicStreamEvent>,
@@ -464,12 +474,9 @@ export async function writeSse(
   const body =
     frames.slice(Math.max(0, completionIndex)).join("") +
     (protocol === "responses" ? "data: [DONE]\n\n" : "");
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-    ...(completionIndex < 0 ? { "content-length": Buffer.byteLength(body) } : {}),
-  });
+  if (!res.headersSent) {
+    writeSseHeaders(res, completionIndex < 0 ? Buffer.byteLength(body) : undefined);
+  }
   if (completionIndex >= 0) {
     // Flush preview deltas before delaying the final text and completion frames.
     res.write(frames.slice(0, completionIndex).join(""));
@@ -493,11 +500,7 @@ export type AnthropicStreamEvent = Record<string, unknown> & {
 };
 
 export function countApproxTokens(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return 0;
-  }
-  return Math.max(1, Math.ceil(trimmed.length / 4));
+  return Math.ceil(text.trim().length / 4);
 }
 
 export function extractEmbeddingInputTexts(input: unknown): string[] {

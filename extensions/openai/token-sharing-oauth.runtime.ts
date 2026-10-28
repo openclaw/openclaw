@@ -5,6 +5,8 @@ import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
 import { startProviderOAuthLoopbackCallbackServer } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
   generateOAuthState,
   generatePKCE,
   oauthErrorHtml,
@@ -71,9 +73,26 @@ async function requestJson(url: string, owner: LoginOwner, body?: URLSearchParam
       owner.assertCurrent?.();
       let json: Record<string, unknown> | undefined;
       try {
-        json = asOptionalRecord(JSON.parse(Buffer.from(bytes).toString("utf8")));
+        json = asOptionalRecord(
+          JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+        );
       } catch {
         // Provider bodies can contain credentials: report bounded status, never the body.
+      }
+      if (
+        body?.get("grant_type") === "refresh_token" &&
+        (!response.ok || json?.error !== undefined)
+      ) {
+        const failure = createOAuthRefreshResponseError(
+          "ChatGPT token-sharing refresh",
+          response.status,
+          json,
+        );
+        if (json?.error === "invalid_grant") {
+          failure.message =
+            "ChatGPT connection expired or was revoked. Sign in again to reconnect.";
+        }
+        throw failure;
       }
       if (!response.ok) {
         const invalidGrant = json?.error === "invalid_grant";
@@ -137,9 +156,13 @@ async function readCredential(params: {
 }): Promise<{ credential: OAuthCredential & { accountId: string }; subject: string }> {
   const { json, previous, clientId, owner } = params;
   const access = normalizeOptionalString(json.access_token);
-  const refresh = normalizeOptionalString(json.refresh_token) ?? previous?.refresh;
-  const expires = resolveOAuthTokenExpiresAt(json.expires_in);
-  const idToken = normalizeOptionalString(json.id_token) ?? previous?.idToken;
+  const refresh =
+    json.refresh_token === undefined
+      ? previous?.refresh
+      : normalizeOptionalString(json.refresh_token);
+  let expires = resolveOAuthTokenExpiresAt(json.expires_in);
+  const idToken =
+    json.id_token === undefined ? previous?.idToken : normalizeOptionalString(json.id_token);
   if (
     !access ||
     !refresh ||
@@ -150,9 +173,22 @@ async function readCredential(params: {
   ) {
     throw new Error("ChatGPT did not return a complete renewable credential. Start sign-in again.");
   }
+  try {
+    const exp = decodeJwt(access).exp;
+    if (
+      typeof exp === "number" &&
+      Number.isSafeInteger(exp) &&
+      exp > 0 &&
+      Number.isSafeInteger(exp * 1000)
+    ) {
+      expires = Math.min(expires, exp * 1000);
+    }
+  } catch {
+    // Opaque access tokens retain expires_in; JWT claims can only shorten their lifetime.
+  }
   // Initial identity is signature-verified; refresh may omit its unchanged ID token.
   const identity =
-    json.id_token || !previous
+    json.id_token !== undefined || !previous
       ? await verifyIdentity(idToken, clientId, owner, params.nonce)
       : decodeJwt(idToken);
   const subject = identity.sub;
@@ -160,8 +196,13 @@ async function readCredential(params: {
     throw new Error("ChatGPT account changed during refresh. Sign in again to reconnect.");
   }
   // OAuth refresh may omit unchanged scope; never infer a grant from requested permissions.
-  const scope = normalizeOptionalString(json.scope) ?? previous?.grantedScope;
-  if (!previous && scope === undefined) {
+  const scope =
+    json.scope === undefined
+      ? previous?.grantedScope
+      : typeof json.scope === "string"
+        ? json.scope.trim()
+        : undefined;
+  if ((json.scope !== undefined || !previous) && scope === undefined) {
     throw new Error("ChatGPT did not report the granted scopes. Start sign-in again.");
   }
   const grantedScopes = new Set(scope?.split(/\s+/u));
@@ -223,9 +264,18 @@ export async function refreshTokenSharingCredential(
       resource: TOKEN_SHARING_RESOURCE,
     }),
   );
-  return (
-    await readCredential({ json, clientId: credential.clientId, owner: {}, previous: credential })
-  ).credential;
+  try {
+    return (
+      await readCredential({ json, clientId: credential.clientId, owner: {}, previous: credential })
+    ).credential;
+  } catch (cause) {
+    // The token endpoint has already replied; a later JWKS/identity failure cannot replay it.
+    throw createOAuthRefreshError(
+      "ChatGPT refresh identity could not be verified. Sign in again.",
+      { version: 1, phase: "after-token-response", outcome: "unknown" },
+      { cause },
+    );
+  }
 }
 
 /** Local authorization owns the listener, state, verifier, and callback lifetime together. */

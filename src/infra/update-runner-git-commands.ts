@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseDocument } from "yaml";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { isFullGitObjectId } from "./update-dev-target.js";
 import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
@@ -27,6 +27,10 @@ export type StepFactory = (
   cwd: string,
   env?: NodeJS.ProcessEnv,
 ) => RunStepOptions;
+
+export function createGitStepFactory(root: string, step: StepFactory) {
+  return (name: string, ...args: string[]) => step(name, ["git", "-C", root, ...args], root);
+}
 
 export function resolveTagFetchRef(candidate: string): string | null {
   const ref = candidate.endsWith("^{}") ? candidate.slice(0, -"^{}".length) : candidate;
@@ -134,30 +138,6 @@ export function gitCleanCheckArgs(
   ];
 }
 
-async function hasExplicitPnpmPreferOfflineConfig(params: {
-  runCommand: CommandRunner;
-  cwd: string;
-  timeoutMs: number;
-  env: NodeJS.ProcessEnv;
-}): Promise<boolean> {
-  try {
-    const result = await params.runCommand(["pnpm", "config", "get", "prefer-offline"], {
-      cwd: params.cwd,
-      timeoutMs: params.timeoutMs,
-      env: params.env,
-    });
-    if (result.code !== 0) {
-      return true;
-    }
-    // pnpm reports only explicitly configured typed values; these sentinels mean absent.
-    const value = result.stdout.trim();
-    return value !== "" && value !== "undefined" && value !== "null";
-  } catch {
-    // A failed provenance check must not override an operator's possible explicit policy.
-    return true;
-  }
-}
-
 export async function prepareCandidateCommandEnv(
   manager: "pnpm" | "bun" | "npm",
   env: NodeJS.ProcessEnv | undefined,
@@ -177,7 +157,24 @@ export async function prepareCandidateCommandEnv(
   const hasExplicitPreferOffline =
     effectiveEnv.pnpm_config_prefer_offline !== undefined ||
     effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined ||
-    (await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv }));
+    (await (async () => {
+      try {
+        const result = await runCommand(["pnpm", "config", "get", "prefer-offline"], {
+          cwd,
+          timeoutMs,
+          env: effectiveEnv,
+        });
+        if (result.code !== 0) {
+          return true;
+        }
+        // pnpm reports only explicitly configured typed values; these sentinels mean absent.
+        const value = result.stdout.trim();
+        return value !== "" && value !== "undefined" && value !== "null";
+      } catch {
+        // A failed provenance check must not override an operator's possible explicit policy.
+        return true;
+      }
+    })());
   const candidateEnv: NodeJS.ProcessEnv = {
     ...resolvePnpmCandidateEnv(effectiveEnv, "node_modules/.pnpm"),
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
@@ -189,12 +186,7 @@ export async function prepareCandidateCommandEnv(
     candidateEnv.pnpm_config_prefer_offline = "true";
   }
   const workspaceFile = path.join(cwd, "pnpm-workspace.yaml");
-  const original = await fs.readFile(workspaceFile, "utf8").catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const original = await fs.readFile(workspaceFile, "utf8").catch(ignoreMissingPath);
   if (original === undefined) {
     return { env: candidateEnv };
   }
@@ -202,6 +194,7 @@ export async function prepareCandidateCommandEnv(
   // Only the disposable worktree gets this override; retain all operator settings.
   const workspace = parseDocument(original);
   workspace.set("virtualStoreDir", "node_modules/.pnpm");
+  workspace.set("virtualStoreType", "project");
   const isolated = workspace.toString();
   const backupDirectory = await fs.mkdtemp(path.join(path.dirname(cwd), "workspace-original-"));
   const backupFile = path.join(backupDirectory, "pnpm-workspace.yaml");

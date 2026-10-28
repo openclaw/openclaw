@@ -4,15 +4,34 @@ read_when:
   - The Discord bot does not reply in a guild channel or DM
   - Discord gateway timeouts, duplicate replies, or bot-to-bot loops appear
   - Voice speech-to-text drops with a decryption failure
+  - The Discord plugin fails during register with ERR_MODULE_NOT_FOUND
 title: "Discord troubleshooting"
 sidebarTitle: "Troubleshooting"
 ---
 
 Symptom-first checks for a Discord account that is not behaving.
 
+Each account start logs `[account] starting account (reason: ...)` at info level.
+The reason distinguishes startup, manual starts, automatic retries, health recovery,
+config/plugin/secret reloads, and host-thaw recovery. A Discord socket reconnect or
+resume stays inside the existing account lifetime and does not produce this line.
+An event-loop stall label identifies work while its named operation is active; it
+does not by itself establish that an account restarted.
+
 ## Troubleshooting
 
 <AccordionGroup>
+  <Accordion title="Plugin fails during register with ERR_MODULE_NOT_FOUND">
+    On OpenClaw 2026.9.33 and later, the Discord channel can fail to start on every Gateway restart with a log line like:
+
+```text
+plugin failed during register: runtime dependencies are missing for externally distributed plugin discord; reinstall or update the plugin package, then restart the Gateway. (Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'mdast-util-to-string' imported from .../plugin-captures/.../node_modules/@openclaw/discord/node_modules/mdast-util-from-markdown/lib/index.js)
+```
+
+    Reinstalling the plugin does not fix it. This happens when the Gateway's Node process runs with `--preserve-symlinks` or `NODE_PRESERVE_SYMLINKS=1`. Remove the flag from the Gateway service, then restart the Gateway. See [Nested dependency missing under preserve-symlinks](/plugins/dependency-resolution#nested-dependency-missing-under-preserve-symlinks) for how to check the service and apply the workaround.
+
+  </Accordion>
+
   <Accordion title="Used disallowed intents or bot sees no guild messages">
 
     - enable Message Content Intent
@@ -67,6 +86,18 @@ openclaw logs --follow
     - `stuck session: sessionKey=agent:...:discord:... state=processing ...`
 
     Discord does not apply a channel-owned timeout to queued agent turns. Message listeners hand off immediately, and queued Discord runs preserve per-session ordering until the session/tool/runtime lifecycle completes or aborts the work.
+
+    Before a turn is adopted, durable ingress retries attempts that stall for five
+    minutes. A timed-out attempt releases its Discord dispatch slots so the retry
+    can run. After eight failed attempts, OpenClaw dead-letters the message and
+    attempts a short failure reply asking you to try again. The reply requires
+    fresh Discord access checks, current account authority, and automatic source
+    replies enabled by the reply visibility policy. If those checks
+    fail or the notice takes more than 15 seconds, OpenClaw logs the suppressed
+    or failed notice alongside the original failure cause. A process crash
+    between dead-lettering and sending the notice can still prevent the reply.
+    Queued notices recheck access and reply visibility before sending or retrying;
+    a notice already sent to Discord can finish after its deadline.
 
   </Accordion>
 

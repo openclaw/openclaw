@@ -1,5 +1,12 @@
-import type { ChatGoalDraftMode, ChatReplyTarget } from "../../lib/chat/chat-types.ts";
-import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
+import type {
+  ChatGoalDraftMode,
+  ChatReplyTarget,
+  ChatComposerDraftRetry,
+} from "../../lib/chat/chat-types.ts";
+import {
+  type StoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+} from "../../lib/chat/outbox-store-scope.ts";
 import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import {
   resolveUiConversationIdentity,
@@ -7,13 +14,8 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
 import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
-import {
-  loadChatComposerCommittedDraftRevision,
-  loadChatComposerDraftRevision,
-  storedChatOutboxScopeKey,
-  type ChatComposerDraftRetry,
-} from "./composer-persistence.ts";
 
 let lastChatComposerMemoryFallbackSequence = 0;
 
@@ -47,15 +49,10 @@ function resolveChatComposerMemoryFallback(
       fallbackSourceKeys.add(key);
     }
   }
-  const candidates = [...fallbackSourceKeys]
-    .map((candidateScopeKey) => ({
-      fallback: state.chatComposerFallbackByScope[candidateScopeKey],
-      scopeKey: candidateScopeKey,
-    }))
-    .filter(
-      (candidate): candidate is { fallback: ChatComposerMemoryFallback; scopeKey: string } =>
-        candidate.fallback !== undefined,
-    );
+  const candidates = [...fallbackSourceKeys].flatMap((candidateScopeKey) => {
+    const fallback = state.chatComposerFallbackByScope[candidateScopeKey];
+    return fallback === undefined ? [] : [{ fallback, scopeKey: candidateScopeKey }];
+  });
   const newest = candidates.toSorted(
     (left, right) => right.fallback.sequence - left.fallback.sequence,
   )[0];
@@ -72,12 +69,11 @@ function resolveChatComposerMemoryFallback(
   }
   let adoptedFallback = sourceFallback;
   if (sourceKey !== scopeKey && sourceFallback.draftRetry) {
-    const committedRevision = loadChatComposerCommittedDraftRevision(
+    const { committed: committedRevision, latestAttempt: latestRevision } = loadChatComposerState(
       state,
       sessionKey,
       scope.agentId,
-    );
-    const latestRevision = loadChatComposerDraftRevision(state, sessionKey, scope.agentId);
+    ).revisions;
     // Rebase only when this unresolved edit is newer than every resolved
     // attempt. Otherwise its original CAS must keep newer pane input intact.
     if (sourceFallback.draftRetry.draftRevision > latestRevision) {
@@ -159,12 +155,10 @@ export function retainChatComposerMemoryFallback(
   if (existing && fallbackMatches(existing, composer)) {
     return { sequence: existing.sequence };
   }
-  if (
-    existing?.storageFailed &&
-    !existing.message.trim() &&
-    !existing.replyTarget &&
-    existing.attachments.length === 0
-  ) {
+  const hasInput =
+    existing &&
+    Boolean(existing.message.trim() || existing.replyTarget || existing.attachments.length > 0);
+  if (existing?.storageFailed && !hasInput) {
     state.chatComposerFallbackByScope = {
       ...state.chatComposerFallbackByScope,
       [scopeKey]: {
@@ -177,13 +171,7 @@ export function retainChatComposerMemoryFallback(
     };
     return { sequence: existing.sequence };
   }
-  if (
-    existing &&
-    (existing.storageFailed ||
-      existing.message.trim() ||
-      existing.replyTarget ||
-      existing.attachments.length > 0)
-  ) {
+  if (existing && (existing.storageFailed || hasInput)) {
     return undefined;
   }
   return storeChatComposerMemoryFallback(state, scope, composer);

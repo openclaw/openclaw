@@ -9,7 +9,7 @@ import { expect, it } from "vitest";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
-it("uses a configured command owner for the approval fixture's resolver probe", async () => {
+it("accepts an unavailable approval response for the configured command owner's resolver probe", async () => {
   setActivePluginRegistry(
     createTestRegistry([{ pluginId: "qa-channel", plugin: qaChannelPlugin, source: "test" }]),
   );
@@ -20,7 +20,6 @@ it("uses a configured command owner for the approval fixture's resolver probe", 
     workspaceDir: "/qa-workspace",
     transportPluginIds: ["qa-channel"],
   });
-  const captured = new Error("resolver probe captured");
   let senderIsOwner: boolean | undefined;
   try {
     await expect(
@@ -49,10 +48,14 @@ it("uses a configured command owner for the approval fixture's resolver probe", 
             },
             commandAuthorized: true,
           }).senderIsOwner;
-          throw captured;
+          state.addOutboundMessage({
+            accountId: "qa-channel",
+            to: "dm:approve-prototype-dm",
+            text: "That approval is no longer available. Check the request in the Control UI.",
+          });
         },
       }),
-    ).rejects.toBe(captured);
+    ).resolves.toMatchObject({ status: "pass" });
     expect(senderIsOwner).toBe(true);
   } finally {
     resetPluginRuntimeStateForTest();

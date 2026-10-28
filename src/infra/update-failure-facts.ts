@@ -4,15 +4,18 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  parsePublicConfigDiagnosticLines,
+  publicConfigIssueMessage,
   redactPublicSupportDiagnosticLine,
   redactSupportDiagnosticLine,
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
+import { StateLeaseLossSchema, type StateLeaseLoss } from "../shared/state-lease-loss.js";
 import { UPDATE_FOREIGN_DESTINATION_REASON } from "../shared/update-outcome.js";
+import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -22,10 +25,45 @@ import {
 } from "./errors.js";
 import { npmFailurePackageName } from "./npm-error.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { formatUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts-format.js";
 import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
 import { UpdateDestinationFailureSchema, UpdateFailureFactSchema } from "./update-run-schema.js";
 
-export type UpdateFailureFact = z.infer<typeof UpdateFailureFactSchema>;
+export type { UpdateFailureFact } from "./update-failure-facts-format.js";
+
+type UpdatePreflightDiagnostic = {
+  check: string;
+  required: string;
+  detected: string;
+  installRoot?: string;
+  binaryPath?: string;
+  gatewayInstall?: string;
+  remedy: string;
+};
+
+/** The local report keeps paths; persisted/exported facts use the existing redaction bounds. */
+export function createUpdatePreflightDiagnostics(
+  params: UpdatePreflightDiagnostic & { code: string; affectedKey?: string },
+) {
+  const mismatch =
+    params.installRoot && params.gatewayInstall && params.installRoot !== params.gatewayInstall;
+  const facts = [
+    `Required: ${params.required}; detected: ${params.detected}`,
+    `Update install root: ${params.installRoot ?? "unresolved"}`,
+    `Update binary: ${params.binaryPath ?? "unresolved"}`,
+    `Gateway install root: ${params.gatewayInstall ?? "unresolved"}${mismatch ? " (differs from update install)" : ""}`,
+    `${mismatch ? "Different installations: align PATH and use the intended installation's absolute launcher. " : ""}${params.remedy}`,
+  ].map((message) => ({
+    check: params.check,
+    code: params.code,
+    affectedKey: params.affectedKey,
+    message,
+  }));
+  return {
+    message: facts.map(formatUpdateFailureFact).join("\n"),
+    failureFacts: facts.map((fact) => createUpdateFailureFact(fact)),
+  };
+}
 
 function normalizeDestinationFailure(
   fact: NonNullable<UpdateFailureFact["destination"]>,
@@ -76,11 +114,15 @@ export function createUpdateErrorFact(
   error: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): UpdateFailureFact {
+  let leaseLoss: StateLeaseLoss | undefined;
   // The formatter must never reach raw cause identities or stringify private object metadata.
   const errors = collectErrorGraphCandidates(error ?? String(error), (current) => [
     ...(readErrorMetadata(() => readErrorCauses(current)) ?? []),
     readErrorMetadata(() => current.cause),
   ]).map((current) => {
+    if (current instanceof OpenClawStateLeaseError) {
+      leaseLoss ??= current.loss;
+    }
     const rawName = readErrorMetadata(() =>
       current instanceof Error ? current.constructor.name : readErrorName(current),
     );
@@ -140,6 +182,7 @@ export function createUpdateErrorFact(
       errorName: primary?.name ?? "Error",
       location: location ?? null,
       message: formatErrorMessage(new AggregateError(errors, primary?.message)),
+      ...(leaseLoss ? { leaseLoss } : {}),
     },
     env,
   );
@@ -152,18 +195,22 @@ export function createUpdateFailureFact(
 ): UpdateFailureFact {
   const context = { env, stateDir: resolveStateDir(env) };
   const line = (value: string, limit: number) => redactSupportDiagnosticLine(value, context, limit);
+  const configFact = fact.code === "invalid-config" || fact.code === "candidate-config-failed";
+  const configText = (value: string, limit: number) =>
+    redactSupportString(value, context, { maxLength: limit, truncationSuffix: "" });
+  const issueKind = configFact
+    ? publicConfigIssueMessage({ path: fact.affectedKey ?? "", message: fact.message ?? "" })
+    : undefined;
   // Redact credentials and complete email addresses before replacing their host suffixes.
   // Protocol-1 candidate refusals carry field facts in multiline text; retain them before truncation.
   const configDiagnostic =
-    fact.code === "invalid-config" && fact.message
-      ? redactPublicSupportDiagnosticLine(fact.message, context)
+    configFact && fact.message
+      ? parsePublicConfigDiagnosticLines(fact.message)
+          .map((issue) => `${configText(issue.path, 128)}: ${issue.message}`)
+          .join("; ") || (issueKind !== "Invalid configuration field" ? issueKind : undefined)
       : undefined;
   const diagnostic =
-    configDiagnostic && configDiagnostic !== "[redacted-diagnostic]"
-      ? configDiagnostic
-      : fact.message
-        ? line(fact.message, Number.MAX_SAFE_INTEGER)
-        : undefined;
+    configDiagnostic ?? (fact.message ? line(fact.message, Number.MAX_SAFE_INTEGER) : undefined);
   // Closed recovery facts contain generated basenames, not hostnames.
   const recoveryDiagnostic = diagnostic?.startsWith("Package recovery ")
     ? redactPublicSupportDiagnosticLine(diagnostic, context)
@@ -191,15 +238,25 @@ export function createUpdateFailureFact(
     fact.code === UPDATE_FOREIGN_DESTINATION_REASON && fact.destination
       ? normalizeDestinationFailure(fact.destination, context)
       : undefined;
+  const leaseLoss = StateLeaseLossSchema.safeParse(fact.leaseLoss).data;
   return {
     check: line(fact.check, 128),
     code: line(fact.code, 80),
-    ...(message ? { message: line(message, 200) } : {}),
+    // Closed issue kinds have no values to redact; scanning them as secret assignments
+    // would erase schema fields such as apiKey on a second normalization pass.
+    ...(message
+      ? { message: configDiagnostic ? truncateUtf16Safe(message, 200) : line(message, 200) }
+      : {}),
     ...(fact.errorName ? { errorName: line(fact.errorName, 80) } : {}),
     ...(fact.location !== undefined ? { location } : {}),
-    ...(fact.affectedKey ? { affectedKey: line(fact.affectedKey, 128) } : {}),
+    ...(fact.affectedKey
+      ? {
+          affectedKey: configFact ? configText(fact.affectedKey, 128) : line(fact.affectedKey, 128),
+        }
+      : {}),
     ...(fact.pluginId ? { pluginId: line(fact.pluginId, 80) } : {}),
     ...(destination ? { destination } : {}),
+    ...(leaseLoss ? { leaseLoss } : {}),
     ...(fact.npmErrorCode || fact.code === "global-install-failed"
       ? {
           npmErrorCode:
@@ -233,36 +290,28 @@ export function createUpdateCanaryFailureFacts(params: {
 }): UpdateFailureFact[] {
   const { phase, signal, timedOut, exitWarning, failureMessage, diagnostic, findings, env } =
     params;
-  if (signal) {
-    return [
-      createUpdateFailureFact(
-        {
-          check: phase,
-          code: "signal",
-          message: `${phase === "doctor" ? "Checking data migrations" : params.name}: terminated by ${signal}`,
-        },
-        env,
-      ),
-      ...(findings ?? []).slice(0, 4),
-    ];
+  if (!signal && findings?.length) {
+    return findings;
   }
-  return findings?.length
-    ? findings
-    : [
-        createUpdateFailureFact(
-          {
-            check: phase,
-            code:
-              timedOut && !exitWarning
-                ? "candidate-checks-timeout"
-                : phase === "doctor" || phase === "lint"
-                  ? "doctor-failed"
-                  : `candidate-${phase}-failed`,
-            message: timedOut ? failureMessage : (diagnostic ?? failureMessage),
-          },
-          env,
-        ),
-      ];
+  const fact = createUpdateFailureFact(
+    {
+      check: phase,
+      code: signal
+        ? "signal"
+        : timedOut && !exitWarning
+          ? "candidate-checks-timeout"
+          : phase === "doctor" || phase === "lint"
+            ? "doctor-failed"
+            : `candidate-${phase}-failed`,
+      message: signal
+        ? `${phase === "doctor" ? "Checking data migrations" : params.name}: terminated by ${signal}`
+        : timedOut
+          ? failureMessage
+          : (diagnostic ?? failureMessage),
+    },
+    env,
+  );
+  return signal ? [fact, ...(findings ?? []).slice(0, 4)] : [fact];
 }
 
 /** Config validation issues are more specific than the CLI's failure envelope. */

@@ -5,12 +5,17 @@ export const DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME = "openclaw";
 export const DEFAULT_BROWSER_DEFAULT_PROFILE_NAME = "openclaw";
 export const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 60_000;
 export const DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS = 120_000;
-export const DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS = 15_000;
-export const DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS = 8_000;
+export const DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS = 60_000;
+export const DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS = 30_000;
+// Cold starts took 31s on a loaded host. Reserve bootstrap/decoration time beyond readiness.
+export const BROWSER_STARTUP_TIMEOUT_MS =
+  DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS + DEFAULT_BROWSER_LOCAL_CDP_READY_TIMEOUT_MS + 30_000;
 export const DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS = 20_000;
 export const DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS = 20_000;
 export const DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES = 120;
 export const DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION = 8;
+/** Maximum single WebSocket message the browser extension relay accepts. */
+export const EXTENSION_RELAY_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
 export const DEFAULT_BROWSER_TAB_CLEANUP_SWEEP_MINUTES = 5;
 /**
  * Age after which a tracked tab whose browser stays unreachable is retired

@@ -1,14 +1,12 @@
+import type { SqliteCommitReceipt } from "../../infra/sqlite-commit-receipt.js";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import type { SessionActorVersion } from "./session-actor-state.types.js";
+import type { SessionEntryMetadataReceipt } from "./session-entry-metadata-receipt.js";
 import type { SessionActor, SessionOwnerAssignment } from "./session-entry-provenance.js";
+import type { SessionMember, SessionParticipantRecord } from "./session-membership-facts.types.js";
 import type { SessionParticipantIdentity } from "./session-participant-identity.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
 import type { SessionEntry, SessionProfileInvolvement } from "./types.js";
-
-export type SessionCollaborationMutation = Exclude<
-  keyof SessionSharingWorkerOperations,
-  "category.prepare" | "category.apply" | "involvement"
->;
 
 export type SessionSharingExpectedEntry = Pick<
   SessionEntry,
@@ -82,6 +80,8 @@ export type MembershipPublication = { facts?: Extract<SessionRowFacts, { kind: "
 type ParticipantPublication = {
   projectionChanged: boolean;
   participants: Pick<SessionEntry, "participants" | "participantCount">;
+  records?: SessionParticipantRecord[];
+  actorVersion?: SessionActorVersion;
 };
 
 export type SessionInvolvementMutation = {
@@ -145,4 +145,21 @@ export type SessionSharingWorkerOperations = {
     input: { scope: SessionAccessScope; params: SessionParticipantRecordInput };
     output: { value: RecordSessionParticipantResult | null } & ParticipantPublication;
   };
+};
+
+export type SessionCollaborationFact = Extract<
+  SessionRowFacts,
+  { kind: "member" | "owner" | "participants" | "category" | "unchanged" }
+>;
+
+export type SessionSharingCommitReceipt = {
+  kind: "session-collaboration-committed";
+  type: Exclude<keyof SessionSharingWorkerOperations, "category.prepare">;
+  result: SessionSharingWorkerOperations[Exclude<
+    keyof SessionSharingWorkerOperations,
+    "category.prepare"
+  >]["output"];
+  publication: SqliteCommitReceipt<readonly SessionCollaborationFact[]>;
+  /** Private producer postimages; never included in session row notifications. */
+  entryMetadata?: readonly SessionEntryMetadataReceipt[];
 };

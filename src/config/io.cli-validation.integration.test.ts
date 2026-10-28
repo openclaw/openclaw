@@ -3,15 +3,59 @@ import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
 import { registerConfigCli } from "../cli/config-cli.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import * as schemas from "../plugins/schema-validator.js";
 import { defaultRuntime } from "../runtime.js";
+import * as stateDb from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import * as agentDirs from "./agent-dirs.js";
 import * as metadata from "./io.plugin-metadata.js";
+import { REDACTED_SENTINEL } from "./redact-sentinel.js";
 import type { OpenClawConfig } from "./types.js";
-import * as validation from "./validation-core.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+async function runCli(
+  config: OpenClawConfig,
+  args?: string[],
+  before?: (env: NodeJS.ProcessEnv) => Promise<void>,
+) {
+  let output: unknown;
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
+    output = value;
+  });
+  if (!args) {
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  }
+  await withOpenClawTestState({ prefix: "config-cli-validation-" }, async (state) => {
+    await state.writeConfig(config);
+    const raw = fs.readFileSync(state.configPath, "utf8");
+    await before?.(state.env);
+    const program = new Command();
+    program.exitOverride();
+    registerConfigCli(program);
+    try {
+      await program.parseAsync(["config", ...(args ?? ["validate", "--json"])], { from: "user" });
+    } catch (error) {
+      if (args) {
+        throw error;
+      }
+      expect(error).toMatchObject({ name: "ExitError", code: 1 });
+    }
+    expect(fs.readFileSync(state.configPath, "utf8")).toBe(raw);
+  });
+  return output;
+}
+
+it.each(["get", "validate"] as const)("core %s redacts without metadata", async (command) => {
+  vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync").mockRejectedValue(
+    new Error("Plugin metadata is unavailable"),
+  );
+  const output = await runCli(
+    { gateway: { mode: "local", auth: { mode: "token", token: "synthetic-core-token" } } },
+    command === "get" ? ["get", "gateway.auth.token", "--json"] : ["validate", "--json"],
+  );
+  expect(output).toEqual(
+    command === "get" ? REDACTED_SENTINEL : expect.objectContaining({ valid: true, warnings: [] }),
+  );
+});
 
 async function validateThroughCli(
   config: OpenClawConfig,
@@ -21,166 +65,82 @@ async function validateThroughCli(
   const snapshot = createPluginMetadataSnapshotFixture({
     plugins: [
       {
-        id: "validation-fixture",
+        id: "plugin",
         configSchema: schema,
-        ...(channelSchema
-          ? {
-              channels: ["validation-channel"],
-              channelConfigs: { "validation-channel": { schema: channelSchema } },
-            }
-          : {}),
+        ...(channelSchema && {
+          channels: ["channel"],
+          channelConfigs: { channel: { schema: channelSchema } },
+        }),
         configContracts: { secretInputs: { paths: [{ path: "credential", expected: "string" }] } },
       },
     ],
   });
-  const synchronousMetadata = vi
-    .spyOn(metadata, "resolveConfigWidePluginMetadataSnapshot")
-    .mockReturnValue(snapshot);
+  vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshot").mockReturnValue(snapshot);
   vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync").mockResolvedValue(snapshot);
-  const core = vi.spyOn(validation, "validateConfigObjectRaw");
-  const directories = vi.spyOn(agentDirs, "findDuplicateAgentDirs");
-  const schemaValidation = vi.spyOn(schemas, "validatePluginSchemaValue");
-  const output: unknown[] = [];
-  vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
-    output.push(value);
-  });
-  vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-  await withOpenClawTestState({ prefix: "config-validation-work-" }, async (state) => {
-    await state.writeConfig(config);
-    const before = fs.readFileSync(state.configPath, "utf8");
-    const program = new Command();
-    program.exitOverride();
-    registerConfigCli(program);
-    try {
-      await program.parseAsync(["config", "validate", "--json"], { from: "user" });
-    } catch (error) {
-      expect(error).toMatchObject({ name: "ExitError", code: 1 });
-    }
-    expect(fs.readFileSync(state.configPath, "utf8")).toBe(before);
-  });
-  return { output: output.at(-1), core, directories, schemaValidation, synchronousMetadata };
+  return runCli(config);
 }
 
-it("validates one config document for a 480-agent fleet", async () => {
-  const { output, core, directories, schemaValidation, synchronousMetadata } =
-    await validateThroughCli(
-      {
-        agents: {
-          ownership: "explicit",
-          entries: Object.fromEntries(Array.from({ length: 480 }, (_, i) => [`agent-${i}`, {}])),
-        },
-        plugins: {
-          entries: { "validation-fixture": { enabled: true, config: { label: "fixture" } } },
-        },
-      },
-      { type: "object", properties: { label: { type: "string" } }, additionalProperties: false },
-    );
-  expect(output).toMatchObject({ valid: true });
-  expect(core).toHaveBeenCalledTimes(1);
-  expect(directories).toHaveBeenCalledTimes(1);
-  expect(schemaValidation).toHaveBeenCalledTimes(1);
-  expect(synchronousMetadata).not.toHaveBeenCalled();
-});
-
-it.each([
-  { rootPath: "/synthetic", valid: true, calls: 1 },
-  { rootPath: "~/synthetic", valid: false, calls: 2 },
-])("preserves channel schema validation for $rootPath", async ({ rootPath, valid, calls }) => {
-  const { output, schemaValidation } = await validateThroughCli(
-    {
-      channels: { "validation-channel": { rootPath } },
-    },
-    { type: "object" },
-    {
-      type: "object",
-      properties: {
-        rootPath: { type: "string", pattern: "^/" },
-        label: { type: "string", default: "synthetic" },
-      },
+it("validates existing state through a private read-only snapshot", async () => {
+  const output = await runCli(
+    { gateway: { mode: "local" }, plugins: { enabled: false } },
+    undefined,
+    async (env) => {
+      stateDb.openOpenClawStateDatabase({ env });
+      await stateDb.closeOpenClawStateDatabaseAsync();
     },
   );
-  expect(output).toMatchObject({ valid });
-  if (!valid) {
-    expect(output).toMatchObject({
-      issues: [expect.objectContaining({ path: "channels.validation-channel.rootPath" })],
-    });
-  }
-  expect(schemaValidation).toHaveBeenCalledTimes(calls);
+  expect(output).toMatchObject({ valid: true });
+});
+
+const objectSchema = (properties = {}) => ({ type: "object", properties });
+const pluginConfig = (enabled: boolean, config?: Record<string, unknown>) => ({
+  plugins: { entries: { plugin: { enabled, ...(config ? { config } : {}) } } },
+});
+const issue = (path: string, details = {}) => ({
+  valid: false,
+  issues: [expect.objectContaining({ path, ...details })],
 });
 
 it.each([
-  { enabled: true, authored: false, valid: true },
-  { enabled: true, authored: true, valid: false },
-  { enabled: false, authored: true, valid: false },
+  { channel: true, rootPath: "/synthetic", valid: true },
+  { channel: true, rootPath: "~/synthetic", valid: false },
+  { channel: false, rootPath: "~/synthetic", valid: false },
 ])(
-  "preserves strict default ownership for $enabled/$authored",
-  async ({ enabled, authored, valid }) => {
-    const { output } = await validateThroughCli(
-      {
-        plugins: {
-          entries: { "validation-fixture": { enabled, ...(authored ? { config: {} } : {}) } },
-        },
-        secrets: {
-          providers: { shared: { source: "file", path: "/synthetic/secrets.json", mode: "json" } },
-        },
-      },
-      {
-        type: "object",
-        properties: {
-          credential: {
-            type: "object",
-            default: { source: "exec", provider: "shared", id: "synthetic" },
-          },
-        },
-      },
+  "validates raw paths (channel=$channel, path=$rootPath)",
+  async ({ channel, rootPath, valid }) => {
+    const schema = objectSchema({ rootPath: { type: "string", pattern: "^/" } });
+    const output = await validateThroughCli(
+      channel ? { channels: { channel: { rootPath } } } : pluginConfig(true, { rootPath }),
+      channel ? objectSchema() : schema,
+      channel
+        ? objectSchema({ ...schema.properties, label: { type: "string", default: "synthetic" } })
+        : undefined,
     );
-    expect(output).toMatchObject({ valid });
-    if (!valid) {
-      expect(output).toMatchObject({
-        issues: [
-          expect.objectContaining({
-            path: "plugins.entries.validation-fixture.config.credential",
-            message: expect.stringContaining('has source "file" but ref requests "exec"'),
-          }),
-        ],
-      });
-    }
+    const path = channel ? "channels.channel.rootPath" : "plugins.entries.plugin.config.rootPath";
+    expect(output).toMatchObject(valid ? { valid } : issue(path));
   },
 );
 
-it("retains raw schema rejection when runtime path normalization changes the input", async () => {
-  const { output, schemaValidation } = await validateThroughCli(
+it.each([true, false])("preserves strict default ownership (enabled=%s)", async (enabled) => {
+  const output = await validateThroughCli(
     {
-      plugins: {
-        entries: { "validation-fixture": { enabled: true, config: { rootPath: "~/synthetic" } } },
+      ...pluginConfig(enabled, enabled ? undefined : {}),
+      secrets: {
+        providers: { shared: { source: "file", path: "/synthetic/secrets.json", mode: "json" } },
       },
     },
-    { type: "object", properties: { rootPath: { type: "string", pattern: "^/" } } },
+    objectSchema({
+      credential: {
+        type: "object",
+        default: { source: "exec", provider: "shared", id: "synthetic" },
+      },
+    }),
   );
-  expect(output).toMatchObject({
-    valid: false,
-    issues: [
-      expect.objectContaining({ path: "plugins.entries.validation-fixture.config.rootPath" }),
-    ],
-  });
-  expect(schemaValidation).toHaveBeenCalledTimes(2);
-});
-
-it("retains runtime warnings while reusing an inactive authored schema result", async () => {
-  const { output, schemaValidation } = await validateThroughCli(
-    {
-      plugins: { entries: { "validation-fixture": { enabled: false, config: {} } } },
-    },
-    { type: "object", properties: { label: { type: "string", default: "synthetic" } } },
+  expect(output).toMatchObject(
+    enabled
+      ? { valid: true }
+      : issue("plugins.entries.plugin.config.credential", {
+          message: expect.stringContaining('has source "file" but ref requests "exec"'),
+        }),
   );
-  expect(output).toMatchObject({
-    valid: true,
-    warnings: [
-      expect.objectContaining({
-        path: "plugins.entries.validation-fixture",
-        message: expect.stringContaining("plugin disabled"),
-      }),
-    ],
-  });
-  expect(schemaValidation).toHaveBeenCalledTimes(1);
 });

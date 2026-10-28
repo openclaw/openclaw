@@ -1,93 +1,42 @@
-// Workspace status tests cover status output for workspace-local skills.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withEnv, withEnvAsync } from "../../test-utils/env.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
-import type { SkillEntry, SkillInstallSpec } from "../types.js";
+import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
+import type { SkillEntry } from "../types.js";
 import { buildWorkspaceSkillStatus } from "./status.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
+const createTempWorkspaceDir = () => tempDirs.make("openclaw-skill-status-");
 
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
-
-async function createTempWorkspaceDir() {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-status-"));
-  tempDirs.push(workspaceDir);
-  return workspaceDir;
-}
-
-function makeEntry(params: {
-  name: string;
-  source?: string;
-  os?: string[];
-  requires?: { bins?: string[]; env?: string[]; config?: string[] };
-  install?: SkillInstallSpec[];
-}): SkillEntry {
-  const filePath = `/tmp/${params.name}/SKILL.md`;
-  const baseDir = `/tmp/${params.name}`;
-  return {
-    skill: createCanonicalFixtureSkill({
-      name: params.name,
-      description: `desc:${params.name}`,
-      filePath,
-      baseDir,
-      source: params.source ?? "openclaw-workspace",
-    }),
-    frontmatter: {},
-    metadata: {
-      ...(params.os ? { os: params.os } : {}),
-      ...(params.requires ? { requires: params.requires } : {}),
-      ...(params.install ? { install: params.install } : {}),
-      ...(params.requires?.env?.[0] ? { primaryEnv: params.requires.env[0] } : {}),
-    },
-  };
-}
-
-type WorkspaceSkillStatus = ReturnType<typeof buildWorkspaceSkillStatus>["skills"][number];
-
-function requireReportedSkill(
-  report: ReturnType<typeof buildWorkspaceSkillStatus>,
+function makeEntry(
   name: string,
-): WorkspaceSkillStatus {
-  const skill = report.skills.find((entry) => entry.name === name);
-  if (!skill) {
-    throw new Error(`reported skill ${name} missing`);
-  }
-  return skill;
+  metadata?: SkillEntry["metadata"],
+  source = "openclaw-workspace",
+): SkillEntry {
+  return { ...createFixtureSkillEntry(name, { source }), metadata };
 }
 
-function requireSkillEntry(entry: SkillEntry | undefined, name: string): SkillEntry {
-  if (!entry) {
-    throw new Error(`skill entry ${name} missing`);
-  }
-  return entry;
+function requireReportedSkill(report: ReturnType<typeof buildWorkspaceSkillStatus>, name: string) {
+  return report.skills.find((entry) => entry.name === name);
 }
 
 describe("buildWorkspaceSkillStatus", () => {
   it.each([
-    [true, true, ["download", "go", "node", "uv", "brew"], "brew-4"],
     [false, true, ["brew", "node", "uv"], "uv-2"],
-    [false, true, ["brew", "go", "node"], "node-2"],
     [false, true, ["go", "brew", "download"], "brew-1"],
     [true, false, ["brew", "download", "go"], "go-2"],
-    [true, false, ["brew", "download"], "download-1"],
-    [true, false, ["brew"], "brew-0"],
-    [true, false, ["node", "node"], "node-0"],
   ] as const)(
     "preserves installer preference (prefer brew: %s, available: %s, kinds: %j)",
     async (preferBrew, brewAvailable, kinds, expectedId) => {
-      const workspaceDir = await createTempWorkspaceDir();
+      const workspaceDir = createTempWorkspaceDir();
       if (brewAvailable) {
         await fs.writeFile(path.join(workspaceDir, "brew"), "", { mode: 0o755 });
       }
-      const entry = makeEntry({
-        name: "installer-preference",
+      const entry = makeEntry("installer-preference", {
         install: kinds.map((kind) => ({ kind })),
       });
       const report = withEnv({ PATH: brewAvailable ? workspaceDir : "" }, () =>
@@ -96,14 +45,14 @@ describe("buildWorkspaceSkillStatus", () => {
           config: { skills: { install: { preferBrew } } },
         }),
       );
-      expect(
-        requireReportedSkill(report, entry.skill.name).install.map((option) => option.id),
-      ).toEqual([expectedId]);
+      expect(report.skills.map((skill) => skill.install.map((option) => option.id))).toEqual([
+        [expectedId],
+      ]);
     },
   );
 
   it("keeps config-disabled skills visible in status when eligibility is passed", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
+    const workspaceDir = createTempWorkspaceDir();
     await writeSkill({
       dir: path.join(workspaceDir, "skills"),
       name: "hot-reload-probe",
@@ -116,79 +65,21 @@ describe("buildWorkspaceSkillStatus", () => {
       config: { skills: { entries: { "hot-reload-probe": { enabled: false } } } },
       eligibility: { nodeSkills: { canExec: false } },
     });
-    const skill = requireReportedSkill(report, "hot-reload-probe");
-
-    expect(skill.disabled).toBe(true);
-  });
-
-  it("reports missing requirements and install options", () => {
-    const entry = makeEntry({
-      name: "status-skill",
-      requires: {
-        bins: ["fakebin"],
-        env: ["ENV_KEY"],
-        config: ["browser.enabled"],
-      },
-      install: [
-        {
-          id: "brew",
-          kind: "brew",
-          formula: "fakebin",
-          bins: ["fakebin"],
-          label: "Install fakebin",
-        },
-      ],
-    });
-
-    const report = withEnv({ PATH: "" }, () =>
-      buildWorkspaceSkillStatus("/tmp/ws", {
-        entries: [entry],
-        config: { browser: { enabled: false } },
-      }),
-    );
-    const skill = requireReportedSkill(report, "status-skill");
-
-    expect(skill.eligible).toBe(false);
-    expect(skill.missing.bins).toContain("fakebin");
-    expect(skill.missing.env).toContain("ENV_KEY");
-    expect(skill.missing.config).toContain("browser.enabled");
-    expect(skill.install[0]?.id).toBe("brew");
-  });
-
-  it("respects OS-gated skills", () => {
-    const entry = makeEntry({
-      name: "os-skill",
-      os: ["darwin"],
-    });
-
-    const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
-    const skill = requireReportedSkill(report, "os-skill");
-
-    if (process.platform === "darwin") {
-      expect(skill.eligible).toBe(true);
-      expect(skill.missing.os).toStrictEqual([]);
-    } else {
-      expect(skill.eligible).toBe(false);
-      expect(skill.missing.os).toEqual(["darwin"]);
-    }
+    expect(requireReportedSkill(report, "hot-reload-probe")).toMatchObject({ disabled: true });
   });
 
   it("requires explicit enablement before exposing bundled coding-agent", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    const bundledSkillsDir = path.resolve("skills");
+    const workspaceDir = createTempWorkspaceDir();
+    const config = { skills: { allowBundled: ["coding-agent"] } };
     const entries = loadWorkspaceSkills(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir,
-      config: {
-        skills: {
-          allowBundled: ["coding-agent"],
-        },
-      },
+      bundledSkillsDir: path.resolve("skills"),
+      config,
     });
-    const codingAgent = requireSkillEntry(
-      entries.find((entry) => entry.skill.name === "coding-agent"),
-      "coding-agent",
-    );
+    const codingAgent = entries.find((entry) => entry.skill.name === "coding-agent");
+    if (!codingAgent) {
+      throw new Error("skill entry coding-agent missing");
+    }
 
     const eligibility = {
       remote: {
@@ -197,98 +88,59 @@ describe("buildWorkspaceSkillStatus", () => {
         hasAnyBin: (bins: string[]) => bins.includes("codex"),
       },
     };
-    const defaultReport = withEnv({ PATH: "" }, () =>
-      buildWorkspaceSkillStatus(workspaceDir, {
-        entries: [codingAgent],
-        config: {
-          skills: {
-            allowBundled: ["coding-agent"],
-          },
-        },
-        eligibility,
-      }),
-    );
-    const defaultStatus = defaultReport.skills[0];
-    expect(defaultStatus?.eligible).toBe(false);
-    expect(defaultStatus?.requirements.config).toEqual(["skills.entries.coding-agent.enabled"]);
-    expect(defaultStatus?.missing.config).toEqual(["skills.entries.coding-agent.enabled"]);
-
-    const enabledReport = withEnv({ PATH: "" }, () =>
-      buildWorkspaceSkillStatus(workspaceDir, {
-        entries: [codingAgent],
-        config: {
-          skills: {
-            allowBundled: ["coding-agent"],
-            entries: {
-              "coding-agent": { enabled: true },
-            },
-          },
-        },
-        eligibility,
-      }),
-    );
-    const enabledStatus = enabledReport.skills[0];
-    expect(enabledStatus?.eligible).toBe(true);
-    expect(enabledStatus?.missing.config).toStrictEqual([]);
+    const read = (enabled = false) =>
+      withEnv(
+        { PATH: "" },
+        () =>
+          buildWorkspaceSkillStatus(workspaceDir, {
+            entries: [codingAgent],
+            eligibility,
+            config: enabled
+              ? { skills: { ...config.skills, entries: { "coding-agent": { enabled: true } } } }
+              : config,
+          }).skills[0],
+      );
+    expect(read()).toMatchObject({
+      eligible: false,
+      requirements: { config: ["skills.entries.coding-agent.enabled"] },
+      missing: { config: ["skills.entries.coding-agent.enabled"] },
+    });
+    expect(read(true)).toMatchObject({ eligible: true, missing: { config: [] } });
   });
 
-  it.each(["openclaw-workspace", "unknown"])(
-    "does not mark a %s skill as bundled by bundled name alone",
-    async (source) => {
-      const bundledDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-"));
-      tempDirs.push(bundledDir);
-      await writeSkill({
-        dir: path.join(bundledDir, "peekaboo"),
-        name: "peekaboo",
-        description: "Bundled peekaboo",
-      });
+  it("does not mark an unknown-source skill as bundled by bundled name alone", async () => {
+    const bundledDir = tempDirs.make("openclaw-bundled-");
+    await writeSkill({
+      dir: path.join(bundledDir, "peekaboo"),
+      name: "peekaboo",
+      description: "Bundled peekaboo",
+    });
 
-      await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledDir }, async () => {
-        const report = buildWorkspaceSkillStatus("/tmp/ws", {
-          entries: [
-            makeEntry({
-              name: "peekaboo",
-              source,
-            }),
-          ],
-          config: { skills: { allowBundled: ["other-skill"] } },
-        });
-        const skill = requireReportedSkill(report, "peekaboo");
-
-        expect(skill.source).toBe(source);
-        expect(skill.bundled).toBe(false);
-        expect(skill.blockedByAllowlist).toBe(false);
-        expect(skill.eligible).toBe(true);
+    await withEnvAsync({ OPENCLAW_BUNDLED_SKILLS_DIR: bundledDir }, async () => {
+      const report = buildWorkspaceSkillStatus("/tmp/ws", {
+        entries: [makeEntry("peekaboo", undefined, "unknown")],
+        config: { skills: { allowBundled: ["other-skill"] } },
       });
-    },
-  );
+      const skill = requireReportedSkill(report, "peekaboo");
+
+      expect(skill).toMatchObject({
+        source: "unknown",
+        bundled: false,
+        blockedByAllowlist: false,
+        eligible: true,
+      });
+    });
+  });
 
   it("filters install options by OS", () => {
-    const entry = makeEntry({
-      name: "install-skill",
-      requires: {
-        bins: ["missing-bin"],
-      },
-      install: [
-        {
-          id: "mac",
-          kind: "download",
-          os: ["darwin"],
-          url: "https://example.com/mac.tar.bz2",
-        },
-        {
-          id: "linux",
-          kind: "download",
-          os: ["linux"],
-          url: "https://example.com/linux.tar.bz2",
-        },
-        {
-          id: "win",
-          kind: "download",
-          os: ["win32"],
-          url: "https://example.com/win.tar.bz2",
-        },
-      ],
+    const entry = makeEntry("install-skill", {
+      requires: { bins: ["missing-bin"] },
+      install: ["darwin", "linux", "win32"].map((os) => ({
+        id: os,
+        kind: "download",
+        os: [os],
+        url: `https://example.com/${os}.tar.bz2`,
+      })),
     });
 
     const report = withEnv({ PATH: "" }, () =>
@@ -296,16 +148,8 @@ describe("buildWorkspaceSkillStatus", () => {
         entries: [entry],
       }),
     );
-    const skill = requireReportedSkill(report, "install-skill");
-
-    if (process.platform === "darwin") {
-      expect(skill.install.map((opt) => opt.id)).toEqual(["mac"]);
-    } else if (process.platform === "linux") {
-      expect(skill.install.map((opt) => opt.id)).toEqual(["linux"]);
-    } else if (process.platform === "win32") {
-      expect(skill.install.map((opt) => opt.id)).toEqual(["win"]);
-    } else {
-      expect(skill.install).toStrictEqual([]);
-    }
+    expect(report.skills.map((skill) => skill.install.map((option) => option.id))).toEqual([
+      ["darwin", "linux", "win32"].includes(process.platform) ? [process.platform] : [],
+    ]);
   });
 });

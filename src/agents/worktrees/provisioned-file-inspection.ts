@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { lstatIfExists } from "./git.js";
+import { lstatIfExists } from "../../infra/path-existence.js";
 
 type DirectoryIdentity = { path: string; dev: number; ino: number };
 
@@ -62,7 +62,7 @@ export async function hasSafeParentDirectories(
   let current = root;
   for (const segment of segments.slice(0, -1)) {
     current = path.join(current, segment);
-    const stat = await lstatIfExists(current);
+    const stat = await lstatIfExists(current, "ENOENT");
     if (stat && (stat.isSymbolicLink() || !stat.isDirectory())) {
       return false;
     }
@@ -90,7 +90,7 @@ export async function inspectProvisionedFiles(
       throw new Error(`unsafe provisioned path: ${relativePath}`);
     }
     const target = resolveGitPath(worktreePath, normalized);
-    const stat = await lstatIfExists(target);
+    const stat = await lstatIfExists(target, "ENOENT");
     if (!stat) {
       files.push({ path: normalized, target, mode: null });
       continue;

@@ -137,7 +137,10 @@ private func makeTestGatewayConnection() -> (GatewayConnection, GatewayTestWebSo
 
 private func makeRecordingGatewayConnection(
     capabilities: [String] = [],
-    responseData: @escaping @Sendable (String) -> Data) -> (GatewayConnection, WebSocketMessageRecorder)
+    clientShutdown: @escaping @Sendable (GatewayChannelActor) async -> Void = { client in
+        await client.shutdown()
+    },
+    responseData: @escaping @Sendable (String) -> Data?) -> (GatewayConnection, WebSocketMessageRecorder)
 {
     let recorder = WebSocketMessageRecorder()
     let session = GatewayTestWebSocketSession(taskFactory: {
@@ -146,7 +149,9 @@ private func makeRecordingGatewayConnection(
             guard sendIndex > 0,
                   let id = GatewayWebSocketTestSupport.requestID(from: message)
             else { return }
-            task.emitReceiveSuccess(.data(responseData(id)))
+            if let response = responseData(id) {
+                task.emitReceiveSuccess(.data(response))
+            }
         }, receiveHook: { task, receiveIndex in
             if receiveIndex == 0 {
                 return .data(GatewayWebSocketTestSupport.connectChallengeData())
@@ -161,7 +166,8 @@ private func makeRecordingGatewayConnection(
         configProvider: {
             (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil)
         },
-        sessionBox: WebSocketSessionBox(session: session))
+        sessionBox: WebSocketSessionBox(session: session),
+        clientShutdown: clientShutdown)
     return (connection, recorder)
 }
 
@@ -649,7 +655,7 @@ private func assertConfigLookupCannotRecreateRoute(
         let params = try #require(talkRequestFrame["params"] as? [String: Any])
         #expect(params["sessionId"] as? String == "talk-session-1")
 
-        let socketGeneration = try #require(await connection._test_activeSocketGeneration())
+        let socketGeneration = try #require(await connection.socketGenerationState.activeGeneration)
         await connection._test_handleDisconnect(socketGeneration: socketGeneration)
         let eventAfterDisconnect = try await TestWait.value(of: nextEvent, "realtime disconnect")
         #expect(eventAfterDisconnect == nil)
@@ -799,7 +805,7 @@ private func assertConfigLookupCannotRecreateRoute(
         do {
             try await connection.refresh()
             let transport = try await connection.acquireRealtimeTalkTransport()
-            let socketGeneration = try #require(await connection._test_activeSocketGeneration())
+            let socketGeneration = try #require(await connection.socketGenerationState.activeGeneration)
             try await operation(connection, transport, socketGeneration)
         } catch {
             await connection.shutdown()
@@ -1353,6 +1359,69 @@ extension GatewayConnectionControlTests {
             GatewayWebSocketTestSupport.requestMethod(from: $0) == "chat.send"
         }
         #expect(chatRequests.count == 2)
+    }
+
+    @Test(arguments: [false, true], [
+        (audio: true, requestTimeoutMs: nil, expectsDeadline: false),
+        (audio: true, requestTimeoutMs: 60000, expectsDeadline: true),
+        (audio: false, requestTimeoutMs: nil, expectsDeadline: true),
+    ] as [(audio: Bool, requestTimeoutMs: Int?, expectsDeadline: Bool)])
+    func `native chat admission inherits deadlines and settles on connection shutdown`(
+        routeBound: Bool,
+        scenario: (audio: Bool, requestTimeoutMs: Int?, expectsDeadline: Bool)) async throws
+    {
+        let dispatched = AsyncTestGate()
+        let (connection, recorder) = makeRecordingGatewayConnection(
+            clientShutdown: { client in
+                // Observe the real pending admission before closing its owner; no clock advance or ACK is needed.
+                let deadlines = await client.pending.values.map { $0.timeoutTask != nil }
+                #expect(deadlines == [scenario.expectsDeadline])
+                await client.shutdown()
+                #expect(await client._test_pendingRequestCount() == 0)
+            },
+            responseData: { _ in
+                dispatched.open()
+                return nil
+            })
+        let route: GatewayConnection.Route? = routeBound ? try await connection.captureRequiredRoute() : nil
+        let attachments: [OpenClawChatAttachmentPayload] = scenario.audio
+            ? [.init(type: "file", mimeType: "audio/wav", fileName: "voice.wav", content: "abc")]
+            : []
+        let sending = Task {
+            if let requestTimeoutMs = scenario.requestTimeoutMs {
+                return try await connection.chatSend(
+                    sessionKey: "main",
+                    message: "caption",
+                    thinking: nil,
+                    idempotencyKey: "deadline-send",
+                    attachments: attachments,
+                    requestTimeoutMs: requestTimeoutMs,
+                    ifCurrentRoute: route)
+            }
+            return try await connection.chatSend(
+                sessionKey: "main",
+                message: "caption",
+                thinking: nil,
+                idempotencyKey: "deadline-send",
+                attachments: attachments,
+                ifCurrentRoute: route)
+        }
+        do {
+            try await dispatched.wait("native chat.send dispatch")
+            await connection.shutdown()
+            do {
+                _ = try await TestWait.value(of: sending, "pending chat.send shutdown")
+                Issue.record("expected shutdown to reject pending chat.send")
+            } catch is CancellationError {}
+        } catch {
+            sending.cancel()
+            await connection.shutdown()
+            _ = await sending.result
+            throw error
+        }
+        #expect(recorder.snapshot().filter {
+            GatewayWebSocketTestSupport.requestMethod(from: $0) == "chat.send"
+        }.count == 1)
     }
 
     @Test func `chat send carries route bound routing and settings preconditions`() async throws {

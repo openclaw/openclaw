@@ -1,22 +1,27 @@
 ---
-summary: "Windows support: Windows Hub, native CLI and Gateway, WSL2 gateway setup, node mode, and troubleshooting"
+summary: "Windows Hub (recommended), Tauri desktop backup, native CLI and Gateway, WSL2, and troubleshooting"
 read_when:
   - Installing OpenClaw on Windows
-  - Choosing between Windows Hub, native Windows, and WSL2
+  - Choosing between Windows Hub, the Tauri desktop app, native Windows, and WSL2
   - Setting up the Windows companion app or Windows node mode
 title: "Windows"
 ---
 
-OpenClaw ships a native **Windows Hub** companion app plus Windows CLI support.
-Use Windows Hub for a desktop app with setup, tray status, chat, Command
-Center diagnostics, and Windows node capabilities. Use the PowerShell
-installer for the CLI/Gateway directly. Use WSL2 for the most
-Linux-compatible Gateway runtime.
+The native **Windows Hub** is the recommended Windows desktop app. It includes
+setup, tray status, chat, Command Center diagnostics, and Windows node
+capabilities, with an app-owned WSL Gateway for local setup. The cross-platform
+**Tauri desktop app** is the backup option, with local Gateways on Windows through
+bundled Bun or connections to remote Gateways. Terminal users can use the
+PowerShell installer or WSL2.
+
+<a id="alternative-windows-hub" />
 
 ## Recommended: Windows Hub
 
 Windows Hub is the native WinUI companion app for Windows 10 20H2+ and
-Windows 11. It installs without administrator privileges and ships signed x64
+Windows 11, maintained in
+[openclaw/openclaw-windows-node](https://github.com/openclaw/openclaw-windows-node).
+It installs without administrator privileges and ships signed x64
 and ARM64 installers from its own release page.
 
 Windows Hub publishes independently from the OpenClaw CLI and Gateway. Download
@@ -132,6 +137,53 @@ Mode matrix:
 | off       | on         | Local MCP server only              |
 | on        | on         | Gateway node plus local MCP server |
 
+<a id="recommended-desktop-app-openclaw" />
+
+## Backup: Tauri desktop app
+
+The Tauri app supports **Windows and Linux** and hosts the Gateway's Control UI.
+It ships as a regular OpenClaw release asset. Download the **Windows x64 NSIS installer** named
+`OpenClaw-<version>-windows-x86_64.exe` from the
+[OpenClaw releases page](https://github.com/openclaw/openclaw/releases).
+Run it, then launch **OpenClaw** from the Start menu. Windows uses WebView2 to
+show the Control UI; the installer provisions WebView2 when necessary.
+
+### First launch and local Gateway
+
+Choose local setup to install the matching OpenClaw CLI and start its Gateway.
+The app uses its private Bun runtime and package manager; system Node.js and npm
+are not required. Gateway installation, startup, status, and recovery remain
+owned by `openclaw gateway`, including Scheduled Task and Startup-folder support.
+Closing the window keeps the app in the tray; the local Gateway has its own
+service lifecycle.
+
+**Local setup requires a signed Windows Bun runtime in the app's pinned release.**
+If an older app reports “This app does not include a signed Windows Gateway
+runtime,” update to an app release with the signed Windows runtime or connect
+to a remote Gateway. Installing system Node.js does not change the
+bundled runtime's admission policy. Remote connections continue to work.
+
+Use connection settings when you already have a Gateway. Enter its URL and token
+or password, or choose an SSH connection. The app opens that Gateway's Control UI.
+The desktop updater verifies Tauri signatures independently of Windows
+Authenticode. Installer Authenticode signing is separately enabled by the
+release owner; Windows may show an unknown-publisher warning for an unsigned
+installer.
+
+### Desktop app troubleshooting
+
+- **Signed runtime unavailable:** update the desktop app after a Windows-enabled
+  runtime release, or use a remote Gateway. Linux, macOS, and unsigned test
+  binaries are never substituted for a Windows release runtime.
+- **Download or installation failed:** check your internet connection and proxy,
+  then retry local setup. The error panel retains the installer diagnostics.
+- **Gateway will not start:** use the tray's Gateway controls and inspect
+  `openclaw gateway status --json`. The app-managed CLI launcher is
+  `%USERPROFILE%\.openclaw\bin\openclaw.cmd`; invoke it by its full path
+  if that directory is not on your terminal's `PATH`.
+- **Startup task denied:** see the native Windows service notes below. The
+  service owner reports whether it registered a task or a logon fallback.
+
 ## Native Windows CLI and Gateway
 
 For terminal-first use, install OpenClaw from PowerShell:
@@ -147,6 +199,12 @@ openclaw --version
 openclaw doctor
 openclaw gateway status --json
 ```
+
+If PowerShell reports that running scripts is disabled, use [npm's `openclaw.cmd`](/platforms/windows#powershell-execution-policy) and leave the execution policy unchanged.
+
+Local `read`, `write`, and `edit` tools accept Git Bash (`/f/...`), Cygwin
+(`/cygdrive/f/...`), and WSL-style (`/mnt/f/...`) drive paths when the Gateway runs
+natively on Windows. These paths resolve to the corresponding Windows drive.
 
 **New workspace** also works with a native Windows Gateway. Install Git for
 Windows and make it available on `PATH`. Each empty workspace starts from a
@@ -165,6 +223,12 @@ S4U does not provide Windows network credentials or access to encrypted files;
 installations that need those capabilities can retain an operator-configured
 Password task. Reinstall refreshes its launcher files without replacing its
 account, credentials, action, or triggers.
+
+Agent exec prefers a native PowerShell 7 executable and falls back to Windows
+PowerShell 5.1. Inaccessible Microsoft Store app-execution aliases are skipped:
+they can fail with `spawn EPERM` under S4U while PowerShell is running in another
+logon session. Install PowerShell 7 with the MSI or ZIP distribution if you need
+PowerShell 7 syntax, such as `&&`, in unattended exec commands.
 
 The installer reports the selected startup mode. Node hosts retain per-user
 interactive tasks for desktop access. If the account cannot be identified or
@@ -188,6 +252,12 @@ Scheduler's **End** action terminates the Gateway and its descendants. After
 updating an older installation, run `openclaw gateway install --force` to
 regenerate the launcher if the update did not refresh it.
 
+For pnpm global installs, new launchers use the verified stable
+`node_modules/openclaw` link so package replacement does not invalidate them.
+If an older launcher already points at a deleted package generation, run
+`openclaw gateway install --force` from the current installation to rewrite
+`gateway.cmd`. Without `--force`, a registered task can be left unchanged.
+
 Reinstalling a managed Scheduled Task stops and settles its previous process
 before publishing and starting the replacement. This also applies when both
 installations use Node or only the service arguments change. Status verifies
@@ -201,6 +271,13 @@ running policy when ownership can still be verified. During an update, the
 updater retains recovery ownership. If recovery cannot be confirmed, inspect the
 reported Task Scheduler state before retrying.
 
+Scheduler takeover evidence and Startup login-item reprobes use elapsed-time budgets,
+so wall-clock corrections do not extend or prematurely expire those waits.
+
+Publication accepts filesystem timestamp changes when the launcher's identity,
+permissions, and contents still match. Reinstallation reports the retained
+`.task.xml.bak` and launcher `.bak` recovery files beside the task script.
+
 Status reports the effective task working directory while checking runtime intent
 against the generated launcher. The standard unattended task directory does not
 invalidate an unchanged runtime pin. Inspection does not reinstall the service
@@ -208,7 +285,19 @@ or rewrite its pin; custom task directories remain operator-owned overrides.
 
 Gateway status and Doctor read the Scheduled Task's numeric current state, independently of the Windows display language or console code page. A previous task exit result does not prove whether it is running now. Queued or unknown tasks do not count as safely stopped for Doctor maintenance. Stop a queued task through its service owner; if inspection is inaccessible, restore Task Scheduler inspection permissions before retrying.
 
-Strict maintenance inspection follows the task's registered CMD or VBS launcher, or a directly registered executable with literal arguments, and rechecks its captured definition before using the result. Runtime inspection uses that registered command rather than a default launcher. Direct executable inspection does not grant ownership to rewrite the executable or its task definition. Automatic update service management still reports these custom actions as unavailable and leaves them untouched because it cannot restore a managed launcher; environment expansion and ambiguous argument quoting remain uninspectable. Deep discovery identifies OpenClaw and legacy helpers from executable or launcher evidence; an unrelated task's display name alone does not identify a service. Canonical and selected task names suppress extra-service findings only when the registered action is a modern Gateway; legacy and Node actions remain visible. Doctor reports incomplete inspection separately from services eligible for existing cleanup.
+Updates and service recovery change the task's enabled state through Task Scheduler's
+native API. Access-denied guidance uses its numeric HRESULT, not translated Windows
+error text. An uncertain disable still attempts to restore the previous enabled state;
+a confirmed permission denial leaves the task unchanged and requests elevation.
+Enabled-state changes allow up to 60 seconds for Windows PowerShell's cold startup.
+
+Strict maintenance inspection follows the task's registered CMD or VBS launcher, or a directly registered executable with literal arguments, and rechecks its captured definition before using the result. Runtime inspection uses that registered command rather than a default launcher. Direct executable inspection does not grant ownership to rewrite the executable or its task definition. Automatic update service management still reports these custom actions as unavailable and leaves them untouched because it cannot restore a managed launcher; environment expansion and ambiguous argument quoting remain uninspectable. Deep discovery identifies OpenClaw and legacy helpers from executable or launcher evidence; an unrelated task's display name alone does not identify a service. Standard and selected task names suppress extra-service findings only when the registered action is a modern Gateway; legacy and Node actions remain visible. Doctor reports incomplete inspection separately from services eligible for existing cleanup.
+
+For a rejected CMD launcher line, status and update warnings report the rejected
+rule and its physical line number, counting blank lines and comments.
+Diagnostics omit launcher text and environment values. Review that line and use
+literal values with a single Gateway command before retrying. Inspection leaves
+the launcher unchanged and does not grant permission to rewrite custom behavior.
 
 `openclaw gateway status --deep` and `openclaw doctor --deep` report sibling
 profiles from the current account's Startup folder. If its Scheduled Task is
@@ -238,7 +327,7 @@ Invoking it from an app without a console can briefly display a console window.
 Without an explicit caller deadline, each check allows up to 60 seconds for
 PowerShell's cold startup. Registration inspection uses the same native check
 and shares its budget with any Startup-folder checks. Explicit inspection
-budgets replace the default allowance. Direct lifecycle commands retain their
+budgets replace the default allowance. Other direct lifecycle commands retain their
 existing limits. Access-denied and timeout results remain inspection failures,
 not proof that a task is absent.
 If inspection fails, Doctor and update refusals include the underlying check
@@ -404,6 +493,35 @@ Notes:
 - Use `listenaddress=0.0.0.0` for LAN access, `127.0.0.1` for local-only access.
 
 ## Troubleshooting
+
+<a id="powershell-execution-policy" />
+
+### PowerShell refuses to run `openclaw.ps1`
+
+Windows PowerShell with an effective execution policy of Restricted resolves a
+bare `openclaw` command to npm's `openclaw.ps1` shim and stops before OpenClaw
+starts. Leave the execution policy unchanged. The install also includes
+`openclaw.cmd` in that same directory. This is npm's global shim, not the
+desktop app launcher at `%USERPROFILE%\.openclaw\bin\openclaw.cmd`. For the
+default npm prefix:
+
+```powershell
+& "$env:APPDATA\npm\openclaw.cmd" --version
+& "$env:APPDATA\npm\openclaw.cmd" doctor --generate-gateway-token
+```
+
+If the error names a different `openclaw.ps1` path, that directory is the npm
+prefix. Run the `openclaw.cmd` beside it:
+
+```powershell
+$shim = (Get-Command openclaw.ps1).Source
+& (Join-Path (Split-Path $shim) "openclaw.cmd") doctor --generate-gateway-token
+```
+
+Doctor can ask to pause the managed Gateway while you review repairs. If you
+accept, Doctor restores the previous service state when it finishes. A new
+token, and the Gateway restart after it, disconnects clients that still use
+the previous secret.
 
 ### The Gateway Scheduled Task is disabled
 

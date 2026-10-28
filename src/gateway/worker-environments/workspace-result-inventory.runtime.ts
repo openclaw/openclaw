@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { runGitBuffered } from "../../agents/worktrees/git.js";
+import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
+import { isStagedInputPath, stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
 import {
@@ -7,6 +9,7 @@ import {
   parseWorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
 import { reconciliationEntries } from "./workspace-reconcile-derived-paths.js";
 import { WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS } from "./workspace-result-git.js";
 import {
@@ -16,6 +19,7 @@ import {
   STAGED_WORKSPACE_READ_MAX_BYTES,
   STAGED_WORKSPACE_READ_MAX_ENTRIES,
   STAGED_RESULT_MESSAGE,
+  WorkerWorkspaceGitHistorySchema,
   type StagedWorkerArtifactInventory,
   type StagedWorkerWorkspaceInventory,
   type StagedWorkerWorkspaceReadEntry,
@@ -24,27 +28,10 @@ import {
 
 const STAGED_RESULT_METADATA_LIMIT = 128 * 1024 * 1024 + 4_096;
 
-async function readGitBlob(params: {
-  root: string;
-  objectId: string;
-  maxBytes: number;
-}): Promise<Buffer> {
-  const result = await runGitBuffered(params.root, ["cat-file", "blob", params.objectId], {
-    timeoutMs: PATCH_TIMEOUT_MS,
-    maxOutputBytes: params.maxBytes + 1,
-  });
-  if (result.termination !== "exit" || result.code !== 0) {
-    throw new Error(result.stderr.toString("utf8").trim() || "git cat-file failed");
-  }
-  if (result.stdout.byteLength > params.maxBytes) {
-    throw new Error("Cloud workspace staged result exceeds its byte limit");
-  }
-  return result.stdout;
-}
-
 export async function loadStagedWorkerWorkspace(
   root: string,
   stagedResultRef: string,
+  buildCacheInputs?: string[],
 ): Promise<StagedWorkerWorkspaceInventory> {
   const ref = requireWorkerResultStorageRef(stagedResultRef);
   const rawCommit = await runGitBuffered(root, ["cat-file", "commit", ref], {
@@ -64,7 +51,14 @@ export async function loadStagedWorkerWorkspace(
     throw new Error("Cloud workspace staged result metadata is invalid");
   }
   const lines = message.subarray(0, metadataEnd).toString("utf8").split("\n");
-  const version = lines[1] === "version 1" ? 1 : lines[1] === "version 2" ? 2 : undefined;
+  const version =
+    lines[1] === "version 1"
+      ? 1
+      : lines[1] === "version 2"
+        ? 2
+        : lines[1] === "version 3"
+          ? 3
+          : undefined;
   const match = /^sha256:[a-f0-9]{64}$/u;
   const baseManifestRef = lines[2]?.slice("base-ref ".length) ?? "";
   const currentManifestRef = lines[3]?.slice("current-ref ".length) ?? "";
@@ -77,7 +71,7 @@ export async function loadStagedWorkerWorkspace(
     !lines[3]?.startsWith("current-ref ") ||
     !lines[4]?.startsWith("base-bytes ") ||
     !lines[5]?.startsWith("current-bytes ") ||
-    lines.length !== 6 ||
+    lines.length !== (version === 3 ? 7 : 6) ||
     !match.test(baseManifestRef) ||
     !match.test(currentManifestRef) ||
     !Number.isSafeInteger(baseBytes) ||
@@ -93,14 +87,35 @@ export async function loadStagedWorkerWorkspace(
   }
   const baseRaw = manifests.subarray(0, baseBytes).toString("utf8");
   const currentRaw = manifests.subarray(baseBytes).toString("utf8");
-  const base = parseWorkerWorkspaceManifest(baseRaw, baseManifestRef);
-  const current = parseWorkerWorkspaceManifest(currentRaw, currentManifestRef);
+  const base = parseWorkerWorkspaceManifest(baseRaw, baseManifestRef, buildCacheInputs);
+  const current = parseWorkerWorkspaceManifest(currentRaw, currentManifestRef, buildCacheInputs);
+  const gitHistory =
+    version === 3 && lines[6]?.startsWith("git-history ")
+      ? WorkerWorkspaceGitHistorySchema.parse(JSON.parse(lines[6].slice("git-history ".length)))
+      : undefined;
+  if (
+    version === 3 &&
+    (!gitHistory ||
+      gitHistory.baseCommit !== base.baseCommit ||
+      (gitHistory.descendsFromBase &&
+        !gitHistory.unavailableReason &&
+        !rawCommit.stdout
+          .subarray(0, commitHeaderEnd)
+          .toString("utf8")
+          .split("\n")
+          .includes(`parent ${gitHistory.headCommit}`)))
+  ) {
+    throw new Error("Cloud workspace staged Git history is invalid");
+  }
   // Shipped v1 refs carry a complete current tree and predate the conservative
   // manifest worst-case record gate. Recovery still validates their manifests,
   // tree shape, and changed payload bytes; the apply owner caps actual records.
   const changedResult = parseChangedWorkspaceResult(base, current, version !== 1);
   const changedEntries = changedResult.entries;
-  const treeEntries = version === 1 ? reconciliationEntries(current.entries) : changedEntries;
+  const treeEntries =
+    version === 1
+      ? reconciliationEntries(current.entries, undefined, buildCacheInputs)
+      : changedEntries;
   const tree = await runGitBuffered(root, ["ls-tree", "-r", "-z", "--full-tree", ref], {
     timeoutMs: PATCH_TIMEOUT_MS,
     maxOutputBytes: 2 * MAX_RECONCILIATION_FILE_BYTES,
@@ -108,6 +123,8 @@ export async function loadStagedWorkerWorkspace(
   if (tree.termination !== "exit" || tree.code !== 0) {
     throw new Error(tree.stderr.toString("utf8").trim() || "git ls-tree failed");
   }
+  const stagedInputs = stagedInputDirectoriesFromEntries(current.entries);
+  const retained = buildCacheInputPaths(buildCacheInputs);
   const objectsByPath = new Map<string, { mode: string; objectId: string }>();
   for (const record of tree.stdout.toString("utf8").split("\0").filter(Boolean)) {
     const parsed = /^(100644|100755|120000) blob ([a-f0-9]{40}|[a-f0-9]{64})\t([\s\S]+)$/u.exec(
@@ -116,7 +133,19 @@ export async function loadStagedWorkerWorkspace(
     if (!parsed) {
       throw new Error("Cloud workspace staged result tree is invalid");
     }
-    objectsByPath.set(parsed[3]!, { mode: parsed[1]!, objectId: parsed[2]! });
+    const entryPath = parsed[3]!;
+    // Older receipts can contain caches that the authenticated manifest reader
+    // now excludes. Apply the same rule without rewriting the retained result.
+    if (
+      isDerivedWorkspacePath(
+        entryPath,
+        retained.has(entryPath) || isStagedInputPath(entryPath, stagedInputs),
+        buildCacheInputs !== undefined,
+      )
+    ) {
+      continue;
+    }
+    objectsByPath.set(entryPath, { mode: parsed[1]!, objectId: parsed[2]! });
   }
   if (objectsByPath.size !== treeEntries.length) {
     throw new Error("Cloud workspace staged result tree does not match its manifest");
@@ -130,6 +159,7 @@ export async function loadStagedWorkerWorkspace(
     }
   }
   return {
+    ...(gitHistory ? { gitHistory } : {}),
     baseManifestRaw: baseRaw,
     currentManifestRaw: currentRaw,
     baseManifestRef,
@@ -175,16 +205,6 @@ export async function readStagedWorkerWorkspaceEntries(params: {
   }
   if (params.entries.length > 1 && bytes > STAGED_WORKSPACE_READ_MAX_BYTES) {
     throw new Error("Cloud workspace staged result batch exceeds its byte limit");
-  }
-  const only = params.entries.length === 1 ? params.entries[0] : undefined;
-  if (only) {
-    const content = await readGitBlob({
-      root: params.root,
-      objectId: only.object.objectId,
-      maxBytes: MAX_RECONCILIATION_FILE_BYTES,
-    });
-    assertStagedEntryContent(only.entry, content);
-    return only.entry.type === "file" ? content : Buffer.alloc(0);
   }
   if (params.entries.length === 0) {
     return Buffer.alloc(0);
@@ -233,7 +253,7 @@ export async function readStagedWorkerWorkspaceEntries(params: {
     throw new Error("Cloud workspace staged result contains unexpected payload bytes");
   }
   // Links are validated above; their filesystem representation uses the manifest target.
-  return Buffer.concat(contents);
+  return contents.length === 1 ? contents[0]! : Buffer.concat(contents);
 }
 
 export async function collectStagedWorkerArtifacts(
@@ -259,6 +279,7 @@ export async function collectStagedWorkerArtifacts(
       })),
   ].toSorted((left, right) => left.path.localeCompare(right.path));
   const selected = snapshot.changedEntries.find((entry) => entry.path === input.previewPath);
+  const download = snapshot.changedEntries.find((entry) => entry.path === input.downloadPath);
   const preview =
     selected?.type === "file" && selected.size <= WORKSPACE_PREVIEW_MAX_BYTES
       ? await readStagedWorkerWorkspaceEntries({
@@ -273,6 +294,9 @@ export async function collectStagedWorkerArtifacts(
     current: { baseCommit: snapshot.current.baseCommit },
     changedEntries: snapshot.changedEntries,
     changes,
-    ...(preview === undefined ? {} : { preview }),
+    ...(preview === undefined ? {} : { preview: ownedWorkerBytes(preview) }),
+    ...(download?.type === "file"
+      ? { downloadObjectId: snapshot.objectsByPath.get(download.path)!.objectId }
+      : {}),
   };
 }

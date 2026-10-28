@@ -11,6 +11,7 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   parseSkillFrontmatter,
   resolveSkillInvocationPolicy,
@@ -20,6 +21,7 @@ import { materializeSkill } from "../loading/skill-materializer.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import type { SkillEntry } from "../types.js";
 import { readSkillLibraryManifestTree, skillLibraryRevisionDir } from "./bundle.js";
+import type { SkillLibraryReadQueries } from "./read.contract.js";
 import {
   readSkillLibrarySelectionDescriptions,
   readSkillLibrarySelectionManifests,
@@ -55,13 +57,30 @@ function bindPreparedSelection(prepared: {
 const selectedEntryCache = new Map<string, SkillEntry[]>();
 
 /** Async preparation retains pin values even when a caller later edits its snapshot. */
-export function captureSkillLibrarySelection(selections: readonly SkillLibrarySelection[]) {
+function captureSkillLibrarySelection(selections: readonly SkillLibrarySelection[]) {
   return selections.map(({ skillId, revision, name, ownerProfileId }) => ({
     skillId,
     revision,
     name,
     ownerProfileId,
   }));
+}
+
+export function captureSkillLibraryPreparation(
+  selections: readonly SkillLibrarySelection[],
+  assertCallerCurrent?: () => void,
+) {
+  const librarySelections = captureSkillLibrarySelection(selections);
+  const libraryContext = librarySelections.length ? captureOpenClawStateWorkerContext() : undefined;
+  return {
+    librarySelections,
+    libraryContext,
+    assertCurrent: () => {
+      assertCallerCurrent?.();
+      libraryContext?.maintenanceScope?.assertAdmission();
+      libraryContext?.admission.assertCurrent();
+    },
+  };
 }
 
 /** The session owner has already authorized this exact immutable pin. */
@@ -87,6 +106,26 @@ export async function seedSkillLibrarySelection(
   }
   const prepared = await captureSkillLibraryAccess(authority, options).read("seed", undefined);
   return bindPreparedSelection(prepared);
+}
+
+export type PreparedSkillLibrarySession = SkillLibraryReadQueries["session"]["output"] & {
+  assertCurrent: () => void;
+};
+
+/** Human ingress consumes one snapshot for initial pins and authoring presentation. */
+export async function prepareSkillLibrarySession(
+  authority: SkillLibraryAuthority,
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<PreparedSkillLibrarySession> {
+  const prepared = await captureSkillLibraryAccess(authority, options).read("session", undefined);
+  return {
+    selections: bindPreparedSelection({
+      value: prepared.value.selections,
+      assertCurrent: prepared.assertCurrent,
+    }),
+    presentation: prepared.value.presentation,
+    assertCurrent: prepared.assertCurrent,
+  };
 }
 
 /** Session mutation authorization is separate; retain library authority through its commit. */

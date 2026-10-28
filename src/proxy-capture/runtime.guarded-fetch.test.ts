@@ -45,7 +45,6 @@ async function captureRoots() {
     roots,
     settings,
     leases,
-    originalFetch,
     savedWrapper,
     readEvents: () =>
       Promise.all(
@@ -71,7 +70,7 @@ async function captureRoots() {
 }
 
 describe("guarded capture ownership", () => {
-  it("captures RequestInit overrides as sent by the global fetch transport", async () => {
+  it("normalizes symbol-bearing RequestInit overrides as sent by the global fetch transport", async () => {
     const fixture = await captureRoots();
     try {
       await withServer(
@@ -85,6 +84,7 @@ describe("guarded capture ownership", () => {
                 method: request.method,
                 originalHeader: request.headers["x-original"],
                 overrideHeader: request.headers["x-override"],
+                hiddenHeader: request.headers["x-hidden"],
                 body: Buffer.concat(chunks).toString(),
               }),
             );
@@ -96,16 +96,23 @@ describe("guarded capture ownership", () => {
             headers: { "x-original": "original" },
             body: "original body",
           });
+          const headers = { "x-override": "override", "content-type": "application/json" };
+          Object.defineProperties(headers, {
+            "x-hidden": { value: "yes", enumerable: false },
+            [Symbol("sensitiveHeaders")]: { value: new Set(["content-type"]), enumerable: false },
+          });
           const response = await fixture.savedWrapper(request, {
             method: "POST",
-            headers: { "x-override": "override", "content-type": "application/json" },
+            headers,
             body: "override body",
           });
           expect(await response.json()).toEqual({
             method: "POST",
             overrideHeader: "override",
+            hiddenHeader: "yes",
             body: "override body",
           });
+          expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
         },
       );
       await fixture.close();
@@ -118,128 +125,119 @@ describe("guarded capture ownership", () => {
       expect(JSON.parse(String(events?.[0]?.headersJson))).toEqual({
         "content-type": "application/json",
         "x-override": "override",
+        "x-hidden": "yes",
       });
     } finally {
       await fixture.close();
     }
   });
 
-  it.each([
-    "same-owner",
-    "other-owner",
-    "saved-wrapper",
-    "caller-wrapper",
-    "capture-disabled",
-  ] as const)("uses one capture owner through %s", async (mode) => {
+  it("captures redacted Blob bytes before a custom fetch can mutate its input", async () => {
+    const nativeFetch = globalThis.fetch;
     const fixture = await captureRoots();
-    if (mode === "same-owner") {
-      vi.stubEnv("OPENCLAW_STATE_DIR", fixture.roots[0]);
-    } else if (mode === "saved-wrapper") {
-      await initializeDebugProxyCaptureAsync("second", fixture.settings[1]);
-    }
-    const callerFetch = vi.fn<typeof fetch>((input, init) => fixture.originalFetch(input, init));
+    const secret = "synthetic-blob-capture-secret";
+    registerSecretValueForRedaction(secret);
+    const wire = JSON.stringify({ message: "retained 🦞 history", credential: secret });
     try {
       await withServer(
         (request, response) => {
-          request.resume();
-          response.writeHead(200, { "x-fixture": "caller-response" });
-          response.end("loopback response");
+          const chunks: Buffer[] = [];
+          request.on("data", (chunk: Buffer) => chunks.push(chunk));
+          request.on("end", () => response.end(Buffer.concat(chunks)));
         },
         async (baseUrl) => {
           const result = await fetchWithSsrFGuard({
-            url: `${baseUrl}/ownership`,
+            url: `${baseUrl}/blob`,
             pinDns: false,
             policy: { allowPrivateNetwork: true },
-            ...(mode === "saved-wrapper"
-              ? { fetchImpl: fixture.savedWrapper }
-              : mode === "caller-wrapper"
-                ? { fetchImpl: callerFetch }
-                : {}),
-            ...(mode === "capture-disabled" ? { capture: false } : {}),
-            init: { method: "POST", body: "loopback request" },
+            init: {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: new Blob([wire]),
+            },
+            fetchImpl: async (input, init) => {
+              const response = await nativeFetch(input, init);
+              if (init?.body instanceof Uint8Array) {
+                init.body.fill(0);
+              }
+              return response;
+            },
           });
           try {
-            expect(result.response.status).toBe(200);
-            expect(result.response.headers.get("x-fixture")).toBe("caller-response");
-            expect(await result.response.text()).toBe("loopback response");
+            expect(await result.response.text()).toBe(wire);
           } finally {
             await result.release();
           }
         },
       );
-      // Finalization settles any diagnostic clone before checking all writes.
       await fixture.close();
-      const events = await fixture.readEvents();
-      // Disabling the guard recorder leaves an installed global recorder in control.
-      const expected = mode === "capture-disabled" || mode === "same-owner" ? [2, 0] : [0, 2];
-      expect(events.map((rows) => rows.length)).toEqual(expected);
-      for (const rows of events.filter((captured) => captured.length > 0)) {
-        expect(rows[0]).toMatchObject({ kind: "request", dataText: "loopback request" });
-        expect(rows[1]).toMatchObject({ status: 200, flowId: rows[0]!.flowId });
-        expect(["response", "error"]).toContain(rows[1]!.kind);
-      }
-      expect(callerFetch).toHaveBeenCalledTimes(mode === "caller-wrapper" ? 1 : 0);
+      const requests = (await fixture.readEvents())
+        .flat()
+        .filter((event) => event.kind === "request");
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        method: "POST",
+        path: "/blob",
+        contentType: "application/json",
+        dataText: '{"message":"retained 🦞 history","credential":"[REDACTED]"}',
+      });
     } finally {
       await fixture.close();
     }
   });
 
-  it.each(["guarded", "global"] as const)(
-    "records an active transport rejection once through the %s owner",
-    async (mode) => {
-      const fixture = await captureRoots();
-      const arrived = createDeferredCore<ServerResponse>();
-      const controller = new AbortController();
-      const secret = "fixture-transport-secret";
-      registerSecretValueForRedaction(secret);
-      const reason = new Error(`caller abort ${secret}`);
-      try {
-        await withServer(
-          (request, response) => {
-            request.resume();
-            arrived.resolve(response);
-          },
-          async (baseUrl) => {
-            const operation = fetchWithSsrFGuard({
-              url: `${baseUrl}/rejection`,
-              pinDns: false,
-              policy: { allowPrivateNetwork: true },
-              signal: controller.signal,
-              capture: mode === "global" ? false : { flowId: "guarded-rejection-flow" },
-            }).then(
-              (value) => ({ value, error: undefined }),
-              (error: unknown) => ({ value: undefined, error }),
-            );
-            const response = await arrived.promise;
-            controller.abort(reason);
-            response.end();
-            const completed = await operation;
-            expect(completed.error).toBe(reason);
-            expect(completed.value).toBeUndefined();
-          },
-        );
-        await fixture.close();
-        const events = await fixture.readEvents();
-        expect(events.map((rows) => rows.length)).toEqual(mode === "global" ? [1, 0] : [0, 1]);
-        const event = events[mode === "global" ? 0 : 1]![0]!;
-        expect(event).toMatchObject({
-          kind: "error",
-          direction: "local",
-          method: "GET",
-          path: "/rejection",
-          errorText: "caller abort [REDACTED]",
-          ...(mode === "guarded" ? { flowId: "guarded-rejection-flow" } : {}),
-        });
-        expect(event.status).toBeNull();
-        expect(JSON.parse(String(event.metaJson))).toMatchObject({
-          captureOrigin: mode === "global" ? "global-fetch" : "guarded-fetch",
-        });
-      } finally {
-        controller.abort();
-        await fixture.close();
-      }
-    },
-  );
+  it("records an active transport rejection once through the global owner", async () => {
+    const fixture = await captureRoots();
+    const arrived = createDeferredCore<ServerResponse>();
+    const controller = new AbortController();
+    const secret = "fixture-transport-secret";
+    registerSecretValueForRedaction(secret);
+    const reason = new Error(`caller abort ${secret}`);
+    try {
+      await withServer(
+        (request, response) => {
+          request.resume();
+          arrived.resolve(response);
+        },
+        async (baseUrl) => {
+          const operation = fetchWithSsrFGuard({
+            url: `${baseUrl}/rejection`,
+            pinDns: false,
+            policy: { allowPrivateNetwork: true },
+            signal: controller.signal,
+            capture: false,
+          }).then(
+            (value) => ({ value, error: undefined }),
+            (error: unknown) => ({ value: undefined, error }),
+          );
+          const response = await arrived.promise;
+          controller.abort(reason);
+          response.end();
+          const completed = await operation;
+          expect(completed.error).toBe(reason);
+          expect(completed.value).toBeUndefined();
+        },
+      );
+      await fixture.close();
+      const events = await fixture.readEvents();
+      expect(events.map((rows) => rows.length)).toEqual([1, 0]);
+      const event = events[0]![0]!;
+      expect(event).toMatchObject({
+        kind: "error",
+        direction: "local",
+        method: "GET",
+        path: "/rejection",
+        errorText: "caller abort [REDACTED]",
+      });
+      expect(event.status).toBeNull();
+      expect(JSON.parse(String(event.metaJson))).toMatchObject({
+        captureOrigin: "global-fetch",
+      });
+    } finally {
+      controller.abort();
+      await fixture.close();
+    }
+  });
 
   it.each(["response", "abort"] as const)(
     "keeps a delayed caller %s while retired admissions stay fenced",

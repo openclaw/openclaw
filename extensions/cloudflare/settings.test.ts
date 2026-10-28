@@ -1,5 +1,4 @@
-import type { StorageProvider } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { r2StorageProvider } from "./api.js";
 import plugin from "./index.js";
@@ -14,14 +13,8 @@ const settings = {
 
 describe("Cloudflare R2 provider settings", () => {
   it("registers and opens its storage provider through the plugin entrypoint", async () => {
-    const providers: StorageProvider[] = [];
-    plugin.register?.(
-      createTestPluginApi({
-        registerStorageProvider(provider) {
-          providers.push(provider);
-        },
-      }),
-    );
+    const { api, storageProviders: providers } = createCapturedPluginRegistration();
+    plugin.register?.(api);
     expect(providers).toHaveLength(1);
     const provider = providers[0]!;
     expect(provider.id).toBe("r2");

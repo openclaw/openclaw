@@ -26,12 +26,17 @@ import { createVitestCacheSlots, resolveVitestCacheRoot } from "./lib/vitest-cac
 import {
   hasNonRunVitestSubcommand,
   collectVitestFileFilters,
+  replaceVitestFileFilters,
   resolveBooleanModeFlag,
   resolveExplicitVitestMode,
   vitestOptionConsumesNextArg,
 } from "./lib/vitest-cli-mode.mts";
 import { parseVitestExecutionArgs } from "./lib/vitest-cli.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
+import {
+  VITEST_INFRASTRUCTURE_EXIT_CODE,
+  vitestInfrastructureExitCode,
+} from "./lib/vitest-outcome.mts";
 import {
   resolveVitestProcessEnv,
   resolveVitestNodeArgs,
@@ -50,6 +55,7 @@ import {
 import {
   resolveVitestRuntimeCliSelections,
   shouldPrepareVitestCoreWorkers,
+  shouldUseRuntimeOnlyVitestWorkers,
 } from "./lib/vitest-runtime-selection.mts";
 import {
   resolveNativeBunTestCommand,
@@ -60,6 +66,7 @@ import {
   stripVitestAnsi,
   writeVitestUnhandledErrorSummary,
 } from "./lib/vitest-unhandled-errors.mts";
+import { getVitestWorkerDescriptor } from "./lib/vitest-worker-descriptor.mts";
 import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import {
@@ -208,8 +215,11 @@ export function resolveBoundedVitestInvocations(
       `--shard=${index + 1}/${E2E_TEST_PROCESS_COUNT}`,
     ]);
   }
-  const chunks = options.gatewayServerTargetChunks ?? createGatewayServerTestTargetChunks(cwd);
-  return chunks.length > 1 ? chunks.map((targets) => insertVitestTargets(argv, targets)) : [argv];
+  const chunks =
+    options.gatewayServerTargetChunks ?? createGatewayServerTestTargetChunks(cwd, argv, env);
+  return chunks.length > 1
+    ? chunks.map((targets) => replaceVitestFileFilters(argv, targets))
+    : [argv];
 }
 
 /**
@@ -859,6 +869,8 @@ export function spawnWatchedVitestProcess({
   const testCommand = nativeBunFiles
     ? resolveNativeBunTestCommand(
         validateNativeBunTestFiles(nativeBunFiles, spawnParams.cwd ?? process.cwd()),
+        undefined,
+        env,
       )
     : directNodeArgs
       ? resolveVitestTestCommand(directNodeArgs, env)
@@ -874,6 +886,7 @@ export function spawnWatchedVitestProcess({
       0,
       path.join(resolveRepoRoot(import.meta.url), "scripts/lib/vitest-worker-bootstrap.mts"),
       workerRun.descriptor.directory,
+      ...(workerRun.descriptor.preset === "runtime" ? ["--worker-preset=runtime"] : []),
     );
   }
   const childSpawnParams: PnpmRunnerParams = workerRun
@@ -956,7 +969,8 @@ export function spawnWatchedVitestProcess({
   };
   const completion = Promise.all([childCompletion, forwardedOutput])
     .then(async ([{ code: childCode, signal, groupJoined }]) => {
-      const code = (await timeoutCompletion) && childCode === 0 ? 1 : childCode;
+      const code =
+        (await timeoutCompletion) && !signal ? vitestInfrastructureExitCode(childCode) : childCode;
       const result = unhandledErrors.finish();
       if (result) {
         writeVitestUnhandledErrorSummary(result, env);
@@ -1008,7 +1022,7 @@ export async function runVitest(
       });
       const result = await watched.completion;
       interrupted ??= result.signal ?? undefined;
-      process.exitCode = result.code ?? 1;
+      process.exitCode = result.code ?? VITEST_INFRASTRUCTURE_EXIT_CODE;
     } finally {
       const signal = interrupted ?? watched?.getForwardedSignal();
       process.off("disconnect", onParentDisconnect);
@@ -1069,7 +1083,7 @@ export async function runVitest(
   } catch (error) {
     if (isErrorWithCode(error, "OPENCLAW_MISSING_VITEST")) {
       console.error(error.message);
-      process.exitCode = 1;
+      process.exitCode = VITEST_INFRASTRUCTURE_EXIT_CODE;
       return;
     }
     throw error;
@@ -1087,18 +1101,20 @@ export async function runVitest(
     : config === null && !sourceMode && process.cwd() === repoRoot
       ? "vitest.config.ts"
       : "";
-  const invocationEnv =
-    invocations.length > 1 && relativeConfig === E2E_VITEST_CONFIG
-      ? { ...env, ...(await prepareE2eVitestRuntime(env)) }
-      : env;
-  // Canonical configs have known project scopes. Custom roots/projects keep
-  // their own setup; never infer their runtime selection from a config name.
-  const canonicalSelection =
+  // Custom roots/projects keep their own runtime preparation. Prebuilt UI
+  // projects below only partition the known real-Gateway fixture scope.
+  const canonicalRootRun =
     execution &&
     !hasAlternateVitestRootArg(vitestArgs) &&
-    !hasExplicitVitestProjectArg(vitestArgs) &&
     !hasNonRunVitestSubcommand(vitestArgs) &&
     !hasExplicitDisabledRunFlag(vitestArgs);
+  const canonicalSelection = canonicalRootRun && !hasExplicitVitestProjectArg(vitestArgs);
+  // E2E global setup must precede shared asset preparation, including a single
+  // invocation; otherwise it can replace dist after UI readiness was checked.
+  const invocationEnv =
+    canonicalSelection && relativeConfig === E2E_VITEST_CONFIG
+      ? { ...env, ...(await prepareE2eVitestRuntime(env)) }
+      : env;
   if (canonicalSelection && relativeConfig) {
     const code = await prepareVitestRuntime(
       invocations.flatMap((cliArgs) =>
@@ -1107,13 +1123,28 @@ export async function runVitest(
       invocationEnv,
     );
     if (code !== 0) {
-      process.exitCode = code;
+      process.exitCode = vitestInfrastructureExitCode(code);
       return;
     }
   }
   const workers = sourceMode
     ? undefined
-    : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv));
+    : createVitestWorkerRun(
+        resolveVitestProcessEnv(invocationEnv),
+        getVitestWorkerDescriptor(),
+        (canonicalSelection &&
+          (relativeConfig === "test/vitest/vitest.ui-e2e.config.ts" ||
+            relativeConfig === "test/vitest/vitest.extension-browser.config.ts" ||
+            shouldUseRuntimeOnlyVitestWorkers(
+              relativeConfig,
+              vitestArgs,
+              invocationEnv,
+              execution?.options.testNamePattern,
+            ))) ||
+          (canonicalRootRun && relativeConfig === "test/vitest/vitest.ui-e2e-prebuilt.config.ts")
+          ? "runtime"
+          : "full",
+      );
   const withCacheSlot = createVitestCacheSlots();
   let interrupted: NodeJS.Signals | undefined;
   let preparingWorkers = false;
@@ -1189,7 +1220,7 @@ export async function runVitest(
         },
       );
       interrupted ??= signal ?? undefined;
-      const exitCode = code ?? 1;
+      const exitCode = code ?? VITEST_INFRASTRUCTURE_EXIT_CODE;
       // Ordinary test failures must not hide later files; interruptions stop
       // admission and are re-raised only after the invocation has been disposed.
       if (interrupted || (exitCode !== 0 && exitCode !== 1)) {
@@ -1201,8 +1232,8 @@ export async function runVitest(
     process.exitCode = failedExitCode;
   } finally {
     try {
-      await workers?.dispose().catch((error: unknown) => {
-        process.exitCode ||= 1;
+      await workers?.dispose({ interrupted: Boolean(interrupted) }).catch((error: unknown) => {
+        process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
         console.error(error);
       });
     } finally {

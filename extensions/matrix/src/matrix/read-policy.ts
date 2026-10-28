@@ -39,18 +39,6 @@ function normalizeRoomId(raw?: string | null): string {
   return raw?.trim().replace(/^room:/i, "") ?? "";
 }
 
-function isCurrentRoom(params: {
-  accountId: string;
-  context?: MatrixReadContext;
-  roomId: string;
-}): boolean {
-  return (
-    params.context?.currentChannelProvider?.trim().toLowerCase() === "matrix" &&
-    params.context.requesterAccountId?.trim() === params.accountId &&
-    normalizeRoomId(params.context.currentChannelId) === normalizeRoomId(params.roomId)
-  );
-}
-
 function includesEntry(entries: Array<string | number> | undefined, value: string): boolean {
   const normalized = value.trim().toLowerCase();
   return (entries ?? []).some((entry) => {
@@ -197,11 +185,11 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
       aliases,
     });
     const room = finalPolicy.room;
-    const current = isCurrentRoom({
-      accountId: account.accountId,
-      context: params.context,
-      roomId,
-    });
+    const currentRoomContext = params.context;
+    const current =
+      currentRoomContext?.currentChannelProvider?.trim().toLowerCase() === "matrix" &&
+      currentRoomContext.requesterAccountId?.trim() === account.accountId &&
+      normalizeRoomId(currentRoomContext.currentChannelId) === normalizeRoomId(roomId);
     const currentChatType = params.context?.currentChatType?.trim().toLowerCase();
     const trustedCurrentClassification =
       currentChatType === "direct"
@@ -233,31 +221,23 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
         : "allowlist"
       : (account.config.dm?.policy ?? "pairing");
     const directOperator = params.context?.conversationReadOrigin === "direct-operator";
-    const allowed = finalPolicy.blocked
-      ? false
-      : directOperator
-        ? classification.kind === "direct"
-          ? account.config.dm?.enabled !== false && dmPolicy !== "disabled"
-          : classification.kind === "group"
-            ? groupPolicy !== "disabled"
-            : groupPolicy !== "disabled" &&
-              dmPolicy !== "disabled" &&
-              account.config.dm?.enabled !== false
-        : classification.kind === "direct"
-          ? account.config.dm?.enabled !== false &&
-            dmPolicy !== "disabled" &&
-            (current || includesEntry(account.config.dm?.allowFrom, classification.remoteUserId))
-          : classification.kind === "group"
-            ? groupPolicy !== "disabled" &&
-              (current || groupPolicy === "open" || room.config !== undefined)
-            : current
-              ? groupPolicy !== "disabled" &&
-                dmPolicy !== "disabled" &&
-                account.config.dm?.enabled !== false
-              : groupPolicy === "open" &&
-                dmPolicy !== "disabled" &&
-                account.config.dm?.enabled !== false &&
-                hasWildcardEntry(account.config.dm?.allowFrom);
+    const dmEnabled = account.config.dm?.enabled !== false && dmPolicy !== "disabled";
+    const groupEnabled = groupPolicy !== "disabled";
+    const allowed =
+      !finalPolicy.blocked &&
+      (classification.kind === "direct"
+        ? dmEnabled &&
+          (directOperator ||
+            current ||
+            includesEntry(account.config.dm?.allowFrom, classification.remoteUserId))
+        : classification.kind === "group"
+          ? groupEnabled &&
+            (directOperator || current || groupPolicy === "open" || room.config !== undefined)
+          : groupEnabled &&
+            dmEnabled &&
+            (directOperator ||
+              current ||
+              (groupPolicy === "open" && hasWildcardEntry(account.config.dm?.allowFrom))));
     if (!allowed) {
       throw new ToolAuthorizationError("Matrix read target is not allowed.");
     }

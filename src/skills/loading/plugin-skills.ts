@@ -14,11 +14,10 @@ import {
 } from "../../plugins/plugin-cache-files.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
-import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotRequiredRuntime } from "../../plugins/plugin-metadata-snapshot-required.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { iteratePluginRootContributions } from "../../plugins/plugin-root-contributions.js";
 import { isPathInside } from "../../security/scan-paths.js";
-import { readPluginSkillBundle } from "./plugin-skill-bundle.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { resolvePluginSkillsDir } from "./skill-paths.js";
 import { loadSkillRootRecords } from "./skill-root-loader.js";
@@ -26,6 +25,12 @@ import { loadSkillRootRecords } from "./skill-root-loader.js";
 export type { PluginSkillRoot } from "./plugin-skill-root.js";
 
 const log = createSubsystemLogger("skills");
+
+/** Serializable active contributions; filesystem validation remains with the skill owner. */
+export type PluginSkillContribution = Pick<
+  PluginManifestRecord,
+  "id" | "origin" | "rootDir" | "bundleFormat"
+> & { roots: string[] };
 
 // This tracks the generated SDK links we last published, not plugin metadata.
 // Config and ACP availability can change the desired links without changing package files.
@@ -43,13 +48,14 @@ export function resolvePluginSkillRoots(params: {
   config?: OpenClawConfig;
   /** Override the plugin skills directory for testing. */
   pluginSkillsDir?: string;
+  acpRuntimeAvailable?: boolean;
 }): PluginSkillRoot[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir || params.config?.plugins?.enabled === false) {
     publishPluginSkills([], params.pluginSkillsDir);
     return [];
   }
-  const metadataSnapshot = resolvePluginMetadataSnapshot({
+  const metadataSnapshot = resolvePluginMetadataSnapshotRequiredRuntime({
     workspaceDir,
     config: params.config,
     env: process.env,
@@ -62,6 +68,7 @@ export function resolvePluginSkillRootsFromMetadata(params: {
   config?: OpenClawConfig;
   pluginSkillsDir?: string;
   metadataSnapshot: PluginMetadataSnapshot;
+  acpRuntimeAvailable?: boolean;
 }): PluginSkillRoot[] {
   return withPluginCache(getPluginMetadataSnapshotCache(params.metadataSnapshot), () =>
     resolvePluginSkillRootsInOwner(params),
@@ -72,28 +79,54 @@ function resolvePluginSkillRootsInOwner(
   params: Parameters<typeof resolvePluginSkillRootsFromMetadata>[0],
 ): PluginSkillRoot[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
-  const metadataSnapshot = params.metadataSnapshot;
-  if (!workspaceDir || metadataSnapshot.manifestRegistry.plugins.length === 0) {
+  if (!workspaceDir) {
     publishPluginSkills([], params.pluginSkillsDir);
     return [];
   }
+  return resolvePluginSkillRootsFromContributions({
+    contributions: capturePluginSkillContributions(params),
+    pluginSkillsDir: params.pluginSkillsDir,
+  });
+}
+
+/** Select activation and ACP policy without reading plugin directories. */
+export function capturePluginSkillContributions(params: {
+  config?: OpenClawConfig;
+  metadataSnapshot: PluginMetadataSnapshot;
+  acpRuntimeAvailable?: boolean;
+}): PluginSkillContribution[] {
   const config = params.config ?? {};
-  const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config });
+  const acpRuntimeAvailable = params.acpRuntimeAvailable ?? isAcpRuntimeSpawnAvailable({ config });
+  return [
+    ...iteratePluginRootContributions({
+      metadataSnapshot: params.metadataSnapshot,
+      config,
+      contribution: "skills",
+      isAvailable: (candidate) => acpRuntimeAvailable || candidate.id !== "acpx",
+    }),
+  ].map(({ record, roots }) => ({
+    id: record.id,
+    origin: record.origin,
+    rootDir: record.rootDir,
+    bundleFormat: record.bundleFormat,
+    roots,
+  }));
+}
+
+/** Validate and publish selected roots on the filesystem-owning thread. */
+export function resolvePluginSkillRootsFromContributions(params: {
+  contributions: readonly PluginSkillContribution[];
+  pluginSkillsDir?: string;
+}): PluginSkillRoot[] {
   const seen = new Set<string>();
   const resolved: PluginSkillRoot[] = [];
 
-  for (const { record, roots } of iteratePluginRootContributions({
-    metadataSnapshot,
-    config,
-    contribution: "skills",
-    // ACP router skills should not be attached unless ACP can actually spawn.
-    isAvailable: (candidate) => acpRuntimeAvailable || candidate.id !== "acpx",
-  })) {
+  for (const record of params.contributions) {
     const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
       origin: record.origin,
       rootDir: record.rootDir,
     });
-    for (const raw of roots) {
+    for (const raw of record.roots) {
       const trimmed = raw.trim();
       if (!trimmed) {
         continue;
@@ -201,6 +234,7 @@ export async function readPluginSkill(
   if (!pluginRoot) {
     throw new Error("Installed plugin root not found.");
   }
+  const { readPluginSkillBundle } = await import("./plugin-skill-bundle.js");
   const result = await readPluginSkillBundle({
     pluginRoot,
     rootPath: path.relative(pluginRoot, matches[0]!.skill.baseDir).split(path.sep).join("/") || ".",

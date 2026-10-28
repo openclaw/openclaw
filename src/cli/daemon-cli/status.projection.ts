@@ -15,10 +15,8 @@ export async function projectDaemonRuntimeStatus(params: {
   state: Pick<GatewayServiceState, "command" | "loadState" | "inspectionReason"> & {
     inspectionFailed?: true;
   };
-  env?: NodeJS.ProcessEnv;
-  argv?: readonly string[];
 }): Promise<{ cli: CliStatusSummary; runtimeIntent?: ServiceRuntimeIntentStatus }> {
-  const entrypoint = (params.argv ?? process.argv)[1]?.trim();
+  const entrypoint = process.argv[1]?.trim();
   const cli: CliStatusSummary = {
     version: VERSION,
     ...(entrypoint ? { entrypoint } : {}),
@@ -28,9 +26,10 @@ export async function projectDaemonRuntimeStatus(params: {
   }
   const { inspectCliRuntime, inspectServiceRuntimeIntent } =
     await import("./status.runtime-intent.js");
-  const env = params.env ?? process.env;
+  const env = process.env;
   const { command, loadState, inspectionFailed, inspectionReason } = params.state;
   const runtimeIntent = await inspectServiceRuntimeIntent({
+    kind: "gateway",
     service: params.service,
     command,
     env,

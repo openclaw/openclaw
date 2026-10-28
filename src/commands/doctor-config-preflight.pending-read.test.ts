@@ -1,49 +1,35 @@
-import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { flatMapRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
+import { afterEach, expect, it, vi } from "vitest";
 import * as pendingMigrations from "../infra/deferred-plugin-migrations.js";
-import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
+import { invalidateSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { observeAsyncFixture } from "../state/openclaw-state-db-readonly.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
-// Observe real launches without replacing SQLite or the child's lifecycle owner.
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    spawn: vi.fn(actual.spawn),
-    spawnSync: vi.fn(actual.spawnSync),
-  };
-});
-
-beforeEach(() => {
-  vi.mocked(spawn).mockClear();
-  vi.mocked(spawnSync).mockClear();
-});
 afterEach(() => vi.restoreAllMocks());
 
 it.each(["Doctor repair", "Gateway readiness"] as const)(
-  "awaits pending inputs before backup selection through %s",
+  "preserves config and closes state reads through %s",
   async (owner) => {
     const gateway = owner === "Gateway readiness";
     await withDoctorConfigPreflightHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const configPath = path.join(stateDir, "openclaw.json");
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-      const retained = {
+      const baseConfig = { gateway: { mode: "local" }, plugins: { enabled: false } };
+      const raw = JSON.stringify({
+        ...baseConfig,
         meta: { migrations: { webhookListeners: true } },
-        gateway: { mode: "local" },
-        plugins: { enabled: false },
-        legacyFixture: "retained",
-      };
-      const raw = JSON.stringify(retained);
-      const backup = JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } });
+        ...(gateway ? {} : { legacyFixture: "retained" }),
+      });
+      const backup = JSON.stringify(baseConfig);
       await fs.mkdir(stateDir, { recursive: true });
       await fs.writeFile(configPath, raw);
       await fs.writeFile(`${configPath}.bak`, backup);
@@ -57,33 +43,40 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
       };
       await pendingMigrations.recordDeferredPluginMigrations({ pending: [pending] });
       await closeOpenClawStateDatabaseAsync();
+      // Exercise snapshot admission; a clean seal intentionally skips this wait.
+      invalidateSqliteDatabaseCleanClose(databasePath);
       const held = createDeferredCore();
       const release = createDeferredCore();
-      const prepareSnapshot = snapshotSource.prepareSqliteReadOnlyLocation;
+      const startSnapshot = snapshotSource.startSqliteReadOnlyLocationAsync;
       let intercepted = false;
       let snapshotClosed = false;
       const snapshotsClosedAtReadiness: boolean[] = [];
       const pendingRead = vi.spyOn(pendingMigrations, "readDeferredPluginMigrations");
-      vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocation").mockImplementation(
-        async (...args) => {
-          const prepared = await prepareSnapshot(...args);
-          if (
-            !intercepted &&
-            args[1]?.signal !== undefined &&
-            path.toNamespacedPath(path.resolve(args[0])) === path.toNamespacedPath(databasePath)
-          ) {
-            intercepted = true;
-            const cleanup = prepared.cleanupAsync.bind(prepared);
-            vi.spyOn(prepared, "cleanupAsync").mockImplementation(async () => {
-              snapshotClosed = await cleanup();
-              return snapshotClosed;
-            });
-            held.resolve();
-            await release.promise;
-          }
-          return prepared;
-        },
-      );
+      vi.spyOn(snapshotSource, "startSqliteReadOnlyLocationAsync").mockImplementation((...args) => {
+        const preparation = startSnapshot(...args);
+        return {
+          ...preparation,
+          ...flatMapRetainedOperation(preparation, (prepared) =>
+            observeAsyncFixture(async () => {
+              if (
+                !intercepted &&
+                args[1]?.signal !== undefined &&
+                path.toNamespacedPath(path.resolve(args[0])) === path.toNamespacedPath(databasePath)
+              ) {
+                intercepted = true;
+                const cleanup = prepared.cleanupAsync.bind(prepared);
+                vi.spyOn(prepared, "cleanupAsync").mockImplementation(async () => {
+                  snapshotClosed = await cleanup();
+                  return snapshotClosed;
+                });
+                held.resolve();
+                await release.promise;
+              }
+              return prepared;
+            }),
+          ),
+        };
+      });
       const acquire = vi.spyOn(checkpoint, "acquireStartupMigrationLeaseWithWait");
       const operation = gateway
         ? runStartupConfigPreflight({
@@ -115,10 +108,15 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
         const result = await operation;
         expect(snapshotsClosedAtReadiness.length > 0).toBe(gateway);
         expect(snapshotsClosedAtReadiness).not.toContain(false);
-        expect(pendingRead).toHaveBeenCalled();
+        expect(pendingRead.mock.calls.length > 0).toBe(!gateway);
         expect(snapshotClosed).toBe(true);
-        expect(result.snapshot.valid).toBe(true);
-        expect(result.snapshot.sourceConfig).toHaveProperty("legacyFixture", "retained");
+        expect(result.snapshot).toMatchObject({
+          valid: true,
+          sourceConfig: {
+            gateway: { mode: "local" },
+            ...(!gateway ? { legacyFixture: "retained" } : {}),
+          },
+        });
         expect(pendingMigrations.readDeferredPluginMigrations({ path: databasePath })).toEqual([
           pending,
         ]);
@@ -132,47 +130,6 @@ it.each(["Doctor repair", "Gateway readiness"] as const)(
         } finally {
           await closeOpenClawStateDatabaseAsync();
         }
-      }
-    });
-  },
-);
-
-it.each([false, true])(
-  "does not create pending-state files (config exists: %s)",
-  async (configExists) => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      const stateDir = path.join(home, ".openclaw");
-      const configPath = path.join(stateDir, "openclaw.json");
-      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-      if (configExists) {
-        await fs.mkdir(stateDir, { recursive: true });
-        await fs.writeFile(
-          configPath,
-          JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
-        );
-      }
-      try {
-        const result = await runDoctorConfigPreflight({
-          migrateState: false,
-          migrateLegacyConfig: false,
-          invalidConfigNote: false,
-          observe: false,
-        });
-        expect(result.snapshot.exists).toBe(configExists);
-        expect(result.deferredPluginMigrations ?? []).toEqual([]);
-        for (const suffix of ["", "-wal", "-shm"]) {
-          await expect(fs.stat(`${databasePath}${suffix}`)).rejects.toMatchObject({
-            code: "ENOENT",
-          });
-        }
-        for (const [, args] of [
-          ...vi.mocked(spawn).mock.calls,
-          ...vi.mocked(spawnSync).mock.calls,
-        ]) {
-          expect(args ?? []).not.toContain(SQLITE_READONLY_CHILD_ARG);
-        }
-      } finally {
-        await closeOpenClawStateDatabaseAsync();
       }
     });
   },

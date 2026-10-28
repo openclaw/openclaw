@@ -5,7 +5,8 @@ import type { NodePluginToolDescriptor } from "../../../packages/gateway-protoco
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
-import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type { LlmCompleteUsage, PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type { NativeSubagentRuntime } from "./types-native-subagent.js";
 import type {
   RuntimeSessionFactsResult,
   RuntimeSessionFactsSelection,
@@ -15,8 +16,6 @@ import type {
 export type { RuntimeLogger };
 
 type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
-
-// ── Subagent runtime types ──────────────────────────────────────────
 
 type SubagentRunParams = {
   /** Revalidate command authority at the host's run admission boundary. */
@@ -133,6 +132,8 @@ type RuntimeNodeDuplexChannel = {
 
 export type RuntimeGatewayRequestOptions = {
   timeoutMs?: number;
+  /** Cancel this request without extending the current caller or plugin lifetime. */
+  signal?: AbortSignal;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];
   /** Fence an in-process channel send to the exact current requester session incarnation. */
@@ -142,6 +143,20 @@ export type RuntimeGatewayRequestOptions = {
     lifecycleRevision?: string;
   };
 };
+
+/** One plugin-written agent message; see `api.runtime.gateway.appendAgentMessage`. */
+export type RuntimeAgentMessage = {
+  sessionKey: string;
+  agentId?: string;
+  /** Displayed Markdown, normalized like typed chat input; mention spans are UTF-16 offsets into it. */
+  text: string;
+  /** Spans selecting `@label` text for people to notify; the caller cannot mention themselves. */
+  mentions?: ReadonlyArray<{ profileId: string; start: number; end: number }>;
+  /** Stable per message; a retry replays the same transcript row and Inbox entry. */
+  idempotencyKey: string;
+};
+
+export type RuntimeAgentMessageResult = { messageId: string; replayed: boolean };
 
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
@@ -169,6 +184,11 @@ export type PluginRuntime = PluginRuntimeCore & {
       select: RuntimeSessionFactsSelection,
       run: (snapshot: RuntimeSessionFactsSelectionResult) => Promise<T>,
     ) => Promise<T>;
+    /**
+     * Inside an authenticated RPC handler, add one agent-authored message to a session the
+     * caller may write, without a model run. The caller is named as the Inbox sender.
+     */
+    appendAgentMessage: (params: RuntimeAgentMessage) => Promise<RuntimeAgentMessageResult>;
     /** Keyed fact invalidations; callers own unsubscribe. Broad store changes are excluded. */
     subscribeSessionChanges: (
       listener: (event: { agentId: string; sessionKey: string; factsInvalidated?: string }) => void,
@@ -195,8 +215,17 @@ export type PluginRuntime = PluginRuntimeCore & {
     >;
   };
   subagent: {
+    /** Native collector children; only callable during requester-bound reply_dispatch. */
+    native?: NativeSubagentRuntime;
     /** Fresh, tool-free background inference under the existing subagent model policy. */
     complete: (params: SubagentCompleteParams) => Promise<{ text: string }>;
+    /** Ephemeral session-context inference on the session's model, with tool execution denied. */
+    forkSession: (params: {
+      sessionKey: string;
+      message: string;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+    }) => Promise<{ text: string; usage?: LlmCompleteUsage }>;
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<AgentWaitResult>;
     getSessionMessages: (
@@ -219,6 +248,7 @@ export type PluginRuntime = PluginRuntimeCore & {
     resolveWorkspaceAuthority: (params: {
       config: OpenClawConfig;
       agentId?: string;
+      storePath?: string;
       confinedToolNames?: readonly string[];
       requiredToolNames?: readonly string[];
       modelProvider?: string;
@@ -268,8 +298,14 @@ export type CreatePluginRuntimeOptions = {
   allowGatewaySubagentBinding?: boolean;
 };
 
+/** Host-owned facades retained by the path-loaded runtime. */
+export type PluginRuntimeBase = Pick<
+  PluginRuntime,
+  "capabilities" | "config" | "llm" | "state" | "system"
+>;
+
 /** Checked contract for both the path-loaded factory and its implementation. */
 export type PluginRuntimeFactory = (
   options?: CreatePluginRuntimeOptions,
-  base?: Pick<PluginRuntime, "capabilities" | "config" | "state" | "system">,
+  base?: PluginRuntimeBase,
 ) => PluginRuntime;

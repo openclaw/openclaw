@@ -10,6 +10,14 @@ import { CronCliError } from "./cron-cli-error.js";
 
 const MAX_CRON_TRIGGER_SCRIPT_BYTES = 65_536;
 
+function decodeCronInput(bytes: Buffer, label: string): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch (error) {
+    throw new CronCliError(`${label} must be valid UTF-8`, { cause: error });
+  }
+}
+
 async function readCronInput(
   source: string,
   stdin: AsyncIterable<unknown> | undefined,
@@ -42,7 +50,7 @@ async function readScriptStream(
     maxBytes: MAX_CRON_TRIGGER_SCRIPT_BYTES,
     onOverflow: () => new CronCliError(`${label} exceeds ${MAX_CRON_TRIGGER_SCRIPT_BYTES} bytes`),
   });
-  const script = bytes.toString("utf8").trim();
+  const script = decodeCronInput(bytes, label).trim();
   if (!script) {
     throw new CronCliError(`${label} must not be empty`);
   }
@@ -76,5 +84,5 @@ export async function readCronScratchContent(
     maxBytes: CRON_JOB_SCRATCH_MAX_BYTES,
     onOverflow: () => new CronCliError(`Cron scratch exceeds ${CRON_JOB_SCRATCH_MAX_BYTES} bytes`),
   });
-  return bytes.toString("utf8");
+  return decodeCronInput(bytes, "Cron scratch");
 }

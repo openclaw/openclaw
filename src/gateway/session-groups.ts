@@ -1,4 +1,3 @@
-// Gateway-owned custom session group catalog.
 // Membership stays on each session entry's category field; this module owns
 // which groups exist, their display order, and bulk member category updates.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -77,12 +76,11 @@ export async function putSessionGroups(params: {
   cfg: OpenClawConfig;
   names: readonly string[];
   sectionOrder?: readonly string[];
-  env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
   assertTargetCurrent?: (target: { agentId?: string; sessionKey: string }) => void;
 }): Promise<SessionGroupRecord[]> {
-  const { cfg, names, sectionOrder, env = process.env } = params;
-  await ensureSessionGroupCatalog(env);
+  const { cfg, names, sectionOrder } = params;
+  await ensureSessionGroupCatalog(process.env);
   const normalized = normalizeUniqueTrimmedStringList(names);
   const normalizedSectionOrder =
     sectionOrder === undefined ? undefined : normalizeSidebarSectionOrder(sectionOrder, normalized);
@@ -93,7 +91,7 @@ export async function putSessionGroups(params: {
       sectionOrder: normalizedSectionOrder,
       cfg: { agents: cfg.agents, session: cfg.session },
     },
-    env,
+    process.env,
     (facts) => {
       params.assertCurrent?.();
       for (const [, targets] of facts?.groups ?? []) {

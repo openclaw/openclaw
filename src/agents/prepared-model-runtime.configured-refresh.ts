@@ -10,14 +10,11 @@ import {
   type ActiveRemoteModelCatalog,
   type RemoteCatalogPublicationResult,
 } from "../model-catalog/remote-overlay.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import {
-  capturePreparedModelRuntimeGeneration,
-  retirePreparedModelRuntimeGeneration,
-} from "./prepared-model-runtime.lifecycle.js";
+import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
 import {
   advancePreparedModelRuntimeOwnerConfig,
-  preparedModelRuntimeConfigsMatch,
   ownerKey,
   prepareModelRuntimeOwner,
   publishPreparedModelRuntimeOwnerBatch,
@@ -47,37 +44,19 @@ export type PreparedModelRuntimeCatalogPublicationHost = {
   publicationQueue: PreparedModelRuntimePublicationQueue;
   replyDispatchPublication: PreparedReplyDispatchPublicationOwner;
   captureLifetime: () => () => void;
-  getEpoch: () => number;
   getCancellationSignal: () => AbortSignal;
   getPendingReplacement: () => Promise<void> | undefined;
   getBuildTimeoutMs: () => number;
   /** Same recovery configured publication installs; adopted owners replace those owners. */
   onPluginGenerationRetired: (owner: PreparedModelRuntimeOwner) => void;
-  pending?: {
-    catalog: ActiveRemoteModelCatalog;
-    /** Ends the adoption: a newer catalog or shutdown supersedes it. */
-    controller: AbortController;
-    /** Ends one preparation: a config advance restarts it against the new config. */
-    attempt?: AbortController;
-    completion: Promise<RemoteCatalogPublicationResult>;
-    isCurrent: () => boolean;
-  };
+  pending?: Promise<RemoteCatalogPublicationResult>;
 };
-
-// Owner churn (auth or config publication) retries adoption after it settles; churn that
-// outlasts these attempts defers the catalog to the next scheduled check.
-const MAX_REMOTE_CATALOG_ADOPTION_ATTEMPTS = 3;
 
 /** Binds the prepared runtime's publication host to the catalog adoption operations. */
 export function createRemoteCatalogPublication(host: PreparedModelRuntimeCatalogPublicationHost) {
   return {
     applyRemoteModelCatalogUpdate: applyRemoteModelCatalogUpdateNow.bind(null, host),
     advancePreparedModelRuntimeConfig: advancePreparedModelRuntimeConfigNow.bind(null, host),
-    /** Runtime close ends a pending adoption, including preparation still awaiting I/O. */
-    cancel: (reason: Error): void => {
-      host.pending?.controller.abort(reason);
-      host.pending = undefined;
-    },
   };
 }
 
@@ -86,18 +65,6 @@ function advancePreparedModelRuntimeConfigNow(
   host: PreparedModelRuntimeCatalogPublicationHost,
   config: OpenClawConfig,
 ): void {
-  const pending = host.pending;
-  if (
-    pending?.attempt &&
-    !pending.attempt.signal.aborted &&
-    captureRemoteModelCatalogStartupSnapshot() !== pending.catalog
-  ) {
-    pending.attempt.abort(
-      new PreparedModelRuntimePublicationSupersededError(
-        "Config changed during remote catalog preparation",
-      ),
-    );
-  }
   for (const owner of host.owners.values()) {
     // Read-only owners include the config hash in their map key and remain bound to their lease.
     if (!owner.input.readOnly) {
@@ -115,27 +82,25 @@ function applyRemoteModelCatalogUpdateNow(
 ): Promise<RemoteCatalogPublicationResult> {
   signal?.throwIfAborted();
   const assertLifetime = host.captureLifetime();
+  if (host.pending) {
+    return racePromiseWithAbortSignal(host.pending, signal);
+  }
   const completion: Promise<RemoteCatalogPublicationResult> = host.publicationQueue.track(
     runOutsideRemoteModelCatalogSnapshot(async (): Promise<RemoteCatalogPublicationResult> => {
-      let config: OpenClawConfig;
-      let update: ActiveRemoteModelCatalog | undefined;
-      do {
-        config = getConfig();
-        update = await readRemoteModelCatalogUpdate(config);
+      const config = getConfig();
+      const update = await readRemoteModelCatalogUpdate(config);
+      assertLifetime();
+      // The next catalog check retries if an overlapping config publication wins.
+      const replacement = update ? host.getPendingReplacement() : undefined;
+      if (replacement) {
+        await replacement;
         assertLifetime();
-        // Join outside the queue: degraded startup still owns a queued final commit.
-        const replacement = update ? host.getPendingReplacement() : undefined;
-        if (replacement) {
-          await replacement;
-          assertLifetime();
-        }
-        // A read made under a superseded config must not replace a current adoption.
-      } while (!preparedModelRuntimeConfigsMatch(config, getConfig()));
+      }
       if (!update) {
         return "unchanged";
       }
       const catalog = update;
-      let previous = captureRemoteModelCatalogStartupSnapshot();
+      const previous = captureRemoteModelCatalogStartupSnapshot();
       if (previous?.sourceUrl === catalog.sourceUrl) {
         if (previous.revision === catalog.revision) {
           return "unchanged";
@@ -144,122 +109,30 @@ function applyRemoteModelCatalogUpdateNow(
           return "superseded";
         }
       }
-      const pending = host.pending;
-      if (pending?.catalog.sourceUrl === catalog.sourceUrl) {
-        if (pending.catalog.revision === catalog.revision && pending.isCurrent()) {
-          return await pending.completion;
-        }
-        if (pending.catalog.generatedAt > catalog.generatedAt) {
+      try {
+        if (
+          !(await withRemoteModelCatalogSnapshot(catalog, () =>
+            publishPreparedModelRuntimeCatalogReplacement(host, catalog, previous),
+          ))
+        ) {
           return "superseded";
         }
-      }
-      if (pending?.isCurrent()) {
-        pending.controller.abort(
-          new PreparedModelRuntimePublicationSupersededError("A newer remote catalog was accepted"),
-        );
-      }
-      const controller = new AbortController();
-      const isCurrent = () =>
-        !controller.signal.aborted &&
-        host.pending?.controller === controller &&
-        captureRemoteModelCatalogStartupSnapshot() === previous;
-      const adoption: NonNullable<PreparedModelRuntimeCatalogPublicationHost["pending"]> = {
-        catalog,
-        controller,
-        completion,
-        isCurrent,
-      };
-      host.pending = adoption;
-      const publishAttempt = async (attemptConfig: OpenClawConfig): Promise<boolean> => {
-        const attempt = new AbortController();
-        const abortAttempt = () => attempt.abort(controller.signal.reason);
-        controller.signal.addEventListener("abort", abortAttempt, { once: true });
-        adoption.attempt = attempt;
-        const epoch = host.getEpoch();
-        try {
-          return await withRemoteModelCatalogSnapshot(catalog, () =>
-            publishPreparedModelRuntimeCatalogReplacement({
-              owners: host.owners,
-              agentBuildCompletions: host.agentBuildCompletions,
-              buildTimeoutMs: host.getBuildTimeoutMs(),
-              onPluginGenerationRetired: host.onPluginGenerationRetired,
-              controller: attempt,
-              signal: host.getCancellationSignal(),
-              isPublicationCurrent: () =>
-                isCurrent() &&
-                !host.getPendingReplacement() &&
-                !attempt.signal.aborted &&
-                host.getEpoch() === epoch &&
-                preparedModelRuntimeConfigsMatch(attemptConfig, getConfig()),
-              prepareCommit: (candidates) => {
-                const commitDispatch = host.replyDispatchPublication.stage(candidates);
-                return () => {
-                  if (!publishRemoteModelCatalogSnapshot(catalog, previous)) {
-                    throw new PreparedModelRuntimePublicationSupersededError(
-                      "Remote catalog publication lost its accepted predecessor",
-                    );
-                  }
-                  previous = null;
-                  commitDispatch();
-                };
-              },
-              commit: (publish) =>
-                host.publicationQueue.enqueue(async () => {
-                  assertLifetime();
-                  publish();
-                }),
-            }),
-          );
-        } catch (error) {
-          if (
-            error instanceof PreparedModelRuntimePublicationSupersededError ||
-            attempt.signal.aborted ||
-            host.getEpoch() !== epoch
-          ) {
-            return false;
-          }
-          throw error;
-        } finally {
-          controller.signal.removeEventListener("abort", abortAttempt);
-          if (adoption.attempt === attempt) {
-            adoption.attempt = undefined;
-          }
-        }
-      };
-      try {
-        for (let attempt = 1; ; attempt += 1) {
-          if (await publishAttempt(config)) {
-            notifyPreparedModelRuntimePublication({ phase: "published" });
-            return "published";
-          }
-          const settlements =
-            isCurrent() && attempt < MAX_REMOTE_CATALOG_ADOPTION_ATTEMPTS
-              ? configuredOwnerSettlements(host)
-              : undefined;
-          if (!settlements) {
-            return "superseded";
-          }
-          await racePromiseWithAbortSignal(Promise.allSettled(settlements), controller.signal);
-          assertLifetime();
-          config = getConfig();
-          const latest = await readRemoteModelCatalogUpdate(config);
-          assertLifetime();
-          if (latest?.revision !== catalog.revision || !isCurrent()) {
-            return "superseded";
-          }
-        }
+        notifyPreparedModelRuntimePublication({ phase: "published" });
+        return "published";
       } catch (error) {
-        if (error instanceof PreparedModelRuntimePublicationSupersededError || !isCurrent()) {
+        if (
+          error instanceof PreparedModelRuntimePublicationSupersededError ||
+          host.getCancellationSignal().aborted
+        ) {
           return "superseded";
         }
         throw error;
-      } finally {
-        if (host.pending === adoption) {
-          host.pending = undefined;
-        }
       }
+    }).finally(() => {
+      host.pending = undefined;
     }),
   );
+  host.pending = completion;
   return racePromiseWithAbortSignal(completion, signal);
 }
 
@@ -278,6 +151,7 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     progress?: Parameters<typeof publishPreparedModelRuntimeOwnerBatch>[0]["progress"];
   },
 ): Promise<void> {
+  await prepareSharedAuthStoreOwnership();
   const { owners, agentBuildCompletions, gatewayLifecycleActive, isPublicationCurrent, progress } =
     context;
   const catalogMode = options.catalogMode ?? "live";
@@ -320,7 +194,7 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
       catalogMode,
       existing?.provenance === "configured" ? existing : undefined,
     );
-    owner.onPluginGenerationRetired = () => context.onPluginGenerationRetired(owner);
+    owner.onPluginGenerationRetired = context.onPluginGenerationRetired.bind(context, owner);
     owner.catalogInventory = inventories.get(
       ownerKey({ ...input, runtimePluginSelections: undefined }),
     );
@@ -343,48 +217,13 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
   });
 }
 
-/**
- * Publication gates whose settlement can make every configured owner claimable again.
- * Replacement and owner gates settle when their publication commits, fails, or times out;
- * a raw build completion can outlive a timed-out build, so an owner without a gate
- * (including a failed build) cannot progress until its next admission and ends this adoption.
- */
-function configuredOwnerSettlements(
-  host: PreparedModelRuntimeCatalogPublicationHost,
-): Promise<unknown>[] | undefined {
-  const replacement = host.getPendingReplacement();
-  if (replacement) {
-    return [replacement];
-  }
-  const settlements: Promise<unknown>[] = [];
-  let configured = false;
-  for (const owner of host.owners.values()) {
-    if (owner.provenance !== "configured") {
-      continue;
-    }
-    configured = true;
-    if (owner.pending) {
-      settlements.push(owner.pending);
-    } else if (!owner.snapshot || owner.needsRefresh) {
-      return undefined;
-    }
-  }
-  return configured ? settlements : undefined;
-}
-
 /** Builds privately; only the final serialized commit replaces request-visible owners. */
-async function publishPreparedModelRuntimeCatalogReplacement(params: {
-  owners: Map<string, PreparedModelRuntimeOwner>;
-  agentBuildCompletions: Map<string, Promise<void>>;
-  buildTimeoutMs: number;
-  onPluginGenerationRetired: (owner: PreparedModelRuntimeOwner) => void;
-  controller: AbortController;
-  signal: AbortSignal;
-  isPublicationCurrent: () => boolean;
-  prepareCommit: (owners: readonly PreparedModelRuntimeOwner[]) => () => void;
-  commit: (publish: () => void) => Promise<void>;
-}): Promise<boolean> {
-  const claims = [...params.owners.values()]
+async function publishPreparedModelRuntimeCatalogReplacement(
+  host: PreparedModelRuntimeCatalogPublicationHost,
+  catalog: ActiveRemoteModelCatalog,
+  previous: ActiveRemoteModelCatalog | null,
+): Promise<boolean> {
+  const claims = [...host.owners.values()]
     .filter((owner) => owner.provenance === "configured")
     .map((owner) => ({ owner, generation: owner.generation, input: owner.input }));
   if (
@@ -393,62 +232,17 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
   ) {
     return false;
   }
-  const controller = params.controller;
-  let parentSignals = [
-    params.signal,
-    ...claims.map(({ owner }) => capturePreparedModelRuntimeGeneration(owner)),
-  ];
-  const abortPreparation = () => {
-    if (!controller.signal.aborted) {
-      controller.abort(
-        new PreparedModelRuntimePublicationSupersededError(
-          "A captured model owner retired during remote catalog preparation",
-        ),
-      );
-    }
-  };
-  const stopWatchingParents = () => {
-    for (const signal of parentSignals) {
-      signal.removeEventListener("abort", abortPreparation);
-    }
-    parentSignals = [];
-  };
-  for (const signal of parentSignals) {
-    signal.addEventListener("abort", abortPreparation, { once: true });
-  }
-  if (parentSignals.some((signal) => signal.aborted)) {
-    abortPreparation();
-  }
+  const signal = host.getCancellationSignal();
+  const buildTimeoutMs = host.getBuildTimeoutMs();
   const staged = new Map<string, PreparedModelRuntimeOwner>();
   let committed = false;
-  const isCurrent = () =>
-    !controller.signal.aborted &&
-    params.isPublicationCurrent() &&
-    claims.every(
-      ({ owner, generation, input }) =>
-        params.owners.get(ownerKey(input)) === owner &&
-        owner.generation === generation &&
-        owner.input === input &&
-        !owner.needsRefresh &&
-        !owner.pending,
-    );
-  const assertCurrent = () => {
-    if (!isCurrent()) {
-      throw new PreparedModelRuntimePublicationSupersededError(
-        "remote catalog publication was superseded",
-      );
-    }
-  };
   const candidates = claims.map(({ input, generation }) => {
     const candidate = prepareModelRuntimeOwner(input, "configured", "static");
     candidate.generation = generation;
-    // Before commit no reader sees the candidate, so a lost Gateway loan restarts this attempt;
-    // after commit it is a published configured owner and takes the normal recovery.
+    // Unpublished loan retirement is checked at commit; published owners use normal recovery.
     candidate.onPluginGenerationRetired = () => {
       if (committed) {
-        params.onPluginGenerationRetired(candidate);
-      } else {
-        abortPreparation();
+        host.onPluginGenerationRetired(candidate);
       }
     };
     return candidate;
@@ -459,48 +253,74 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
       retirePreparedModelRuntimeGeneration(owner);
     }
   };
-  controller.signal.addEventListener("abort", retireCandidates, { once: true });
+  signal.addEventListener("abort", retireCandidates, { once: true });
   try {
-    assertCurrent();
     await publishPreparedModelRuntimeOwnerBatch({
       ownersToPublish: candidates,
       owners: staged,
-      agentBuildCompletions: params.agentBuildCompletions,
-      buildTimeoutMs: params.buildTimeoutMs,
+      agentBuildCompletions: host.agentBuildCompletions,
+      buildTimeoutMs,
       registerEntriesAfterBuildStart: true,
-      acquisitionSignal: controller.signal,
-      isPublicationCurrent: () => committed || isCurrent(),
-      isOwnerRegistered: (key, owner) => (committed ? params.owners : staged).get(key) === owner,
-      isOwnerPublished: (key, owner) => committed && params.owners.get(key) === owner,
+      acquisitionSignal: signal,
+      isPublicationCurrent: () => committed || !signal.aborted,
+      isOwnerRegistered: (key, owner) => (committed ? host.owners : staged).get(key) === owner,
     });
     // Pricing preparation takes no signal; cancellation, shutdown and a stalled read must not
     // leave adoption pending, so it shares the owner build deadline.
-    const pricingSignal = AbortSignal.any([
-      controller.signal,
-      AbortSignal.timeout(params.buildTimeoutMs),
-    ]);
+    const pricingSignal = AbortSignal.any([signal, AbortSignal.timeout(buildTimeoutMs)]);
     for (const config of new Set(candidates.map((owner) => owner.input.config))) {
       await racePromiseWithAbortSignal(prepareModelPricingContext(config), pricingSignal);
     }
-    await params.commit(() => {
-      assertCurrent();
-      // Any candidate retirement (lost loan or retired cache) leaves it unpublishable.
-      if (candidates.some((owner) => owner.needsRefresh || !owner.pluginGeneration)) {
+    // Readers keep the committed generation until each candidate has discovered its own rows.
+    // A failed discovery publishes the candidate's static rows, never the previous catalog's.
+    await racePromiseWithAbortSignal(
+      Promise.allSettled(
+        candidates.map(
+          async (owner) =>
+            await owner.snapshot?.loadFullModelCatalog?.({
+              refresh: true,
+              changedOnly: true,
+              wait: true,
+            }),
+        ),
+      ),
+      signal,
+    );
+    await host.publicationQueue.enqueue(async () => {
+      signal.throwIfAborted();
+      // One effect check keeps auth refreshes and retired plugins from publishing stale authority.
+      if (
+        claims.some(
+          ({ owner, generation, input }) =>
+            host.owners.get(ownerKey(input)) !== owner ||
+            owner.generation !== generation ||
+            owner.needsRefresh ||
+            owner.pending !== undefined,
+        ) ||
+        candidates.some((owner) => owner.needsRefresh || !owner.pluginGeneration)
+      ) {
         throw new PreparedModelRuntimePublicationSupersededError(
-          "A remote catalog candidate's plugin generation retired before publication",
+          "A remote catalog owner retired before publication",
         );
       }
-      const commit = params.prepareCommit(candidates);
-      assertCurrent();
-      commit();
+      // Keep new-run policy current without rebuilding model-neutral catalog facts.
+      for (const [index, candidate] of candidates.entries()) {
+        advancePreparedModelRuntimeOwnerConfig(candidate, claims[index]!.owner.input.config);
+      }
+      const commitDispatch = host.replyDispatchPublication.stage(candidates);
+      if (!publishRemoteModelCatalogSnapshot(catalog, previous)) {
+        throw new PreparedModelRuntimePublicationSupersededError(
+          "Remote catalog publication lost its accepted predecessor",
+        );
+      }
+      commitDispatch();
       for (const owner of candidates) {
-        params.owners.set(ownerKey(owner.input), owner);
+        host.owners.set(ownerKey(owner.input), owner);
       }
       committed = true;
-      stopWatchingParents();
-      controller.signal.removeEventListener("abort", retireCandidates);
+      signal.removeEventListener("abort", retireCandidates);
       // Existing leases retain their pair; other owners must rebuild before new admission.
-      for (const owner of params.owners.values()) {
+      for (const owner of host.owners.values()) {
         if (owner.provenance !== "configured") {
           owner.needsRefresh = true;
         }
@@ -510,40 +330,21 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
         retirePreparedModelRuntimeGeneration(owner);
         releasePreparedPluginPublication(owner);
       }
-      claims.length = 0;
       staged.clear();
     });
-    for (const owner of candidates) {
-      void owner.snapshot?.loadFullModelCatalog?.({ refresh: true }).catch(() => undefined);
-    }
     return true;
-  } catch (error) {
-    if (
-      !committed &&
-      !(error instanceof PreparedModelRuntimePublicationSupersededError) &&
-      !isCurrent()
-    ) {
-      throw new PreparedModelRuntimePublicationSupersededError(
-        "Remote catalog preparation lost its captured owners",
-        { cause: error },
-      );
-    }
-    throw error;
   } finally {
-    stopWatchingParents();
-    controller.signal.removeEventListener("abort", retireCandidates);
+    signal.removeEventListener("abort", retireCandidates);
     if (!committed) {
       retireCandidates();
-      for (const owner of candidates) {
-        releasePreparedPluginPublication(owner);
-      }
-      const discarded: Promise<void>[] = [];
-      for (const owner of candidates) {
-        if (owner.pluginGeneration) {
-          discarded.push(discardPreparedPluginGeneration(owner.pluginGeneration));
-        }
-      }
-      await Promise.all(discarded);
+      await Promise.all(
+        candidates.map(async (owner) => {
+          releasePreparedPluginPublication(owner);
+          if (owner.pluginGeneration) {
+            await discardPreparedPluginGeneration(owner.pluginGeneration);
+          }
+        }),
+      );
     }
   }
 }

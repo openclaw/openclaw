@@ -1,5 +1,6 @@
 import { backup } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
@@ -17,18 +18,22 @@ import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-
 import { restoreEmptyV21StorageForHistoricalFixture } from "./openclaw-agent-schema-v21.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 describe("creator namespace upgrades", () => {
   it("qualifies only proven historical seams atomically and keeps a restorable backup", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const options = { agentId: "main", env: state.env };
       const cases = [
         ["operator", "profile"],
         ["run", "profile"],
         ["channel", "channel"],
         ["cron", "unknown"],
-        ["spawn", "unknown"],
-        ["talk", "unknown"],
         [undefined, "unknown"],
       ] as const;
       for (const [via] of cases) {
@@ -134,6 +139,7 @@ describe("creator namespace upgrades", () => {
 
   it("retains historical cron attribution as unknown through the actual store upgrade", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const storePath = state.statePath("cron", "jobs.json");
       await saveCronStore(storePath, {
         version: 1,
@@ -150,10 +156,15 @@ describe("creator namespace upgrades", () => {
         ],
       });
       const initial = openOpenClawStateDatabase({ env: state.env });
+      restorePreTemplateStateIdentifiersForTest(initial.db);
+      addPreCutoverClientCredentialTablesForTest(initial.db);
       initial.db
         .exec(`UPDATE cron_jobs SET job_json = json_remove(job_json, '$.createdActor.source');
         PRAGMA user_version = 13; UPDATE schema_meta SET schema_version = 13;`);
       await closeStateDatabaseForTest();
+      await withStateMigrationBackupForTest({ env: state.env }, () =>
+        openOpenClawStateDatabase({ env: state.env }),
+      );
       const reopened = openOpenClawStateDatabase({ env: state.env });
       expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,

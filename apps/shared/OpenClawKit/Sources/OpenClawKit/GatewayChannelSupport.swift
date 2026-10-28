@@ -51,6 +51,7 @@ extension GatewayChannelActor {
         let storedScopes: [String]?
         let authSource: GatewayAuthSource
         let suppressedDeviceTokenRetry: Bool
+        var observedTokens: [String: String] = [:]
     }
 }
 

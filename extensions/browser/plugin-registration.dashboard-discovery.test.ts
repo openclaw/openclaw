@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
@@ -17,6 +18,7 @@ import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
@@ -24,12 +26,12 @@ import { registerBrowserPlugin } from "./plugin-registration.js";
 import { getBrowserStateRuntime, setBrowserStateRuntime } from "./src/browser-runtime-state.js";
 import { resolveBrowserConfig } from "./src/browser/config.js";
 import { createBrowserRuntimeState, stopBrowserRuntime } from "./src/browser/runtime-lifecycle.js";
+import { browserSessionTabStorageKey } from "./src/browser/session-tab-identity.js";
 import {
   closeTrackedBrowserTabsForSessions,
   trackSessionBrowserTab,
 } from "./src/browser/session-tab-registry.js";
 import {
-  browserSessionTabStorageKey,
   getBrowserSessionTabStore,
   persistBrowserDashboardStopIntent,
 } from "./src/browser/session-tab-store.js";
@@ -46,54 +48,52 @@ const serviceScope = new AsyncLocalStorage<string>();
 beforeEach(() => reconcile.mockReset());
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["stop", "replacement"] as const)(
-  "runs cleanup under service authority until %s",
-  async (end) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      // Native timers retain async context; keep that contract in the fake clock.
-      const schedule = globalThis.setTimeout;
-      vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) =>
-        schedule(AsyncLocalStorage.bind(callback), delay, ...args),
-      );
-      const lifecycle = await registerDiscovery(state.stateDir);
-      const observed = createDeferred<void>();
-      const scopes: Array<string | undefined> = [];
-      reconcile.mockImplementation(async () => {
-        scopes.push(serviceScope.getStore());
-        observed.resolve();
-        return 0;
-      });
-      await lifecycle.start();
-      const runtime = await serviceScope.run("ended-caller", () =>
-        createBrowserRuntimeState({
-          resolved: resolveBrowserConfig(undefined),
-          port: 18_791,
-        }),
-      );
-      try {
-        await vi.advanceTimersByTimeAsync(300_000);
-        await observed.promise;
-        expect(scopes).toEqual(["discovery-service"]);
-        if (end === "stop") {
-          await lifecycle.stop();
-        } else {
-          setBrowserStateRuntime({ ...getBrowserStateRuntime() });
-        }
-        await vi.advanceTimersByTimeAsync(600_000);
-        expect(scopes).toHaveLength(1);
-      } finally {
+it.each(["stop", "replacement"] as const)("keeps cleanup service-scoped until %s", async (end) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // Native timers retain async context; keep that contract in the fake clock.
+    const schedule = globalThis.setTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) =>
+      schedule(AsyncLocalStorage.bind(callback), delay, ...args),
+    );
+    const lifecycle = await registerDiscovery(state.stateDir);
+    const observed = observeReconciliation();
+    await lifecycle.start();
+    const runtime = await serviceScope.run("ended-caller", () =>
+      createBrowserRuntimeState({
+        resolved: resolveBrowserConfig(undefined),
+        port: 18_791,
+      }),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(300_000);
+      await observed.entered;
+      if (end === "stop") {
         await lifecycle.stop();
-        await stopBrowserRuntime({
-          current: runtime,
-          clearState: vi.fn(),
-          onWarn: vi.fn(),
-        });
-        vi.useRealTimers();
+      } else {
+        setBrowserStateRuntime({ ...getBrowserStateRuntime() });
       }
-    });
-  },
-);
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(observed.scopes).toEqual(["discovery-service"]);
+    } finally {
+      await lifecycle.stop();
+      await stopBrowserRuntime({ current: runtime, clearState: vi.fn(), onWarn: vi.fn() });
+      vi.useRealTimers();
+    }
+  });
+});
+
+function observeReconciliation(result = Promise.resolve(0)) {
+  const entered = createDeferred<void>();
+  const scopes: Array<string | undefined> = [];
+  reconcile.mockImplementation(async () => {
+    scopes.push(serviceScope.getStore());
+    entered.resolve();
+    return result;
+  });
+  return { entered: entered.promise, scopes };
+}
 
 async function registerDiscovery(stateDir: string) {
   const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
@@ -109,22 +109,15 @@ async function registerDiscovery(stateDir: string) {
     const bound = withCurrent(authority);
     return { ...bound, entries: () => entries(bound) };
   });
+  const openKeyedStore = (options: OpenKeyedStoreOptions) =>
+    options.namespace === "browser.session-tabs"
+      ? store
+      : createPluginStateKeyedStoreForTests("browser", options);
   registerBrowserPlugin(
     createTestPluginApi({
       id: "browser",
-      name: "Browser",
-      source: "test",
-      rootDir: stateDir,
-      config: {},
       on: hooks,
-      runtime: {
-        state: {
-          openKeyedStore: (options: OpenKeyedStoreOptions) =>
-            options.namespace === "browser.session-tabs"
-              ? store
-              : createPluginStateKeyedStoreForTests("browser", options),
-        },
-      } as unknown as PluginRuntime,
+      runtime: { state: { openKeyedStore } } as unknown as PluginRuntime,
       registerService: (service) => services.push(service),
     }),
   );
@@ -138,14 +131,8 @@ async function registerDiscovery(stateDir: string) {
   });
   const service = services[0];
   const sessionEnd = hooks.mock.calls.find(([name]) => name === "session_end")?.[1];
-  if (!service?.stop || !sessionEnd) {
-    throw new Error("Browser discovery lifecycle was not registered");
-  }
-  let onBoardChanged: Parameters<OpenClawPluginGatewayEvents["onSessionsChanged"]>[0] | undefined;
-  const subscribe = vi.fn<OpenClawPluginGatewayEvents["onSessionsChanged"]>((handler) => {
-    onBoardChanged = handler;
-    return vi.fn();
-  });
+  assert(service?.stop && sessionEnd, "Browser discovery lifecycle was not registered");
+  const subscribe = vi.fn<OpenClawPluginGatewayEvents["onSessionsChanged"]>(() => vi.fn());
   const scheduler = createTestPluginServiceScheduler();
   onTestFinished(() => scheduler.stop());
   const context: OpenClawPluginServiceContextV2 = {
@@ -153,279 +140,223 @@ async function registerDiscovery(stateDir: string) {
     config: {},
     stateDir,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    gatewayEvents: {
-      emit: vi.fn(),
-      onSessionsChanged: subscribe,
-    },
+    gatewayEvents: { emit: vi.fn(), onSessionsChanged: subscribe },
   };
   return {
+    replace: () => registerDiscovery(stateDir),
     entries,
     subscribe,
-    async start() {
-      await serviceScope.run("discovery-service", () => service.start(context));
-    },
+    start: () => serviceScope.run("discovery-service", () => service.start(context)),
     stop: () => service.stop?.(context),
     boardChanged: () =>
-      onBoardChanged?.({ sessionKey: "discovery", agentId: "main", reason: "board" }),
+      subscribe.mock.lastCall?.[0]({ sessionKey: "discovery", agentId: "main", reason: "board" }),
     sessionEnd: () => sessionEnd({ sessionKey, reason: "deleted" }, { sessionKey }),
   };
 }
 
-it.each(["board", "session end"] as const)(
-  "discovers %s dashboard owners without querying plugin rows on the host",
-  async (trigger) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const lifecycle = await registerDiscovery(state.stateDir);
+function withDiscovery<T extends unknown[]>(
+  run: (lifecycle: Awaited<ReturnType<typeof registerDiscovery>>, ...args: T) => Promise<void>,
+) {
+  return (...args: T) =>
+    withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+      const lifecycle = await registerDiscovery(stateDir);
       await lifecycle.start();
-      const db = openOpenClawStateDatabase().db;
-      const prepare = db.prepare.bind(db);
-      const hostRead = vi.spyOn(db, "prepare").mockImplementation((sql) => {
-        if (/select\b[\s\S]*\bplugin_state_entries\b/i.test(sql)) {
-          throw new Error("Dashboard discovery queried plugin rows on the host");
-        }
-        return prepare(sql);
-      });
       try {
-        if (trigger === "board") {
-          lifecycle.boardChanged();
-          await lifecycle.stop();
-        } else {
-          await lifecycle.sessionEnd();
+        await run(lifecycle, ...args);
+      } finally {
+        await lifecycle.stop();
+      }
+    });
+}
+
+function holdStoreReply(storageKey: string, action: "set" | "delete") {
+  const binding = vi.mocked(getBrowserStateRuntime().sessionTabs.withCurrent!);
+  const bindStore = binding.getMockImplementation();
+  assert(bindStore, "Expected the registered real-store fixture binding");
+  const applied = createDeferred<void>();
+  const release = createDeferred<void>();
+  binding.mockImplementation((authority) => {
+    const store = bindStore(authority);
+    return {
+      ...store,
+      compareAndApply: async (key, comparison, intent) => {
+        const result = await store.compareAndApply(key, comparison, intent);
+        if (key === storageKey && intent.action === action && result.status === "applied") {
+          applied.resolve();
+          await release.promise;
         }
+        return result;
+      },
+    };
+  });
+  return { applied, release, restore: () => binding.mockImplementation(bindStore) };
+}
+
+function tabOptions(targetId: string) {
+  return {
+    sessionKey,
+    targetId,
+    profile: "openclaw",
+    ownership: {
+      status: "durable" as const,
+      nativeTargetId: targetId,
+      profileFingerprint: "shutdown-profile",
+      browserInstanceFingerprint: "shutdown-browser",
+    },
+  };
+}
+
+async function holdDiscovery(lifecycle: Awaited<ReturnType<typeof registerDiscovery>>) {
+  const rows = await getBrowserSessionTabStore().entries();
+  lifecycle.entries.mockClear();
+  const pending = createDeferred<typeof rows>();
+  lifecycle.entries.mockReturnValueOnce(pending.promise);
+  return () => pending.resolve(rows);
+}
+
+it.each([
+  ["board", false],
+  ["session end", false],
+  ["board", true],
+  ["session end", true],
+] as const)(
+  "discovers %s owners with replaced runtime=%s without host SQL",
+  withDiscovery(async (lifecycle, trigger: "board" | "session end", replaced: boolean) => {
+    const releaseDiscovery = replaced ? await holdDiscovery(lifecycle) : () => {};
+    const db = openOpenClawStateDatabase().db;
+    const prepare = db.prepare.bind(db);
+    const hostRead = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
+      if (/select\b[\s\S]*\bplugin_state_entries\b/i.test(sql)) {
+        throw new Error("Dashboard discovery queried plugin rows on the host");
+      }
+      return prepare(sql);
+    });
+    try {
+      const pending = trigger === "board" ? lifecycle.boardChanged() : lifecycle.sessionEnd();
+      if (replaced) {
         expect(lifecycle.entries).toHaveBeenCalledOnce();
+        await lifecycle.replace();
+        releaseDiscovery();
+      }
+      await pending;
+      await lifecycle.stop();
+      expect(lifecycle.entries).toHaveBeenCalledOnce();
+      if (replaced) {
+        lifecycle.boardChanged();
+        await lifecycle.sessionEnd();
+        expect(lifecycle.entries).toHaveBeenCalledOnce();
+        expect(reconcile).not.toHaveBeenCalled();
+      } else {
         expect(reconcile).toHaveBeenCalledExactlyOnceWith({
           sessionKeys: [sessionKey],
           onWarn: expect.any(Function),
         });
-      } finally {
-        hostRead.mockRestore();
-        await lifecycle.stop();
       }
-    });
-  },
+    } finally {
+      releaseDiscovery();
+      hostRead.mockRestore();
+    }
+  }),
 );
 
 it.each(["stop", "restart"] as const)(
-  "joins deferred discovery and reconciliation during %s, retaining the service context",
-  async (transition) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const lifecycle = await registerDiscovery(state.stateDir);
-      await lifecycle.start();
-      const rows = await getBrowserSessionTabStore().entries();
-      lifecycle.entries.mockClear();
-      const discovery = createDeferred<typeof rows>();
-      const finishing = createDeferred<number>();
-      const reconciling = createDeferred<void>();
-      lifecycle.entries.mockReturnValueOnce(discovery.promise);
-      let observedScope: string | undefined;
-      reconcile.mockImplementationOnce(async () => {
-        observedScope = serviceScope.getStore();
-        reconciling.resolve();
-        return await finishing.promise;
-      });
-      let stopping: Promise<void> | undefined;
-      try {
-        lifecycle.boardChanged();
-        expect(lifecycle.entries).toHaveBeenCalledOnce();
-        let stopped = false;
-        stopping = Promise.resolve(
-          transition === "stop" ? lifecycle.stop() : lifecycle.start(),
-        ).then(() => {
-          stopped = true;
-        });
-        expect(lifecycle.subscribe).toHaveBeenCalledOnce();
-        lifecycle.boardChanged();
-        await Promise.resolve();
-        expect(stopped).toBe(false);
-        expect(reconcile).not.toHaveBeenCalled();
-        discovery.resolve(rows);
-        await reconciling.promise;
-        expect(reconcile).toHaveBeenCalledOnce();
-        expect(stopped).toBe(false);
-        finishing.resolve(0);
-        await stopping;
-        expect(observedScope).toBe("discovery-service");
-        expect(lifecycle.entries).toHaveBeenCalledOnce();
-        expect(lifecycle.subscribe).toHaveBeenCalledTimes(transition === "stop" ? 1 : 2);
-        await lifecycle.stop();
-        lifecycle.boardChanged();
-        expect(lifecycle.entries).toHaveBeenCalledOnce();
-      } finally {
-        discovery.resolve(rows);
-        finishing.resolve(0);
-        await stopping;
-        await lifecycle.stop();
-      }
-    });
-  },
-);
-
-it.each(["board", "session end"] as const)(
-  "discards %s discovery after its Browser runtime is replaced",
-  async (trigger) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const lifecycle = await registerDiscovery(state.stateDir);
-      await lifecycle.start();
-      const rows = await getBrowserSessionTabStore().entries();
-      lifecycle.entries.mockClear();
-      const discovery = createDeferred<typeof rows>();
-      lifecycle.entries.mockReturnValueOnce(discovery.promise);
-      const pending = trigger === "board" ? lifecycle.boardChanged() : lifecycle.sessionEnd();
-      expect(lifecycle.entries).toHaveBeenCalledOnce();
-      await registerDiscovery(state.stateDir);
-      discovery.resolve(rows);
-      await pending;
-      await lifecycle.stop();
-      expect(reconcile).not.toHaveBeenCalled();
+  "joins service-scoped discovery on %s",
+  withDiscovery(async (lifecycle, transition: "stop" | "restart") => {
+    const releaseDiscovery = await holdDiscovery(lifecycle);
+    const finishing = createDeferred<number>();
+    const observed = observeReconciliation(finishing.promise);
+    let stopping: Promise<void> | undefined;
+    try {
       lifecycle.boardChanged();
-      await lifecycle.sessionEnd();
       expect(lifecycle.entries).toHaveBeenCalledOnce();
+      const settled = vi.fn();
+      stopping = Promise.resolve(transition === "stop" ? lifecycle.stop() : lifecycle.start()).then(
+        settled,
+      );
+      lifecycle.boardChanged();
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
       expect(reconcile).not.toHaveBeenCalled();
-    });
-  },
+      releaseDiscovery();
+      await observed.entered;
+      expect(settled).not.toHaveBeenCalled();
+      finishing.resolve(0);
+      await stopping;
+      expect(observed.scopes).toEqual(["discovery-service"]);
+      expect(lifecycle.subscribe).toHaveBeenCalledTimes(transition === "stop" ? 1 : 2);
+      await lifecycle.stop();
+      lifecycle.boardChanged();
+      expect(lifecycle.entries).toHaveBeenCalledOnce();
+    } finally {
+      releaseDiscovery();
+      finishing.resolve(0);
+      await stopping;
+    }
+  }),
 );
 
-it("joins an accepted tab registration reply during service shutdown", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const lifecycle = await registerDiscovery(state.stateDir);
-    await lifecycle.start();
-    const binding = vi.mocked(getBrowserStateRuntime().sessionTabs.withCurrent!);
-    const bindStore = binding.getMockImplementation();
-    if (!bindStore) {
-      throw new Error("Expected the registered real-store fixture binding");
+it.each(["registration", "retirement"] as const)(
+  "joins %s during shutdown",
+  withDiscovery(async (lifecycle, phase: "registration" | "retirement") => {
+    const options = tabOptions(phase === "registration" ? "shutdown-tab" : "shutdown-close");
+    const storageKey = browserSessionTabStorageKey({ ...options.ownership, sessionKey });
+    if (phase === "retirement") {
+      assert(await trackSessionBrowserTab(options), "Expected a durable cleanup row");
     }
-    const applied = createDeferred<void>();
-    const releaseReply = createDeferred<void>();
-    const ownership = {
-      status: "durable" as const,
-      nativeTargetId: "shutdown-tab",
-      profileFingerprint: "shutdown-profile",
-      browserInstanceFingerprint: "shutdown-browser",
-    };
-    const storageKey = browserSessionTabStorageKey({ ...ownership, sessionKey });
-    binding.mockImplementation((authority) => {
-      const boundStore = bindStore(authority);
-      return {
-        ...boundStore,
-        compareAndApply: async (key, comparison, intent) => {
-          const result = await boundStore.compareAndApply(key, comparison, intent);
-          if (key === storageKey && intent.action === "set" && result.status === "applied") {
-            applied.resolve();
-            await releaseReply.promise;
-          }
-          return result;
-        },
-      };
-    });
-    const tracking = trackSessionBrowserTab({
-      sessionKey,
-      targetId: ownership.nativeTargetId,
-      profile: "openclaw",
-      ownership,
-      now: 1_000,
-    });
+    const reply = holdStoreReply(storageKey, phase === "registration" ? "set" : "delete");
+    const dispatched = createDeferred<void>();
+    const releaseClose = createDeferred<void>();
+    const operation =
+      phase === "registration"
+        ? trackSessionBrowserTab({ ...options, now: 1_000 })
+        : closeTrackedBrowserTabsForSessions({
+            sessionKeys: [sessionKey],
+            closeTab: async () => {
+              dispatched.resolve();
+              await releaseClose.promise;
+            },
+          });
     let stopping: Promise<void> | undefined;
     try {
       await Promise.race([
-        applied.promise,
-        tracking.then(() => {
-          throw new Error("Tab registration settled without holding its applied reply");
+        phase === "registration" ? reply.applied.promise : dispatched.promise,
+        operation.then(() => {
+          throw new Error("Tab operation settled before its held reply");
         }),
       ]);
-      let stopped = false;
-      stopping = Promise.resolve(lifecycle.stop()).then(() => {
-        stopped = true;
-      });
+      const settled = vi.fn();
+      stopping = Promise.resolve(lifecycle.stop()).then(settled);
       const persisted = await getBrowserSessionTabStore().lookup(storageKey);
-      expect(persisted).toMatchObject({
-        sessionKey,
-        nativeTargetId: ownership.nativeTargetId,
-        profile: "openclaw",
-        lastUsedAt: 1_000,
-      });
-      expect(stopped).toBe(false);
-      releaseReply.resolve();
-      await Promise.all([tracking, stopping]);
-      expect(stopped).toBe(true);
-      expect(await getBrowserSessionTabStore().lookup(storageKey)).toEqual(persisted);
-    } finally {
-      releaseReply.resolve();
-      await Promise.allSettled([tracking, stopping]);
-      binding.mockImplementation(bindStore);
-      await lifecycle.stop();
-    }
-  });
-});
-
-it("joins a cold lifecycle close and its retirement reply during service shutdown", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const lifecycle = await registerDiscovery(state.stateDir);
-    await lifecycle.start();
-    const tab = await trackSessionBrowserTab({
-      sessionKey,
-      targetId: "shutdown-close",
-      profile: "openclaw",
-      ownership: {
-        status: "durable",
-        nativeTargetId: "shutdown-close",
-        profileFingerprint: "shutdown-profile",
-        browserInstanceFingerprint: "shutdown-browser",
-      },
-    });
-    if (!tab) {
-      throw new Error("Expected a durable cleanup row");
-    }
-    const binding = vi.mocked(getBrowserStateRuntime().sessionTabs.withCurrent!);
-    const bindStore = binding.getMockImplementation()!;
-    const dispatched = createDeferred<void>();
-    const releaseClose = createDeferred<void>();
-    const retired = createDeferred<void>();
-    const releaseRetirement = createDeferred<void>();
-    binding.mockImplementation((authority) => {
-      const store = bindStore(authority);
-      return {
-        ...store,
-        compareAndApply: async (key, comparison, intent) => {
-          const result = await store.compareAndApply(key, comparison, intent);
-          if (key === tab.storageKey && intent.action === "delete" && result.status === "applied") {
-            retired.resolve();
-            await releaseRetirement.promise;
-          }
-          return result;
-        },
-      };
-    });
-    const closing = closeTrackedBrowserTabsForSessions({
-      sessionKeys: [sessionKey],
-      closeTab: async () => {
-        dispatched.resolve();
-        await releaseClose.promise;
-      },
-    });
-    let stopping: Promise<void> | undefined;
-    try {
-      await dispatched.promise;
-      let stopped = false;
-      stopping = Promise.resolve(lifecycle.stop()).then(() => {
-        stopped = true;
-      });
-      expect(await getBrowserSessionTabStore().lookup(tab.storageKey)).toMatchObject({
-        cleanupKind: "lifecycle",
-      });
-      expect(stopped).toBe(false);
-      releaseClose.resolve();
-      await retired.promise;
-      expect(stopped).toBe(false);
-      releaseRetirement.resolve();
-      expect(await closing).toBe(1);
+      expect(persisted).toMatchObject(
+        phase === "registration"
+          ? {
+              sessionKey,
+              nativeTargetId: "shutdown-tab",
+              profile: "openclaw",
+              lastUsedAt: 1_000,
+            }
+          : { cleanupKind: "lifecycle" },
+      );
+      expect(settled).not.toHaveBeenCalled();
+      if (phase === "retirement") {
+        releaseClose.resolve();
+        await reply.applied.promise;
+        expect(settled).not.toHaveBeenCalled();
+      }
+      reply.release.resolve();
+      const result = await operation;
+      if (phase === "retirement") {
+        expect(result).toBe(1);
+      }
       await stopping;
-      expect(await getBrowserSessionTabStore().lookup(tab.storageKey)).toBeUndefined();
+      expect(await getBrowserSessionTabStore().lookup(storageKey)).toEqual(
+        phase === "registration" ? persisted : undefined,
+      );
     } finally {
       releaseClose.resolve();
-      releaseRetirement.resolve();
-      await Promise.allSettled([closing, stopping]);
-      binding.mockImplementation(bindStore);
-      await lifecycle.stop();
+      reply.release.resolve();
+      await Promise.allSettled([operation, stopping]);
+      reply.restore();
     }
-  });
-});
+  }),
+);

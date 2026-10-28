@@ -2,8 +2,12 @@
   "oldestSupportedBaseline": "2026.6.34",
   "scenarios": [
     "base",
+    "session-share",
     "backup-schedule",
     "abandoned-update",
+    "package-publication-recovery",
+    "package-verification-recovery",
+    "package-stranded-first-hop",
     "legacy-operator-state",
     "workshop-doctor-recovery",
     "update-report-recovery",

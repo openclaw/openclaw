@@ -8,13 +8,11 @@ import { attachModelProviderRuntimePluginHandle } from "../../plugins/provider-h
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import { transformProviderSystemPrompt } from "../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
 import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
-import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
-import { hasAnyAuthProfileStoreSourceAsync } from "../auth-profiles/source-check.js";
+import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../auth-profiles/store-runtime.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
 import {
@@ -27,22 +25,18 @@ import {
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
 } from "../bootstrap-files.js";
-import {
-  resolveChannelMessageToolHints,
-  resolveChannelReactionGuidance,
-} from "../channel-tools.js";
-import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
-import { formatDateStamp, resolveUserTimezone } from "../date-time.js";
+import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
-  resolveModelAuthMode,
+  resolveModelAuthModeAsync,
 } from "../model-auth.js";
 import { supportsModelTools } from "../model-tool-support.js";
+import { getPreparedModelRuntimeAuthStore } from "../prepared-model-runtime-auth.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
-import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
+import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
 import {
   buildAgentRuntimePlan,
   resolvePreparedProviderRuntimeHandle,
@@ -93,6 +87,7 @@ export async function buildPreparedCompactionRuntime(
     thinkLevel,
     runtimeModel,
     apiKeyInfo,
+    runtimeApiKey,
     resolvedRuntimeAuthPlan,
     hasRuntimeAuthExchange,
     resolvedWorkspace,
@@ -116,14 +111,11 @@ export async function buildPreparedCompactionRuntime(
   let restoreSkillEnv: (() => void) | undefined;
   let bundleMcpRuntime: Awaited<ReturnType<typeof createBundleMcpToolRuntime>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
-  let toolRuntimesDisposed = false;
-  let skillEnvironmentRestored = false;
   const disposeToolRuntimes = async () => {
-    if (toolRuntimesDisposed) {
-      return;
-    }
-    toolRuntimesDisposed = true;
-    for (const runtime of [bundleMcpRuntime, bundleLspRuntime]) {
+    const runtimes = [bundleMcpRuntime, bundleLspRuntime];
+    bundleMcpRuntime = undefined;
+    bundleLspRuntime = undefined;
+    for (const runtime of runtimes) {
       try {
         await runtime?.dispose();
       } catch {
@@ -132,11 +124,9 @@ export async function buildPreparedCompactionRuntime(
     }
   };
   const restoreSkillEnvironment = () => {
-    if (skillEnvironmentRestored) {
-      return;
-    }
-    skillEnvironmentRestored = true;
-    restoreSkillEnv?.();
+    const restore = restoreSkillEnv;
+    restoreSkillEnv = undefined;
+    restore?.();
   };
   onCleanupReady({ disposeToolRuntimes, restoreSkillEnvironment });
 
@@ -191,8 +181,7 @@ export async function buildPreparedCompactionRuntime(
     const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
       bootstrapBudget.bootstrapPromptWarning.lines,
     );
-    // Apply contextTokens cap to model so session runtime's auto-compaction
-    // threshold uses the effective limit, not the native context window.
+    // Keep session sizing separate from the summarizer's native request window.
     const contextTokenBudget = resolveCompactionContextTokenBudget({
       config: params.config,
       provider: contextConfigProvider,
@@ -202,12 +191,7 @@ export async function buildPreparedCompactionRuntime(
       fallbackTokenBudget: params.tokenBudget,
     });
     const modelWithAuth = applyAuthHeaderOverride(
-      applyLocalNoAuthHeaderOverride(
-        contextTokenBudget < (runtimeModel.contextWindow ?? Infinity)
-          ? { ...runtimeModel, contextWindow: contextTokenBudget }
-          : runtimeModel,
-        apiKeyInfo,
-      ),
+      applyLocalNoAuthHeaderOverride(runtimeModel, { apiKey: runtimeApiKey }),
       // Skip header injection when runtime auth exchange produced a
       // different credential — the SDK reads the exchanged token from
       // authStorage automatically.
@@ -251,7 +235,6 @@ export async function buildPreparedCompactionRuntime(
     const runtimePlan = reuseFullRuntimePlan
       ? preparedRuntimePlan
       : { ...preparedRuntimePlan, auth: resolvedRuntimeAuthPlan };
-    const runAbortController = new AbortController();
     const spawnWorkspaceDir =
       effectiveCwd !== effectiveWorkspace
         ? resolvedWorkspace
@@ -270,6 +253,11 @@ export async function buildPreparedCompactionRuntime(
       agentAccountId: params.agentAccountId,
       messageProvider: resolvedMessageProvider,
       chatType: params.chatType,
+      requesterOrigin: params.requesterOrigin,
+      operatorProfileId: params.operatorProfileId,
+      conversationId: params.conversationId,
+      messageThreadId: params.messageThreadId,
+      memberRoleIds: params.memberRoleIds,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
@@ -287,7 +275,7 @@ export async function buildPreparedCompactionRuntime(
       spawnWorkspaceDir,
       skillsSnapshot: skillsSnapshotForRun,
     };
-    const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+    const runtimeCapabilityProfile = await prepareConversationCapabilityProfile({
       ...conversationContext,
       agentId: sandboxAgentId,
       conversationToolPolicy: params.conversationToolPolicy,
@@ -298,15 +286,17 @@ export async function buildPreparedCompactionRuntime(
       pluginMetadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
     });
     const toolsEnabled = supportsModelTools(effectiveModel);
-    const authProfileStoreSource =
-      toolsEnabled && (await hasAnyAuthProfileStoreSourceAsync(agentDir));
+    const authProfileStore = toolsEnabled
+      ? (getPreparedModelRuntimeAuthStore(params.preparedModelRuntime) ??
+        (await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir)))
+      : undefined;
     params.abortSignal?.throwIfAborted();
-    const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const skillInstructionDeliveryCache = new Map<string, Promise<boolean>>();
     const toolsRaw = toolsEnabled
       ? await createOpenClawCodingToolsInternalAsync(
           {
             ...conversationContext,
-            authProfileStoreSource,
+            authProfileStore,
             agentId: sessionAgentId,
             exec: {
               ...execOverrides,
@@ -321,7 +311,6 @@ export async function buildPreparedCompactionRuntime(
             oneShotCliRun: params.oneShotCliRun,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             webSearchEnabled: params.toolOverrides?.webSearch !== false,
-            abortSignal: runAbortController.signal,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             modelHasVision: effectiveModel.input?.includes("image") ?? false,
             modelCompat: extractModelCompat(effectiveModel),
@@ -329,9 +318,14 @@ export async function buildPreparedCompactionRuntime(
             skillInstructionDeliveryCache,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             preparedModelRuntime: params.preparedModelRuntime,
-            modelAuthMode: resolveModelAuthMode(effectiveModel.provider, params.config, undefined, {
-              workspaceDir: effectiveWorkspace,
-            }),
+            modelAuthMode: await resolveModelAuthModeAsync(
+              effectiveModel.provider,
+              params.config,
+              authProfileStore,
+              {
+                workspaceDir: effectiveWorkspace,
+              },
+            ),
           },
           skillReadResources,
         )
@@ -347,16 +341,24 @@ export async function buildPreparedCompactionRuntime(
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     };
-    const normalizableToolProjection = filterProviderNormalizableTools(toolsRaw);
-    await logRuntimeToolSchemaQuarantine({
-      ...toolDiagnosticContext,
-      diagnostics: normalizableToolProjection.diagnostics,
-      tools: toolsRaw,
-    });
-    const tools = runtimePlan.tools.normalize(
-      [...normalizableToolProjection.tools],
-      runtimePlanModelContext,
-    );
+    const normalizeToolSchemas = async (
+      sourceTools: typeof toolsRaw,
+      source: "core" | "bundle",
+    ) => {
+      const projection = filterProviderNormalizableTools(sourceTools);
+      // Core preparation reports healthy empty sets; absent bundles remain untouched.
+      if (source === "core" || projection.diagnostics.length > 0) {
+        await logRuntimeToolSchemaQuarantine({
+          ...toolDiagnosticContext,
+          diagnostics: projection.diagnostics,
+          tools: sourceTools,
+        });
+      }
+      return source === "core" || sourceTools.length > 0
+        ? runtimePlan.tools.normalize([...projection.tools], runtimePlanModelContext)
+        : sourceTools;
+    };
+    const tools = await normalizeToolSchemas(toolsRaw, "core");
     bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
           workspaceDir: effectiveWorkspace,
@@ -382,21 +384,7 @@ export async function buildPreparedCompactionRuntime(
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
-    const normalizableBundledToolProjection = filterProviderNormalizableTools(filteredBundledTools);
-    if (normalizableBundledToolProjection.diagnostics.length > 0) {
-      await logRuntimeToolSchemaQuarantine({
-        ...toolDiagnosticContext,
-        diagnostics: normalizableBundledToolProjection.diagnostics,
-        tools: filteredBundledTools,
-      });
-    }
-    const normalizedBundledTools =
-      filteredBundledTools.length > 0
-        ? runtimePlan.tools.normalize(
-            [...normalizableBundledToolProjection.tools],
-            runtimePlanModelContext,
-          )
-        : filteredBundledTools;
+    const normalizedBundledTools = await normalizeToolSchemas(filteredBundledTools, "bundle");
     const projectedEffectiveTools = [...tools, ...normalizedBundledTools];
     const toolSchemaProjection = filterRuntimeCompatibleTools(projectedEffectiveTools);
     await logRuntimeToolSchemaQuarantine({
@@ -415,27 +403,18 @@ export async function buildPreparedCompactionRuntime(
     const promptAllowedToolNames = collectAllowedToolNames({ tools: promptTools });
     runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
     const machineName = await getMachineDisplayName();
-    const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
-    const runtimeCapabilities = collectRuntimeChannelCapabilities({
+    const {
+      runtimeChannel,
+      runtimeCapabilities,
+      reactionGuidance,
+      messageToolHints,
+      customInlineButtonHint,
+    } = resolveRuntimeChannelPromptContext({
       cfg: params.config,
-      channel: runtimeChannel,
+      channel: params.messageChannel ?? params.messageProvider,
       accountId: params.agentAccountId,
+      requester: params,
     });
-    const reactionGuidance =
-      runtimeChannel && params.config
-        ? resolveChannelReactionGuidance({
-            cfg: params.config,
-            channel: runtimeChannel,
-            accountId: params.agentAccountId,
-          })
-        : undefined;
-    const messageToolHints = runtimeChannel
-      ? resolveChannelMessageToolHints({
-          cfg: params.config,
-          channel: runtimeChannel,
-          accountId: params.agentAccountId,
-        })
-      : undefined;
 
     const runtimeInfo = {
       agentId: sessionAgentId,
@@ -450,6 +429,8 @@ export async function buildPreparedCompactionRuntime(
       channel: runtimeChannel,
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
+      customInlineButtonHint,
+      blind: params.sessionEntry?.blindPrompt,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
           sessionKey: params.sessionKey,
@@ -488,8 +469,6 @@ export async function buildPreparedCompactionRuntime(
       modelApi: effectiveModel.api,
       model: effectiveModel,
     });
-    const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-    const userDate = formatDateStamp(Date.now(), userTimezone);
     const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
     const promptMode = promptPolicyRestricted
       ? "minimal"
@@ -498,6 +477,7 @@ export async function buildPreparedCompactionRuntime(
       surface: promptSurface,
     });
     const openClawReferences = await resolveOpenClawReferencePaths({
+      sandbox,
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
       cwd: effectiveCwd,
@@ -567,8 +547,6 @@ export async function buildPreparedCompactionRuntime(
         messageToolHints,
         sandboxInfo,
         tools: promptTools,
-        userTimezone,
-        userDate,
         contextFiles,
         bootstrapTruncationNotice,
         activeProjectKeys,
@@ -594,7 +572,6 @@ export async function buildPreparedCompactionRuntime(
       effectiveModel,
       runtimePlan,
       runtimePlanModelContext,
-      runAbortController,
       effectiveTools,
       allowedToolNames,
       buildSystemPromptText,

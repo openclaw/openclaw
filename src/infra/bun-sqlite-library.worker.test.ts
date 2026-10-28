@@ -8,6 +8,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
+import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import type { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type { SqliteWorkerStore } from "./sqlite-worker-contract.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
@@ -20,7 +21,7 @@ const runtime = vi.hoisted(() => ({
   selectedPath: undefined as string | undefined,
   launches: 0,
   pools: new Set<{ close: () => Promise<void> }>(),
-  dlopen: vi.fn(),
+  probe: vi.fn(),
   select: vi.fn<(path: string) => void>(),
   closeProbe: vi.fn(),
   getEnvironmentData: vi.fn<(key: unknown) => unknown>(),
@@ -28,6 +29,10 @@ const runtime = vi.hoisted(() => ({
 }));
 
 vi.mock("./bun-sqlite-close-probe.js", () => ({ probeSqliteNativeClose: runtime.closeProbe }));
+vi.mock("./bun-sqlite-library-probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bun-sqlite-library-probe.js")>()),
+  probeBunSqliteLibrary: runtime.probe,
+}));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -44,9 +49,6 @@ vi.mock("node:module", async (importOriginal) => {
   const createRequire = (...args: Parameters<typeof actual.createRequire>) => {
     const require = actual.createRequire(...args);
     return Object.assign((specifier: string) => {
-      if (specifier === "bun:ffi") {
-        return { dlopen: runtime.dlopen, FFIType: { cstring: 0, i32: 1 } };
-      }
       if (specifier === "bun:sqlite") {
         return { Database: { setCustomSQLite: runtime.select } };
       }
@@ -107,7 +109,10 @@ vi.mock("./worker-task-pool.js", async (importOriginal) => {
 });
 
 const selectionKey = Symbol.for("openclaw.bunSqliteLibrarySelection");
-const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
+const inheritedKeys = ["openclaw.bunSqliteLibrarySelection", "openclaw.sqliteRuntimeCapabilities"];
+const storeUrl = new URL("./sqlite-worker-store.test-support.ts", import.meta.url);
+type Store = SqliteWorkerStore<FixtureOperations>;
+const stores = new Set<Store>();
 let previousSelection: PropertyDescriptor | undefined;
 let previousVersions: PropertyDescriptor | undefined;
 let previousPlatform: PropertyDescriptor | undefined;
@@ -132,12 +137,24 @@ function setRuntime(bun: boolean, platform: string) {
   Object.defineProperty(process, "platform", { configurable: true, value: platform });
 }
 
-beforeEach(() => {
+function setCloseCapability(capable: boolean, reason = "parent probe result") {
+  runtime.closeProbe.mockResolvedValue({
+    explicitSqliteCloseReleasesNativeResources: capable,
+    reason,
+  });
+}
+
+const readStore = (store: Store) => store.execute({ type: "read", input: undefined });
+const append = (store: Store, value: string) => store.execute({ type: "append", input: { value } });
+
+beforeEach(async () => {
   previousSelection = Object.getOwnPropertyDescriptor(globalThis, selectionKey);
   previousVersions = Object.getOwnPropertyDescriptor(process, "versions");
   previousPlatform = Object.getOwnPropertyDescriptor(process, "platform");
   Reflect.deleteProperty(globalThis, selectionKey);
   vi.resetModules();
+  // File identity must keep the physical host policy while library selection simulates macOS.
+  await import("./sqlite-worker-identity.js");
   runtime.mainThread = true;
   runtime.environment.clear();
   runtime.selectedPath = undefined;
@@ -146,13 +163,10 @@ beforeEach(() => {
     explicitSqliteCloseReleasesNativeResources: false,
     reason: "fixture native handles require exit",
   });
-  runtime.dlopen.mockReset().mockImplementation(() => ({
-    symbols: {
-      sqlite3_libversion: () => "3.53.4",
-      sqlite3_compileoption_used: () => 0,
-    },
-    close() {},
-  }));
+  runtime.probe.mockReset().mockReturnValue({
+    version: "3.53.4",
+    extensionLoadingSupported: true,
+  });
   runtime.select.mockReset().mockImplementation((selectedPath) => {
     if (runtime.selectedPath) {
       throw new Error("SQLite library selection is process-wide and cannot repeat");
@@ -200,7 +214,7 @@ async function enterWorkerHeap() {
 async function openStore(databasePath: string, broker?: SqliteWorkerBroker) {
   const { openSqliteWorkerStore } = await import("./sqlite-worker-store.js");
   const options = {
-    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+    moduleUrl: storeUrl,
     databasePath,
     input: undefined,
   };
@@ -218,10 +232,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
   it("extends a callable library owner retained from an earlier runtime generation", async () => {
     const retained = vi.fn(() => ({ source: "runtime" as const }));
     Object.defineProperty(globalThis, selectionKey, { configurable: true, value: retained });
-    runtime.closeProbe.mockResolvedValue({
-      explicitSqliteCloseReleasesNativeResources: true,
-      reason: "fixture close passed",
-    });
+    setCloseCapability(true, "fixture close passed");
     const owner = await import("./bun-sqlite-library.js");
     expect(owner.ensureSqliteLibrarySelected()).toEqual(retained());
     const admission = owner.initializeSqliteRuntimeCapabilities();
@@ -247,49 +258,36 @@ describe("Bun SQLite process selection and worker inheritance", () => {
         storePath,
       };
       const reader = await import("../config/sessions/session-transcript-read-worker-runtime.js");
-      switch (kind) {
-        case "sqlite-target": {
-          const { prepareSqliteTranscriptReadScope } =
-            await import("../config/sessions/session-accessor.sqlite-scope.js");
-          expect(await prepareSqliteTranscriptReadScope(target)).toMatchObject({
-            agentId: target.agentId,
-            sessionId: target.sessionId,
-            sessionKey: target.sessionKey,
-            path: storePath,
-          });
-          break;
-        }
-        case "model-context":
-          expect(await reader.readSessionTranscriptModelContextInWorker(target, undefined)).toEqual(
+      if (kind === "sqlite-target") {
+        const { prepareSqliteTranscriptReadScope: prepare } =
+          await import("../config/sessions/session-accessor.sqlite-scope.js");
+        expect(await prepare(target)).toMatchObject({
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          path: storePath,
+        });
+      } else if (kind === "model-context") {
+        const { readSessionTranscriptModelContextInWorker: read } = reader;
+        expect(await read(target, undefined)).toEqual({ events: [] });
+      } else if (kind === "session-entry") {
+        const { buildSessionEntry } =
+          await import("../../packages/memory-host-sdk/src/host/session-files.js");
+        expect(await buildSessionEntry(path.join(directory, "transcript.jsonl"), target)).toBe(
+          null,
+        );
+      } else {
+        const { runSessionBranchSummaryWorkerRequest: read } =
+          await import("../config/sessions/session-transcript-worker-runtime.js");
+        expect(
+          await read(
             {
-              events: [],
+              database: { agentId: target.agentId, path: storePath },
+              sessionKey: target.sessionKey,
             },
-          );
-          break;
-        case "session-entry": {
-          const { buildSessionEntry } =
-            await import("../../packages/memory-host-sdk/src/host/session-files.js");
-          expect(await buildSessionEntry(path.join(directory, "transcript.jsonl"), target)).toBe(
-            null,
-          );
-          break;
-        }
-        case "branch-summaries": {
-          const { runSessionBranchSummaryWorkerRequest } =
-            await import("../config/sessions/session-transcript-worker-runtime.js");
-          expect(
-            await runSessionBranchSummaryWorkerRequest(
-              {
-                database: { agentId: target.agentId, path: storePath },
-                databaseIdentity: "absent-database",
-                sessionKey: target.sessionKey,
-                sessionId: target.sessionId,
-              },
-              new AbortController().signal,
-            ),
-          ).toEqual({ status: "missing-session" });
-          break;
-        }
+            new AbortController().signal,
+          ),
+        ).toEqual({ status: "missing-session" });
       }
       expect(runtime.launches).toBeGreaterThan(0);
       expect(runtime.selectedPath).toBe("/fixture/sqlite.dylib");
@@ -298,50 +296,31 @@ describe("Bun SQLite process selection and worker inheritance", () => {
     },
   );
 
-  it.each(["custom", "fallback"] as const)(
-    "inherits the parent's %s selection without probing or applying a worker override",
-    async (selection) => {
-      if (selection === "fallback") {
-        vi.stubEnv("OPENCLAW_SQLITE_LIBRARY", "");
-        runtime.dlopen.mockImplementation(() => {
-          throw new Error("No custom library available");
-        });
-      }
-      const parent = await import("./bun-sqlite-library.js");
-      const selected = parent.ensureSqliteLibrarySelected();
-      if (selection === "custom") {
-        expect(selected).toMatchObject({
-          source: "env",
-          path: "/fixture/sqlite.dylib",
-          version: "3.53.4",
-        });
-      } else {
-        expect(selected).toEqual({ source: "runtime" });
-        runtime.dlopen.mockClear();
-      }
-      expect([...runtime.environment.values()]).toEqual([selected]);
-      const worker = await enterWorkerHeap();
-      expect(
-        worker.ensureSqliteLibrarySelected({ explicitPath: "/worker/different.dylib" }),
-      ).toEqual(selected);
-      expect(worker.ensureSqliteLibrarySelected()).toEqual(selected);
-      if (selection === "custom") {
-        expect(runtime.select).toHaveBeenCalledExactlyOnceWith("/fixture/sqlite.dylib");
-      } else {
-        expect(runtime.select).not.toHaveBeenCalled();
-      }
-      expect(runtime.dlopen).toHaveBeenCalledTimes(selection === "custom" ? 1 : 0);
-      expect(runtime.setEnvironmentData).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("inherits the parent's custom selection without probing or applying a worker override", async () => {
+    const parent = await import("./bun-sqlite-library.js");
+    const selected = parent.ensureSqliteLibrarySelected();
+    expect(selected).toMatchObject({
+      source: "env",
+      path: "/fixture/sqlite.dylib",
+      version: "3.53.4",
+    });
+    expect([...runtime.environment.values()]).toEqual([selected]);
+    expect(runtime.probe).toHaveBeenCalledExactlyOnceWith("/fixture/sqlite.dylib");
+    runtime.probe.mockClear();
+    const worker = await enterWorkerHeap();
+    expect(worker.ensureSqliteLibrarySelected({ explicitPath: "/worker/different.dylib" })).toEqual(
+      selected,
+    );
+    expect(worker.ensureSqliteLibrarySelected()).toEqual(selected);
+    expect(runtime.select).toHaveBeenCalledExactlyOnceWith("/fixture/sqlite.dylib");
+    expect(runtime.probe).not.toHaveBeenCalled();
+    expect(runtime.setEnvironmentData).toHaveBeenCalledTimes(1);
+  });
 
   it.each([false, true])(
     "inherits the immutable native-close decision (capable: %s)",
     async (capable) => {
-      runtime.closeProbe.mockResolvedValue({
-        explicitSqliteCloseReleasesNativeResources: capable,
-        reason: "parent probe result",
-      });
+      setCloseCapability(capable);
       const parent = await import("./bun-sqlite-library.js");
       const decision = await parent.initializeSqliteRuntimeCapabilities();
       expect(runtime.environment.get("openclaw.sqliteRuntimeCapabilities")).toBe(decision);
@@ -358,10 +337,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
   it("refreshes inherited facts for new children of a carrier that predates admission", async () => {
     const owner = await import("./bun-sqlite-library.js");
     owner.ensureSqliteLibrarySelected();
-    runtime.closeProbe.mockResolvedValue({
-      explicitSqliteCloseReleasesNativeResources: true,
-      reason: "parent probe result",
-    });
+    setCloseCapability(true);
     const { captureRetainedNativeWorkerSource } = await import("./worker-native-lifecycle.js");
     let closeSource: Parameters<RuntimeWorkerGeneration["retain"]>[1] | undefined;
     const source = captureRetainedNativeWorkerSource({
@@ -424,17 +400,22 @@ describe("Bun SQLite process selection and worker inheritance", () => {
     { bun: false, platform: "darwin" },
     { bun: true, platform: "linux" },
   ])(
-    "leaves worker environment facts and native selection untouched on $platform (Bun: $bun)",
+    "leaves library-selection facts and native selection untouched on $platform (Bun: $bun)",
     async ({ bun, platform }) => {
       setRuntime(bun, platform);
-      runtime.getEnvironmentData.mockImplementation(() => {
+      runtime.getEnvironmentData.mockImplementation((key) => {
+        if (key === SQLITE_DATABASE_ADMISSIONS_KEY) {
+          return undefined;
+        }
         throw new Error("Unrelated worker data must not be read");
       });
       const worker = await enterWorkerHeap();
       expect(worker.ensureSqliteLibrarySelected()).toMatchObject({ source: "runtime" });
-      expect(runtime.getEnvironmentData).not.toHaveBeenCalled();
+      for (const key of inheritedKeys) {
+        expect(runtime.getEnvironmentData).not.toHaveBeenCalledWith(key);
+      }
       expect(runtime.setEnvironmentData).not.toHaveBeenCalled();
-      expect(runtime.dlopen).not.toHaveBeenCalled();
+      expect(runtime.probe).not.toHaveBeenCalled();
       expect(runtime.select).not.toHaveBeenCalled();
     },
   );
@@ -442,10 +423,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
   it.each([false, true])(
     "freezes placement and close policy at broker construction (admitted: %s)",
     async (capable) => {
-      runtime.closeProbe.mockResolvedValue({
-        explicitSqliteCloseReleasesNativeResources: true,
-        reason: "fixture native close",
-      });
+      setCloseCapability(true, "fixture native close");
       const owner = await import("./bun-sqlite-library.js");
       const { SqliteWorkerBroker } = await import("./sqlite-worker-broker.js");
       if (capable) {
@@ -461,43 +439,35 @@ describe("Bun SQLite process selection and worker inheritance", () => {
       const paths = Array.from({ length: 5 }, (_, index) =>
         path.join(directory, `${index}.sqlite`),
       );
-      const active: SqliteWorkerStore<FixtureOperations>[] = [];
+      const active: Store[] = [];
       for (let index = 0; index < paths.length; index += 1) {
         const store = await open(paths[index]!);
         active.push(store);
-        await store.execute({ type: "append", input: { value: `database ${index}` } });
+        await append(store, `database ${index}`);
       }
-      expect(runtime.launches).toBe(capable ? 4 : 5);
+      expect(runtime.launches).toBe(capable ? 2 : 5);
       for (const [index, store] of active.entries()) {
-        expect(await store.execute({ type: "read", input: undefined })).toEqual([
-          `database ${index}`,
-        ]);
+        expect(await readStore(store)).toEqual([`database ${index}`]);
       }
       const aliasPath = path.join(directory, "alias.sqlite");
       await fs.link(paths[0]!, aliasPath);
       const alias = await open(aliasPath);
-      await alias.execute({ type: "append", input: { value: "shared alias" } });
-      expect(runtime.launches).toBe(capable ? 4 : 5);
+      await append(alias, "shared alias");
+      expect(runtime.launches).toBe(capable ? 2 : 5);
       await active[0]!.close();
-      expect(await alias.execute({ type: "read", input: undefined })).toEqual([
-        "database 0",
-        "shared alias",
-      ]);
+      const sharedRows = ["database 0", "shared alias"];
+      expect(await readStore(alias)).toEqual(sharedRows);
 
       if (capable) {
         await alias.close();
         const reopened = await open(paths[0]!);
-        expect(await reopened.execute({ type: "read", input: undefined })).toEqual([
-          "database 0",
-          "shared alias",
-        ]);
-        expect(runtime.launches).toBe(4);
-        expect(
-          await active[4]!.execute({ type: "append", input: { value: "sibling still open" } }),
-        ).toMatchObject({ writes: 2 });
+        expect(await readStore(reopened)).toEqual(sharedRows);
+        expect(runtime.launches).toBe(2);
+        expect(await append(active[4]!, "sibling still open")).toMatchObject({ writes: 2 });
         return;
       }
 
+      const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
       const terminating = createDeferredCore();
       const release = createDeferredCore();
       const termination = vi
@@ -509,14 +479,10 @@ describe("Bun SQLite process selection and worker inheritance", () => {
           return this.terminate();
         });
       const closing = alias.close();
-      let reopening: Promise<SqliteWorkerStore<FixtureOperations>> | undefined;
+      let reopening: Promise<Store> | undefined;
       try {
         await terminating.promise;
-        const actualFs =
-          await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-        const backendPath = await fs.realpath(
-          fileURLToPath(new URL("./sqlite-worker-store.test-support.ts", import.meta.url)),
-        );
+        const backendPath = await fs.realpath(fileURLToPath(storeUrl));
         const inspected = createDeferredCore();
         vi.mocked(fs.stat).mockImplementation(async (pathname, options) => {
           const result = await actualFs.stat(pathname, options);
@@ -527,14 +493,10 @@ describe("Bun SQLite process selection and worker inheritance", () => {
         });
         let reopenSettled = false;
         reopening = open(paths[0]!);
-        void reopening.then(
-          () => {
-            reopenSettled = true;
-          },
-          () => {
-            reopenSettled = true;
-          },
-        );
+        const markSettled = () => {
+          reopenSettled = true;
+        };
+        void reopening.then(markSettled, markSettled);
         await inspected.promise;
         await Promise.resolve();
         expect(runtime.launches).toBe(5);
@@ -543,27 +505,22 @@ describe("Bun SQLite process selection and worker inheritance", () => {
         release.resolve();
         await closing;
         const reopened = await reopening;
-        expect(await reopened.execute({ type: "read", input: undefined })).toEqual([
-          "database 0",
-          "shared alias",
-        ]);
+        expect(await readStore(reopened)).toEqual(sharedRows);
         expect(runtime.launches).toBe(6);
-        expect(await active[1]!.execute({ type: "read", input: undefined })).toEqual([
-          "database 1",
-        ]);
-        expect(await active[4]!.execute({ type: "read", input: undefined })).toEqual([
-          "database 4",
-        ]);
+        expect(await readStore(active[1]!)).toEqual(["database 1"]);
+        expect(await readStore(active[4]!)).toEqual(["database 4"]);
       } finally {
         release.resolve();
         termination.mockRestore();
-        const actualFs =
-          await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
         vi.mocked(fs.stat).mockImplementation(actualFs.stat);
         await Promise.allSettled([closing, ...(reopening ? [reopening] : [])]);
       }
       expect(runtime.select).toHaveBeenCalledExactlyOnceWith("/fixture/sqlite.dylib");
-      expect(runtime.setEnvironmentData).toHaveBeenCalledTimes(2);
+      expect(
+        runtime.setEnvironmentData.mock.calls.filter(([key]) =>
+          inheritedKeys.includes(String(key)),
+        ),
+      ).toHaveLength(2);
     },
   );
 

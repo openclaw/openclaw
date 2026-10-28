@@ -8,7 +8,6 @@ import { isRenderableAvatarImageDataUrl } from "../../../src/shared/avatar-limit
 const MAX_ASSISTANT_TEXT_AVATAR = 64;
 const ASSISTANT_IDENTITY_LIMITS = {
   name: 50,
-  avatarSource: 500,
   avatarReason: 200,
 } as const;
 type AssistantIdentityField = keyof typeof ASSISTANT_IDENTITY_LIMITS;
@@ -24,7 +23,6 @@ export type AssistantIdentity = {
   agentId?: string | null;
   name: string;
   avatar: string | null;
-  avatarSource?: string | null;
   avatarStatus?: "none" | "local" | "remote" | "data" | null;
   avatarReason?: string | null;
 };
@@ -45,10 +43,7 @@ function normalizeAssistantAvatar(value: string | null | undefined): string | nu
   if (isRenderableAvatarImageDataUrl(trimmed) || SAME_ORIGIN_AVATAR_URL_RE.test(trimmed)) {
     return trimmed;
   }
-  if (URI_SCHEME_RE.test(trimmed)) {
-    return null;
-  }
-  if (/[\r\n]/.test(trimmed)) {
+  if (URI_SCHEME_RE.test(trimmed) || /[\r\n]/.test(trimmed)) {
     return null;
   }
   return trimmed.length <= MAX_ASSISTANT_TEXT_AVATAR ? trimmed : null;
@@ -59,7 +54,6 @@ export function normalizeAssistantIdentity(
 ): Required<AssistantIdentity> {
   const name = normalizeAssistantValue("name", input?.name) ?? DEFAULT_ASSISTANT_NAME;
   const avatar = normalizeAssistantAvatar(input?.avatar);
-  const avatarSource = normalizeAssistantValue("avatarSource", input?.avatarSource) ?? null;
   const avatarStatus =
     input?.avatarStatus === "none" ||
     input?.avatarStatus === "local" ||
@@ -70,5 +64,5 @@ export function normalizeAssistantIdentity(
   const avatarReason = normalizeAssistantValue("avatarReason", input?.avatarReason) ?? null;
   const agentId =
     typeof input?.agentId === "string" && input.agentId.trim() ? input.agentId.trim() : null;
-  return { agentId, name, avatar, avatarSource, avatarStatus, avatarReason };
+  return { agentId, name, avatar, avatarStatus, avatarReason };
 }

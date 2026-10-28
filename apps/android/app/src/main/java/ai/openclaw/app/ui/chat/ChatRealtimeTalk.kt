@@ -8,7 +8,6 @@ import ai.openclaw.app.requiresSetup
 import ai.openclaw.app.ui.FoldAwarePrompt
 import ai.openclaw.app.ui.design.ClawTheme
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -80,7 +79,7 @@ internal fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> U
   return {
     when (
       resolveChatRealtimeTalkLaunch(
-        hasMicPermission = context.hasRecordAudioPermission(),
+        hasMicPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED,
         requiresSetup = talkSetupReadiness.realtimeTalk.requiresSetup,
       )
     ) {
@@ -90,5 +89,3 @@ internal fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> U
     }
   }
 }
-
-private fun Context.hasRecordAudioPermission(): Boolean = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED

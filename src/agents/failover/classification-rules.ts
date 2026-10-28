@@ -2,6 +2,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractLeadingHttpStatus,
+  extractProviderWrappedHttpStatus,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import {
@@ -10,36 +11,37 @@ import {
   isRateLimitErrorMessage,
 } from "./message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
-const FAILOVER_TIMEOUT_ERROR_CODES = new Set([
-  "EHOSTDOWN",
-  "ENETRESET",
-  "ERR_STREAM_PREMATURE_CLOSE",
-]);
 const NO_BODY_HTTP_WRAPPER_RE =
   /^(?:no body(?: response)?|no response body|status code \(no body\))$/i;
+const REDACTION_DESTROYED_BODY_RE =
+  /^\[(?:(?:Malformed|Oversized) diagnostic JSON redacted|Unserializable)\]$/;
+const PRESERVED_NOT_FOUND_OR_GONE_REASONS = new Set<FailoverReason | null>([
+  "session_expired",
+  "billing",
+  "auth_permanent",
+  "auth",
+]);
 function stripErrorPrefix(raw: string): string {
   return raw.replace(/^error:\s*/i, "").trim();
 }
 export function inferSignalStatus(signal: FailoverSignal): number | undefined {
-  if (typeof signal.status === "number" && Number.isFinite(signal.status)) {
+  if (Number.isFinite(signal.status)) {
     return signal.status;
   }
-  return extractLeadingHttpStatus(stripErrorPrefix(signal.message?.trim() ?? ""))?.code;
+  const message = stripErrorPrefix(signal.message?.trim() ?? "");
+  return extractLeadingHttpStatus(message)?.code ?? extractProviderWrappedHttpStatus(message)?.code;
 }
-function isExplicitNoBodyHttpMessage(raw: string | undefined, status?: number): boolean {
+function isExplicitNoBodyHttpMessage(raw: string | undefined, status: number): boolean {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return false;
   }
-  const candidate = extractLeadingHttpStatus(trimmed) ? trimmed : stripErrorPrefix(trimmed);
+  const candidate = stripErrorPrefix(trimmed);
   const leadingStatus = extractLeadingHttpStatus(candidate);
-  if (leadingStatus) {
-    if (typeof status === "number" && leadingStatus.code !== status) {
-      return false;
-    }
-    return NO_BODY_HTTP_WRAPPER_RE.test(leadingStatus.rest);
-  }
-  return NO_BODY_HTTP_WRAPPER_RE.test(candidate);
+  return (
+    (!leadingStatus || leadingStatus.code === status) &&
+    NO_BODY_HTTP_WRAPPER_RE.test(leadingStatus?.rest ?? candidate)
+  );
 }
 export function isUnclassifiedNoBodyHttpSignal(signal: FailoverSignal): boolean {
   const status = inferSignalStatus(signal);
@@ -187,7 +189,7 @@ export function classifyFailoverClassificationFromHttpStatus(
   opts?: { preserveProviderSignalClassification?: boolean },
 ): FailoverClassification | null {
   const messageReason = failoverReasonFromClassification(messageClassification);
-  if (typeof status !== "number" || !Number.isFinite(status)) {
+  if (status === undefined || !Number.isFinite(status)) {
     return null;
   }
   if (status === 402) {
@@ -243,10 +245,8 @@ export function classifyFailoverClassificationFromHttpStatus(
   if (status === 410) {
     // Generic 410/no-body responses behave like transport failures, not session expiry.
     if (
-      messageReason === "session_expired" ||
-      messageReason === "billing" ||
-      messageReason === "auth_permanent" ||
-      messageReason === "auth"
+      PRESERVED_NOT_FOUND_OR_GONE_REASONS.has(messageReason) ||
+      messageReason === "model_not_found"
     ) {
       return messageClassification;
     }
@@ -257,13 +257,7 @@ export function classifyFailoverClassificationFromHttpStatus(
     return messageClassification;
   }
   if (status === 404) {
-    if (
-      messageReason === "session_expired" ||
-      messageReason === "billing" ||
-      messageReason === "auth_permanent" ||
-      messageReason === "auth" ||
-      messageReason === "format"
-    ) {
+    if (PRESERVED_NOT_FOUND_OR_GONE_REASONS.has(messageReason) || messageReason === "format") {
       return messageClassification;
     }
     return toReasonClassification("model_not_found");
@@ -293,68 +287,63 @@ export function classifyFailoverClassificationFromHttpStatus(
     if (messageClassification && messageReason !== "server_error") {
       return messageClassification;
     }
-    // When the response has no body at all, or only surfaces as an HTTP wrapper
-    // like "400 status code (no body)", return null instead of defaulting to
-    // "format". These shapes are likely transient proxy issues — classifying
-    // them as "format" triggers a compaction loop that cannot recover.
-    if (isUnclassifiedNoBodyHttpSignal({ status, message })) {
+    // An empty or fully redacted body cannot establish request-format semantics.
+    const diagnostic = stripErrorPrefix(message?.trim() ?? "");
+    const body = extractLeadingHttpStatus(diagnostic)?.rest ?? diagnostic;
+    if (
+      isUnclassifiedNoBodyHttpSignal({ status, message }) ||
+      REDACTION_DESTROYED_BODY_RE.test(body.trim())
+    ) {
       return null;
     }
-    // Body exists but couldn't be classified — still treat as format error
-    // since the provider rejected the request schema.
+    // Other unclassified bodies retain the provider's request-format rejection.
     return toReasonClassification("format");
   }
   return null;
 }
 // Only cross-provider structured codes classify in core; provider-native
 // mappings belong to provider hooks.
+const FAILOVER_CODE_REASONS = new Map<string, FailoverReason>([
+  ["DEGENERATE_OUTPUT", "server_error"],
+  ["UNKNOWN_PARAMETER", "format"],
+  ["RESOURCE_EXHAUSTED", "rate_limit"],
+  ["RATE_LIMIT", "rate_limit"],
+  ["RATE_LIMITED", "rate_limit"],
+  ["RATE_LIMIT_EXCEEDED", "rate_limit"],
+  ["TOO_MANY_REQUESTS", "rate_limit"],
+  ["THROTTLED", "rate_limit"],
+  ["THROTTLING", "rate_limit"],
+  ["THROTTLINGEXCEPTION", "rate_limit"],
+  ["THROTTLING_EXCEPTION", "rate_limit"],
+  ["DEACTIVATED_WORKSPACE", "auth_permanent"],
+  ["SELECTED_AUTH_PROFILE_UNAVAILABLE", "auth"],
+  ["OVERLOADED", "overloaded"],
+  ["OVERLOADED_ERROR", "overloaded"],
+  ["EHOSTDOWN", "timeout"],
+  ["ENETRESET", "timeout"],
+  ["ERR_STREAM_PREMATURE_CLOSE", "timeout"],
+]);
 export function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason | null {
   const normalized = raw?.trim().toUpperCase();
   if (!normalized) {
     return null;
   }
-  switch (normalized) {
-    case "UNKNOWN_PARAMETER":
-      return "format";
-    case "RESOURCE_EXHAUSTED":
-    case "RATE_LIMIT":
-    case "RATE_LIMITED":
-    case "RATE_LIMIT_EXCEEDED":
-    case "TOO_MANY_REQUESTS":
-    case "THROTTLED":
-    case "THROTTLING":
-    case "THROTTLINGEXCEPTION":
-    case "THROTTLING_EXCEPTION":
-      return "rate_limit";
-    case "DEACTIVATED_WORKSPACE":
-      return "auth_permanent";
-    case "SELECTED_AUTH_PROFILE_UNAVAILABLE":
-      return "auth";
-    case "OVERLOADED":
-    case "OVERLOADED_ERROR":
-      return "overloaded";
-    default:
-      return FAILOVER_TIMEOUT_ERROR_CODES.has(normalized) ||
-        isTransientNetworkError({ code: normalized })
-        ? "timeout"
-        : null;
-  }
+  return (
+    FAILOVER_CODE_REASONS.get(normalized) ??
+    (isTransientNetworkError({ code: normalized }) ? "timeout" : null)
+  );
 }
+const FAILOVER_ERROR_TYPE_REASONS = new Map<string, FailoverReason>([
+  ["invalid_request_error", "format"],
+  ["server_error", "server_error"],
+  ["upstream_error", "server_error"],
+  ["overloaded_error", "overloaded"],
+]);
 export function classifyCoreFailoverReasonFromErrorType(
   raw: string | undefined,
 ): FailoverReason | null {
   const normalized = normalizeOptionalLowercaseString(raw);
-  switch (normalized) {
-    case "invalid_request_error":
-      return "format";
-    case "server_error":
-    case "upstream_error":
-      return "server_error";
-    case "overloaded_error":
-      return "overloaded";
-    default:
-      return null;
-  }
+  return normalized ? (FAILOVER_ERROR_TYPE_REASONS.get(normalized) ?? null) : null;
 }
 function hasStructuredBilling429Signal(raw: string): boolean {
   if (hasBillingApiErrorType(raw)) {

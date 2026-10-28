@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveAgentRuntimePrompt } from "./runtime-prompt.js";
+import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 
 const {
-  collectRuntimeChannelCapabilitiesMock,
+  resolveChannelCapabilitiesMock,
   getMachineDisplayNameMock,
   resolveChannelMessageToolHintsMock,
   resolveChannelReactionGuidanceMock,
 } = vi.hoisted(() => ({
-  collectRuntimeChannelCapabilitiesMock: vi.fn(() => ["voice"]),
+  resolveChannelCapabilitiesMock: vi.fn(() => ["voice"]),
   getMachineDisplayNameMock: vi.fn(async () => "test-host"),
   resolveChannelMessageToolHintsMock: vi.fn(() => ["Use the message tool."]),
   resolveChannelReactionGuidanceMock: vi.fn(() => ({
@@ -17,8 +19,10 @@ const {
   })),
 }));
 
-vi.mock("./channel-tools.js", () => ({
+vi.mock("./channel-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel-tools.js")>()),
   resolveChannelMessageToolHints: resolveChannelMessageToolHintsMock,
+  resolveChannelPromptCapabilities: vi.fn(() => []),
   resolveChannelReactionGuidance: resolveChannelReactionGuidanceMock,
 }));
 
@@ -26,8 +30,9 @@ vi.mock("./model-selection.js", () => ({
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-default" })),
 }));
 
-vi.mock("./runtime-capabilities.js", () => ({
-  collectRuntimeChannelCapabilities: collectRuntimeChannelCapabilitiesMock,
+vi.mock("../config/channel-capabilities.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/channel-capabilities.js")>()),
+  resolveChannelCapabilities: resolveChannelCapabilitiesMock,
 }));
 
 vi.mock("./shell-utils.js", () => ({
@@ -72,7 +77,7 @@ describe("resolveAgentRuntimePrompt", () => {
     });
 
     const channelContext = { cfg: config, channel: "telegram", accountId: "work" };
-    expect(collectRuntimeChannelCapabilitiesMock).toHaveBeenCalledWith(channelContext);
+    expect(resolveChannelCapabilitiesMock).toHaveBeenCalledWith(channelContext);
     expect(resolveChannelReactionGuidanceMock).toHaveBeenCalledWith(channelContext);
     expect(resolveChannelMessageToolHintsMock).toHaveBeenCalledWith(channelContext);
     expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
@@ -102,6 +107,41 @@ describe("resolveAgentRuntimePrompt", () => {
       }),
     );
   });
+
+  it.each([
+    { delivery: { kind: "internal" as const }, expectedChannel: "webchat" },
+    { delivery: { kind: "none" as const }, expectedChannel: undefined },
+    {
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "123", accountId: "work", threadId: "4" },
+      }),
+      expectedChannel: "telegram",
+    },
+  ])(
+    "keeps session presentation for $delivery.kind delivery",
+    async ({ delivery, expectedChannel }) => {
+      const prompts = [];
+      for (const channel of ["webchat", undefined]) {
+        const result = await resolveAgentRuntimePrompt({
+          config: {},
+          agentId: "main",
+          workspaceDir: "/tmp/workspace",
+          sessionKey: "agent:main:prompt-continuity",
+          sessionId: "session-1",
+          preparedSessionEntry: { sessionId: "session-1", updatedAt: 1, delivery },
+          model: "local/qwen3:8b",
+          channel,
+        });
+        expect(result.runtimeInfo.channel).toBe(expectedChannel);
+        expect(result.runtimeChannel).toBe(channel);
+        prompts.push(
+          buildConfiguredAgentSystemPrompt({ ...result, workspaceDir: "/tmp/workspace" }),
+        );
+      }
+      expect(prompts[1]).toBe(prompts[0]);
+      expect(prompts[0]?.includes("## Control UI Embed")).toBe(delivery.kind === "internal");
+    },
+  );
 
   it.each([
     { name: "prepared credit", preparedGitCoauthorPrompt: gitCoauthorPrompt },

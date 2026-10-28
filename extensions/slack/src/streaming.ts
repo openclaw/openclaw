@@ -140,10 +140,6 @@ export async function startSlackStream(
 ): Promise<SlackStreamSession> {
   const { client, channel, threadTs, text, chunks, taskDisplayMode, teamId, userId, identity } =
     params;
-  logVerbose(
-    `slack-stream: starting stream in ${channel} thread=${threadTs}${teamId ? ` team=${teamId}` : ""}${userId ? ` user=${userId}` : ""}`,
-  );
-
   const writeClient = getSlackListenerWriteClient({
     listenerClient: client,
     clientOptions: params.clientOptions,
@@ -184,7 +180,6 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
   const { session, text, chunks } = params;
 
   if (applySlackStreamStop(session) || session.stopped) {
-    logVerbose("slack-stream: attempted to append to a stopped stream, ignoring");
     return;
   }
 
@@ -207,11 +202,6 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
       session.pendingText = "";
     }
     applySlackStreamStop(session);
-    logVerbose(
-      `slack-stream: appended ${text?.length ?? 0} chars, ${chunks?.length ?? 0} chunks (${
-        result ? "flushed" : "buffered"
-      })`,
-    );
   } catch (err) {
     if (applySlackStreamStop(session)) {
       return;
@@ -221,22 +211,14 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
   }
 }
 
-type StopSlackStreamResult = {
-  messageId?: string;
-};
-
-export async function stopSlackStream(
-  params: StopSlackStreamParams,
-): Promise<StopSlackStreamResult> {
+export async function stopSlackStream(params: StopSlackStreamParams) {
   const { session, chunks, metadata } = params;
 
   if (applySlackStreamStop(session) || session.stopped) {
-    logVerbose("slack-stream: stream already stopped, ignoring duplicate stop");
     return {};
   }
 
   session.stopped = true;
-  logVerbose(`slack-stream: stopping stream in ${session.channel} thread=${session.threadTs}`);
 
   try {
     const stopResponse = await session.streamer.stop(
@@ -253,7 +235,6 @@ export async function stopSlackStream(
     }
     session.delivered = true;
     session.pendingText = "";
-    logVerbose("slack-stream: stream stopped");
     // `chat.stopStream` reports the finalized message `ts` at the top level
     // (and on `message.ts`); prefer the former and fall back to the latter.
     const messageId = stopResponse?.ts ?? stopResponse?.message?.ts;

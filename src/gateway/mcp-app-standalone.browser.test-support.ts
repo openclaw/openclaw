@@ -6,6 +6,7 @@ export type StandaloneHostBrowserOptions = {
   operationStatus?: number;
   initialBody?: ReturnType<typeof createDeferred<unknown>>;
   abortable401Body?: boolean;
+  initialSignal?: AbortSignal;
 };
 
 export async function createStandaloneHostBrowserHarness(
@@ -22,7 +23,7 @@ export async function createStandaloneHostBrowserHarness(
     style: { height: "" },
   };
   const replaceChildren = vi.fn();
-  const timeout = vi.fn(() => new AbortController().signal);
+  const timeout = vi.fn(() => options.initialSignal ?? new AbortController().signal);
   const reload = vi.fn();
   const operations: Array<{
     signal: AbortSignal | undefined;
@@ -107,6 +108,7 @@ export async function createStandaloneHostBrowserHarness(
     replaceChildren,
     timers,
     timeout,
+    fetch,
     reload,
     pagehide: (persisted = false) => listeners.get("pagehide")?.({ persisted }),
     pageshow: (persisted = false) => listeners.get("pageshow")?.({ persisted }),

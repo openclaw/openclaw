@@ -3,7 +3,9 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { notifyListeners } from "../../../../src/shared/listeners.js";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { readOfflineStorageScope, type OfflineStorageClient } from "../../app/boot-record.ts";
+import { listen } from "../reactive/listener.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -35,7 +37,7 @@ const PREVIOUS_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
 const BLOB_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v3:";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v4:";
 const storedChatOutboxChangeListeners = new Set<() => void>();
-let storageChangeListenerInstalled = false;
+let stopStorageChanges: (() => void) | undefined;
 
 export type ChatComposerScope = {
   client?: OfflineStorageClient | null;
@@ -44,7 +46,7 @@ export type ChatComposerScope = {
   settings?: { gatewayUrl?: string | null };
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null; scope?: string | null } | null;
-  hello?: { snapshot?: unknown } | null;
+  hello?: Pick<GatewayHelloOk, "snapshot"> | null;
 };
 
 /** Sidebar draft presence for a tab row; attachments exist only in durable drafts. */
@@ -122,19 +124,14 @@ const pendingLegacyTransfers = new WeakMap<
 const projectedStoreByStorage = new WeakMap<Storage, Map<string, StoredComposerState>>();
 export function subscribeStoredChatOutboxChanges(listener: () => void): () => void {
   storedChatOutboxChangeListeners.add(listener);
-  if (!storageChangeListenerInstalled && typeof window !== "undefined") {
-    storageChangeListenerInstalled = true;
-    window.addEventListener("storage", handleStoredChatOutboxStorageChange);
+  if (!stopStorageChanges && typeof window !== "undefined") {
+    stopStorageChanges = listen(window, "storage", handleStoredChatOutboxStorageChange);
   }
   return () => {
     storedChatOutboxChangeListeners.delete(listener);
-    if (
-      storageChangeListenerInstalled &&
-      storedChatOutboxChangeListeners.size === 0 &&
-      typeof window !== "undefined"
-    ) {
-      storageChangeListenerInstalled = false;
-      window.removeEventListener("storage", handleStoredChatOutboxStorageChange);
+    if (storedChatOutboxChangeListeners.size === 0) {
+      stopStorageChanges?.();
+      stopStorageChanges = undefined;
     }
   };
 }
@@ -146,12 +143,8 @@ export function notifyStoredChatOutboxChanges(): void {
 }
 
 function handleStoredChatOutboxStorageChange(event: StorageEvent): void {
-  if (event.key === null && event.storageArea) {
-    projectedStoreByStorage.get(event.storageArea)?.clear();
-    notifyStoredChatOutboxChanges();
-    return;
-  }
   if (
+    (event.key === null && event.storageArea) ||
     event.key?.startsWith(STORAGE_KEY_PREFIX) ||
     event.key?.startsWith(LEGACY_STORAGE_KEY_PREFIX) ||
     event.key?.startsWith(PREVIOUS_STORAGE_KEY_PREFIX) ||
@@ -625,16 +618,14 @@ export function writeStoredOutboxStore(
   // A recovery move consumes its remaining source. Unlike an ordinary bounded
   // cache write, it must retain both that destination and every existing input.
   if (options.requiredSessionKey !== undefined) {
-    const required = new Set([
-      options.requiredSessionKey,
-      ...entries
-        .filter(([, session]) => session.queue?.length || hasStoredComposerDraftInput(session))
-        .map(([key]) => key),
-    ]);
-    for (const [key] of retained) {
-      required.delete(key);
-    }
-    if (required.size > 0) {
+    const retainedKeys = new Set(retained.map(([key]) => key));
+    if (
+      !retainedKeys.has(options.requiredSessionKey) ||
+      entries.some(
+        ([key, session]) =>
+          (session.queue?.length || hasStoredComposerDraftInput(session)) && !retainedKeys.has(key),
+      )
+    ) {
       throw new Error("Required chat outbox destination exceeds retention; source retained");
     }
   }
@@ -646,9 +637,6 @@ export function writeStoredOutboxStore(
   ) {
     options.beforeCommit?.();
     storage.removeItem(target.key);
-    if (storage.getItem(target.key) !== null) {
-      throw new Error("Chat outbox removal verification failed");
-    }
     retireRemovedOutboxPayloads(storage, target, previous, null);
     return;
   }
@@ -663,12 +651,9 @@ export function writeStoredOutboxStore(
     ...(store.legacyReceipts ? { legacyReceipts: store.legacyReceipts } : {}),
   };
   const payload = JSON.stringify(retainedStore);
-  // Verification precedes deleting any legacy source, including quota/no-op writes.
+  // Native Storage throws on failure; retire legacy sources only after this write succeeds.
   options.beforeCommit?.();
   storage.setItem(target.key, payload);
-  if (storage.getItem(target.key) !== payload) {
-    throw new Error("Chat outbox write verification failed");
-  }
   for (const source of pendingLegacyTransfers.get(store) ?? []) {
     if (storage.getItem(source.key) === source.raw) {
       try {

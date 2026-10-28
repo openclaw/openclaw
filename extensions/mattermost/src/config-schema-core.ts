@@ -1,4 +1,5 @@
 import {
+  ChannelBotLoopProtectionSchema,
   ChannelImplicitMentionsSchema,
   ChannelPreviewStreamingConfigSchema,
   ChannelStreamingPreviewSchema,
@@ -7,6 +8,7 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  buildChannelAllowBotsSchema,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
@@ -16,6 +18,8 @@ import { z } from "zod";
 
 const MattermostGroupSchema = buildGroupEntrySchema({
   requireMentionInBotThreads: z.boolean().optional(),
+  allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+  botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
 }).omit({
   tools: true,
   toolsBySender: true,
@@ -104,6 +108,8 @@ export const MattermostAccountSchemaBase = z
     oncharPrefixes: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
     requireMentionInBotThreads: z.boolean().optional(),
+    allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
     implicitMentions: ChannelImplicitMentionsSchema.optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -131,7 +137,6 @@ export const MattermostAccountSchemaBase = z
     groups: z.record(z.string(), MattermostGroupSchema.optional()).optional(),
     /** Network policy overrides for self-hosted Mattermost on trusted private/internal hosts. */
     network: MattermostNetworkSchema,
-    /** Retry configuration for DM channel creation */
     dmChannelRetry: DmChannelRetrySchema,
   })
   .strict();

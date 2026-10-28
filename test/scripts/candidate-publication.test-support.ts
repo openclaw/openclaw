@@ -33,17 +33,23 @@ import {
 
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const time = "2026-08-28T12:00:00.000Z";
+const version = "2026.8.28-beta.1";
+const workflowPath = (name: string) => `.github/workflows/${name}.yml`;
 
 export function candidatePublicationFixture(
   options: {
     candidateSha?: string;
+    transportRef?: string;
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
+    protectedTag?: boolean;
   } = {},
 ) {
   const fixture = trustedMainNpmFixture();
   const q = options.candidateSha ?? defaultQ;
-  const branch = options.candidateSha ? "release-ci/" + q.slice(0, 12) + "-123" : defaultBranch;
+  const branch =
+    options.transportRef ??
+    (options.candidateSha ? "release-ci/" + q.slice(0, 12) + "-123" : defaultBranch);
   const legacyRunId = fixture.runId;
   const runId = options.runId ?? legacyRunId;
   const workflowSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
@@ -64,6 +70,10 @@ export function candidatePublicationFixture(
     pluginPublishScope: "all-publishable",
     plugins: [],
   };
+  const intent = {
+    validationPurpose: purpose,
+    publicationSelection: publishing ? selection : null,
+  };
   Object.assign(inputs, {
     ref: q,
     expected_sha: q,
@@ -72,22 +82,19 @@ export function candidatePublicationFixture(
     rerun_group: "all",
     mode: "both",
     run_release_soak: "false",
-    trusted_workflow_json: publicationDispatchEnvelope(
-      tooling,
-      { validationPurpose: purpose, publicationSelection: publishing ? selection : null },
-      laneInputs,
-    ),
+    trusted_workflow_json: publicationDispatchEnvelope(tooling, intent, laneInputs),
   });
-  const admission = admissionFixture(true, {
+  const admission = admissionFixture(options.protectedTag ?? true, {
     inputs,
     candidateSha: q,
-    candidateVersion: "2026.8.28-beta.1",
+    transportRef: branch,
+    candidateVersion: version,
     policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
     workflowSource,
   });
   inputs.trusted_workflow_json = publicationDispatchEnvelope(
     tooling,
-    { validationPurpose: purpose, publicationSelection: publishing ? selection : null },
+    intent,
     laneInputs,
     admission.descriptor,
   );
@@ -118,8 +125,8 @@ export function candidatePublicationFixture(
     publishing ? { packages: [], platforms: [] } : null,
     publishing
       ? {
-          version: "2026.8.28-beta.1",
-          packages: [{ name: "openclaw", version: "2026.8.28-beta.1", targets: ["npm"] }],
+          version,
+          packages: [{ name: "openclaw", version, targets: ["npm"] }],
           platforms: [],
         }
       : null,
@@ -136,7 +143,7 @@ export function candidatePublicationFixture(
       npm: [
         {
           name: "openclaw",
-          version: "2026.8.28-beta.1",
+          version,
           required: true,
           observedAt: time,
           outcome: "observed",
@@ -174,7 +181,7 @@ export function candidatePublicationFixture(
       time,
     );
   })();
-  const plan = Object.assign(mapped(fixture.executionPlan), {
+  const admissionFields = {
     sourceAdmissionContract: "1",
     sourceAdmission: source,
     publicationAdmissionContract: "1",
@@ -182,7 +189,8 @@ export function candidatePublicationFixture(
     qualificationCoverage: coverage,
     qualificationInputs: inputs,
     trustedWorkflow: tooling,
-  });
+  };
+  const plan = Object.assign(mapped(fixture.executionPlan), admissionFields);
   plan.children = plan.children.filter((child) => child.selected);
   const qualificationBaselines = JSON.parse(qualificationBaselinesJson);
   Object.assign(expectDefined(plan.candidateRequest, "candidate request"), {
@@ -206,18 +214,12 @@ export function candidatePublicationFixture(
     // Fresh qualification has no reused evidence or shared candidate artifact.
     candidateBinding: undefined,
     evidenceReuse: undefined,
-    sourceAdmissionContract: "1",
-    sourceAdmission: source,
-    publicationAdmissionContract: "1",
-    publicationAdmission,
+    ...admissionFields,
     qualificationCoverage: structuredClone(coverage),
-    qualificationInputs: inputs,
-    trustedWorkflow: tooling,
     targetRef: q,
     targetSha: q,
     workflowFullRef: tooling.fullRef,
     workflowRef: branch,
-    publicationArtifacts: { npmPreflight: {}, docker: {} },
   });
   delete manifest.candidateBinding;
   delete manifest.evidenceReuse;
@@ -250,53 +252,37 @@ export function candidatePublicationFixture(
   const parent = Object.assign(mapped(fixture.parentRun), {
     name: "Full Release Validation",
     head_repository: { full_name: repository },
-    referenced_workflows: [
-      {
-        path: repository + "/.github/workflows/docker-release-prepare.yml@" + q,
-        sha: q,
-        ref: tooling.fullRef,
-      },
-      {
-        path: repository + "/.github/workflows/openclaw-npm-preflight.yml@" + q,
-        sha: q,
-        ref: tooling.fullRef,
-      },
-    ],
+    referenced_workflows: ["docker-release-prepare", "openclaw-npm-preflight"].map((name) => ({
+      path: `${repository}/${workflowPath(name)}@${q}`,
+      sha: q,
+      ref: tooling.fullRef,
+    })),
   });
-  const sealer = {
-    id: options.runId ? 10902 : 902,
-    name: "Seal release execution plan",
+  const completedJob = (id: number, name: string) => ({
+    id,
+    name,
     run_id: Number(runId),
     run_attempt: 1,
     head_sha: q,
     status: "completed",
     conclusion: "success",
-    steps: [
-      {
-        name: "Seal immutable release execution plan",
-        number: 5,
-        status: "completed",
-        conclusion: "success",
-        started_at: "2026-08-28T12:01:00.000Z",
-        completed_at: "2026-08-28T12:01:01.000Z",
-      },
-      {
-        name: "Upload immutable release execution plan",
-        number: 6,
-        status: "completed",
-        conclusion: "success",
-        started_at: "2026-08-28T12:01:01.000Z",
-        completed_at: "2026-08-28T12:01:03.000Z",
-      },
-      {
-        name: "Record immutable release execution plan digest",
-        number: 7,
-        status: "completed",
-        conclusion: "success",
-        started_at: "2026-08-28T12:01:03.000Z",
-        completed_at: "2026-08-28T12:01:03.000Z",
-      },
-    ],
+  });
+  const sealer = {
+    ...completedJob(options.runId ? 10902 : 902, "Seal release execution plan"),
+    steps: (
+      [
+        ["Seal immutable release execution plan", "00", "01"],
+        ["Upload immutable release execution plan", "01", "03"],
+        ["Record immutable release execution plan digest", "03", "03"],
+      ] as const
+    ).map(([name, start, end], index) => ({
+      name,
+      number: index + 5,
+      status: "completed",
+      conclusion: "success",
+      started_at: `2026-08-28T12:01:${start}.000Z`,
+      completed_at: `2026-08-28T12:01:${end}.000Z`,
+    })),
   };
   const originalJobs = jobsFor(runId).map((job) =>
     Object.assign(job, {
@@ -362,20 +348,23 @@ export function candidatePublicationFixture(
     loadManifest: () => ({ artifact: mapped(fixture.artifact), manifest }),
   };
   const npmBytes = "immutable qualified npm tarball bytes";
-  const npmProducer = {
+  const producer = {
     repository,
     runId,
     runAttempt: "1",
     workflowSha: q,
-    workflowRef: repository + "/.github/workflows/full-release-validation.yml@" + tooling.fullRef,
-    producerWorkflowPath: ".github/workflows/openclaw-npm-preflight.yml",
+    workflowRef: `${repository}/${workflowPath("full-release-validation")}@${tooling.fullRef}`,
+  };
+  const npmProducer = {
+    ...producer,
+    producerWorkflowPath: workflowPath("openclaw-npm-preflight"),
     jobId: "780",
     jobName: "Qualify prepared npm package",
   };
   const npmManifest = {
     version: 3,
     releaseSha: q,
-    releaseTag: "v2026.8.28-beta.1",
+    releaseTag: `v${version}`,
     tarballName: "openclaw.tgz",
     tarballSha256: hash(npmBytes),
     producer: npmProducer,
@@ -391,14 +380,17 @@ export function candidatePublicationFixture(
     "preflight-manifest.json": npmManifestBytes,
     "openclaw.tgz": npmBytes,
   });
-  const npmArtifact = {
-    id: 781,
-    name: "openclaw-npm-preflight-v2026.8.28-beta.1",
-    digest: "sha256:" + hash(npmArchive),
-    size_in_bytes: npmArchive.length,
+  const artifact = (id: number, name: string, bytes: string | Uint8Array) => ({
+    id,
+    name,
+    digest: "sha256:" + hash(bytes),
+    size_in_bytes: bytes.length,
     expired: false,
-    expires_at: "2099-01-01T00:00:00Z",
     workflow_run: { id: Number(runId), head_sha: q },
+  });
+  const npmArtifact = {
+    ...artifact(781, `openclaw-npm-preflight-v${version}`, npmArchive),
+    expires_at: "2099-01-01T00:00:00Z",
   };
   const npmQualified = {
     schema: "openclaw.qualified-npm-preflight/v1",
@@ -413,49 +405,31 @@ export function candidatePublicationFixture(
       runAttempt: "1",
     },
   };
-  manifest.publicationArtifacts.npmPreflight = npmQualified;
-  const npmJob = {
-    id: 780,
-    run_id: Number(runId),
-    run_attempt: 1,
-    head_sha: q,
-    name: npmProducer.jobName,
-    status: "completed",
-    conclusion: "success",
-  };
+  const npmJob = completedJob(780, npmProducer.jobName);
   const artifactName = dockerReleaseArtifactName(q, "1");
   const payloadBytes = ["immutable amd64 OCI payload", "immutable arm64 OCI payload"];
-  const dockerArtifacts = ["amd64", "arm64"].map((arch, i) => ({
-    id: 810 + i,
-    name: artifactName + "-" + arch,
-    digest: "sha256:" + hash(payloadBytes[i]!),
-    size_in_bytes: payloadBytes[i]!.length,
-    expired: false,
-    workflow_run: { id: Number(runId), head_sha: q },
-  }));
+  const architectures = ["amd64", "arm64"];
+  const dockerArtifacts = architectures.map((arch, i) =>
+    artifact(810 + i, artifactName + "-" + arch, payloadBytes[i]!),
+  );
   const docker = {
     schemaVersion: 1,
     repository,
     sourceSha: q,
     toolingSha: q,
-    tag: "v2026.8.28-beta.1",
-    version: "2026.8.28-beta.1",
+    tag: `v${version}`,
+    version,
     imageTagSuffix: "",
     builtAt: time,
     includeBrowser: false,
     artifactName,
     producer: {
-      repository,
-      runId,
-      runAttempt: "1",
-      workflowSha: q,
-      workflowRef: repository + "/.github/workflows/full-release-validation.yml@" + tooling.fullRef,
-      preparationWorkflowRef:
-        repository + "/.github/workflows/docker-release-prepare.yml@" + tooling.fullRef,
+      ...producer,
+      preparationWorkflowRef: `${repository}/${workflowPath("docker-release-prepare")}@${tooling.fullRef}`,
       jobId: "800",
       jobName: "Prepare Docker / Seal prepared Docker images",
     },
-    architectures: ["amd64", "arm64"].map((architecture, i) => ({
+    architectures: architectures.map((architecture, i) => ({
       architecture,
       artifact: {
         id: String(dockerArtifacts[i]!.id),
@@ -476,21 +450,16 @@ export function candidatePublicationFixture(
     })),
   };
   const dockerBytes = JSON.stringify(docker, null, 2) + "\n";
-  manifest.publicationArtifacts.docker = {
-    preparedRunId: runId,
-    preparedRunAttempt: "1",
-    preparedArtifactName: artifactName,
-    preparedManifestSha256: hash(dockerBytes),
+  const publicationArtifacts = {
+    npmPreflight: npmQualified,
+    docker: {
+      preparedRunId: runId,
+      preparedRunAttempt: "1",
+      preparedArtifactName: artifactName,
+      preparedManifestSha256: hash(dockerBytes),
+    },
   };
-  const dockerJob = {
-    id: 800,
-    run_id: Number(runId),
-    run_attempt: 1,
-    head_sha: q,
-    name: docker.producer.jobName,
-    status: "completed",
-    conclusion: "success",
-  };
+  const dockerJob = completedJob(800, docker.producer.jobName);
   const readApi = (endpoint: string) => {
     if (endpoint.includes("/compare/")) {
       return denied();
@@ -515,15 +484,13 @@ export function candidatePublicationFixture(
     }
     throw new Error("Unexpected publication API: " + endpoint);
   };
-  const runGh = (args: string[]) =>
-    JSON.stringify(
-      readApi(
-        expectDefined(
-          args.find((arg) => arg.startsWith("repos/")),
-          "API endpoint",
-        ),
-      ),
+  const runGh = (args: string[]) => {
+    const endpoint = expectDefined(
+      args.find((arg) => arg.startsWith("repos/")),
+      "API endpoint",
     );
+    return JSON.stringify(readApi(endpoint));
+  };
   return {
     q,
     p,
@@ -534,13 +501,10 @@ export function candidatePublicationFixture(
     admission,
     source,
     plan,
-    manifest,
+    manifest: Object.assign(manifest, { publicationArtifacts }),
     parent,
     client,
-    fixture,
-    inputs,
     tooling,
-    coverage,
     npmBytes,
     npmManifest,
     npmManifestBytes,

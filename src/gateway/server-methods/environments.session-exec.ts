@@ -3,11 +3,17 @@ import {
   errorShape,
   validateEnvironmentsSessionExecParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveExecDefaults } from "../../agents/exec-defaults.js";
+import { prepareExecDefaults } from "../../agents/exec-defaults.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntrySourceAssertion } from "../../config/sessions/session-entry-source-authority.js";
+import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { prepareExecApprovalsCurrentRead } from "../../infra/exec-approvals-store.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { approveSessionEnvironmentCommand } from "./environments.session-exec-approval.js";
 import { captureSessionEnvironmentToolPolicy } from "./environments.session-tool-policy.js";
 import { resolveSessionEnvironmentCaller } from "./environments.session.js";
-import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
@@ -17,8 +23,35 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
     validateEnvironmentsSessionExecParams,
     async (options) => {
       const { params, respond, context } = options;
+      const caller = await resolveSessionEnvironmentCaller(options, params);
+      let policyAuthority: Awaited<ReturnType<typeof prepareSessionSourceAuthority>> | undefined;
       try {
-        const caller = resolveSessionEnvironmentCaller(options, params);
+        const scope = {
+          ...caller.identity,
+          storePath: resolveSessionStorePathForScope(caller.identity, context.getRuntimeConfig()),
+        };
+        const policyEntry = await readSessionEntryReadOnlyInWorker(scope, caller.assertCurrent);
+        policyAuthority = await prepareSessionSourceAuthority(
+          captureSessionEntrySourceAssertion({
+            scope,
+            expected: policyEntry,
+            fields: [
+              "sessionId",
+              "lifecycleRevision",
+              "execHost",
+              "execNode",
+              "permissionMode",
+              "sandbox",
+              "sandboxMode",
+              "createdActor",
+            ],
+            assertCurrent: caller.assertCurrent,
+            assertHostCurrent: caller.assertCurrent,
+            refuse() {
+              throw new Error("The selected session changed before its operation committed.");
+            },
+          }),
+        );
         const service = context.workerEnvironmentService;
         const binding = service?.getSessionAttachment(caller.identity.sessionId);
         if (
@@ -40,20 +73,31 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
           caller,
           action === "run" || action === "start" ? "exec" : "process",
         );
+        const readApprovals = await prepareExecApprovalsCurrentRead(
+          captureOpenClawStateWorkerContext(),
+        );
         let approved = false;
         const resolvePolicy = () => {
           const cfg = context.getRuntimeConfig();
-          const target = loadAccessorSessionEntryForGatewayTarget({
-            cfg,
-            key: caller.identity.sessionKey,
-            agentId: caller.identity.agentId,
-          });
-          return resolveExecDefaults({
-            cfg,
-            ...caller.identity,
-            sessionEntry: target.entry,
-          });
+          policyAuthority!.assertCurrent();
+          const preparation = prepareExecDefaults(
+            {
+              cfg,
+              ...caller.identity,
+              sessionEntry: policyEntry,
+            },
+            resolveSandboxRuntimeStatus({
+              cfg,
+              ...caller.identity,
+              preparedSessionEntry: policyEntry ?? null,
+            }),
+          );
+          return preparation.kind === "resolved"
+            ? preparation.defaults
+            : preparation.resolve(readApprovals());
         };
+        const requiresApproval = (policy: ReturnType<typeof resolvePolicy>) =>
+          policy.security !== "full" || policy.ask === "always" || toolPolicy.cronExecAskAlways;
         const assertCurrent = () => {
           toolPolicy.assertAllowed();
           service.assertSessionAttachment(binding);
@@ -71,37 +115,25 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
               throw new Error("The conversation's exec policy binds commands to a different host");
             }
           }
+          return defaults;
         };
-        assertCurrent();
-        if (action === "run" || action === "start") {
-          const policy = resolvePolicy();
-          if (
-            policy.security !== "full" ||
-            policy.ask === "always" ||
-            toolPolicy.cronExecAskAlways
-          ) {
-            await approveSessionEnvironmentCommand({
-              options,
-              binding,
-              argv: command.argv,
-              input: command.input,
-              background: action === "start",
-              assertCurrent,
-              signal: caller.signal,
-            });
-            approved = true;
-          }
+        const initialPolicy = assertCurrent();
+        if ((action === "run" || action === "start") && requiresApproval(initialPolicy)) {
+          await approveSessionEnvironmentCommand({
+            options,
+            binding,
+            argv: command.argv,
+            input: command.input,
+            background: action === "start",
+            assertCurrent,
+            signal: caller.signal,
+          });
+          approved = true;
         }
         const assertDispatch = () => {
-          assertCurrent();
+          const policy = assertCurrent();
           if (action === "run" || action === "start") {
-            const policy = resolvePolicy();
-            if (
-              !approved &&
-              (policy.security !== "full" ||
-                policy.ask === "always" ||
-                toolPolicy.cronExecAskAlways)
-            ) {
+            if (!approved && requiresApproval(policy)) {
               throw new Error(
                 "Environment execution policy now requires approval; retry the command",
               );
@@ -120,16 +152,18 @@ export const environmentsSessionExecHandlers: GatewayRequestHandlers = {
         });
         assertCurrent();
         respond(true, { environmentId: binding.environmentId, ...result });
-      } catch (error) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            error instanceof Error ? error.message : "Environment execution failed",
-          ),
-        );
+      } finally {
+        try {
+          await policyAuthority?.release?.();
+        } finally {
+          caller.release();
+        }
       }
     },
+    (error) =>
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        error instanceof Error ? error.message : "Environment execution failed",
+      ),
   ),
 };

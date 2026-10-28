@@ -9,17 +9,15 @@ import {
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { buildBtwCliPrompt } from "../agents/btw-prompts.js";
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
-import type { InternalSessionEffectsTarget } from "../agents/internal-session-effects.js";
 import { withSessionManagerWrite } from "../agents/sessions/session-manager-write-admission.js";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
-import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
-import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
 import { parseMessageWithAttachments, type ChatAttachment } from "./chat-attachments.js";
@@ -28,6 +26,9 @@ import { SessionCompanionAskError } from "./session-companion-errors.js";
 import {
   buildSessionCompanionSystemPrompt,
   resolveSessionCompanionModel,
+  resolveSessionCompanionRoute,
+  type SessionCompanionAskSelection,
+  type SessionCompanionRunControls,
   resolveSessionCompanionCliRuntime,
   assertSessionCompanionImageInput,
   SESSION_COMPANION_TOOLS,
@@ -41,12 +42,12 @@ import {
   type SessionCompanionPromptMessage,
 } from "./session-companion-prompt.js";
 import {
+  sessionCompanionThreadKey,
   trimSessionCompanionExchanges,
   type SessionCompanionThread,
 } from "./session-companion-state.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
-import { sessionObserverScopeKey } from "./session-observer-model.js";
 
 const companionLog = createSubsystemLogger("gateway/session-companion");
 
@@ -60,6 +61,7 @@ type SessionCompanionRunParams = {
   cfg: OpenClawConfig;
   agentId: string;
   modelRef: string;
+  controls?: SessionCompanionRunControls;
   sessionKey: string;
   workspaceDir: string;
   systemPrompt: string;
@@ -79,10 +81,7 @@ export type SessionCompanionAskDeps = {
       agentId?: string,
     ) => Promise<SessionObserverCompanionSnapshot>;
   };
-  resolveUtilityModelRef?: typeof resolveUtilityModelRefForAgent;
   contextReader: SessionCompanionContextReader;
-  run?: (params: SessionCompanionRunParams) => Promise<string>;
-  now?: () => number;
 };
 
 type SessionCompanionAskRuntimeParams = SessionCompanionAskDeps & {
@@ -127,12 +126,7 @@ function toRunnerHistoryMessage(
 async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
   params.assertSourceCurrent?.();
   params.assertInputCurrent?.();
-  const selectedModel = resolveSessionCompanionModel({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    modelRef: params.modelRef,
-    operatorAuthority: params.operatorAuthority,
-  });
+  const selectedModel = resolveSessionCompanionModel(params);
   const current = params.messages.at(-1);
   if (!current || current.role !== "user") {
     throw new Error("Session companion has no current question.");
@@ -185,17 +179,60 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     );
     if (cliRuntime) {
       executionStarted = true;
-      const answer = await runSessionCompanionViaCliRuntime({
-        ...params,
-        cliRuntime,
-        modelId: selectedModel.modelId,
-        requesterModel: { provider: selectedModel.provider, model: selectedModel.modelId },
-        authProfileId: selectedModel.profileId,
-        target,
-        preparedRunAdmission,
-        runId,
-        abortSignal,
-      });
+      // Subscription-backed CLI runtimes have no direct provider credential. Their
+      // tool-free side question uses bounded context because the CLI bridge cannot
+      // scope read-only session tools to the observed session.
+      const [{ prepareCliRunContext }, { executePreparedCliRun }] = await Promise.all([
+        import("../agents/cli-runner/prepare.runtime.js"),
+        import("../agents/cli-runner/execute.runtime.js"),
+      ]);
+      let prepared: PreparedCliRunContext | undefined;
+      let answer: string;
+      try {
+        params.assertSourceCurrent?.();
+        prepared = await prepareCliRunContext({
+          preparedRunAdmission,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          sessionEntry: target.sessionEntry,
+          sessionFile: target.sessionFile,
+          agentId: params.agentId,
+          trigger: "manual",
+          workspaceDir: params.workspaceDir,
+          config: params.cfg,
+          prompt: buildBtwCliPrompt({
+            messages: params.messages.slice(0, -1).map((message) =>
+              toRunnerHistoryMessage(message, {
+                provider: cliRuntime,
+                modelId: selectedModel.modelId,
+              }),
+            ),
+            question: current.content,
+            imageCount: 0,
+          }),
+          extraSystemPrompt: params.systemPrompt,
+          executionMode: "side-question",
+          provider: cliRuntime,
+          model: selectedModel.modelId,
+          ...(params.controls?.thinkLevel ? { thinkLevel: params.controls.thinkLevel } : {}),
+          requesterModel: { provider: selectedModel.provider, model: selectedModel.modelId },
+          disableTools: true,
+          timeoutMs: ASK_TIMEOUT_MS,
+          runTimeoutOverrideMs: ASK_TIMEOUT_MS,
+          runId,
+          authProfileId: selectedModel.profileId,
+          abortSignal,
+        });
+        abortSignal.throwIfAborted();
+        params.assertSourceCurrent?.();
+        answer = (await executePreparedCliRun(prepared)).text;
+      } finally {
+        try {
+          await prepared?.preparedBackend.cleanup?.();
+        } catch (error) {
+          companionLog.warn("Side chat backend cleanup failed", { error });
+        }
+      }
       modelExecution?.assertCurrent();
       return answer;
     }
@@ -214,24 +251,18 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     const assertSeedCurrent = () => {
       abortSignal.throwIfAborted();
       params.assertSourceCurrent?.();
-      const currentEntry = loadExactSessionEntry(target)?.entry;
-      if (
-        !currentEntry ||
-        currentEntry.sessionId !== target.sessionId ||
-        currentEntry.lifecycleRevision !== expectedSeedOwner.lifecycleRevision ||
-        currentEntry.activeWriterRunId !== expectedSeedOwner.activeWriterRunId
-      ) {
-        throw new Error("Session companion identity changed before history persistence");
-      }
     };
-    await withSessionTranscriptWriteAssertion(target, assertSeedCurrent, () =>
-      withSessionManagerWrite(sessionManager, async () => {
-        assertSeedCurrent();
-        for (const message of params.messages.slice(0, -1)) {
+    await withSessionTranscriptWriteAssertion(
+      { ...target, expectedOwner: expectedSeedOwner },
+      assertSeedCurrent,
+      () =>
+        withSessionManagerWrite(sessionManager, async () => {
           assertSeedCurrent();
-          await sessionManager.appendMessageAsync(toRunnerHistoryMessage(message, selectedModel));
-        }
-      }),
+          for (const message of params.messages.slice(0, -1)) {
+            assertSeedCurrent();
+            await sessionManager.appendMessageAsync(toRunnerHistoryMessage(message, selectedModel));
+          }
+        }),
     );
     abortSignal.throwIfAborted();
     params.assertInputCurrent?.();
@@ -258,6 +289,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       assertModelInput: params.images?.length ? assertSessionCompanionImageInput : undefined,
       provider: selectedModel.runtimeProvider ?? selectedModel.provider,
       model: selectedModel.modelId,
+      ...params.controls,
       modelFallbacksOverride: [],
       requestedRouteResolution: "resolved",
       agentHarnessRuntimeOverride: "openclaw",
@@ -293,113 +325,41 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       await removeInternalSessionEffectsSession(
         target,
         executionStarted ? undefined : expectedSeedOwner,
-      );
+      ).catch((error: unknown) => {
+        // Cleanup must not replace a completed answer or replay it through fallback.
+        companionLog.warn("Side chat internal session cleanup failed", { error });
+      });
     } finally {
       modelExecution?.release();
     }
   }
 }
 
-/**
- * Subscription-backed CLI runtimes have no direct provider credential, so Side
- * chat runs as a tool-free, one-shot side question on the owning CLI backend.
- * The bounded reference context stands in for the read-only session tools,
- * which the CLI bridge cannot scope to the observed session.
- */
-async function runSessionCompanionViaCliRuntime(
-  params: SessionCompanionRunParams & {
-    cliRuntime: string;
-    modelId: string;
-    requesterModel: { provider: string; model: string };
-    authProfileId?: string;
-    target: InternalSessionEffectsTarget;
-    preparedRunAdmission: PreparedAgentRunAdmission;
-    runId: string;
-    abortSignal: AbortSignal;
-  },
-): Promise<string> {
-  const [{ prepareCliRunContext }, { executePreparedCliRun }] = await Promise.all([
-    import("../agents/cli-runner/prepare.runtime.js"),
-    import("../agents/cli-runner/execute.runtime.js"),
-  ]);
-  const history = params.messages.slice(0, -1);
-  const question = params.messages.at(-1)?.content ?? "";
-  let prepared: PreparedCliRunContext | undefined;
-  try {
-    params.assertSourceCurrent?.();
-    prepared = await prepareCliRunContext({
-      preparedRunAdmission: params.preparedRunAdmission,
-      sessionId: params.target.sessionId,
-      sessionKey: params.target.sessionKey,
-      sessionEntry: params.target.sessionEntry,
-      sessionFile: params.target.sessionFile,
-      agentId: params.agentId,
-      trigger: "manual",
-      workspaceDir: params.workspaceDir,
-      config: params.cfg,
-      prompt: buildBtwCliPrompt({
-        messages: history.map((message) =>
-          toRunnerHistoryMessage(message, {
-            provider: params.cliRuntime,
-            modelId: params.modelId,
-          }),
-        ),
-        question,
-        imageCount: 0,
-      }),
-      extraSystemPrompt: params.systemPrompt,
-      executionMode: "side-question",
-      provider: params.cliRuntime,
-      model: params.modelId,
-      requesterModel: params.requesterModel,
-      disableTools: true,
-      timeoutMs: ASK_TIMEOUT_MS,
-      runTimeoutOverrideMs: ASK_TIMEOUT_MS,
-      runId: params.runId,
-      authProfileId: params.authProfileId,
-      abortSignal: params.abortSignal,
-    });
-    params.abortSignal.throwIfAborted();
-    params.assertSourceCurrent?.();
-    return (await executePreparedCliRun(prepared)).text;
-  } finally {
-    await prepared?.preparedBackend.cleanup?.();
-  }
-}
-
 export function createSessionCompanionAskRuntime(params: SessionCompanionAskRuntimeParams) {
-  const resolveUtilityModelRef = params.resolveUtilityModelRef ?? resolveUtilityModelRefForAgent;
   const contextReader = params.contextReader;
-  const run = params.run ?? defaultRun;
   const activeAsks = new Map<string, SessionCompanionActiveAsk>();
   const admissions: Array<{ connId: string; admittedAt: number }> = [];
 
-  const resolveTarget = async (sessionKey: string, agentId: string) => {
-    const cfg = params.getConfig();
+  const currentSessionId = (sessionKey: string, agentId: string) =>
+    contextReader.currentSessionId({ agentId, sessionKey });
+
+  const prepareThread = async (
+    threadKey: string,
+    { sessionKey, agentId }: { sessionKey: string; agentId: string },
+    signal: AbortSignal,
+    assertSourceCurrent?: () => void,
+  ): Promise<SessionCompanionThread> => {
+    const existing = params.threads.get(threadKey);
     const observerSnapshot = await params.sessionObserver.getCompanionSnapshotAsync(
       sessionKey,
       agentId,
     );
-    return { agentId, cfg, observerSnapshot };
-  };
-
-  const currentSessionId = (sessionKey: string, agentId: string): string | undefined =>
-    contextReader.currentSessionId({ agentId, sessionKey });
-
-  const prepareThread = async (
-    sessionKey: string,
-    agentId: string,
-    signal: AbortSignal,
-    assertSourceCurrent?: () => void,
-  ): Promise<SessionCompanionThread> => {
-    const threadKey = sessionObserverScopeKey(sessionKey, agentId);
-    const existing = params.threads.get(threadKey);
-    const { observerSnapshot } = await resolveTarget(sessionKey, agentId);
+    const existingSessionId = existing ? await currentSessionId(sessionKey, agentId) : undefined;
     if (signal.aborted) {
       throw new Error("session companion preparation was cancelled");
     }
     assertSourceCurrent?.();
-    if (existing && currentSessionId(sessionKey, agentId) === existing.context.sessionId) {
+    if (existing && existingSessionId === existing.context.sessionId) {
       return existing;
     }
     if (existing) {
@@ -422,12 +382,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         "The selected session history could not be loaded.",
       );
     }
-    if (currentSessionId(sessionKey, agentId) !== result.context.sessionId) {
-      throw new SessionCompanionAskError(
-        "context-unavailable",
-        "The selected session changed before its history was ready.",
-      );
-    }
     const thread: SessionCompanionThread = {
       context: result.context,
       digestText: formatObserverDigest(observerSnapshot),
@@ -446,7 +400,9 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     question: string;
     selectionContext?: string;
     attachments?: ChatAttachment[];
+    selection?: SessionCompanionAskSelection;
     connId: string;
+    ownerId: string;
     operatorAuthority?: AdmittedRunOperatorAuthority;
     assertSourceCurrent?: () => void;
     assertInputCurrent?: () => void;
@@ -470,7 +426,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         ? AbortSignal.any([request.signal, request.operatorAuthority.signal])
         : request.operatorAuthority.signal
       : request.signal;
-    const threadKey = sessionObserverScopeKey(sessionKey, agentId);
+    const threadKey = sessionCompanionThreadKey(sessionKey, agentId, request.ownerId);
     const existing = params.threads.get(threadKey);
     if (existing?.busy || activeAsks.has(threadKey)) {
       throw new SessionCompanionAskError("busy", "Side chat is answering another question.");
@@ -533,6 +489,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       aborted.reject(new Error("session companion ask timed out or was cancelled"));
     controller.signal.addEventListener("abort", onAbort, { once: true });
     let ownedThread: SessionCompanionThread | undefined;
+    let mustSettleExecution = isIncognitoSessionKey(sessionKey);
     const discardOwnedThread = () => {
       if (ownedThread && params.threads.get(threadKey) === ownedThread) {
         params.threads.delete(threadKey);
@@ -542,8 +499,8 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     // still pass the ownership checks before dispatching or committing an answer.
     const execute = async () => {
       const thread = await prepareThread(
-        sessionKey,
-        agentId,
+        threadKey,
+        { sessionKey, agentId },
         controller.signal,
         assertSourceCurrent,
       );
@@ -556,13 +513,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       }
       thread.busy = true;
       thread.lastUsedAt = admittedAt;
-      if (currentSessionId(sessionKey, agentId) !== thread.context.sessionId) {
-        params.threads.delete(threadKey);
-        throw new SessionCompanionAskError(
-          "context-unavailable",
-          "The selected session changed before Side chat could answer.",
-        );
-      }
       const currentSnapshot = await params.sessionObserver.getCompanionSnapshotAsync(
         sessionKey,
         agentId,
@@ -570,15 +520,9 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       controller.signal.throwIfAborted();
       assertSourceCurrent?.();
       request.assertInputCurrent?.();
-      if (currentSessionId(sessionKey, agentId) !== thread.context.sessionId) {
-        throw new SessionCompanionAskError(
-          "context-unavailable",
-          "The selected session changed before Side chat could answer.",
-        );
-      }
       const cfg = params.getConfig();
-      const utilityModelRef = resolveUtilityModelRef({ cfg, agentId });
-      if (!utilityModelRef) {
+      const { modelRef, fallbacks } = resolveSessionCompanionRoute(cfg, agentId, request.selection);
+      if (!modelRef) {
         throw new SessionCompanionAskError(
           "utility-model-unavailable",
           "No utility model is configured for this session.",
@@ -608,13 +552,22 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
           request.assertInputCurrent?.();
         },
       });
+      const executionSessionId = await currentSessionId(sessionKey, agentId);
       controller.signal.throwIfAborted();
       assertSourceCurrent?.();
       request.assertInputCurrent?.();
-      const rawAnswer = await run({
+      if (executionSessionId !== thread.context.sessionId) {
+        discardOwnedThread();
+        throw new SessionCompanionAskError(
+          "context-unavailable",
+          "The selected session changed before Side chat could answer.",
+        );
+      }
+      const runParams: SessionCompanionRunParams = {
         cfg,
         agentId,
-        modelRef: utilityModelRef,
+        modelRef,
+        ...(request.selection?.controls ? { controls: request.selection.controls } : {}),
         sessionKey,
         workspaceDir,
         systemPrompt: buildSessionCompanionSystemPrompt(sessionKey),
@@ -624,15 +577,66 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         assertSourceCurrent,
         ...(request.assertInputCurrent ? { assertInputCurrent: request.assertInputCurrent } : {}),
         signal: controller.signal,
-      });
+      };
+      let rawAnswer: string;
+      mustSettleExecution = true;
+      if (fallbacks.length) {
+        // The fallback owner filters the whole chain before choosing a permitted route.
+        const selection = resolveSessionCompanionModel({
+          ...runParams,
+          operatorAuthority: undefined,
+        });
+        const [{ runWithModelFallback }, { resolveModelCandidateChain }] = await Promise.all([
+          import("../agents/model-fallback-runner.js"),
+          import("../agents/model-fallback-candidates.js"),
+        ]);
+        const candidateParams = {
+          cfg,
+          agentId,
+          provider: selection.provider,
+          model: selection.modelId,
+          requestedRouteResolution: "resolved" as const,
+          fallbacksOverride: fallbacks,
+        };
+        const modelPolicy = request.operatorAuthority?.modelPolicy;
+        if (modelPolicy && !resolveModelCandidateChain(candidateParams).some(modelPolicy.allows)) {
+          // Preserve Side chat's permitted-model recovery when the entire utility chain is denied.
+          rawAnswer = await defaultRun(runParams);
+        } else {
+          const result = await runWithModelFallback({
+            ...candidateParams,
+            abortSignal: controller.signal,
+            operatorAuthority: request.operatorAuthority,
+            skipAuthProfileRuntime: true,
+            resolveAgentHarnessRuntimeOverride: () => "openclaw",
+            run: (provider, model, options) => {
+              controller.signal.throwIfAborted();
+              assertSourceCurrent?.();
+              request.assertInputCurrent?.();
+              return defaultRun({
+                ...runParams,
+                modelRef:
+                  options?.modelRoutingProvenance.stage === "fallback"
+                    ? `${provider}/${model}${
+                        provider === selection.provider && selection.profileId
+                          ? `@${selection.profileId}`
+                          : ""
+                      }`
+                    : modelRef,
+              });
+            },
+          });
+          rawAnswer = result.result;
+        }
+      } else {
+        rawAnswer = await defaultRun(runParams);
+      }
+      const replySessionId = await currentSessionId(sessionKey, agentId);
       if (activeAsk.cancellation || params.isDisposed()) {
         throw new Error("session companion ask was cancelled");
       }
       assertSourceCurrent?.();
-      if (
-        params.threads.get(threadKey) !== thread ||
-        currentSessionId(sessionKey, agentId) !== thread.context.sessionId
-      ) {
+      if (params.threads.get(threadKey) !== thread || replySessionId !== thread.context.sessionId) {
         discardOwnedThread();
         throw new SessionCompanionAskError(
           "context-unavailable",
@@ -651,8 +655,9 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       thread.lastUsedAt = ts;
       return { answer, ts };
     };
+    const execution = execute();
     try {
-      return await Promise.race([execute(), aborted.promise]);
+      return await Promise.race([execution, aborted.promise]);
     } catch (error) {
       if (
         error instanceof SessionCompanionAskError ||
@@ -669,14 +674,19 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       }
       companionLog.warn("session companion ask failed", { sessionKey, error });
       throw new SessionCompanionAskError(
-        "unavailable",
+        activeAsk.cancellation === "timeout" ? "timeout" : "unavailable",
         activeAsk.cancellation === "timeout"
-          ? "Side chat timed out."
+          ? "Side chat timed out. Try again."
           : activeAsk.cancellation === "explicit-reset"
             ? "The Side chat request was cancelled."
             : "Side chat could not answer right now.",
       );
     } finally {
+      // Keep RPC source facts and the busy slot until internal-session writes and cleanup
+      // settle. Ordinary context reads still time out without waiting for a model run.
+      if (mustSettleExecution) {
+        await execution.catch(() => undefined);
+      }
       clearTimeout(timeout);
       controller.signal.removeEventListener("abort", onAbort);
       requestSignal?.removeEventListener("abort", abortRequest);
@@ -691,15 +701,15 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
 
   return {
     ask,
+    activeKeys: () => activeAsks.keys(),
     cancel(
-      sessionKey: string,
-      agentId: string,
+      threadKey: string,
       cancellation: Extract<
         SessionCompanionCancellationKind,
         "backing-session-revoked" | "explicit-reset"
       >,
     ) {
-      const activeAsk = activeAsks.get(sessionObserverScopeKey(sessionKey, agentId));
+      const activeAsk = activeAsks.get(threadKey);
       if (!activeAsk || activeAsk.cancellation) {
         return;
       }

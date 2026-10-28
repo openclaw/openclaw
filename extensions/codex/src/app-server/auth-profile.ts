@@ -1,34 +1,47 @@
-/** Synchronous auth-profile selection and native provider identity. */
+/** Worker-backed auth-profile selection and native provider identity. */
 import {
   embeddedAgentLog,
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-harness-registration";
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   resolveAuthProfileOrder,
-  type AuthProfileStore,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/provider-auth-aliases";
-import { createCodexAuthProfileSelection } from "./auth-profile-selection.js";
-export { CODEX_APP_SERVER_AUTH_PROVIDER } from "./auth-profile-selection.js";
+import {
+  createCodexAuthProfileSelection,
+  type CodexAppServerAuthProfileLookup,
+} from "./auth-profile-selection.js";
+export {
+  CODEX_APP_SERVER_AUTH_PROVIDER,
+  type CodexAppServerAuthProfileLookup,
+} from "./auth-profile-selection.js";
 
-type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
-type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
 const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
+
+export async function resolveModelBackedReviewerPolicyProvider(params: {
+  authProfileId?: string;
+  modelProvider?: string;
+  agentDir?: string;
+  config?: CodexAppServerAuthProfileLookup["config"];
+}): Promise<string | undefined> {
+  const modelProvider = params.modelProvider?.trim();
+  if (modelProvider && modelProvider.toLowerCase() !== "codex") {
+    return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
+  }
+  return (await isCodexAppServerNativeAuthProfile(params)) ? "openai" : undefined;
+}
 
 export const {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerAuthProfileStore,
-} = createCodexAuthProfileSelection({ ensureAuthProfileStore, resolveAuthProfileOrder });
-
-export type CodexAppServerAuthProfileLookup = {
-  authProfileId?: string;
-  authProfileStore?: AuthProfileStore;
-  agentDir?: string;
-  config?: ProviderAuthAliasConfig;
-};
+  withCodexAppServerAuthProfileIdAtEffect,
+} = createCodexAuthProfileSelection({
+  ensureAuthProfileStoreAsync,
+  resolveAuthProfileOrder,
+});
 
 export type CodexAppServerAuthRuntimeContext = CodexAppServerAuthProfileLookup & {
   authMode?: "prepared-api-key" | "profile";
@@ -36,9 +49,9 @@ export type CodexAppServerAuthRuntimeContext = CodexAppServerAuthProfileLookup &
 };
 
 /** Returns true when an auth profile uses native Codex/OpenAI app-server auth. */
-export function isCodexAppServerNativeAuthProfile(
+export async function isCodexAppServerNativeAuthProfile(
   lookup: CodexAppServerAuthProfileLookup,
-): boolean {
+): Promise<boolean> {
   const authProfileId = lookup.authProfileId?.trim();
   if (!authProfileId) {
     return false;
@@ -46,7 +59,7 @@ export function isCodexAppServerNativeAuthProfile(
   try {
     const store =
       lookup.authProfileStore ??
-      ensureAuthProfileStore(
+      (await ensureAuthProfileStoreAsync(
         lookup.agentDir?.trim() || resolveDefaultAgentDir(lookup.config ?? {}),
         {
           allowKeychainPrompt: false,
@@ -54,7 +67,7 @@ export function isCodexAppServerNativeAuthProfile(
           externalCliProviderIds: [CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER],
           externalCliProfileIds: [authProfileId],
         },
-      );
+      ));
     const credential = store.profiles[authProfileId];
     if (
       !credential ||
@@ -81,16 +94,16 @@ export function isCodexAppServerNativeAuthProfile(
 }
 
 /** Hides redundant OpenAI provider attribution for native Codex auth bindings. */
-export function normalizeCodexAppServerBindingModelProvider(
+export async function normalizeCodexAppServerBindingModelProvider(
   params: CodexAppServerAuthProfileLookup & { modelProvider?: string },
-): string | undefined {
+): Promise<string | undefined> {
   const modelProvider = params.modelProvider?.trim();
   if (!modelProvider) {
     return undefined;
   }
   if (
-    isCodexAppServerNativeAuthProfile(params) &&
-    modelProvider.toLowerCase() === PUBLIC_OPENAI_MODEL_PROVIDER
+    modelProvider.toLowerCase() === PUBLIC_OPENAI_MODEL_PROVIDER &&
+    (await isCodexAppServerNativeAuthProfile(params))
   ) {
     return undefined;
   }

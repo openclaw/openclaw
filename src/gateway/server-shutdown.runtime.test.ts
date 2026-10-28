@@ -45,10 +45,6 @@ vi.mock("./mcp-http.js", () => {
   state.loaded.push("mcp-http");
   return { closeMcpLoopbackServer: vi.fn() };
 });
-vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => {
-  state.loaded.push("restart-recovery");
-  return { markRestartAbortedMainSessions: vi.fn() };
-});
 vi.mock("../agents/agent-bundle-lsp-runtime.js", () => {
   state.loaded.push("bundle-lsp");
   return { disposeAllBundleLspRuntimes: vi.fn() };
@@ -110,7 +106,6 @@ describe("gateway shutdown runtime", () => {
         "session-change-events",
         "session-event-publications",
         "mcp-http",
-        "restart-recovery",
         "bundle-lsp",
         "embeddings",
         "gmail-watcher",

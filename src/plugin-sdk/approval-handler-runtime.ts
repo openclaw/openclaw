@@ -1,6 +1,3 @@
-/**
- * Runtime SDK subpath for approval handler adapters and approval view text helpers.
- */
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeApprovalRequest } from "../infra/approval-types.js";
 import type { ApprovalRequestInput } from "../infra/approval-types.js";
@@ -22,6 +19,7 @@ import {
 export {
   createChannelApprovalHandler,
   createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   createChannelApprovalHandlerFromCapability,
   createLazyChannelApprovalNativeRuntimeAdapter,
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,

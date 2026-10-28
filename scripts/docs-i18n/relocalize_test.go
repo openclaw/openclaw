@@ -7,49 +7,6 @@ import (
 	"testing"
 )
 
-func TestPostprocessLocalizedDocsFixesStaleLinksAfterLaterPagesExist(t *testing.T) {
-	t.Parallel()
-
-	docsRoot := t.TempDir()
-	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
-	writeFile(t, filepath.Join(docsRoot, "gateway", "index.md"), "# Gateway\n")
-	writeFile(t, filepath.Join(docsRoot, "gateway", "troubleshooting.md"), "# Troubleshooting\n")
-	writeFile(t, filepath.Join(docsRoot, "zh-CN", "gateway", "index.md"), stringsJoin(
-		"---",
-		"title: 网关",
-		"x-i18n:",
-		"  source_hash: test",
-		"---",
-		"",
-		"See [Troubleshooting](/gateway/troubleshooting).",
-	))
-	writeFile(t, filepath.Join(docsRoot, "zh-CN", "gateway", "troubleshooting.md"), stringsJoin(
-		"---",
-		"title: 故障排除",
-		"x-i18n:",
-		"  source_hash: test",
-		"---",
-		"",
-		"# 故障排除",
-	))
-
-	if err := postprocessLocalizedDocs(docsRoot, "zh-CN", []string{
-		filepath.Join(docsRoot, "zh-CN", "gateway", "index.md"),
-		filepath.Join(docsRoot, "zh-CN", "gateway", "troubleshooting.md"),
-	}); err != nil {
-		t.Fatalf("postprocessLocalizedDocs failed: %v", err)
-	}
-
-	got := mustReadFile(t, filepath.Join(docsRoot, "zh-CN", "gateway", "index.md"))
-	if !strings.Contains(got, "---\ntitle: 网关\nx-i18n:\n  source_hash: test\n  postprocess_version: "+localizedLinkPostprocessVersion+"\n---\n\n") {
-		t.Fatalf("front matter corrupted after rewrite:\n%s", got)
-	}
-	want := "See [Troubleshooting](/zh-CN/gateway/troubleshooting)."
-	if !containsLine(got, want) {
-		t.Fatalf("expected rewritten localized link %q in output:\n%s", want, got)
-	}
-}
-
 func TestPostprocessLocalizedDocsRejectsProtocolMarkerLeak(t *testing.T) {
 	docsRoot := t.TempDir()
 	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
@@ -123,6 +80,9 @@ func TestPostprocessLocalizedDocsRewritesPublishedPageLinksForEachLocale(t *test
 			}
 
 			got := mustReadFile(t, pagePath)
+			if !strings.Contains(got, "---\ntitle: "+tt.title+"\nx-i18n:\n  source_hash: test\n  postprocess_version: "+localizedLinkPostprocessVersion+"\n---\n\n") {
+				t.Fatalf("front matter corrupted after rewrite:\n%s", got)
+			}
 			expectedLinks := []string{
 				"See [Troubleshooting](" + tt.wantPrefix + "/gateway/troubleshooting).",
 				"See [Example provider](" + tt.wantPrefix + "/providers/example-provider).",

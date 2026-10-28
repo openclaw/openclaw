@@ -17,10 +17,9 @@ function toConversationLifecycleBinding(binding: {
 }) {
   return {
     boundAt: binding.boundAt,
-    lastActivityAt:
-      typeof binding.lastActivityAt === "number" ? binding.lastActivityAt : binding.boundAt,
-    idleTimeoutMs: typeof binding.idleTimeoutMs === "number" ? binding.idleTimeoutMs : undefined,
-    maxAgeMs: typeof binding.maxAgeMs === "number" ? binding.maxAgeMs : undefined,
+    lastActivityAt: binding.lastActivityAt ?? binding.boundAt,
+    idleTimeoutMs: binding.idleTimeoutMs,
+    maxAgeMs: binding.maxAgeMs,
   };
 }
 
@@ -37,32 +36,29 @@ export const discordConversationBindings: NonNullable<
       persist: false,
       enableSweeper: false,
     }),
-  setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
+  // Released synchronous runtime setters dispatch here through 2026-12-31.
+  setIdleTimeoutBySessionKey: (params) =>
     setThreadBindingIdleTimeoutBySessionKey({
-      targetSessionKey,
-      accountId: accountId ?? undefined,
-      idleTimeoutMs,
+      ...params,
+      accountId: params.accountId ?? undefined,
     }).map(toConversationLifecycleBinding),
-  setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
+  setMaxAgeBySessionKey: (params) =>
     setThreadBindingMaxAgeBySessionKey({
-      targetSessionKey,
-      accountId: accountId ?? undefined,
-      maxAgeMs,
+      ...params,
+      accountId: params.accountId ?? undefined,
     }).map(toConversationLifecycleBinding),
-  setIdleTimeoutBySessionKeyAsync: async ({ targetSessionKey, accountId, idleTimeoutMs }) =>
+  setIdleTimeoutBySessionKeyAsync: async (params) =>
     (
       await setThreadBindingIdleTimeoutBySessionKeyAsync({
-        targetSessionKey,
-        accountId: accountId ?? undefined,
-        idleTimeoutMs,
+        ...params,
+        accountId: params.accountId ?? undefined,
       })
     ).map(toConversationLifecycleBinding),
-  setMaxAgeBySessionKeyAsync: async ({ targetSessionKey, accountId, maxAgeMs }) =>
+  setMaxAgeBySessionKeyAsync: async (params) =>
     (
       await setThreadBindingMaxAgeBySessionKeyAsync({
-        targetSessionKey,
-        accountId: accountId ?? undefined,
-        maxAgeMs,
+        ...params,
+        accountId: params.accountId ?? undefined,
       })
     ).map(toConversationLifecycleBinding),
 };

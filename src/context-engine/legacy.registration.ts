@@ -1,4 +1,3 @@
-// Legacy context-engine registration installs the built-in fallback under core ownership.
 import { LegacyContextEngine } from "./legacy.js";
 import { registerContextEngineForOwner } from "./registry.js";
 

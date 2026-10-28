@@ -1,10 +1,18 @@
 name: Android Emulator Diagnostic
 
-run-name: Android emulator diagnostic instrumented (${{ inputs.target_sha }})
+run-name: Android ${{ inputs.operation == 'screenshots' && 'screenshots' || 'emulator' }} diagnostic (${{ inputs.target_sha }})
 
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Diagnose emulator boot or capture phone and Wear screenshots without publishing
+        required: false
+        type: choice
+        default: boot
+        options:
+          - boot
+          - screenshots
       target_sha:
         description: Exact lowercase 40-character commit SHA to diagnose
         required: true
@@ -88,7 +96,7 @@ jobs:
   diagnose:
     needs: validate-target
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: ${{ inputs.operation == 'screenshots' && 40 || 25 }}
     permissions:
       contents: read
     env:
@@ -120,6 +128,25 @@ jobs:
             cat /etc/os-release
           } >"$DIAGNOSTIC_DIR/runner.txt"
 
+      - name: Checkout screenshot source
+        if: inputs.operation == 'screenshots'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Execute only the revision selected for this workflow, never a separate input revision.
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify screenshot source
+        if: inputs.operation == 'screenshots'
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git status --short --branch
+
       - name: Checkout trusted Android tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -130,6 +157,14 @@ jobs:
             .github/actions/setup-android-toolchain
             scripts/android-sips-linux.sh
           path: .mobile-release-tooling
+
+      - name: Setup screenshot Node environment
+        if: inputs.operation == 'screenshots'
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "true"
+          node-version: "24.22.1"
 
       - name: Setup Android toolchain
         uses: ./.mobile-release-tooling/.github/actions/setup-android-toolchain
@@ -211,6 +246,7 @@ jobs:
           fi
 
       - name: Run phone emulator diagnostic
+        if: inputs.operation != 'screenshots'
         shell: bash
         run: |
           set -euo pipefail
@@ -638,9 +674,34 @@ jobs:
           fail_after_readiness_timeout \
             "Timed out waiting for Android emulator boot completion" "$serial"
 
+      - name: Capture phone and Wear screenshots
+        if: inputs.operation == 'screenshots'
+        shell: bash
+        env:
+          ANDROID_SCREENSHOT_DIAGNOSTICS: "1"
+          SIPS: ${{ runner.temp }}/openclaw-android-tools/android-sips-linux.sh
+        run: bash scripts/android-screenshots.sh
+
+      - name: Upload screenshot diagnostics
+        if: always() && inputs.operation == 'screenshots'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-screenshot-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/android-screenshots/latest/*/diagnostics/**
+            .artifacts/android-screenshots/latest/*/emulator.log
+            .artifacts/android-screenshots/latest/*/emulator-args.txt
+            .artifacts/android-screenshots/latest/*/process-status.txt
+            .artifacts/android-screenshots/latest/*/activity-start/*.txt
+            .artifacts/android-screenshots/latest/*/ui-dumps/*.xml
+            .artifacts/android-screenshots/latest/*/screenshots/*.jpg
+            .artifacts/android-screenshots/latest/*/manifest.txt
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Upload Android emulator diagnostic
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-emulator-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/android-emulator-diagnostic

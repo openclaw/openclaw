@@ -23,7 +23,7 @@ nightly on `main` and from manual dispatch with the mock parity lane, live
 Matrix lane, Convex-managed live Telegram lane, and Convex-managed live Discord
 lane as parallel jobs. Scheduled QA and selected release checks run the
 catalog-derived Matrix selection through the shared live adapter. Release
-transport checks use `mock-openai/gpt-5.6-luna` so they stay deterministic and
+transport checks use `mock-openai/gpt-5.6-luna` so they use fixed responses and
 avoid normal provider-plugin startup. These live transport gateways disable
 memory search; memory behavior stays covered by the QA parity suites.
 
@@ -57,6 +57,10 @@ inside every shard.
     temporary root and are removed after its processes stop. Parent temporary
     paths and runtime environment patches do not redirect this scratch storage.
     `OPENCLAW_QA_KEEP_TEMP=1` retains that root for debugging.
+    Gateway stdout and stderr are streamed to debug files with at most 4 MiB of
+    pending writes per stream. If a sink stops keeping up, the suite fails with
+    a `log backlog exceeded` error and stops its child. Check the output disk
+    before retrying. The in-memory diagnostic tail remains bounded separately.
     If the controller dies, the current Gateway's parent watchdog exits without
     deleting runtime files that descendants may still use. A surviving owner or
     host maintenance must confirm that those writers stopped before removing the
@@ -67,6 +71,9 @@ inside every shard.
     `aimock` starts a local AIMock-backed provider server for experimental
     fixture and protocol-mock coverage without replacing the scenario-aware
     `mock-openai` lane.
+  - Live runs copy selected provider overrides from the normal JSON5 OpenClaw
+    config. `OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH` overrides
+    `OPENCLAW_CONFIG_PATH`; otherwise QA reads `~/.openclaw/openclaw.json`.
 - `pnpm openclaw qa coverage --match <query>`
   - Searches scenario IDs, titles, surfaces, coverage IDs, docs refs, code
     refs, plugins, and provider requirements, then prints matching suite
@@ -83,6 +90,11 @@ inside every shard.
     diagnostics. Requires live OpenAI auth such as `OPENAI_API_KEY`. In
     hydrated Testbox sessions it automatically sources the Testbox live-auth
     profile when the `openclaw-testbox-env` helper is present.
+    The helper is for live lanes; non-live Vitest workers drop credential env
+    variables. Wrapper Testbox runs redact hydrated profile values from streamed
+    output, which also cleans Crabbox failure bundles. Direct `crabbox` or
+    `blacksmith testbox` runs and downloaded artifacts are not stream-redacted;
+    Vitest reports pass through the redacting reporter.
 - `pnpm test:gateway:cpu-scenarios`
   - Runs the gateway startup bench plus a small mock QA Lab scenario pack
     (`channel-chat-baseline`, `memory-failure-fallback`,
@@ -98,8 +110,10 @@ inside every shard.
   - Runs the same QA suite inside a disposable Multipass Linux VM, keeping
     the same scenario-selection and provider/model flags as `qa suite`.
   - Live runs forward the QA auth inputs practical for the guest:
-    env-based provider keys, the QA live provider config path, and
-    `CODEX_HOME` when present.
+    env-based provider keys (including ordinary `*_API_KEY` names), QA
+    Anthropic setup-token inputs and profile selection, the QA live provider
+    config path, and `CODEX_HOME` when present. Unrelated environment variables
+    are not forwarded.
   - Output dirs must stay under the repo root so the guest can write back
     through the mounted workspace.
   - Writes the normal QA report + summary plus Multipass logs under
@@ -115,7 +129,7 @@ inside every shard.
   - Use `OPENCLAW_NPM_ONBOARD_CHANNEL=discord` to run the same packaged-install
     lane with Discord.
 - `pnpm test:docker:session-runtime-context`
-  - Runs a deterministic built-app Docker smoke for embedded runtime context
+  - Runs a repeatable built-app Docker smoke check for embedded runtime context
     transcripts. Verifies hidden OpenClaw runtime context persists as a
     non-display custom message instead of leaking into the visible user
     turn, then seeds an affected broken session JSONL and verifies
@@ -138,12 +152,12 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`,
     `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`, or
     `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the run.
-    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts zero or exactly one canonical
+    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts zero or exactly one registered
     Telegram QA scenario id. When omitted, the normal lane samples
     `channel-canary`; focused non-RTT scenario runs stay check-free. An explicit
     RTT scenario is included in scenario selection automatically, so callers do
     not need to repeat it in `OPENCLAW_NPM_TELEGRAM_SCENARIOS`. Multiple ids
-    fail immediately, while unknown or inapplicable ids fail canonical scenario
+    fail immediately, while unknown or inapplicable ids fail the shared scenario
     validation. The package runner promotes the selected RTT scenario once to
     the first position before the remaining taxonomy-backed fail-fast release
     scenarios. Checks continue in its most recently observed conversation and
@@ -309,7 +323,7 @@ gh workflow run package-acceptance.yml --ref main \
     `--credential-role`.
   - Defaults cover canary, mention gating, command addressing, `/status`,
     bot-to-bot mentioned replies, and core native command replies.
-    `mock-openai` defaults also cover deterministic reply-chain and
+    `mock-openai` defaults also cover fixed-response reply-chain and
     Telegram final-message streaming regressions. Use `--list-scenarios`
     for optional checks such as `session_status`.
   - Exits non-zero when any scenario fails. Use `--allow-failures` for
@@ -425,6 +439,6 @@ for Slack rows.
 The architecture and scenario-helper names for new channel adapters live in
 [QA overview - Adding a channel](/concepts/qa-e2e-automation#adding-a-channel).
 The minimum bar: implement the transport runner on the shared `qa-lab` host
-seam, add an `adapterFactory` for shared scenarios, declare `qaRunners` in the
+API, add an `adapterFactory` for shared scenarios, declare `qaRunners` in the
 plugin manifest, mount as `openclaw qa <runner>`, and author scenarios under
 `qa/scenarios/`.

@@ -21,25 +21,6 @@ export type ExternalCliAuthDiscovery =
       profileIds?: Iterable<string>;
     };
 
-type ProviderAuthDiscoveryParams = {
-  cfg?: OpenClawConfig;
-  provider: string;
-  profileId?: string;
-  preferredProfile?: string;
-  allowKeychainPrompt?: boolean;
-};
-
-type ConfigStatusDiscoveryParams = {
-  cfg: OpenClawConfig;
-  allowKeychainPrompt?: false;
-};
-
-type ProviderSetDiscoveryParams = {
-  cfg?: OpenClawConfig;
-  providers: Iterable<string>;
-  allowKeychainPrompt?: false;
-};
-
 function externalCliDiscoveryNone(params?: { config?: OpenClawConfig }): ExternalCliAuthDiscovery {
   return {
     mode: "none",
@@ -62,9 +43,13 @@ export function externalCliDiscoveryScoped(
   };
 }
 
-export function externalCliDiscoveryForProviderAuth(
-  params: ProviderAuthDiscoveryParams,
-): ExternalCliAuthDiscovery {
+export function externalCliDiscoveryForProviderAuth(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  profileId?: string;
+  preferredProfile?: string;
+  allowKeychainPrompt?: boolean;
+}): ExternalCliAuthDiscovery {
   const profileIds = normalizeTrimmedStringList([params.profileId, params.preferredProfile]);
   return externalCliDiscoveryScoped({
     config: params.cfg,
@@ -74,30 +59,31 @@ export function externalCliDiscoveryForProviderAuth(
   });
 }
 
-export function externalCliDiscoveryForConfigStatus(
-  params: ConfigStatusDiscoveryParams,
-): ExternalCliAuthDiscovery {
+export function externalCliDiscoveryForConfigStatus(params: {
+  cfg: OpenClawConfig;
+}): ExternalCliAuthDiscovery {
   const scope = resolveExternalCliAuthScopeFromConfig(params.cfg);
   return scope
     ? externalCliDiscoveryScoped({
         config: params.cfg,
-        allowKeychainPrompt: params.allowKeychainPrompt ?? false,
+        allowKeychainPrompt: false,
         providerIds: scope.providerIds,
         profileIds: scope.profileIds,
       })
     : externalCliDiscoveryNone({ config: params.cfg });
 }
 
-export function externalCliDiscoveryForProviders(
-  params: ProviderSetDiscoveryParams,
-): ExternalCliAuthDiscovery {
+export function externalCliDiscoveryForProviders(params: {
+  cfg?: OpenClawConfig;
+  providers: Iterable<string>;
+}): ExternalCliAuthDiscovery {
   const providers = normalizeTrimmedStringList([...params.providers]);
   if (providers.length === 0) {
     return externalCliDiscoveryNone({ config: params.cfg });
   }
   return externalCliDiscoveryScoped({
     config: params.cfg,
-    allowKeychainPrompt: params.allowKeychainPrompt ?? false,
+    allowKeychainPrompt: false,
     providerIds: providers,
   });
 }

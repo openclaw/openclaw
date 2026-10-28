@@ -61,42 +61,6 @@ export type ManagedNpmProjectQuarantine = {
   movedArtifactNames: string[];
 };
 
-type ManagedNpmRootPrepareDependencyResult =
-  | { ok: true; dependencySpec: string }
-  | {
-      ok: false;
-      error: string;
-    };
-
-export type ManagedNpmRootDependencySpecPreparation = (params: {
-  npmRoot: string;
-}) => Promise<ManagedNpmRootPrepareDependencyResult>;
-
-export async function resolveManagedNpmRootDependencySpecForInstall(params: {
-  npmRoot: string;
-  packageName: string;
-  dependencySpec?: string;
-  prepareDependencySpec?: ManagedNpmRootDependencySpecPreparation;
-}): Promise<ManagedNpmRootPrepareDependencyResult> {
-  if (params.prepareDependencySpec) {
-    try {
-      return await params.prepareDependencySpec({ npmRoot: params.npmRoot });
-    } catch (error) {
-      return {
-        ok: false,
-        error: `Failed to prepare managed npm dependency for ${params.packageName}: ${String(error)}`,
-      };
-    }
-  }
-  if (params.dependencySpec === undefined) {
-    return {
-      ok: false,
-      error: `missing managed npm dependency spec for ${params.packageName}`,
-    };
-  }
-  return { ok: true, dependencySpec: params.dependencySpec };
-}
-
 export function isManagedNpmProjectCorruptionInstallFailure(result: {
   stdout: string;
   stderr: string;

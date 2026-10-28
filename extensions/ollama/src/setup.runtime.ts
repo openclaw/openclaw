@@ -1,22 +1,13 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
-import type {
-  OpenClawConfig,
-  SecretInput,
-  SecretInputMode,
-} from "openclaw/plugin-sdk/provider-auth";
-import {
-  isNonSecretApiKeyMarker,
-  normalizeOptionalSecretInput,
-} from "openclaw/plugin-sdk/provider-auth";
-import { captureProviderApiKey } from "openclaw/plugin-sdk/provider-auth-api-key";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { applyAgentDefaultModelPrimary } from "openclaw/plugin-sdk/provider-onboard";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
-  OLLAMA_CLOUD_BASE_URL,
+  isHostedOllamaCloud,
   OLLAMA_CLOUD_DEFAULT_MODELS,
   OLLAMA_DEFAULT_BASE_URL,
   OLLAMA_DEFAULT_MODEL,
@@ -50,33 +41,24 @@ import { pullOllamaModel, pullOllamaModelNonInteractive } from "./setup-pull.js"
 export { buildOllamaProvider, resolveOllamaSetupDefaultBaseUrl };
 
 const OLLAMA_SUGGESTED_MODELS_LOCAL = [OLLAMA_DEFAULT_MODEL];
-const OLLAMA_SUGGESTED_MODELS_CLOUD = OLLAMA_CLOUD_DEFAULT_MODELS.map((model) => model.id);
 const OLLAMA_SUGGESTED_MODELS_LOCAL_CLOUD = OLLAMA_CLOUD_DEFAULT_MODELS.map(
   (model) => `${model.id}:cloud`,
 );
-const OLLAMA_CLOUD_MODEL_CAP = 500;
 const OLLAMA_RECOMMENDED_TOOLS_MODEL = "gemma4:e4b";
 const OLLAMA_RECOMMENDED_TOOLS_MODEL_SIZE = "about 9.6 GB";
-
-type OllamaCloudDefaultModel = (typeof OLLAMA_CLOUD_DEFAULT_MODELS)[number];
+const OLLAMA_HOSTED_BASE_URL_MESSAGE =
+  "ollama.com is served by the Ollama Cloud provider. Choose Ollama Cloud during setup, or run `openclaw onboard --auth-choice ollama-cloud`.";
 
 type OllamaSetupOptions = {
   customBaseUrl?: string;
   customModelId?: string;
 };
 
-type OllamaSetupResult = {
-  config: OpenClawConfig;
-  credential?: SecretInput;
-  credentialMode?: SecretInputMode;
-  defaultModel?: string;
-};
-
-type OllamaInteractiveMode = "cloud-local" | "cloud-only" | "local-only";
-type HostBackedOllamaInteractiveMode = Exclude<OllamaInteractiveMode, "cloud-only">;
+// Hosted ollama.com access is the separate `ollama-cloud` auth choice.
+type OllamaInteractiveMode = "cloud-local" | "local-only";
 
 const HOST_BACKED_OLLAMA_MODE_CONFIG: Record<
-  HostBackedOllamaInteractiveMode,
+  OllamaInteractiveMode,
   { includeCloudModels: boolean; noteTitle: string }
 > = {
   "cloud-local": {
@@ -145,62 +127,11 @@ export async function checkOllamaCloudAuth(
   }
 }
 
-async function promptForOllamaCloudCredential(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-  opts?: Record<string, unknown>;
-  prompter: WizardPrompter;
-  secretInputMode?: SecretInputMode;
-  allowSecretRefPrompt?: boolean;
-}): Promise<{
-  credential: SecretInput;
-  credentialMode?: SecretInputMode;
-  discoveryApiKey: string;
-}> {
-  const optionToken = normalizeOptionalSecretInput(params.opts?.ollamaApiKey);
-  const {
-    apiKey: discoveryApiKey,
-    input: credential,
-    mode: credentialMode,
-  } = await captureProviderApiKey(
-    { ...params, config: params.cfg },
-    {
-      token: optionToken ?? normalizeOptionalSecretInput(params.opts?.token),
-      tokenProvider: optionToken
-        ? "ollama"
-        : normalizeOptionalSecretInput(params.opts?.tokenProvider),
-      env: params.env,
-      expectedProviders: ["ollama"],
-      provider: "ollama",
-      envLabel: "OLLAMA_API_KEY",
-      promptMessage: "Ollama API key",
-      missingInputMessage: "Missing Ollama API key input.",
-    },
-  );
-  if (!credential) {
-    throw new Error("Missing Ollama API key input.");
-  }
-  if (
-    typeof credential === "string" &&
-    isNonSecretApiKeyMarker(credential, { includeEnvVarName: false })
-  ) {
-    throw new Error("Cloud-only Ollama setup requires a real OLLAMA_API_KEY.");
-  }
-  return {
-    credential,
-    credentialMode,
-    discoveryApiKey,
-  };
-}
-
 function applyOllamaProviderConfig(
   cfg: OpenClawConfig,
   baseUrl: string,
   modelNames: string[],
   discoveredModelsByName?: Map<string, OllamaModelWithContext>,
-  apiKey: SecretInput = OLLAMA_DEFAULT_API_KEY,
-  defaultModels: readonly OllamaCloudDefaultModel[] = [],
 ): OpenClawConfig {
   return {
     ...cfg,
@@ -212,8 +143,8 @@ function applyOllamaProviderConfig(
         ollama: capLocalOllamaProviderContext({
           baseUrl,
           api: "ollama",
-          apiKey,
-          models: buildOllamaModelsConfig(modelNames, discoveredModelsByName, defaultModels),
+          apiKey: OLLAMA_DEFAULT_API_KEY,
+          models: buildOllamaModelsConfig(modelNames, discoveredModelsByName),
         }),
       },
     },
@@ -227,68 +158,55 @@ async function promptForOllamaBaseUrl(
   const defaultBaseUrl = resolveOllamaSetupDefaultBaseUrl(env);
   const baseUrlRaw = await prompter.text({
     message: "Ollama base URL",
-    initialValue: defaultBaseUrl,
+    // Prefilling the default makes typed input append to it; hint it and use it for blank input.
     placeholder: defaultBaseUrl,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
+    validate: (value) =>
+      isHostedOllamaCloud(value.trim()) ? OLLAMA_HOSTED_BASE_URL_MESSAGE : undefined,
   });
-  return resolveOllamaApiBase((baseUrlRaw ?? defaultBaseUrl).trim().replace(/\/+$/, ""));
+  return resolveOllamaApiBase((baseUrlRaw.trim() || defaultBaseUrl).replace(/\/+$/, ""));
 }
 
-async function resolveHostBackedSuggestedModelNames(params: {
-  mode: HostBackedOllamaInteractiveMode;
-  baseUrl: string;
-  prompter: WizardPrompter;
-}): Promise<string[]> {
-  const modeConfig = HOST_BACKED_OLLAMA_MODE_CONFIG[params.mode];
-  if (!modeConfig.includeCloudModels) {
-    return OLLAMA_SUGGESTED_MODELS_LOCAL;
-  }
-
-  const auth = await checkOllamaCloudAuth(params.baseUrl);
-  if (auth.signedIn) {
-    return mergeUniqueModelNames(
-      OLLAMA_SUGGESTED_MODELS_LOCAL,
-      OLLAMA_SUGGESTED_MODELS_LOCAL_CLOUD,
-    );
-  }
-
-  await params.prompter.note(
-    buildOllamaCloudSigninLines(auth.signinUrl).join("\n"),
-    modeConfig.noteTitle,
-  );
-  return OLLAMA_SUGGESTED_MODELS_LOCAL;
-}
-
-async function promptAndConfigureHostBackedOllama(params: {
+export async function promptAndConfigureOllama(params: {
   cfg: OpenClawConfig;
-  mode: HostBackedOllamaInteractiveMode;
-  prompter: WizardPrompter;
   env?: NodeJS.ProcessEnv;
+  prompter: WizardPrompter;
   signal?: AbortSignal;
-}): Promise<OllamaSetupResult> {
-  const baseUrl = await promptForOllamaBaseUrl(params.prompter, params.env);
+}) {
+  const mode = (await params.prompter.select({
+    message: "Ollama mode",
+    options: [
+      {
+        value: "cloud-local",
+        label: "Cloud + Local",
+        hint: "Route cloud and local models through your Ollama host",
+      },
+      { value: "local-only", label: "Local only", hint: "Local models only" },
+    ],
+  })) as OllamaInteractiveMode;
+  const { cfg, prompter, env, signal } = params;
+  const baseUrl = await promptForOllamaBaseUrl(prompter, env);
   let discovery = await discoverOllamaModelsForSetup({
     baseUrl,
-    includeRemoteModels: HOST_BACKED_OLLAMA_MODE_CONFIG[params.mode].includeCloudModels,
+    includeRemoteModels: HOST_BACKED_OLLAMA_MODE_CONFIG[mode].includeCloudModels,
     inspectTools: true,
-    ...(params.signal ? { signal: params.signal } : {}),
+    ...(signal ? { signal } : {}),
   });
 
   if (!discovery.reachable) {
-    await params.prompter.note(buildOllamaUnreachableLines(baseUrl, true).join("\n"), "Ollama");
-    const shouldRetry = await params.prompter.confirm({
+    await prompter.note(buildOllamaUnreachableLines(baseUrl, true).join("\n"), "Ollama");
+    const shouldRetry = await prompter.confirm({
       message: "Retry this Ollama address now?",
       initialValue: true,
     });
     if (!shouldRetry) {
       throw new WizardCancelledError("Ollama setup cancelled");
     }
-    params.signal?.throwIfAborted();
+    signal?.throwIfAborted();
     discovery = await discoverOllamaModelsForSetup({
       baseUrl,
-      includeRemoteModels: HOST_BACKED_OLLAMA_MODE_CONFIG[params.mode].includeCloudModels,
+      includeRemoteModels: HOST_BACKED_OLLAMA_MODE_CONFIG[mode].includeCloudModels,
       inspectTools: true,
-      ...(params.signal ? { signal: params.signal } : {}),
+      ...(signal ? { signal } : {}),
     });
   }
 
@@ -305,7 +223,7 @@ async function promptAndConfigureHostBackedOllama(params: {
   } = discovery;
 
   if (inspectionFailures.length > 0) {
-    await params.prompter.note(
+    await prompter.note(
       [
         "Some installed models could not be inspected and were skipped:",
         ...inspectionFailures.slice(0, 5).map((line) => `- ${line}`),
@@ -321,26 +239,19 @@ async function promptAndConfigureHostBackedOllama(params: {
   const inspectionUsable =
     inspectedModels.length === 0 || inspectionFailures.length < inspectedModels.length;
   if (!hasToolsCapableModel && inspectionUsable) {
-    const shouldPullRecommended = await params.prompter.confirm({
+    const shouldPullRecommended = await prompter.confirm({
       message: `No tools-capable Ollama model is installed. Pull ${OLLAMA_RECOMMENDED_TOOLS_MODEL} (${OLLAMA_RECOMMENDED_TOOLS_MODEL_SIZE})?`,
       initialValue: false,
     });
     if (shouldPullRecommended) {
-      if (
-        !(await pullOllamaModel(
-          baseUrl,
-          OLLAMA_RECOMMENDED_TOOLS_MODEL,
-          params.prompter,
-          params.signal,
-        ))
-      ) {
+      if (!(await pullOllamaModel(baseUrl, OLLAMA_RECOMMENDED_TOOLS_MODEL, prompter, signal))) {
         throw new WizardCancelledError("Failed to download recommended Ollama model");
       }
-      params.signal?.throwIfAborted();
+      signal?.throwIfAborted();
       const recommendedScan = await inspectOllamaModelsForSetup(
         baseUrl,
         [{ name: OLLAMA_RECOMMENDED_TOOLS_MODEL }],
-        params.signal,
+        signal,
       );
       // Unlike the pre-existing-model scan, a just-pulled model that cannot be
       // verified is a hard failure: configuring it unenriched would silently
@@ -359,11 +270,27 @@ async function promptAndConfigureHostBackedOllama(params: {
       ]);
     }
   }
-  const suggestedModelNames = await resolveHostBackedSuggestedModelNames({
-    mode: params.mode,
-    baseUrl,
-    prompter: params.prompter,
-  });
+  const resolveHostBackedSuggestedModelNames = async (): Promise<string[]> => {
+    const modeConfig = HOST_BACKED_OLLAMA_MODE_CONFIG[mode];
+    if (!modeConfig.includeCloudModels) {
+      return OLLAMA_SUGGESTED_MODELS_LOCAL;
+    }
+
+    const auth = await checkOllamaCloudAuth(baseUrl);
+    if (auth.signedIn) {
+      return mergeUniqueModelNames(
+        OLLAMA_SUGGESTED_MODELS_LOCAL,
+        OLLAMA_SUGGESTED_MODELS_LOCAL_CLOUD,
+      );
+    }
+
+    await prompter.note(
+      buildOllamaCloudSigninLines(auth.signinUrl).join("\n"),
+      modeConfig.noteTitle,
+    );
+    return OLLAMA_SUGGESTED_MODELS_LOCAL;
+  };
+  const suggestedModelNames = await resolveHostBackedSuggestedModelNames();
   const cloudDefaultModelId = suggestedModelNames.find(isOllamaCloudModel);
   const defaultModelId =
     selectAppGuidedOllamaModelFromDiscovery(discoveredModelsByName.values()) ?? cloudDefaultModelId;
@@ -371,70 +298,12 @@ async function promptAndConfigureHostBackedOllama(params: {
   return {
     ...(defaultModelId ? { defaultModel: `ollama/${defaultModelId}` } : {}),
     config: applyOllamaProviderConfig(
-      params.cfg,
+      cfg,
       baseUrl,
       mergeUniqueModelNames(suggestedModelNames, discoveredModelNames),
       discoveredModelsByName,
     ),
   };
-}
-
-export async function promptAndConfigureOllama(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-  opts?: Record<string, unknown>;
-  prompter: WizardPrompter;
-  secretInputMode?: SecretInputMode;
-  allowSecretRefPrompt?: boolean;
-  signal?: AbortSignal;
-}): Promise<OllamaSetupResult> {
-  const mode = (await params.prompter.select({
-    message: "Ollama mode",
-    options: [
-      {
-        value: "cloud-local",
-        label: "Cloud + Local",
-        hint: "Route cloud and local models through your Ollama host",
-      },
-      { value: "cloud-only", label: "Cloud only", hint: "Hosted Ollama models via ollama.com" },
-      { value: "local-only", label: "Local only", hint: "Local models only" },
-    ],
-  })) as OllamaInteractiveMode;
-  if (mode === "cloud-only") {
-    const { credential, credentialMode, discoveryApiKey } =
-      await promptForOllamaCloudCredential(params);
-    const { models } = await fetchOllamaModels(OLLAMA_CLOUD_BASE_URL, {
-      apiKey: discoveryApiKey,
-      signal: params.signal,
-    });
-    const discoveredModelNames = models.slice(0, OLLAMA_CLOUD_MODEL_CAP).map((model) => model.name);
-    const modelNames =
-      discoveredModelNames.length > 0
-        ? mergeUniqueModelNames(OLLAMA_SUGGESTED_MODELS_CLOUD, discoveredModelNames)
-        : OLLAMA_SUGGESTED_MODELS_CLOUD;
-    const defaultModelId = modelNames[0];
-    return {
-      credential,
-      credentialMode,
-      ...(defaultModelId ? { defaultModel: `ollama/${defaultModelId}` } : {}),
-      config: applyOllamaProviderConfig(
-        params.cfg,
-        OLLAMA_CLOUD_BASE_URL,
-        modelNames,
-        undefined,
-        credential,
-        OLLAMA_CLOUD_DEFAULT_MODELS,
-      ),
-    };
-  }
-  return await promptAndConfigureHostBackedOllama({
-    cfg: params.cfg,
-    mode,
-    prompter: params.prompter,
-    env: params.env,
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
 }
 
 /** Checks existing host models without pulling or mutating state before reset. */
@@ -444,6 +313,9 @@ export async function validateOllamaNonInteractive(
   const configuredBaseUrl =
     typeof ctx.opts.customBaseUrl === "string" ? ctx.opts.customBaseUrl.trim() : undefined;
   const baseUrl = resolveOllamaApiBase(configuredBaseUrl || resolveOllamaSetupDefaultBaseUrl());
+  if (isHostedOllamaCloud(baseUrl)) {
+    throw new Error(OLLAMA_HOSTED_BASE_URL_MESSAGE);
+  }
   const discovery = await fetchOllamaModels(baseUrl);
   if (!discovery.reachable) {
     throw new Error(
@@ -516,6 +388,9 @@ export async function configureOllamaNonInteractive(params: {
   const baseUrl = resolveOllamaApiBase(
     (params.opts.customBaseUrl?.trim() || resolveOllamaSetupDefaultBaseUrl()).replace(/\/+$/, ""),
   );
+  if (isHostedOllamaCloud(baseUrl)) {
+    throw new Error(OLLAMA_HOSTED_BASE_URL_MESSAGE);
+  }
   const { reachable, models, discoveredModelsByName } = await discoverOllamaModelsForSetup({
     baseUrl,
   });

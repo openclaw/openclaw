@@ -1,5 +1,5 @@
 ---
-summary: "Deep conversation-history recall that escalates only when deterministic memory recall is insufficient"
+summary: "Deep conversation-history recall that escalates only when rule-based memory recall is insufficient"
 title: "Active memory"
 read_when:
   - You want to understand what active memory is for
@@ -9,7 +9,7 @@ read_when:
 
 Active Memory is the deep-recall lane for eligible conversational sessions.
 The default `escalate` mode runs its blocking recall sub-agent only when the
-message asks about the past and the deterministic memory lane found no strong
+message asks about the past and the rule-based memory lane found no strong
 trusted trigger match. This keeps ordinary replies fast while preserving a
 deeper search path for prior decisions, conversations, and temporal or
 multi-hop questions.

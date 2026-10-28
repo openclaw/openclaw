@@ -48,6 +48,7 @@ export function runBeforeAgentReplyForTurn(params: {
   event: PluginHookBeforeAgentReplyEvent;
   context: PluginHookAgentContext;
   assertCurrent?: () => void;
+  awaitSessionDiffBaseline?: () => Promise<void>;
   onDispatch?: () => void;
   onDeclined?: () => void;
 }): Promise<PluginHookBeforeAgentReplyResult | undefined> {
@@ -63,15 +64,14 @@ export function runBeforeAgentReplyForTurn(params: {
         params.assertCurrent?.();
       }
     : inherited?.assertCurrent;
-  if (assertCurrent) {
-    withClaimingHookAdmission(context, { ...inherited, assertCurrent });
-  }
   const run = () =>
     runOncePerAgentRun(params.runId, "before_agent_reply", async () => {
       const hookRunner = getGlobalHookRunner();
       if (!hookRunner?.hasHooks("before_agent_reply", context)) {
         return undefined;
       }
+      await params.awaitSessionDiffBaseline?.();
+      assertCurrent?.();
       const observerScope = beforeAgentReplyObserver.getStore();
       // Nested agent runs inherit async context. Bind recovery to the first runner
       // so a hook-spawned child cannot checkpoint its parent's admitted turn.
@@ -101,9 +101,10 @@ export function runBeforeAgentReplyForTurn(params: {
       return result;
     });
   return assertCurrent
-    ? withGuardedFetchRequestAuthority(assertCurrent, async () => {
+    ? withGuardedFetchRequestAuthority(assertCurrent, async (scopedAssertCurrent) => {
+        withClaimingHookAdmission(context, { ...inherited, assertCurrent: scopedAssertCurrent });
         const result = await run();
-        assertCurrent();
+        scopedAssertCurrent?.();
         return result;
       })
     : run();

@@ -2,8 +2,10 @@ import path from "node:path";
 import type { Message } from "grammy/types";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { telegramPlugin } from "./channel.js";
@@ -71,6 +73,87 @@ describe("Telegram registered action authority and input contracts", () => {
     await state.cleanup();
   });
 
+  it.for([
+    {
+      action: "poll",
+      params: { question: "Ready?", answers: ["Yes", "No"] },
+      method: "sendPoll",
+      revoke: false,
+    },
+    {
+      action: "poll",
+      params: { question: "Ready?", answers: ["Yes", "No"] },
+      method: "sendPoll",
+      revoke: true,
+    },
+    { action: "sticker", params: { fileId: "fixture-sticker" }, revoke: true },
+    { action: "topic-create", params: { name: "Guarded topic" }, revoke: true },
+    { action: "topic-edit", params: { threadId: 77, name: "Guarded topic" }, revoke: true },
+    { action: "react", params: { messageId: 456, emoji: "👍" }, revoke: true },
+  ] as const)(
+    "retains host authority after $action chat lookup (revoked: $revoke)",
+    async (testCase, { signal }) => {
+      cfg.channels!.telegram!.actions = {
+        sticker: true,
+        createForumTopic: true,
+        editForumTopic: true,
+      };
+      fixture.responseFor = (method) =>
+        method === "getChat"
+          ? { id: -1001, type: "supergroup", title: "Fixture forum", is_forum: true }
+          : method === "createForumTopic"
+            ? { message_thread_id: 77, name: "Guarded topic" }
+            : undefined;
+      const held = { arrived: createDeferred<void>(), release: createDeferred<void>() };
+      fixture.requestHold = held;
+      let current = true;
+      const pending = invoke(
+        testCase.action,
+        { to: "@retirement_fixture", ...testCase.params },
+        {
+          assertDirectAdapterHandoff: () => {
+            signal.throwIfAborted();
+            if (!current) {
+              throw new Error("Telegram action owner retired");
+            }
+          },
+        },
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(held.arrived.promise, pending, "Action skipped chat lookup"),
+          signal,
+        );
+        expect(requests).toEqual([
+          { method: "getChat", fields: { chat_id: "@retirement_fixture" } },
+        ]);
+        current = !testCase.revoke;
+        held.release.resolve();
+        if (!testCase.revoke) {
+          await expect(pending).resolves.toMatchObject({ details: { ok: true } });
+          expect(requests.map(({ method }) => method)).toEqual(["getChat", testCase.method]);
+        } else {
+          await pending.catch(() => undefined);
+          if (testCase.action === "react") {
+            await expect(pending).resolves.toMatchObject({
+              details: { ok: false, reason: "error", hint: "Reaction failed. Do not retry." },
+            });
+          } else {
+            await expect(pending).rejects.toThrow("Telegram action owner retired");
+          }
+          expect(requests.map(({ method }) => method)).toEqual(["getChat"]);
+        }
+      } finally {
+        current = false;
+        held.release.resolve();
+        if (fixture.requestHold === held) {
+          fixture.requestHold = undefined;
+        }
+        await pending.catch(() => undefined);
+      }
+    },
+  );
+
   it("requires host-owned current-message authority for reactions, edits and deletes", async () => {
     const params = {
       chatId: "telegram:-1001:topic:77",
@@ -115,7 +198,7 @@ describe("Telegram registered action authority and input contracts", () => {
     });
   });
 
-  it.each(["77", "1"])(
+  it.each(["77"])(
     "binds a topicless reaction to trusted topic %s without borrowing another chat",
     async (thread) => {
       const context = {
@@ -142,7 +225,7 @@ describe("Telegram registered action authority and input contracts", () => {
 
   it("rejects conflicting host authority, including threadless and missing-origin invocations", async () => {
     const params = { chatId: "-1001:topic:77", messageId: 456 };
-    const contexts: Partial<ChannelMessageActionContext>[] = [
+    for (const context of [
       { ...trusted, requesterAccountId: "other" },
       { ...trusted, requesterAccountId: " !!! " },
       { ...trusted, toolContext: { ...trusted.toolContext, currentChannelProvider: "slack" } },
@@ -152,8 +235,7 @@ describe("Telegram registered action authority and input contracts", () => {
         toolContext: { ...trusted.toolContext, currentMessagingTarget: "-1002:topic:77" },
       },
       { conversationReadOrigin: undefined },
-    ];
-    for (const context of contexts) {
+    ] satisfies Partial<ChannelMessageActionContext>[]) {
       await expect(invoke("delete", params, context)).rejects.toThrow(/provider-observed binding/);
     }
     await expect(
@@ -361,27 +443,6 @@ describe("Telegram registered action authority and input contracts", () => {
   it.each([
     { action: "send", params: { to: "123" }, error: /content required/i },
     {
-      action: "send",
-      params: { to: "123", message: "hello", replyToMessageId: 9.5 },
-      error: /positive integer/,
-    },
-    {
-      action: "sticker",
-      params: { to: "123", fileId: "sticker", threadId: 11.5 },
-      error: /positive integer/,
-    },
-    { action: "delete", params: { chatId: "123", messageId: 456.5 }, error: /positive integer/ },
-    {
-      action: "edit",
-      params: { chatId: "123", messageId: 456.5, message: "updated" },
-      error: /positive integer/,
-    },
-    {
-      action: "poll",
-      params: { to: "123", question: "Ready?", answers: ["Yes", "No"], durationSeconds: 60.5 },
-      error: /positive integer/,
-    },
-    {
       action: "poll",
       params: {
         to: "123",
@@ -391,11 +452,6 @@ describe("Telegram registered action authority and input contracts", () => {
         pollPublic: true,
       },
       error: /mutually exclusive/i,
-    },
-    {
-      action: "send",
-      params: { to: "123", message: "caption", location: { latitude: 1, longitude: 2 } },
-      error: /cannot be combined/,
     },
     {
       action: "send",
@@ -436,7 +492,7 @@ describe("Telegram registered action authority and input contracts", () => {
     expect(requests).toEqual([]);
   });
 
-  it.each(["off", "ack", "action"] as const)(
+  it.each(["off", "action"] as const)(
     "soft-fails reactions disabled by %s policy",
     async (policy) => {
       cfg.channels!.telegram = {

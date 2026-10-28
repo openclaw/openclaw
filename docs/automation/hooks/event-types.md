@@ -17,23 +17,23 @@ Do not subscribe the same handler to both `command` and `command:new` unless you
 want it called twice for a new command. `session:compact` is not a family or a
 wildcard; subscribe to the two exact compaction keys.
 
-| Event                    | Trigger and wait behavior                                                                                                 |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `command:new`            | Authorized new-session command handling, or a Gateway session operation that emits new-command hooks; awaited.            |
-| `command:reset`          | Authorized reset-command handling or Gateway session reset; awaited.                                                      |
-| `command:stop`           | Stop-command handling after the abort request; awaited, with no hook reply delivery.                                      |
-| `session:auto-reset`     | Existing session replaced due to daily/idle policy; dispatched independently of the successor turn.                       |
-| `session:compact:before` | Before compaction work; awaited.                                                                                          |
-| `session:compact:after`  | After successful compaction; awaited.                                                                                     |
-| `session:patch`          | An authorized Gateway patch is applied, or a supported model-selection path persists a change; asynchronous notification. |
-| `agent:bootstrap`        | Workspace bootstrap resolution before context injection; awaited.                                                         |
-| `gateway:startup`        | Scheduled after hook loading and sidecar/channel startup work; does not delay initial Gateway bind.                       |
-| `gateway:shutdown`       | Shutdown begins, before channel/plugin teardown; bounded wait.                                                            |
-| `gateway:pre-restart`    | Shutdown has a finite expected-restart delay; bounded wait.                                                               |
-| `message:received`       | Accepted inbound dispatch with a session key; asynchronous observation.                                                   |
-| `message:transcribed`    | Pre-agent preprocessing has nonempty audio transcript text and a session key; asynchronous observation.                   |
-| `message:preprocessed`   | Media/link preprocessing completed or was skipped, with a session key; asynchronous observation.                          |
-| `message:sent`           | A delivery owner reports a send outcome with a session key; asynchronous observation. Inspect `context.success`.          |
+| Event                    | Trigger and wait behavior                                                                                                  |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `command:new`            | Authorized new-session command handling, or a Gateway session operation that emits new-command hooks; awaited.             |
+| `command:reset`          | Authorized reset-command handling or Gateway session reset; awaited.                                                       |
+| `command:stop`           | Authorized channel-user and Gateway client abort handling after parent cancellation; awaited, with no hook reply delivery. |
+| `session:auto-reset`     | Existing session replaced due to daily/idle policy; dispatched independently of the successor turn.                        |
+| `session:compact:before` | Before compaction work; awaited.                                                                                           |
+| `session:compact:after`  | After successful compaction; awaited.                                                                                      |
+| `session:patch`          | An authorized Gateway patch is applied, or a supported model-selection path persists a change; asynchronous notification.  |
+| `agent:bootstrap`        | Workspace bootstrap resolution before context injection; awaited.                                                          |
+| `gateway:startup`        | Scheduled after hook loading and sidecar/channel startup work; does not delay initial Gateway bind.                        |
+| `gateway:shutdown`       | Shutdown begins, before channel/plugin teardown; bounded wait.                                                             |
+| `gateway:pre-restart`    | Shutdown has a finite expected-restart delay; bounded wait.                                                                |
+| `message:received`       | Accepted inbound dispatch with a session key; asynchronous observation.                                                    |
+| `message:transcribed`    | Pre-agent preprocessing has nonempty audio transcript text and a session key; asynchronous observation.                    |
+| `message:preprocessed`   | Media/link preprocessing completed or was skipped, with a session key; asynchronous observation.                           |
+| `message:sent`           | A delivery owner reports a send outcome with a session key; asynchronous observation. Inspect `context.success`.           |
 
 The initial wait for `gateway:shutdown` and `gateway:pre-restart` hooks is bounded
 so independent teardown can proceed. A timeout does not cancel the handler.
@@ -53,9 +53,12 @@ warns and `hooks info` reports them. Core does not emit them. A custom key only
 fires if custom code explicitly emits it; declaring it in metadata does not
 create a trigger.
 
-`command:stop` observes cancellation command handling. It is not a natural
-agent-finalization gate. For that contract, see `before_agent_finalize` in
-[Plugin hooks](/plugins/hooks).
+`command:stop` observes authorized channel-user Stop handling (including fast
+and bare stop words), `chat.abort`/`sessions.abort` client requests, Talk voice
+cancellation, and `/acp cancel`. It does
+not fire for interrupt, restart, watchdog, operator revocation, or supersession,
+and it is not a natural agent-finalization gate. For that contract, see
+`before_agent_finalize` in [Plugin hooks](/plugins/hooks).
 
 ### Event context highlights
 

@@ -1,23 +1,29 @@
 import { resolveRuntimeProcessEntrypointUrl } from "../../../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../../../infra/worker-task-pool.js";
+import { ToolInputError } from "../../tool-input-error.js";
 import type {
   FileToolPlanningRequest,
   FileToolPlanningResult,
 } from "./file-tool-planning.worker.js";
 
 const pool = new WorkerTaskPool<FileToolPlanningRequest, FileToolPlanningResult>({
+  workerClass: "compute",
   sharedCompute: true,
   workerUrl: resolveRuntimeProcessEntrypointUrl("fileToolPlanning"),
 });
 
-function plan(input: FileToolPlanningRequest, signal?: AbortSignal) {
+async function plan(input: FileToolPlanningRequest, signal?: AbortSignal) {
   const chars =
     input.path.length +
     input.content.length +
     (input.kind === "edit"
       ? input.edits.reduce((sum, edit) => sum + edit.oldText.length + edit.newText.length, 0)
       : (input.beforeText?.length ?? 0));
-  return pool.run(input, { signal, inputBytes: chars * 2 });
+  const result = await pool.run(input, { signal, inputBytes: chars * 2 });
+  if (result.kind === "invalid_input") {
+    throw new ToolInputError(result.message);
+  }
+  return result;
 }
 
 export async function planFileEdit(

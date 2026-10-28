@@ -1,24 +1,38 @@
 // Plugin state SQLite helpers persist plugin state in the OpenClaw state database.
-import type { DatabaseSync } from "node:sqlite";
+
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { ExpressionBuilder } from "kysely";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import { readTrackedStateDatabaseIdentity } from "../state/openclaw-state-db-handle.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
-  closeOpenClawStateDatabaseAsync,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  listResidentPluginStateEntries,
+  livePluginStateRow,
+  readPluginStateNamespace,
+} from "./plugin-state-namespace-owner.js";
+import { invalidatePluginStateMutation } from "./plugin-state-operation-epochs.js";
+import {
+  pluginStatePublication,
+  recordPluginStateReadDependency,
+} from "./plugin-state-publication.js";
 import {
   runWriteTransaction,
   withPluginStateDatabaseReadOnly,
   wrapPluginStateError,
 } from "./plugin-state-store.database.js";
 import {
+  assertPluginStateKey,
   parseStoredJson,
   getPluginStateKysely,
   selectPluginStateEntry,
@@ -36,6 +50,7 @@ import {
   updatePluginStateEntry,
 } from "./plugin-state-store.mutations.js";
 import {
+  decodePluginStateLookups,
   listPluginStateEntries,
   lookupPluginStateEntries,
   validatePluginStateKeyRange,
@@ -98,9 +113,45 @@ function writePluginState<T>(
   }
 }
 
+/** Private/report handles and transaction-local reads keep their native snapshot. */
+// Remove these sync resident readers with the compatibility API after 2026-12-31.
+function residentNamespace(
+  store: PluginStateDatabase,
+  scope: { pluginId: string; namespace: string },
+) {
+  if (
+    store.db.isTransaction ||
+    openClawStateDatabaseCache.getCachedOpenClawStateDatabase(store.path)?.db !== store.db
+  ) {
+    return undefined;
+  }
+  const identity = readTrackedStateDatabaseIdentity(sqlPublicationAnchor(store.db))?.key;
+  return identity ? readPluginStateNamespace(identity, scope) : undefined;
+}
+
+function residentLookups(
+  store: PluginStateDatabase,
+  scope: { pluginId: string; namespace: string; keys: readonly string[] },
+) {
+  const rows = residentNamespace(store, scope);
+  if (!rows) {
+    return undefined;
+  }
+  for (const key of scope.keys) {
+    assertPluginStateKey(store.db, key, "lookup");
+  }
+  const now = Date.now();
+  return decodePluginStateLookups(
+    scope.keys,
+    (key) => livePluginStateRow(rows.get(key), now)?.value_json,
+    store.path,
+  );
+}
+
 type PluginStateRegisterParams = PluginStateRegisterEntryParams & { env?: NodeJS.ProcessEnv };
 
 export function pluginStateRegister(params: PluginStateRegisterParams): void {
+  invalidatePluginStateMutation(params);
   writePluginState(
     "register",
     "Failed to register plugin state entry.",
@@ -126,6 +177,7 @@ export function pluginStateImportBatch(
   if (entries.length > PLUGIN_STATE_DOCTOR_IMPORT_BATCH_ROWS) {
     throw new RangeError("Plugin state doctor import batch exceeds its row limit");
   }
+  invalidatePluginStateMutation(params);
   try {
     const result = runWriteTransaction(
       "register",
@@ -167,6 +219,7 @@ export function pluginStateImportBatch(
 export function pluginStateRegisterIfAbsent(
   params: Omit<PluginStateRegisterParams, "createdAtMs">,
 ): boolean {
+  invalidatePluginStateMutation(params);
   return writePluginState(
     "register",
     "Failed to register plugin state entry.",
@@ -180,6 +233,7 @@ export function pluginStateUpdate(
     updateValueJson: (current: unknown) => { valueJson: string; ttlMs?: number } | undefined;
   },
 ): boolean {
+  invalidatePluginStateMutation(params);
   return writePluginState(
     "register",
     "Failed to update plugin state entry.",
@@ -227,12 +281,33 @@ export function pluginStateLookup(params: {
   key: string;
   env?: NodeJS.ProcessEnv;
 }): unknown {
-  return readPluginState(
+  let opened = false;
+  const dependency = { pluginId: params.pluginId, namespace: params.namespace, keys: [params.key] };
+  const result = readPluginState(
     "lookup",
     "Failed to read plugin state entry.",
-    (store) => lookupPluginStateEntry(store, params),
+    (store) => {
+      opened = true;
+      recordPluginStateReadDependency({
+        ...dependency,
+        identity: readTrackedStateDatabaseIdentity(sqlPublicationAnchor(store.db))?.key,
+      });
+      const resident = residentLookups(store, { ...params, keys: [params.key] });
+      if (!resident) {
+        return lookupPluginStateEntry(store, params);
+      }
+      const lookup = resident[0]!;
+      if (!lookup.ok) {
+        throw lookup.error;
+      }
+      return lookup.value;
+    },
     params.env,
   );
+  if (!opened) {
+    recordPluginStateReadDependency(dependency);
+  }
+  return result;
 }
 
 export function pluginStateLookupMany(params: {
@@ -244,14 +319,25 @@ export function pluginStateLookupMany(params: {
   if (params.keys.length === 0) {
     return [];
   }
-  return (
-    readPluginState(
-      "lookup",
-      "Failed to read plugin state entries.",
-      (store) => lookupPluginStateEntries(store, params),
-      params.env,
-    ) ?? params.keys.map(() => ok(undefined))
+  let opened = false;
+  const dependency = { pluginId: params.pluginId, namespace: params.namespace, keys: params.keys };
+  const result = readPluginState(
+    "lookup",
+    "Failed to read plugin state entries.",
+    (store) => {
+      opened = true;
+      recordPluginStateReadDependency({
+        ...dependency,
+        identity: readTrackedStateDatabaseIdentity(sqlPublicationAnchor(store.db))?.key,
+      });
+      return residentLookups(store, params) ?? lookupPluginStateEntries(store, params);
+    },
+    params.env,
   );
+  if (!opened) {
+    recordPluginStateReadDependency(dependency);
+  }
+  return result ?? params.keys.map(() => ok(undefined));
 }
 
 export function pluginStateConsume(params: {
@@ -260,6 +346,7 @@ export function pluginStateConsume(params: {
   key: string;
   env?: NodeJS.ProcessEnv;
 }): unknown {
+  invalidatePluginStateMutation(params);
   return writePluginState(
     "consume",
     "Failed to consume plugin state entry.",
@@ -274,6 +361,7 @@ export function pluginStateDelete(params: {
   key: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
+  invalidatePluginStateMutation(params);
   return writePluginState(
     "delete",
     "Failed to delete plugin state entry.",
@@ -291,6 +379,7 @@ export function pluginStateDeleteIf(params: {
   predicate: (current: unknown) => boolean;
   env?: NodeJS.ProcessEnv;
 }): boolean {
+  invalidatePluginStateMutation(params);
   return writePluginState(
     "delete",
     "Failed to conditionally delete plugin state entry.",
@@ -331,7 +420,7 @@ export function pluginStateDeleteEntriesIfUnchanged(params: {
   pluginId: string;
   namespace: string;
   entries: readonly PluginDoctorRawStateEntry[];
-  assertOwnedInTransaction: (database: DatabaseSync) => void;
+  assertOwnedInTransaction: (database: EngineConnection) => void;
   env?: NodeJS.ProcessEnv;
 }): { deleted: number; changed: number } {
   if (params.entries.length > MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES) {
@@ -344,6 +433,7 @@ export function pluginStateDeleteEntriesIfUnchanged(params: {
   }
   // Copy plugin-visible envelopes before BEGIN; no plugin-owned accessors run in the transaction.
   const observed = params.entries.map(({ value: _value, ...entry }) => entry);
+  invalidatePluginStateMutation(params);
   return runWriteTransaction(
     "delete",
     ({ db }) => {
@@ -352,8 +442,11 @@ export function pluginStateDeleteEntriesIfUnchanged(params: {
       for (const entry of observed) {
         const query = getPluginStateKysely(db)
           .deleteFrom("plugin_state_entries")
-          .where((eb) => observedPluginStateRow(eb, params, entry));
-        deleted += Number(executeSqliteQuerySync(db, query).numAffectedRows ?? 0);
+          .where((eb) => observedPluginStateRow(eb, params, entry))
+          .returning(["plugin_id", "namespace", "entry_key"]);
+        const result = executeSqliteQuerySync(db, query);
+        pluginStatePublication.stageDeletions(db, result.rows);
+        deleted += result.rows.length;
       }
       return { deleted, changed: observed.length - deleted };
     },
@@ -432,12 +525,13 @@ export function pluginStateCount(params: {
     readPluginState(
       "count",
       "Failed to count plugin state entries.",
-      ({ db }) =>
-        countLivePluginStateNamespaceEntries(db, {
-          pluginId: params.pluginId,
-          namespace: params.namespace,
-          now: Date.now(),
-        }),
+      (store) => {
+        const rows = residentNamespace(store, params);
+        const now = Date.now();
+        return rows
+          ? [...rows.values()].filter((row) => livePluginStateRow(row, now)).length
+          : countLivePluginStateNamespaceEntries(store.db, { ...params, now });
+      },
       params.env,
     ) ?? 0
   );
@@ -452,7 +546,12 @@ export function pluginStateEntries(params: {
     readPluginState(
       "entries",
       "Failed to list plugin state entries.",
-      (store) => listPluginStateEntries(store, params),
+      (store) => {
+        const rows = residentNamespace(store, params);
+        return rows
+          ? listResidentPluginStateEntries(rows, store.path)
+          : listPluginStateEntries(store, params);
+      },
       params.env,
     ) ?? []
   );
@@ -463,6 +562,7 @@ export function pluginStateClear(params: {
   namespace: string;
   env?: NodeJS.ProcessEnv;
 }): void {
+  invalidatePluginStateMutation(params);
   writePluginState(
     "clear",
     "Failed to clear plugin state namespace.",
@@ -489,5 +589,3 @@ export function getPluginStateCapacity(
 }
 
 export const closePluginStateDatabase: () => void = closeOpenClawStateDatabase;
-
-export const closePluginStateDatabaseAsync: () => Promise<void> = closeOpenClawStateDatabaseAsync;

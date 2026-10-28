@@ -41,9 +41,9 @@ export function isSubagentRunQueued(entry: SubagentRunIdentity | null | undefine
   const current = entry ? subagentRuns.get(entry.runId) : undefined;
   return Boolean(
     current &&
-    isSameSubagentRunOwner(current, entry) &&
     current.collect &&
     current.execution.status === "queued" &&
+    isSameSubagentRunOwner(current, entry) &&
     ownsSwarmRunReservation(
       current.schedulerSlotId ?? current.runId,
       getSubagentRunRuntimeKey(current),
@@ -62,20 +62,20 @@ export function hasSubagentRunEnded<T extends { execution: { endedAt?: number } 
   return typeof entry.execution.endedAt === "number" && Number.isFinite(entry.execution.endedAt);
 }
 
-function resolveStaleCutoffMs(entry: Pick<SubagentRunRecord, "runTimeoutSeconds">): number {
-  const durationMs = resolveSubagentRunDurationMs(entry.runTimeoutSeconds);
-  if (durationMs !== undefined) {
-    return Math.max(STALE_UNENDED_SUBAGENT_RUN_MS, durationMs + EXPLICIT_TIMEOUT_STALE_GRACE_MS);
-  }
-  return STALE_UNENDED_SUBAGENT_RUN_MS;
+export function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
+  return (
+    entry.pauseReason === "sessions_yield" &&
+    !entry.killIntent &&
+    !entry.killReconciliation &&
+    entry.suppressAnnounceReason !== "killed" &&
+    entry.endedReason !== "subagent-killed"
+  );
 }
 
-export function isStaleUnendedSubagentRun(
-  entry: SubagentRunLivenessRecord,
-  now = Date.now(),
-): boolean {
+/** Last instant covered by registration grace, independent of live execution custody. */
+export function getSubagentRunStaleAt(entry: SubagentRunLivenessRecord): number {
   if (hasSubagentRunEnded(entry)) {
-    return false;
+    return Infinity;
   }
   // Creation bounds stale admission, but must not become a displayed execution start.
   const startedAt = getSubagentSessionStartedAt(entry) ?? entry.createdAt;
@@ -84,9 +84,21 @@ export function isStaleUnendedSubagentRun(
     !Number.isFinite(startedAt) ||
     startedAt < MIN_REALISTIC_RUN_TIMESTAMP_MS
   ) {
-    return false;
+    return Infinity;
   }
-  return now - startedAt > resolveStaleCutoffMs(entry);
+  const durationMs = resolveSubagentRunDurationMs(entry.runTimeoutSeconds);
+  const cutoffMs =
+    durationMs === undefined
+      ? STALE_UNENDED_SUBAGENT_RUN_MS
+      : Math.max(STALE_UNENDED_SUBAGENT_RUN_MS, durationMs + EXPLICIT_TIMEOUT_STALE_GRACE_MS);
+  return startedAt + cutoffMs;
+}
+
+export function isStaleUnendedSubagentRun(
+  entry: SubagentRunLivenessRecord,
+  now = Date.now(),
+): boolean {
+  return now > getSubagentRunStaleAt(entry);
 }
 
 /** Admission/display retention includes current owners and a bounded registration grace.

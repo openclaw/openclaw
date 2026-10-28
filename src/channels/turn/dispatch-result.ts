@@ -42,7 +42,7 @@ export const EMPTY_CHANNEL_TURN_DISPATCH_COUNTS: Record<ReplyDispatchKind, numbe
   final: 0,
 };
 
-export function hasVisibleChannelTurnDispatchFromReceipt(
+function hasVisibleChannelTurnDispatchFromReceipt(
   result: ChannelTurnDispatchResultLike,
   signals: ChannelTurnVisibleDeliverySignals = {},
 ): boolean {

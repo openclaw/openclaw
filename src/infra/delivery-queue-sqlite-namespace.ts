@@ -6,7 +6,6 @@ import {
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
-  type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.js";
 
 type MovePendingDeliveryQueueEntryNamespaceParams = Parameters<
@@ -17,19 +16,11 @@ type MovePendingDeliveryQueueEntryNamespaceParams = Parameters<
 
 /** Replaces a pending entry only while its authoritative serialized value is unchanged. */
 export function replacePendingDeliveryQueueEntry(
-  params: {
-    queueName: string;
-    expectedEntry: DeliveryQueueEntryState;
-    replacementEntry: DeliveryQueueEntryState;
+  params: Parameters<typeof replacePendingDeliveryQueueEntryInDatabase>[1] & {
     stateDir?: string;
   },
   context?: DeliveryQueueStateContext,
 ): boolean {
-  if (params.expectedEntry.id !== params.replacementEntry.id) {
-    throw new Error(
-      `Delivery queue replacement id mismatch: ${params.expectedEntry.id} != ${params.replacementEntry.id}`,
-    );
-  }
   return runOpenClawStateWriteTransaction(
     (database) => replacePendingDeliveryQueueEntryInDatabase(database, params),
     { env: resolveDeliveryQueueStateEnv(params.stateDir, context) },

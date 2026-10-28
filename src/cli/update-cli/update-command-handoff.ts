@@ -1,7 +1,10 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV, isGatewayServiceEnv } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
-import { inspectServiceProcessMembershipSync } from "../../daemon/service-process-membership.js";
+import {
+  inspectServiceProcessMembershipSync,
+  resolveServiceProcessMembershipBlock,
+} from "../../daemon/service-process-membership.js";
 import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceState,
@@ -53,6 +56,10 @@ const UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE = 75;
 const GATEWAY_ANCESTRY_SHELL_GUIDANCE =
   "Run this command from a shell outside the gateway service.";
 
+function servicePreflightFailure(code: Parameters<typeof createUpdatePreflightFailure>[0]) {
+  return createUpdatePreflightFailure(code, undefined, "managed-service-preflight");
+}
+
 export function gatewayServiceMembershipBlock(
   pid: unknown,
   ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true }),
@@ -64,56 +71,29 @@ export function gatewayServiceMembershipBlock(
     // Scheduled Tasks retain the ancestry fallback until their owner exposes Job membership.
     return process.platform === "win32"
       ? undefined
-      : createUpdatePreflightFailure(
-          "service-membership-unverified",
-          undefined,
-          "managed-service-preflight",
-        );
+      : servicePreflightFailure("service-membership-unverified");
   }
   if (!ancestry.pids.has(gatewayPid)) {
     const membership =
       process.platform === "win32"
         ? "outside"
         : inspectServiceProcessMembershipSync(gatewayPid, process.platform, systemdControlGroup);
-    if (membership === "inside") {
-      return createUpdatePreflightFailure(
-        "inside-gateway-service",
-        undefined,
-        "managed-service-preflight",
-      );
-    }
-    if (membership === "unknown") {
-      return createUpdatePreflightFailure(
-        "service-membership-unverified",
-        undefined,
-        "managed-service-preflight",
-      );
-    }
     const unverified =
       !ancestry.complete &&
       (process.platform !== "win32" ||
         (isGatewayServiceEnv(process.env) &&
           parsePositivePid(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV]) === gatewayPid &&
           isPidAlive(gatewayPid)));
-    if (!unverified && membership === "absent") {
+    const block = resolveServiceProcessMembershipBlock(membership, !unverified);
+    if (!block && membership === "absent") {
       onAbsentSource?.();
     }
-    return unverified
-      ? createUpdatePreflightFailure(
-          "service-ancestry-unverified",
-          undefined,
-          "managed-service-preflight",
-        )
-      : undefined;
+    return block ? servicePreflightFailure(block) : undefined;
   }
   // Shared by doctor and update: never advise stopping the service from here,
   // because the stop would kill the caller and nothing restarts the gateway.
   return {
-    ...createUpdatePreflightFailure(
-      "inside-gateway-process-tree",
-      undefined,
-      "managed-service-preflight",
-    ),
+    ...servicePreflightFailure("inside-gateway-process-tree"),
     message: `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).
 Stopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.
 ${GATEWAY_ANCESTRY_SHELL_GUIDANCE}`,
@@ -164,11 +144,7 @@ export function gatewayMaintenanceBlock(
         store.readProcessStartIdentity(owner.pid) === owner.startIdentity,
     )
   ) {
-    return createUpdatePreflightFailure(
-      "inside-triage-process-tree",
-      undefined,
-      "managed-service-preflight",
-    );
+    return servicePreflightFailure("inside-triage-process-tree");
   }
   return operation === "handoff" ||
     (!state.running && parsePositivePid(state.runtime?.pid) === null)
@@ -200,10 +176,11 @@ export async function handoffUpdateFromGateway(params: {
     return false;
   }
   const parentPid = parsePositivePid(params.state.runtime?.pid);
-  if (
-    !parentPid ||
-    !inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true }).pids.has(parentPid)
-  ) {
+  const ancestry = inspectSelfAndAncestorPidsSync(undefined, {
+    requireVerifiedParent: true,
+    throughPid: parentPid ?? undefined,
+  });
+  if (!parentPid || !ancestry.complete || !ancestry.pids.has(parentPid)) {
     return false;
   }
   const supervisor =
@@ -242,15 +219,13 @@ export async function handoffUpdateFromGateway(params: {
     tag: params.tag,
     devTarget: params.devTarget,
     acceptCapabilities: params.opts.acceptCapabilities,
+    fullIntegrityCheck: params.opts.fullIntegrityCheck,
     admission: params.opts.admission,
     reapplyLocalOverrides: params.opts.reapplyLocalOverrides,
     meta: { runId: params.opts.run?.runId },
   });
   if (started.status === "joined") {
-    throw new UpdatePreMutationError(
-      "managed-service-handoff-already-running",
-      "Another managed update is already running. Check progress with `openclaw update status`.",
-    );
+    throw new UpdatePreMutationError("managed-service-handoff-already-running", started.message);
   }
   const identity = {
     kind: "managed-update-handoff" as const,
@@ -258,14 +233,10 @@ export async function handoffUpdateFromGateway(params: {
     installRoot: started.installRoot,
   };
   const target = resolveInstallationTarget(env);
-  const statusCommand = formatInstallationTargetCommand(["openclaw", "update", "status"], target, {
-    env,
-  });
-  const healthCommand = formatInstallationTargetCommand(
-    ["openclaw", "gateway", "status", "--deep"],
-    target,
-    { env },
-  );
+  const formatCommand = (args: string[]) =>
+    formatInstallationTargetCommand(["openclaw", ...args], target, { env });
+  const statusCommand = formatCommand(["update", "status"]);
+  const healthCommand = formatCommand(["gateway", "status", "--deep"]);
   const guidance = `Update is not finished. It will continue in the background so it can restart the Gateway.\nLog: ${started.logPath}\nCheck progress: ${statusCommand}`;
   const result: UpdateRunResult = {
     runId: params.opts.run?.runId,
@@ -310,7 +281,7 @@ export async function handoffUpdateFromGateway(params: {
     recordUpdateRunStep(
       params.opts.run.runId,
       { step: "managed-service update handoff", status: "completed", endedAtMs: Date.now() },
-      { env: params.opts.run.env },
+      params.opts.run,
     );
   }
   await printResult(result, params.opts, { nextAction: guidance });
@@ -361,11 +332,7 @@ export async function resolveForegroundUpdateAdmission(params: {
     throw new UpdatePreMutationError(
       "managed-service-preflight",
       "The update handoff metadata or this Gateway's current ownership could not be verified. Retry the update from its current owner.",
-      createUpdatePreflightFailure(
-        "foreground-handoff-unverified",
-        undefined,
-        "managed-service-preflight",
-      ),
+      servicePreflightFailure("foreground-handoff-unverified"),
     );
   }
   return true;

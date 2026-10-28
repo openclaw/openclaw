@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Sourced by the packager and run directly as the per-architecture worker.
+source "$(dirname "${BASH_SOURCE[0]}")/mac-disk-image.sh"
+
 build_path_for_arch() {
   echo "$BUILD_ROOT/$1"
 }
@@ -325,6 +328,25 @@ if committed_pins != snapshot_pins:
 PY
 }
 
+attach_peekaboo_snapshot() {
+  local attempt=1 errors attach_status
+  # Busy hosts can fail attach with EAGAIN after creating devices.
+  while [[ "$attempt" -le 3 ]]; do
+    errors="$(hdiutil attach -readonly -nobrowse -mountpoint "$PEEKABOO_SNAPSHOT_MOUNT" "$PEEKABOO_SNAPSHOT_IMAGE" 2>&1 >/dev/null)" && attach_status=0 || attach_status=$?
+    if [[ -n "$errors" ]]; then
+      printf '%s\n' "$errors" >&2
+    fi
+    [[ "$attach_status" == 0 ]] && return 0
+    if [[ "$errors" == *"Resource temporarily unavailable"* && "$attempt" -lt 3 ]]; then
+      detach_disk_image "$PEEKABOO_SNAPSHOT_IMAGE" || return 1
+      sleep $((attempt * 2))
+      attempt=$((attempt + 1))
+    else
+      return "$attach_status"
+    fi
+  done
+}
+
 create_verified_peekaboo_snapshot() {
   local build_path="$1" expected="$2" source_checkout source_commit snapshot_commit
   source_checkout="$build_path/checkouts/Peekaboo"
@@ -338,9 +360,7 @@ create_verified_peekaboo_snapshot() {
     -srcfolder "$source_checkout" \
     -volname OpenClawPeekabooSnapshot \
     "$PEEKABOO_SNAPSHOT_IMAGE" >/dev/null
-  hdiutil attach -readonly -nobrowse \
-    -mountpoint "$PEEKABOO_SNAPSHOT_MOUNT" \
-    "$PEEKABOO_SNAPSHOT_IMAGE" >/dev/null
+  attach_peekaboo_snapshot
   snapshot_commit="$(compiled_peekaboo_commit "$PEEKABOO_SNAPSHOT_MOUNT" "$expected")" || return 1
   [[ "$snapshot_commit" == "$source_commit" ]] || return 1
 }
@@ -477,6 +497,10 @@ cleanup_swift_architecture() {
       elif printf '%s\n' "$mounts" | grep -F " on $PEEKABOO_SNAPSHOT_MOUNT (" >/dev/null; then
         cleanup_status=1
       fi
+      # A failed attach can leave the image's devices attached without a mount.
+      if [[ -e "$PEEKABOO_SNAPSHOT_IMAGE" ]]; then
+        detach_disk_image "$PEEKABOO_SNAPSHOT_IMAGE" || cleanup_status=1
+      fi
     }
   fi
   if [[ "$cleanup_status" == "0" ]]; then
@@ -555,6 +579,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   SWIFT_PACKAGE_CONTAINER="$SWIFT_WORK_ROOT/package"
   SWIFT_PACKAGE_ROOT="$SWIFT_PACKAGE_CONTAINER/apps/macos"
   PEEKABOO_SNAPSHOT_ROOT="$SWIFT_WORK_ROOT/snapshot"
+  PEEKABOO_SNAPSHOT_IMAGE="$PEEKABOO_SNAPSHOT_ROOT/Peekaboo.dmg"
   PEEKABOO_SNAPSHOT_MOUNT="$9"
   case "$operation" in
     build) build_swift_architecture "$arch" ;;

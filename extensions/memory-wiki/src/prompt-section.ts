@@ -1,5 +1,6 @@
 import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-host-core";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { compareWikiClaimSummaries } from "./claim-health.js";
 import {
   loadMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
@@ -23,32 +24,10 @@ function rankPromptDigestPage(page: MemoryWikiCompiledDigestPage): number {
   );
 }
 
-function rankPromptClaimFreshness(level?: string): number {
-  return ["stale", "aging", "fresh"].indexOf(level ?? "") + 1;
-}
-
-function sortPromptClaims(
-  claims: MemoryWikiCompiledDigestClaim[],
-): MemoryWikiCompiledDigestClaim[] {
-  return claims.toSorted((left, right) => {
-    const leftConfidence = typeof left.confidence === "number" ? left.confidence : -1;
-    const rightConfidence = typeof right.confidence === "number" ? right.confidence : -1;
-    if (leftConfidence !== rightConfidence) {
-      return rightConfidence - leftConfidence;
-    }
-    const leftFreshness = rankPromptClaimFreshness(left.freshnessLevel);
-    const rightFreshness = rankPromptClaimFreshness(right.freshnessLevel);
-    if (leftFreshness !== rightFreshness) {
-      return rightFreshness - leftFreshness;
-    }
-    return left.text.localeCompare(right.text);
-  });
-}
-
 function formatPromptClaim(claim: MemoryWikiCompiledDigestClaim): string {
   const qualifiers = [
     claim.status?.trim() ? `status ${claim.status.trim()}` : null,
-    typeof claim.confidence === "number" ? `confidence ${claim.confidence.toFixed(2)}` : null,
+    claim.confidence !== undefined ? `confidence ${claim.confidence.toFixed(2)}` : null,
     claim.freshnessLevel?.trim() ? `freshness ${claim.freshnessLevel.trim()}` : null,
   ].filter(Boolean);
   if (qualifiers.length === 0) {
@@ -102,10 +81,9 @@ function buildDigestPromptSection(
     lines.push(
       `- ${truncateUtf16Safe(page.title, DIGEST_MAX_PAGE_TITLE_CHARS)}: ${details.join(", ")}`,
     );
-    for (const claim of sortPromptClaims(page.topClaims ?? []).slice(
-      0,
-      DIGEST_MAX_CLAIMS_PER_PAGE,
-    )) {
+    for (const claim of (page.topClaims ?? [])
+      .toSorted(compareWikiClaimSummaries)
+      .slice(0, DIGEST_MAX_CLAIMS_PER_PAGE)) {
       lines.push(`  - ${truncateUtf16Safe(formatPromptClaim(claim), DIGEST_MAX_CLAIM_CHARS)}`);
     }
   }

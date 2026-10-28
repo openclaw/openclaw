@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi, type Mock } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
@@ -21,6 +22,26 @@ type SessionsSendTimeoutFixtures = {
   ) => AnyAgentTool;
   callGatewayMock: Mock;
 };
+type GatewayRequest = {
+  method?: string;
+  params?: {
+    sessionKey?: string;
+    runId?: string;
+    extraSystemPrompt?: string;
+    message?: string;
+    inputProvenance?: { sourceSessionKey?: string; sourceRole?: string };
+  };
+};
+const requesterKey = "agent:main:main";
+const sendInput = (sessionKey: string) => ({ sessionKey, message: "ping", timeoutSeconds: 1 });
+const accepted = (runId: string, acceptedAt: number) => ({ runId, status: "accepted", acceptedAt });
+const reply = (runId: string, text: string) => ({
+  runId,
+  status: "ok",
+  terminalReply: { disposition: "visible", text },
+});
+const sendTool = ({ getSessionTool }: SessionsSendTimeoutFixtures) =>
+  getSessionTool("sessions_send", { agentSessionKey: requesterKey, agentChannel: "discord" });
 
 export function observeSessionSendContinuations(options: { trackAllWork?: boolean } = {}) {
   const completions = new Set<Promise<unknown>>();
@@ -52,17 +73,12 @@ export function observeSessionSendContinuations(options: { trackAllWork?: boolea
 
   return {
     settle(): Promise<void> {
-      if (joining) {
-        return joining;
-      }
-      joining = (async () => {
+      return (joining ??= (async () => {
         const failures: unknown[] = [];
         while (completions.size > 0) {
           const batch = [...completions];
           const results = await Promise.allSettled(batch);
-          for (const completion of batch) {
-            completions.delete(completion);
-          }
+          batch.forEach((completion) => completions.delete(completion));
           for (const result of results) {
             if (result.status === "rejected") {
               failures.push(result.reason);
@@ -77,8 +93,7 @@ export function observeSessionSendContinuations(options: { trackAllWork?: boolea
         }
       })().finally(() => {
         joining = undefined;
-      });
-      return joining;
+      }));
     },
     restore() {
       spy.mockRestore();
@@ -88,181 +103,120 @@ export function observeSessionSendContinuations(options: { trackAllWork?: boolea
   };
 }
 
-export function registerSessionsSendTimeoutTests({
-  getSessionTool,
-  callGatewayMock,
-}: SessionsSendTimeoutFixtures) {
-  it.each([
-    {
-      name: "provider-attributed terminal timeout without a diagnostic",
-      waitResult: {
-        status: "ok",
-        endedAt: 3000,
-        timeoutPhase: "provider",
-        providerStarted: true,
-      },
-      expectedError: "agent run timed out",
-    },
-  ] as const)(
-    "sessions_send preserves a $name through Tool Search without starting A2A",
-    async ({ waitResult, expectedError }) => {
-      const calls: Array<{ method?: string; params?: unknown }> = [];
-      const requesterKey = "agent:main:main";
-      const targetKey = "agent:director1:main";
-      callGatewayMock.mockImplementation(async (opts: unknown) => {
-        const request = opts as { method?: string; params?: unknown };
-        calls.push(request);
-        if (request.method === "agent") {
-          return { runId: "run-terminal", status: "accepted", acceptedAt: 2000 };
-        }
-        if (request.method === "agent.wait") {
-          return { runId: "run-terminal", ...waitResult };
-        }
-        return {};
-      });
+export function registerSessionsSendTimeoutTests(fixtures: SessionsSendTimeoutFixtures) {
+  const { callGatewayMock } = fixtures;
+  it("sessions_send preserves a provider-attributed terminal timeout without a diagnostic through Tool Search without starting A2A", async () => {
+    const calls: GatewayRequest[] = [];
+    const targetKey = "agent:director1:main";
+    await upsertSessionEntryCore(
+      { agentId: "director1", sessionKey: targetKey },
+      { sessionId: "timeout-target", updatedAt: 1 },
+    );
+    callGatewayMock.mockImplementation(async (request: GatewayRequest) => {
+      calls.push(request);
+      if (request.method === "agent") {
+        return accepted("run-terminal", 2000);
+      }
+      if (request.method === "agent.wait") {
+        return {
+          runId: "run-terminal",
+          status: "ok",
+          endedAt: 3000,
+          timeoutPhase: "provider",
+          providerStarted: true,
+        };
+      }
+      return {};
+    });
 
-      const tool = getSessionTool("sessions_send", {
-        agentSessionKey: requesterKey,
-        agentChannel: "discord",
-      });
-      const catalogRef = createToolSearchCatalogRef();
-      registerHeadlessToolSearchCatalog({ catalogRef, tools: [tool] });
-      const runtime = new ToolSearchRuntime(
-        { catalogRef },
-        resolveToolSearchConfig({ tools: { toolSearch: { enabled: true, mode: "tools" } } }),
-        { validateInput: true },
-      );
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [sendTool(fixtures)] });
+    const runtime = new ToolSearchRuntime(
+      { catalogRef },
+      resolveToolSearchConfig({ tools: { toolSearch: { enabled: true, mode: "tools" } } }),
+      { validateInput: true },
+    );
 
-      const details = await runtime.callValue("sessions_send", {
-        sessionKey: targetKey,
-        message: "ping",
-        timeoutSeconds: 1,
-      });
-      expect(details).toEqual({
-        runId: "run-terminal",
-        status: "timeout",
-        error: expectedError,
-        sentBeforeError: true,
-        sessionKey: targetKey,
-      });
-      expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
-      expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
-      expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(1);
-    },
-  );
+    const details = await runtime.callValue("sessions_send", sendInput(targetKey));
+    expect(details).toEqual({
+      runId: "run-terminal",
+      status: "timeout",
+      error: "agent run timed out",
+      sentBeforeError: true,
+      sessionKey: targetKey,
+    });
+    expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(1);
+  });
 }
 
-export function registerSessionsSendLateReplyTests({
-  getSessionTool,
-  callGatewayMock,
-  settleContinuations,
-}: SessionsSendTimeoutFixtures & { settleContinuations: () => Promise<void> }) {
-  it.each<{
-    targetKind: string;
-    targetKey: string;
-    spawned: boolean;
-    pendingError?: boolean;
-    failure?: string;
-    stopReason?: string;
-  }>([
-    { targetKind: "peer", targetKey: "agent:director1:main", spawned: false },
-    {
-      targetKind: "retrying child",
-      targetKey: "agent:director1:subagent:child",
-      spawned: true,
-      pendingError: true,
-    },
-    {
-      targetKind: "cancelled child",
-      targetKey: "agent:director1:subagent:child",
-      spawned: true,
-      failure: "child run cancelled",
-      stopReason: "aborted",
-    },
+export function registerSessionsSendLateReplyTests(
+  fixtures: SessionsSendTimeoutFixtures & { settleContinuations: () => Promise<void> },
+) {
+  const { callGatewayMock, settleContinuations } = fixtures;
+  it.each<[string, boolean, boolean, string?]>([
+    ["peer", false, false],
+    ["retrying child", true, true],
+    ["cancelled child", true, false, "child run cancelled"],
   ])(
-    "sessions_send delivers the late reply from a $targetKind after the parent root releases",
-    async ({ targetKey, spawned, pendingError, failure, stopReason }) => {
-      const calls: Array<{ method?: string; params?: unknown }> = [];
-      const requesterKey = "agent:main:main";
-      if (spawned) {
-        await upsertSessionEntryCore(
-          { agentId: "director1", sessionKey: targetKey },
-          { sessionId: "child-session", updatedAt: 1, spawnedBy: requesterKey, spawnDepth: 1 },
-        );
-      }
+    "sessions_send delivers the late reply from a %s after the parent root releases",
+    async (_targetKind, spawned, pendingError, failure) => {
+      const targetKey = spawned ? "agent:director1:subagent:child" : "agent:director1:main";
+      const calls: GatewayRequest[] = [];
+      await upsertSessionEntryCore(
+        { agentId: "director1", sessionKey: targetKey },
+        {
+          sessionId: "child-session",
+          updatedAt: 1,
+          ...(spawned ? { spawnedBy: requesterKey, spawnDepth: 1 } : {}),
+        },
+      );
       let targetWaitCount = 0;
-      let releaseDelayedWait = () => {};
-      const delayedWaitGate = new Promise<void>((resolve) => {
-        releaseDelayedWait = resolve;
-      });
+      const delayedWaitGate = createDeferred();
       let requesterProviderStarts = 0;
       let requesterAdmissionClosed: boolean | undefined;
-      callGatewayMock.mockImplementation(async (opts: unknown) => {
-        const request = opts as { method?: string; params?: unknown };
+      callGatewayMock.mockImplementation(async (request: GatewayRequest) => {
         calls.push(request);
-        if (request.method === "agent") {
-          const params = request.params as { sessionKey?: string } | undefined;
-          if (params?.sessionKey === targetKey) {
-            return { runId: "run-target", status: "accepted", acceptedAt: 2000 };
-          }
-          if (params?.sessionKey === requesterKey) {
-            requesterAdmissionClosed =
-              gatewayWorkAdmission.isGatewaySubordinateWorkAdmissionClosed();
-            if (requesterAdmissionClosed) {
-              throw new gatewayWorkAdmission.GatewayDrainingError();
-            }
-            requesterProviderStarts += 1;
-            return { runId: "run-requester", status: "accepted", acceptedAt: 2001 };
-          }
+        const { method, params } = request;
+        if (method === "agent" && params?.sessionKey === targetKey) {
+          return accepted("run-target", 2000);
         }
-        if (request.method === "agent.wait") {
-          const params = request.params as { runId?: string } | undefined;
-          if (params?.runId === "run-target") {
-            targetWaitCount += 1;
-            if (targetWaitCount === 1) {
-              return {
-                runId: "run-target",
-                status: "timeout",
-                ...(pendingError ? { pendingError: true, error: "retrying provider" } : {}),
-              };
-            }
-            await delayedWaitGate;
-            if (failure) {
-              return { runId: "run-target", status: "error", error: failure, stopReason };
-            }
+        if (method === "agent" && params?.sessionKey === requesterKey) {
+          requesterAdmissionClosed = gatewayWorkAdmission.isGatewaySubordinateWorkAdmissionClosed();
+          if (requesterAdmissionClosed) {
+            throw new gatewayWorkAdmission.GatewayDrainingError();
+          }
+          requesterProviderStarts += 1;
+          return accepted("run-requester", 2001);
+        }
+        if (method === "agent.wait" && params?.runId === "run-target") {
+          targetWaitCount += 1;
+          if (targetWaitCount === 1) {
             return {
               runId: "run-target",
-              status: "ok",
-              terminalReply: { disposition: "visible", text: "late director reply" },
+              status: "timeout",
+              ...(pendingError ? { pendingError: true, error: "retrying provider" } : {}),
             };
           }
-          if (params?.runId === "run-requester") {
-            return {
-              runId: "run-requester",
-              status: "ok",
-              terminalReply: { disposition: "visible", text: "requester saw director" },
-            };
-          }
+          await delayedWaitGate.promise;
+          return failure
+            ? { runId: "run-target", status: "error", error: failure, stopReason: "aborted" }
+            : reply("run-target", "late director reply");
+        }
+        if (method === "agent.wait" && params?.runId === "run-requester") {
+          return reply("run-requester", "requester saw director");
         }
         return {};
       });
 
-      const tool = getSessionTool("sessions_send", {
-        agentSessionKey: requesterKey,
-        agentChannel: "discord",
-      });
+      const tool = sendTool(fixtures);
 
       await runQaGatewayFixture(async () => {
         const parentWork = new asyncWork.AsyncWorkScope();
         const result = await runWithGatewayRootWorkAdmissionForTest(async () => {
           try {
-            return await parentWork.track(() =>
-              tool.execute("call-delayed", {
-                sessionKey: targetKey,
-                message: "ping",
-                timeoutSeconds: 1,
-              }),
-            );
+            return await parentWork.track(() => tool.execute("call-delayed", sendInput(targetKey)));
           } finally {
             await asyncWork.AsyncWorkScope.runWhenAllIdle(
               () => [parentWork],
@@ -278,33 +232,21 @@ export function registerSessionsSendLateReplyTests({
         });
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(1);
         expect(requesterProviderStarts).toBe(0);
-        releaseDelayedWait();
+        delayedWaitGate.resolve();
 
-        await vi.waitFor(
-          () => {
-            expect(requesterAdmissionClosed).toBe(false);
-          },
-          { timeout: 2_000, interval: 5 },
-        );
-        await settleContinuations();
-        await vi.waitFor(() => {
-          expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
+        await vi.waitFor(() => expect(requesterAdmissionClosed).toBe(false), {
+          timeout: 2_000,
+          interval: 5,
         });
+        await settleContinuations();
+        await vi.waitFor(() =>
+          expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0),
+        );
         expect(requesterProviderStarts).toBe(1);
 
-        const requesterReplyCall = calls.find(
-          (call) =>
-            call.method === "agent" &&
-            (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
-        );
-        const replyParams = requesterReplyCall?.params as
-          | {
-              extraSystemPrompt?: string;
-              inputProvenance?: { sourceSessionKey?: string; sourceRole?: string };
-              message?: string;
-              sessionKey?: string;
-            }
-          | undefined;
+        const replyParams = calls.find(
+          (call) => call.method === "agent" && call.params?.sessionKey === requesterKey,
+        )?.params;
         expect(replyParams?.sessionKey).toBe(requesterKey);
         expect(replyParams?.inputProvenance?.sourceSessionKey).toBe(targetKey);
         expect(replyParams?.message).toContain(failure ?? "late director reply");
@@ -317,7 +259,7 @@ export function registerSessionsSendLateReplyTests({
           expect(replyParams?.extraSystemPrompt).toContain("This result is delivered once");
         }
         expect(calls.find((call) => call.method === "send")).toBeUndefined();
-      }, releaseDelayedWait);
+      }, delayedWaitGate.resolve);
     },
   );
 }

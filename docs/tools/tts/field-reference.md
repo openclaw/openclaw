@@ -55,7 +55,7 @@ and resolved values still fail startup or reject the update.
       Hard cap for TTS input characters. `/tts audio`, `tts.convert`, and `tts.speak` fail if exceeded.
     </ParamField>
     <ParamField path="timeoutMs" type="number" default="30000">
-      Request timeout in milliseconds. A per-call `timeoutMs` (agent tool, gateway) wins when set; otherwise an explicitly configured `tts.timeoutMs` wins over any plugin-authored provider default.
+      Request timeout in milliseconds. A per-call `timeoutMs` (agent tool, gateway) wins when set; otherwise an explicitly configured `tts.timeoutMs` wins over any plugin-authored provider default. When neither is set, DeepInfra and OpenRouter default to `120000` because hosted Kokoro synthesis can exceed 30 seconds.
     </ParamField>
   </Accordion>
   <Accordion title="Azure Speech">
@@ -88,7 +88,7 @@ and resolved values still fail startup or reject the update.
     <ParamField path="audioProfile" type="string">Natural-language delivery style. Gemini 3.8 sends it as `speech_metadata.style`. Gemini 3.1 and 2.5 preview models prepend it to the spoken text.</ParamField>
     <ParamField path="speakerName" type="string">Optional speaker label. Gemini 3.8 sends it as the structured `speech_metadata.speaker` label alongside the single configured voice. Older preview models prepend `Speaker name:` before the spoken text.</ParamField>
     <ParamField path="speakers" type="array">Exactly two `{ speaker, voice, style? }` entries. On Gemini 3.8, lines that start with one of the two configured names and a colon (with or without a following space) become conversational turns and the name is not spoken; any other line, including other `Word: text` prose, stays inside the current turn. Transcripts without configured labels stay single-voice.</ParamField>
-    <ParamField path="promptTemplate" type='"audio-profile-v1"'>On Gemini 3.1 and 2.5 preview models, wrap active persona fields in a deterministic prompt. On Gemini 3.8, `personaPrompt` is sent as `speech_metadata.style` and is not read aloud; the persona label is not sent.</ParamField>
+    <ParamField path="promptTemplate" type='"audio-profile-v1"'>On Gemini 3.1 and 2.5 preview models, wrap active persona fields in a fixed prompt format. On Gemini 3.8, `personaPrompt` is sent as `speech_metadata.style` and is not read aloud; the persona label is not sent.</ParamField>
     <ParamField path="personaPrompt" type="string">Google-specific persona direction. Gemini 3.8 sends it as style metadata. Older preview models append it to the audio-profile template's Director's Notes.</ParamField>
     <ParamField path="baseUrl" type="string">Only `https://generativelanguage.googleapis.com` is accepted.</ParamField>
   </Accordion>
@@ -104,9 +104,11 @@ and resolved values still fail startup or reject the update.
 
     <ParamField path="apiKey" type="string">Env: `INWORLD_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.inworld.ai`.</ParamField>
-    <ParamField path="modelId" type="string">Default `inworld-tts-1.5-max`. Also: `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`.</ParamField>
+    <ParamField path="modelId" type="string">Default `inworld-tts-1.5-max`. Also: `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`, `inworld-tts-2`, `inworld-tts-2-flash`.</ParamField>
     <ParamField path="speakerVoiceId" type="string">Default `Sarah`. Legacy alias: `voiceId`.</ParamField>
-    <ParamField path="temperature" type="number">Sampling temperature `0..2` (exclusive of 0).</ParamField>
+    <ParamField path="temperature" type="number">Sampling temperature `0..2` (exclusive of 0). Ignored by `inworld-tts-2`, which uses `deliveryMode` instead.</ParamField>
+    <ParamField path="speakingRate" type="number">Speaking rate `0.5..1.5`; `1.0` is the voice's native speed. Sent as `audioConfig.speakingRate`.</ParamField>
+    <ParamField path="deliveryMode" type='"STABLE" | "BALANCED" | "CREATIVE"'>Delivery preset. Honored only by `inworld-tts-2` (where it replaces `temperature`); OpenClaw does not send it to other models, including `inworld-tts-2-flash`.</ParamField>
 
   </Accordion>
 

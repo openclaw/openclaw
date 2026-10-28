@@ -9,13 +9,19 @@ import {
   type MovePathPublicationReceipt,
 } from "@openclaw/fs-safe/atomic";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import { isRemovalIoError, removePathWithinRoot } from "./fs-safe-remove.js";
 import { FsSafeError, pathExists } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { withInstallActivity, type InstallActivityObserver } from "./install-progress.js";
-import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
+import {
+  assertCanonicalPathWithinBase,
+  assertInstallBaseStable,
+  INSTALL_BASE_CHANGED_ERROR_MESSAGE,
+  resolveInstallPublishTarget,
+} from "./install-safe-path.js";
 import { formatNpmCommandFailureOutput } from "./install-source-utils.js";
 import { tryReadJson, writeJson } from "./json-files.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
@@ -24,7 +30,6 @@ import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-packag
 
 type InstallSourceHardlinks = "package-manager" | "reject";
 
-const INSTALL_BASE_CHANGED_ERROR_MESSAGE = "install base directory changed during install";
 const INSTALL_BASE_CHANGED_ABORT_WARNING =
   "Install base directory changed during install; aborting staged publish.";
 const INSTALL_BASE_CHANGED_BACKUP_WARNING =
@@ -38,7 +43,7 @@ type HiddenProjectConfigFile = {
   hiddenPath: string;
 } | null;
 
-type InstallPackageDirFailure = { ok: false; error: string };
+type InstallPackageDirFailure = { ok: false; error: string; recoveryIncomplete?: boolean };
 type InstallPackageDirSuccess = { ok: true };
 
 export function hasPackageRuntimeDependencies(manifest: {
@@ -131,48 +136,14 @@ function isInstallBaseChangedError(error: unknown): boolean {
   return error instanceof Error && error.message === INSTALL_BASE_CHANGED_ERROR_MESSAGE;
 }
 
-async function assertInstallBaseStable(params: {
-  installBaseDir: string;
-  expectedRealPath: string;
-}): Promise<void> {
-  const baseStat = await fs.stat(params.installBaseDir);
-  if (!baseStat.isDirectory()) {
-    throw new Error(INSTALL_BASE_CHANGED_ERROR_MESSAGE);
-  }
-  const currentRealPath = await fs.realpath(params.installBaseDir);
-  if (currentRealPath !== params.expectedRealPath) {
-    throw new Error(INSTALL_BASE_CHANGED_ERROR_MESSAGE);
-  }
-}
-
-async function resolveInstallPublishTarget(params: {
-  installBaseDir: string;
-  targetDir: string;
-}): Promise<{ installBaseRealPath: string; canonicalTargetDir: string }> {
-  const installBaseResolved = path.resolve(params.installBaseDir);
-  const targetResolved = path.resolve(params.targetDir);
-  const targetRelativePath = path.relative(installBaseResolved, targetResolved);
-  if (
-    !targetRelativePath ||
-    targetRelativePath === ".." ||
-    targetRelativePath.startsWith(`..${path.sep}`)
-  ) {
-    throw new Error("invalid install target path");
-  }
-  const installBaseRealPath = await fs.realpath(params.installBaseDir);
-  return {
-    installBaseRealPath,
-    canonicalTargetDir: path.join(installBaseRealPath, targetRelativePath),
-  };
-}
-
 export type PackageDirInstallTransaction = {
-  commit(): Promise<void>;
-  rollback(): Promise<void>;
+  commit(assertCurrent?: () => void): Promise<void>;
+  rollback(assertCurrent?: () => void): Promise<void>;
 };
 
 type PackageDirInstallTransactionRequest = {
   assertOwned?: () => void;
+  prepareSettlement?: () => void | Promise<void>;
 };
 
 const PACKAGE_DIR_INSTALL_TRANSACTION = Symbol.for("openclaw.packageDirInstallTransaction");
@@ -183,11 +154,12 @@ const PACKAGE_DIR_INSTALL_TRANSACTION_REQUEST = Symbol.for(
 export function requestDeferredPackageDirInstall<T extends object>(
   params: T,
   assertOwned?: () => void,
+  prepareSettlement?: () => void | Promise<void>,
 ): T {
   Object.defineProperty(params, PACKAGE_DIR_INSTALL_TRANSACTION_REQUEST, {
     configurable: false,
     enumerable: true,
-    value: { assertOwned } satisfies PackageDirInstallTransactionRequest,
+    value: { assertOwned, prepareSettlement } satisfies PackageDirInstallTransactionRequest,
   });
   return params;
 }
@@ -197,7 +169,9 @@ export function copyPackageDirInstallTransactionRequest<T extends object>(
   target: T,
 ): T {
   const request = resolvePackageDirInstallTransactionRequest(source);
-  return request ? requestDeferredPackageDirInstall(target, request.assertOwned) : target;
+  return request
+    ? requestDeferredPackageDirInstall(target, request.assertOwned, request.prepareSettlement)
+    : target;
 }
 
 function resolvePackageDirInstallTransactionRequest(
@@ -208,6 +182,18 @@ function resolvePackageDirInstallTransactionRequest(
       [PACKAGE_DIR_INSTALL_TRANSACTION_REQUEST]?: PackageDirInstallTransactionRequest;
     }
   )[PACKAGE_DIR_INSTALL_TRANSACTION_REQUEST];
+}
+
+function attachPackageDirInstallTransaction<T extends object>(
+  result: T,
+  transaction: PackageDirInstallTransaction,
+): T {
+  Object.defineProperty(result, PACKAGE_DIR_INSTALL_TRANSACTION, {
+    configurable: false,
+    enumerable: true,
+    value: transaction,
+  });
+  return result;
 }
 
 export function resolvePackageDirInstallTransaction(
@@ -246,13 +232,36 @@ export async function installPackageDir<
   beforePersistentApply?: () => void;
   /** Remote owners answer before displacement/publication; local checks still run at the mutation. */
   authorizeMutation?: () => Promise<void>;
+  requireExistingTarget?: boolean;
 }): Promise<InstallPackageDirSuccess | InstallPackageDirFailure | TAfterInstallFailure> {
   const transactionRequest = resolvePackageDirInstallTransactionRequest(params);
   const deferCommit = transactionRequest !== undefined;
   // A retry cannot revive a refused transaction or borrow a successor's lease.
   // Publication-only cancellation remains separate so the owner can still roll back.
-  const assertOwned = retainMutationAuthority(transactionRequest?.assertOwned ?? (() => {}));
-  params.logger?.info?.(`Installing to ${params.targetDir}…`);
+  const originalAssertOwned = transactionRequest?.assertOwned;
+  const originalPrepareSettlement = transactionRequest?.prepareSettlement;
+  let settlementRefusal: { error: unknown } | undefined;
+  const assertOwned = retainMutationAuthority(() => {
+    if (settlementRefusal) {
+      throw settlementRefusal.error;
+    }
+    originalAssertOwned?.();
+  });
+  const prepareSettlement = async () => {
+    assertOwned();
+    try {
+      await originalPrepareSettlement?.();
+      assertOwned();
+    } catch (error) {
+      settlementRefusal = { error };
+      throw error;
+    }
+  };
+  const assertSettlementOwned = retainMutationAuthority((assertCurrent?: () => void) => {
+    assertOwned();
+    assertCurrent?.();
+  });
+  params.logger?.info?.(terminalText`Installing to ${params.targetDir}…`);
   const installBaseDir = path.dirname(params.targetDir);
   let initialInstallBaseRealPath: string;
   try {
@@ -295,8 +304,8 @@ export async function installPackageDir<
       throw error;
     }
   };
-  const assertRollbackOwned = () => {
-    assertOwned();
+  const assertRollbackOwned = (assertCurrent: () => void = assertOwned) => {
+    assertCurrent();
     assertDirectoryIdentity(installBaseRealPath, baseIdentity);
   };
   const assertPersistentApply = retainMutationAuthority(() => {
@@ -334,6 +343,7 @@ export async function installPackageDir<
     }
   };
   let stageDir: string | null = null;
+  let originalIdentity: Awaited<ReturnType<typeof readDirectoryIdentity>> | undefined;
   const published: {
     backup: MovePathPublicationReceipt | null;
     install: MovePathPublicationReceipt | null;
@@ -343,10 +353,10 @@ export async function installPackageDir<
   let quarantine:
     | { directory: string; identity: Awaited<ReturnType<typeof readDirectoryIdentity>> }
     | undefined;
-  const rollback = async () => {
+  const rollback = async (assertCurrent: () => void = assertOwned) => {
     const installedIdentity = published.install;
     if (installedIdentity) {
-      assertRollbackOwned();
+      assertRollbackOwned(assertCurrent);
       if (published.backup && !published.restore) {
         assertDirectoryIdentity(published.backup.path, published.backup);
       }
@@ -356,11 +366,12 @@ export async function installPackageDir<
         );
         const identity = await readDirectoryIdentity(directory);
         try {
-          assertDirectoryIdentity(directory, identity);
-          assertDirectoryIdentity(canonicalTargetDir, installedIdentity);
           // Detach atomically before any recursive deletion. Copy fallback would still
           // clean the shared source after ownership can close, so it is forbidden here.
-          assertRollbackOwned();
+          await prepareSettlement();
+          assertRollbackOwned(assertCurrent);
+          assertDirectoryIdentity(directory, identity);
+          assertDirectoryIdentity(canonicalTargetDir, installedIdentity);
           fsSync.renameSync(canonicalTargetDir, path.join(directory, "package"));
           quarantine = { directory, identity };
         } catch (error) {
@@ -377,7 +388,7 @@ export async function installPackageDir<
         assertOwner: () => assertDirectoryIdentity(detached.directory, detached.identity),
       });
     }
-    await restoreBackup();
+    await restoreBackup(assertCurrent);
     if (quarantine) {
       await removeInstallTree({
         directory: quarantine.directory,
@@ -389,6 +400,10 @@ export async function installPackageDir<
     published.install = null;
   };
   const fail = async (error: string, cause?: unknown) => {
+    const heldFileHint =
+      hasErrnoCode(cause, "EBUSY") || hasErrnoCode(cause, "EPERM")
+        ? ". Files may be held by another process; stop the Gateway and retry this update."
+        : "";
     const installBaseChanged = isInstallBaseChangedError(cause);
     let restoreError: string | undefined;
     if (installBaseChanged) {
@@ -410,17 +425,52 @@ export async function installPackageDir<
         `install was published at ${published.install.path}; recovery incomplete`,
       published.backup && `backup recovery path: ${published.backup.path}`,
     ].filter(Boolean);
+    const recoveryIncomplete = Boolean(restoreError || published.install || published.backup);
     return {
       ok: false as const,
-      error: [error, ...recovery].join("; "),
+      error: [error + heldFileHint, ...recovery].join("; "),
+      ...(recoveryIncomplete ? { recoveryIncomplete: true } : {}),
     };
   };
-  const restoreBackup = async (): Promise<void> => {
+  const restoreBackup = async (assertCurrent: () => void = assertOwned): Promise<void> => {
     if (!published.backup) {
       return;
     }
     const restoring = published.backup;
     try {
+      await prepareSettlement();
+      assertRollbackOwned(assertCurrent);
+      if (!published.restore && fsSync.lstatSync(canonicalTargetDir, { throwIfNoEntry: false })) {
+        if (!originalIdentity) {
+          throw new Error(`install target changed during rollback: ${canonicalTargetDir}`);
+        }
+        const original = originalIdentity;
+        // Copy-fallback displacement can stop at a held file after deleting siblings.
+        // Synchronous filters recheck recovery authority before each missing entry is
+        // restored, without yielding between the check and write or touching held files.
+        fsSync.cpSync(restoring.path, canonicalTargetDir, {
+          recursive: true,
+          verbatimSymlinks: true,
+          force: false,
+          mode: fsSync.constants.COPYFILE_EXCL,
+          filter: (source, destination) => {
+            assertRollbackOwned(assertCurrent);
+            assertDirectoryIdentity(restoring.path, restoring);
+            assertDirectoryIdentity(canonicalTargetDir, original);
+            const existing = fsSync.lstatSync(destination, { throwIfNoEntry: false });
+            const sourceStat = fsSync.lstatSync(source);
+            if (
+              existing &&
+              (existing.isDirectory() !== sourceStat.isDirectory() ||
+                existing.isSymbolicLink() !== sourceStat.isSymbolicLink())
+            ) {
+              throw new Error(`install entry changed during rollback: ${destination}`);
+            }
+            return !existing || existing.isDirectory();
+          },
+        });
+        published.restore = { path: canonicalTargetDir, ...original };
+      }
       if (published.restore) {
         // A prior attempt restored the target; retry only its remaining backup cleanup.
         const restored = published.restore;
@@ -429,7 +479,7 @@ export async function installPackageDir<
           identity: restoring,
           assertOwner: () => {
             assertDirectoryIdentity(canonicalTargetDir, restored);
-            assertRollbackOwned();
+            assertRollbackOwned(assertCurrent);
           },
         });
       } else {
@@ -442,7 +492,7 @@ export async function installPackageDir<
           },
           assertBeforeMutation: () => {
             assertDirectoryIdentity(restoring.path, restoring);
-            assertRollbackOwned();
+            assertRollbackOwned(assertCurrent);
           },
           onDestinationPublished: (receipt) => {
             published.restore = receipt;
@@ -553,14 +603,18 @@ export async function installPackageDir<
       const postInstallResult = await params.afterInstall(stageDir);
       if (!postInstallResult.ok) {
         const failed = await fail(postInstallResult.error);
-        return { ...postInstallResult, error: failed.error };
+        return { ...postInstallResult, ...failed };
       }
     } catch (err) {
       return await fail(`post-install validation failed: ${String(err)}`, err);
     }
   }
 
-  if (params.mode === "update" && (await pathExists(canonicalTargetDir))) {
+  const hasUpdateTarget = params.mode === "update" && (await pathExists(canonicalTargetDir));
+  if (params.requireExistingTarget && !hasUpdateTarget) {
+    return await fail(`${params.copyErrorPrefix}: required update target disappeared`);
+  }
+  if (hasUpdateTarget) {
     const backupRoot = path.join(installBaseRealPath, ".openclaw-install-backups");
     const backupPath = path.join(
       backupRoot,
@@ -581,6 +635,7 @@ export async function installPackageDir<
       if (params.authorizeMutation) {
         await params.authorizeMutation();
       }
+      originalIdentity = await readDirectoryIdentity(canonicalTargetDir);
       await movePathWithCopyFallback({
         assertBeforeMutation: assertPersistentApply,
         onDestinationPublished: (receipt) => {
@@ -590,6 +645,8 @@ export async function installPackageDir<
         sourceHardlinks,
         to: backupPath,
       });
+      // Only incomplete displacement can leave the original at the target path.
+      originalIdentity = undefined;
     } catch (err) {
       return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
     }
@@ -602,7 +659,7 @@ export async function installPackageDir<
       const backupResult = await params.afterBackup(published.backup.path);
       if (!backupResult.ok) {
         const failed = await fail(backupResult.error);
-        return { ...backupResult, error: failed.error };
+        return { ...backupResult, ...failed };
       }
     } catch (err) {
       return await fail(`backup validation failed: ${String(err)}`, err);
@@ -641,6 +698,9 @@ export async function installPackageDir<
       if (isInstallBaseChangedError(err)) {
         params.logger?.warn?.(INSTALL_BASE_CHANGED_BACKUP_WARNING);
       }
+      if (deferCommit) {
+        return await fail(`${params.copyErrorPrefix}: ${String(err)}`, err);
+      }
       published.backup = null;
     }
   }
@@ -656,12 +716,16 @@ export async function installPackageDir<
     return { ok: true };
   }
   let settlement: Promise<void> | undefined;
-  const settle = (apply: () => Promise<void>) => {
+  const settle = (
+    apply: (assertCurrent: () => void) => Promise<void>,
+    settlementAssertCurrent?: () => void,
+  ) => {
     // Share in-flight settlement, but retain rollback progress when an I/O failure needs a retry.
     settlement ??= Promise.resolve()
       .then(() => {
-        assertOwned();
-        return apply();
+        const assertCurrent = () => assertSettlementOwned(settlementAssertCurrent);
+        assertCurrent();
+        return apply(assertCurrent);
       })
       .catch((error: unknown) => {
         settlement = undefined;
@@ -669,30 +733,27 @@ export async function installPackageDir<
       });
     return settlement;
   };
-  return Object.defineProperty(
-    { ok: true } satisfies InstallPackageDirSuccess,
-    PACKAGE_DIR_INSTALL_TRANSACTION,
+  return attachPackageDirInstallTransaction(
+    { ok: true },
     {
-      configurable: false,
-      enumerable: true,
-      value: {
-        commit: () =>
-          settle(async () => {
-            if (quarantine) {
-              throw new Error("cannot commit an install after rollback has started");
-            }
-            assertOwned();
-            if (published.backup) {
-              await removeInstallTree({
-                directory: published.backup.path,
-                identity: published.backup,
-                assertOwner: assertRollbackOwned,
-                bestEffort: true,
-              });
-            }
-          }),
-        rollback: () => settle(rollback),
-      } satisfies PackageDirInstallTransaction,
+      commit: (assertCurrent) =>
+        settle(async (assertOwner) => {
+          if (quarantine) {
+            throw new Error("cannot commit an install after rollback has started");
+          }
+          assertOwner();
+          if (published.backup) {
+            await prepareSettlement();
+            assertOwner();
+            await removeInstallTree({
+              directory: published.backup.path,
+              identity: published.backup,
+              assertOwner: () => assertRollbackOwned(assertOwner),
+              bestEffort: true,
+            });
+          }
+        }, assertCurrent),
+      rollback: (assertCurrent) => settle(rollback, assertCurrent),
     },
   );
 }

@@ -1,38 +1,58 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { DatabaseSync } from "node:sqlite";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
-import { deferCanonicalSessionValidation } from "../config/sessions/session-canonical-validation-deferral.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import * as sqliteTarget from "../config/sessions/session-sqlite-target.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import {
+  assertAgentDatabaseAdmitted,
+  readAgentDatabaseAdmissionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
+import {
+  getAgentDatabaseStartupAdmission,
+  withAgentDatabaseStartupAdmission,
+} from "../state/agent-database-startup.js";
+import * as deletionJournal from "../state/agent-deletion-journal.read.js";
+import { gatewayRequest } from "./request-frame.test-support.js";
 import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
 import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
-import { withPreparedSessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
+import { readPreparedSessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowAncestorReads } from "./session-row-projection-ancestors.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 
-const certifyReadiness = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("../config/sessions/session-canonical-validation-readiness.js", () => ({
-  certifySessionCanonicalValidationPending: certifyReadiness,
-}));
-
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  vi.useRealTimers();
   vi.restoreAllMocks();
-  certifyReadiness.mockReset();
+  vi.unstubAllEnvs();
 });
 
 const cfg = { agents: { entries: { main: {} } } };
 const query = { agentId: "main", key: "agent:main:dashboard:incognito-prepared" };
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function describeFixture() {
   const projection = createSessionRowProjectionFixture({ cfg, store: {} });
-  projection.withPreparedExactRows = (queries, consume) =>
-    withPreparedSessionRows(projection, () => true, queries, consume);
+  projection.withPreparedExactRows = async (queries, consume) =>
+    readPreparedSessionRows(projection, () => true, queries, consume);
   const context = bindSessionRowProjection(requestContext(cfg), () => projection);
   const client = sharingPolicyClient({ scopes: ["operator.admin"] });
   const request = {
@@ -42,8 +62,343 @@ function describeFixture() {
     context,
     methodRegistry: createRequestGatewayMethodRegistry(),
   };
-  return { projection, context, client, request };
+  const authorize = (
+    method = request.method,
+    requestParams: unknown = request.requestParams,
+    options: Pick<Parameters<typeof authorizeGatewayRequestPreDispatch>[0], "signal"> = {},
+  ) => authorizeGatewayRequestPreDispatch({ ...request, method, requestParams, ...options });
+  const dispatch = (
+    req: Parameters<typeof handleGatewayRequest>[0]["req"],
+    respond: Parameters<typeof handleGatewayRequest>[0]["respond"],
+    extraHandlers = sessionByKeyReadHandlers,
+  ) =>
+    handleGatewayRequest({
+      req,
+      context,
+      client,
+      respond,
+      isWebchatConnect: () => false,
+      extraHandlers,
+    });
+  const describe = (respond: Parameters<typeof handleGatewayRequest>[0]["respond"]) =>
+    dispatch(gatewayRequest("description", "sessions.describe", { key: query.key }), respond);
+  return { projection, context, client, request, authorize, dispatch, describe };
 }
+
+async function withPendingStartupInspection(
+  run: (
+    fixture: ReturnType<typeof describeFixture> & {
+      complete: () => void;
+      fail: (error: Error) => void;
+      databasePath: string;
+      admission: Parameters<Parameters<typeof withAgentDatabaseStartupAdmission>[0]>[0];
+    },
+  ) => Promise<void>,
+) {
+  vi.useFakeTimers();
+  const root = tempDirs.make("request-startup-inspection-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const pathname = path.join(root, "agent.sqlite");
+  writeFileSync(pathname, "synthetic identity; native preparation is separate proof");
+  vi.spyOn(deletionJournal, "readAgentDeletionJournalStatusInWorker").mockResolvedValue("absent");
+  const inspection = createDeferredCore<{ incompatible: []; indeterminate: [] }>();
+  const complete = () => inspection.resolve({ incompatible: [], indeterminate: [] });
+  const fixture = describeFixture();
+  await withAgentDatabaseStartupAdmission(async (admission) => {
+    recordAgentDatabaseAdmissions(
+      admission.defer({
+        env: process.env,
+        inspections: [{ target: { agentId: "main", path: pathname }, result: inspection.promise }],
+        reason: "synthetic inspection in progress",
+      }),
+      { source: "startup" },
+    );
+    const owner = admission.adopt();
+    admission.activate({
+      isCurrent: () => true,
+      preparationReady: Promise.resolve(),
+      openAgent: async () => {},
+      migrateAgent: async () => {},
+      publishAgent: async () => {},
+    });
+    fixture.context.agentDatabaseStartup = {
+      get hasPendingAgents() {
+        return admission.hasPendingAgents;
+      },
+      waitForAgentPreparation: admission.waitForAgentPreparation.bind(admission),
+    };
+    try {
+      await runInDetachedAsyncContext(() => {
+        expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
+        return run({
+          ...fixture,
+          complete,
+          fail: inspection.reject,
+          admission,
+          databasePath: pathname,
+        });
+      });
+    } finally {
+      complete();
+      await admission.pendingPreparation;
+      await owner.stop();
+      recordAgentDatabaseAdmissions([], { source: "startup" });
+      fixture.projection.dispose();
+    }
+  });
+}
+
+function useSharedStore(context: ReturnType<typeof requestContext>, databasePath: string) {
+  const sharedConfig: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      entries: { main: {}, ops: {} },
+      defaults: { sessionStore: { agentId: "ops" } },
+    },
+    session: { scope: "global", store: databasePath },
+  };
+  context.getRuntimeConfig = () => sharedConfig;
+  // Native routing and host-SQL isolation are covered by session-sqlite-target.worker.test.ts.
+  vi.spyOn(sqliteTarget, "prepareSqliteTargetFromSessionStorePath").mockResolvedValue({
+    agentId: "main",
+    path: databasePath,
+    shared: true,
+  });
+}
+
+it.each(["before", "after refusal"] as const)(
+  "preserves terminal inspection failure %s write authorization",
+  async (when) => {
+    await withPendingStartupInspection(async ({ authorize, fail, admission }) => {
+      const write = () =>
+        authorize("sessions.send", { key: "agent:main:startup", message: "hello" });
+      if (when === "after refusal") {
+        await expect(write()).resolves.toMatchObject({
+          error: { code: "UNAVAILABLE", retryable: true },
+        });
+      }
+      fail(new Error("synthetic failed inspection"));
+      await admission.pendingPreparation;
+      await expect(write()).resolves.toMatchObject({
+        error: {
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("synthetic failed inspection"),
+          retryable: false,
+        },
+      });
+    });
+  },
+);
+
+it("admits an unrelated agent's write while startup preparation continues", async () => {
+  await withPendingStartupInspection(async ({ authorize, context }) => {
+    context.getRuntimeConfig = () => ({ agents: { entries: { main: {}, ready: {} } } });
+    await expect(
+      authorize("sessions.create", { agentId: "ready", message: "hello" }),
+    ).resolves.toMatchObject({ error: null });
+    expect(readAgentDatabaseAdmissionRefusal("main")?.code).toBe(
+      "agent-database-inspection-pending",
+    );
+  });
+});
+
+it("waits for the physical shared-store owner on reads but refuses pending writes", async () => {
+  await withPendingStartupInspection(
+    async ({ authorize, context, databasePath, complete, admission }) => {
+      useSharedStore(context, databasePath);
+      const write = () => authorize("sessions.create", { agentId: "ops", message: "hello" });
+      await expect(write()).resolves.toMatchObject({
+        error: {
+          code: "UNAVAILABLE",
+          retryable: true,
+          details: { reason: "startup-sidecars", method: "sessions.create" },
+        },
+      });
+      expect(() => assertAgentDatabaseAdmitted("ops")).not.toThrow();
+      let settled = false;
+      const reading = authorize("sessions.list", { agentId: "ops" }).then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
+      complete();
+      await admission.pendingPreparation;
+      await expect(reading).resolves.toMatchObject({ error: null });
+      await expect(write()).resolves.toMatchObject({ error: null });
+    },
+  );
+});
+
+it.each([
+  ["sessions.list", { agentId: "main" }],
+  ["sessions.resolve", { key: "agent:main:startup" }],
+  ["sessions.resolve", { sessionId: "startup" }],
+  ["sessions.describe", { key: "agent:main:startup" }],
+  ["models.list", {}],
+  ["models.list", { sessionKey: "agent:main:startup" }],
+] as const)(
+  "holds %s reads until their startup inspection publishes (%j)",
+  async (method, params) => {
+    await withPendingStartupInspection(async ({ dispatch, complete }) => {
+      const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
+        assertAgentDatabaseAdmitted("main");
+        respond(true, { read: "committed" });
+      });
+      const respond = vi.fn();
+      const request = dispatch({ type: "req", id: "startup-read", method, params }, respond, {
+        [method]: handler,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handler).not.toHaveBeenCalled();
+      expect(respond).not.toHaveBeenCalled();
+      expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
+      complete();
+      await request;
+      expect(handler).toHaveBeenCalledOnce();
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, { read: "committed" });
+    });
+  },
+);
+
+it("dispatches broad lists while an agent remains in startup preparation", async () => {
+  await withPendingStartupInspection(async ({ dispatch }) => {
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { sessions: [] }));
+    const respond = vi.fn();
+    const request = dispatch(
+      { type: "req", id: "broad-startup-list", method: "sessions.list", params: {} },
+      respond,
+      { "sessions.list": handler },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(handler).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledExactlyOnceWith(true, { sessions: [] });
+    expect(readAgentDatabaseAdmissionRefusal("main")?.code).toBe(
+      "agent-database-inspection-pending",
+    );
+    await request;
+  });
+});
+
+it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)(
+  "settles startup discovery after %s before dispatch",
+  async (outcome) => {
+    await withPendingStartupInspection(
+      async ({ authorize, context, client, databasePath, complete }) => {
+        let liveConfig: OpenClawConfig = cfg;
+        context.getRuntimeConfig = () => liveConfig;
+        const discovery =
+          createDeferredCore<
+            Awaited<ReturnType<typeof sqliteTarget.prepareSqliteTargetFromSessionStorePath>>
+          >();
+        let discoverySignal: AbortSignal | undefined;
+        const prepare = vi
+          .spyOn(sqliteTarget, "prepareSqliteTargetFromSessionStorePath")
+          .mockImplementation((_storePath, _options, signal) => {
+            discoverySignal = signal;
+            if (liveConfig !== cfg) {
+              return Promise.resolve({ agentId: "main", path: databasePath });
+            }
+            return racePromiseWithAbortSignal(discovery.promise, signal);
+          });
+        const controller = new AbortController();
+        const reading = authorize(
+          "sessions.list",
+          { agentId: "healthy" },
+          { signal: controller.signal },
+        );
+        const cancelled =
+          outcome === "cancelled"
+            ? expect(reading).rejects.toMatchObject({ name: "AbortError" })
+            : undefined;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(discoverySignal?.aborted).toBe(false);
+        if (outcome === "cancelled") {
+          controller.abort();
+          await cancelled;
+        } else if (outcome === "timeout") {
+          await vi.advanceTimersByTimeAsync(20_000);
+          await expect(reading).resolves.toMatchObject({
+            error: { code: "UNAVAILABLE", retryable: true },
+          });
+        } else {
+          if (outcome === "revoked") {
+            client.connect.scopes = [];
+          } else if (outcome === "changed config") {
+            liveConfig = { ...cfg, session: { store: databasePath } };
+          }
+          discovery.resolve({ agentId: "healthy", path: databasePath });
+          if (outcome === "changed config") {
+            await vi.advanceTimersByTimeAsync(0);
+            expect(prepare).toHaveBeenCalledTimes(2);
+            complete();
+          }
+          await expect(reading).resolves.toMatchObject(
+            outcome === "revoked" ? { error: { code: "FORBIDDEN" } } : { error: null },
+          );
+        }
+        expect(discoverySignal?.aborted).toBe(true);
+      },
+    );
+  },
+);
+
+it.each(["current", "revoked"] as const)(
+  "bounds startup reads with %s authority without cancelling preparation or granting writes",
+  async (authority) => {
+    await withPendingStartupInspection(async ({ authorize, client, complete, admission }) => {
+      const read = authorize();
+      await vi.advanceTimersByTimeAsync(0);
+      if (authority === "revoked") {
+        client.connect.scopes = [];
+      }
+      await vi.advanceTimersByTimeAsync(20_000);
+      await expect(read).resolves.toMatchObject(
+        authority === "revoked"
+          ? { error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } } }
+          : {
+              error: {
+                code: "UNAVAILABLE",
+                retryable: true,
+                details: { code: "agent-database-inspection-pending" },
+              },
+            },
+      );
+      expect(admission.signal.aborted).toBe(false);
+      expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
+      complete();
+      await admission.pendingPreparation;
+      expect(readAgentDatabaseAdmissionRefusal("main")).toBeUndefined();
+    });
+  },
+);
+
+it.each(["request", "connection", "observation"] as const)(
+  "cancels startup waiting when the %s ends without stopping preparation",
+  async (source) => {
+    await withPendingStartupInspection(async ({ authorize, client, admission }) => {
+      const controller = new AbortController();
+      const scope = new AsyncWorkScope();
+      if (source === "connection") {
+        client.connectionSignal = controller.signal;
+      }
+      const read = scope.run(() =>
+        authorize("models.list", {}, source === "request" ? { signal: controller.signal } : {}),
+      );
+      const cancelled = expect(read).rejects.toMatchObject({ name: "AbortError" });
+      await vi.advanceTimersByTimeAsync(0);
+      if (source === "observation") {
+        scope.beginClose();
+      } else {
+        controller.abort();
+      }
+      await cancelled;
+      expect(admission.signal.aborted).toBe(false);
+      expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
+    });
+  },
+);
 
 it("preserves the admin dispatch shortcut without preparing private rows", async () => {
   const { projection, request } = describeFixture();
@@ -58,19 +413,16 @@ it("preserves the admin dispatch shortcut without preparing private rows", async
 });
 
 it.each(["dispatch scopes", "private access"] as const)(
-  "rechecks %s after canonical description readiness",
+  "rechecks %s after row preparation",
   async (boundary) => {
-    const { projection, context, client, request } = describeFixture();
-    const database = { agentId: "main", path: "/synthetic/parent.sqlite" };
-    vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
-      kind: "pending",
-      database,
-    });
+    const { projection, context, client, describe: dispatchDescription } = describeFixture();
+    const prepare = projection.withPreparedExactRows.bind(projection);
     const describe = vi.spyOn(projection, "describe");
     if (boundary === "dispatch scopes") {
       client.connect.scopes = ["operator.read"];
     }
-    certifyReadiness.mockImplementationOnce(async () => {
+    vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(async (...args) => {
+      await Promise.resolve();
       client.connect.scopes = boundary === "dispatch scopes" ? [] : ["operator.read"];
       if (boundary === "private access") {
         client.authenticatedUserProfile = {
@@ -80,11 +432,16 @@ it.each(["dispatch scopes", "private access"] as const)(
           updatedAt: 1,
         };
       }
+      return prepare(...args);
     });
     if (boundary === "dispatch scopes") {
-      await expect(authorizeGatewayRequestPreDispatch(request)).resolves.toMatchObject({
-        error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } },
-      });
+      const respond = vi.fn();
+      await dispatchDescription(respond);
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "FORBIDDEN" }),
+      );
     } else {
       const respond = vi.fn();
       await sessionByKeyReadHandlers["sessions.describe"]!({
@@ -101,40 +458,32 @@ it.each(["dispatch scopes", "private access"] as const)(
       });
       expect(describe).not.toHaveBeenCalled();
     }
-    expect(certifyReadiness).toHaveBeenCalledExactlyOnceWith(database);
   },
 );
 
 it.each(["operator.admin", "operator.read"])(
-  "ends describe readiness retries after its %s connection closes",
+  "ends describe preparation after its %s connection closes",
   async (scope) => {
-    const { projection, context, client } = describeFixture();
+    const { projection, client, dispatch } = describeFixture();
     const connection = new AbortController();
     client.connect.scopes = [scope];
     client.connectionSignal = connection.signal;
-    const prepare = vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
-      kind: "pending",
-      database: { agentId: "main", path: "/synthetic/cancelled.sqlite" },
-    });
-    certifyReadiness.mockImplementationOnce(async () => {
-      connection.abort(new Error("Requesting connection closed"));
-    });
+    const prepareRows = projection.withPreparedExactRows.bind(projection);
+    const prepare = vi
+      .spyOn(projection, "withPreparedExactRows")
+      .mockImplementationOnce(async (...args) => {
+        await Promise.resolve();
+        connection.abort(new Error("Requesting connection closed"));
+        return prepareRows(...args);
+      });
     const respond = vi.fn();
     try {
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "cancelled-description",
-          method: "sessions.describe",
-          params: { key: "agent:main:cancelled-read" },
-        },
-        context,
-        client,
+      await dispatch(
+        gatewayRequest("cancelled-description", "sessions.describe", {
+          key: "agent:main:cancelled-read",
+        }),
         respond,
-        isWebchatConnect: () => false,
-        extraHandlers: sessionByKeyReadHandlers,
-      });
-      expect(certifyReadiness).toHaveBeenCalledOnce();
+      );
       expect(prepare).toHaveBeenCalledOnce();
       expect(respond).not.toHaveBeenCalled();
     } finally {
@@ -143,78 +492,48 @@ it.each(["operator.admin", "operator.read"])(
   },
 );
 
-it.each(["disposed", "pending", "refreshed"] as const)(
-  "consumes private rows only from an active, ready frame: %s",
-  async (preparation) => {
-    const owner = createSessionRowProjectionFixture({ cfg, store: {} });
-    const queries = vi.fn(() => [query]);
-    let database: DatabaseSync | undefined;
-    const initial = owner.state;
-    let current = initial;
-    const state = vi.fn(() => current);
-    if (preparation === "pending") {
-      const db = new DatabaseSync(":memory:");
-      database = db;
-      // The signal only needs a locator; this fixture never opens the named file.
-      vi.spyOn(db, "location").mockReturnValue("/synthetic/parent.sqlite");
-      vi.spyOn(owner, "describe").mockImplementation(() => {
-        deferCanonicalSessionValidation({ agentId: "main", db });
-        return undefined;
-      });
-    } else if (preparation === "refreshed") {
-      Object.defineProperty(owner, "state", { get: state });
-      vi.spyOn(owner, "describe").mockImplementation(() => {
-        current = {
-          ...initial,
-          rowContext: {
-            ...initial.rowContext,
-            configuredDefaultModelByAgent: new Map([
-              ["main", { provider: "fixture", model: "fresh" }],
-            ]),
-          },
-        };
-        return undefined;
-      });
-    }
-    const consume = vi.fn((read: SessionRowReadView) => {
-      state.mockClear();
-      expect(read.state.rowContext.configuredDefaultModelByAgent.get("main")).toEqual({
-        provider: "fixture",
-        model: "fresh",
-      });
-      expect(read.describe(query)).toBeUndefined();
-      expect(state).not.toHaveBeenCalled();
+it("captures metadata refreshed during preparation without rereading it during consumption", () => {
+  const owner = createSessionRowProjectionFixture({ cfg, store: {} });
+  const initial = owner.state;
+  let current = initial;
+  const state = vi.fn(() => current);
+  Object.defineProperty(owner, "state", { get: state });
+  vi.spyOn(owner, "describe").mockImplementation(() => {
+    current = {
+      ...initial,
+      rowContext: {
+        ...initial.rowContext,
+        configuredDefaultModelByAgent: new Map([["main", { provider: "fixture", model: "fresh" }]]),
+      },
+    };
+    return undefined;
+  });
+  const consume = vi.fn((read: SessionRowReadView) => {
+    state.mockClear();
+    expect(read.state.rowContext.configuredDefaultModelByAgent.get("main")).toEqual({
+      provider: "fixture",
+      model: "fresh",
     });
-    try {
-      const reading = withPreparedSessionRows(
-        owner,
-        () => preparation !== "disposed",
-        queries,
-        consume,
-      );
-      if (preparation === "disposed") {
-        await expect(reading).rejects.toThrow("no longer active");
-        expect(queries).not.toHaveBeenCalled();
-      } else if (preparation === "pending") {
-        await expect(reading).resolves.toEqual({
-          kind: "pending",
-          database: { agentId: "main", path: "/synthetic/parent.sqlite" },
-        });
-      } else {
-        await reading;
-      }
-      if (preparation !== "refreshed") {
-        expect(consume).not.toHaveBeenCalled();
-      }
-    } finally {
-      database?.close();
-    }
-  },
-);
+    expect(read.describe(query)).toBeUndefined();
+    expect(state).not.toHaveBeenCalled();
+  });
+  try {
+    const queries = vi.fn(() => [query]);
+    expect(() => readPreparedSessionRows(owner, () => false, queries, consume)).toThrow(
+      "no longer active",
+    );
+    expect(queries).not.toHaveBeenCalled();
+    expect(consume).not.toHaveBeenCalled();
+    readPreparedSessionRows(owner, () => true, queries, consume);
+  } finally {
+    owner.dispose();
+  }
+});
 
 it.each(["child", "parent"] as const)(
   "rechecks %s membership after placement preparation and consumes the exact frame once",
   async (changed) => {
+    setRuntimeConfigSnapshot(cfg);
     const child = { agentId: "main", key: "agent:main:prepared-child" };
     const parent = { agentId: "main", key: "agent:main:prepared-parent" };
     const projection = createSessionRowProjectionFixture({
@@ -261,7 +580,6 @@ it.each(["child", "parent"] as const)(
       prepareExactRows: () => undefined,
       prepareSelection: () => undefined,
       retainExactPreparation: () => () => {},
-      assertExactRowsPrepared: () => {},
       retainArchiveRows: () => ({ update: () => {}, release: () => {} }),
       describe: projection.describe,
       inOwnerContext: AsyncLocalStorage.snapshot(),
@@ -280,8 +598,9 @@ it.each(["child", "parent"] as const)(
       const row = expectDefined(read.describe(child), "prepared child row");
       return exact.ancestorRows(row)?.map(({ key }) => key);
     });
+    const select = vi.fn(() => [child]);
     try {
-      const prepared = exact.withPreparedExactRows(() => [child], consume, {
+      const prepared = exact.withPreparedExactRows(select, consume, {
         includeAncestors: true,
       });
       await Promise.race([placementStarted.promise, prepared]);
@@ -295,9 +614,11 @@ it.each(["child", "parent"] as const)(
       ).toBe("membership");
       expect(consume).not.toHaveBeenCalled();
       membershipReady.resolve();
-      await expect(prepared).resolves.toEqual({ kind: "complete", value: [parent.key] });
+      await expect(prepared).resolves.toEqual([parent.key]);
       expect(prepareMembership).toHaveBeenCalledOnce();
       expect(consume).toHaveBeenCalledOnce();
+      // One initial selection, one after placement yields, one after membership yields.
+      expect(select).toHaveBeenCalledTimes(3);
     } finally {
       placementReply.resolve(snapshot);
       membershipReady.resolve();

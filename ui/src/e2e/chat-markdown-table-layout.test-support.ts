@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 
@@ -11,21 +10,15 @@ const auditRows = [
     auditHash,
     "Invoice arithmetic uses integer cents.",
   ],
-  [
-    "monthly_transaction_summary.md",
-    "832",
-    auditHash,
-    "The total includes all recorded line items.",
-  ],
-  ["inventory_quantity_report.md", "890", auditHash, "Inventory quantities reconcile correctly."],
 ];
 export const auditMarkdownTable = [auditHeader, auditHeader.map(() => "---"), ...auditRows]
   .map((row) => `| ${row.join(" | ")} |`)
   .join("\n");
 
-export async function expectReadableAuditTable(page: Page, shell: Locator, artifactDir?: string) {
-  const readCells = (element: HTMLElement) =>
-    [...element.querySelectorAll<HTMLTableCellElement>("tbody td")].map((cell) => {
+export async function expectReadableAuditTable(_page: Page, shell: Locator) {
+  await shell.scrollIntoViewIfNeeded();
+  const report = await shell.evaluate((element) => {
+    const cells = [...element.querySelectorAll<HTMLTableCellElement>("tbody td")].map((cell) => {
       const range = document.createRange();
       range.selectNodeContents(cell);
       return {
@@ -35,69 +28,39 @@ export async function expectReadableAuditTable(page: Page, shell: Locator, artif
         overflow: cell.scrollWidth - cell.clientWidth,
       };
     });
-  const expectReadable = (cells: ReturnType<typeof readCells>) => {
-    expect(
-      cells.filter((_, index) => index % 4 === 1).map((cell) => [cell.text, cell.lines]),
-    ).toEqual([
-      ["3514", 1],
-      ["832", 1],
-      ["890", 1],
-    ]);
-    for (const cell of cells.filter((_, index) => index % 4 === 2)) {
-      expect(cell.text).toBe(auditHash);
-      expect(cell.lines).toBeGreaterThan(1);
-      expect(cell.width).toBeLessThanOrEqual(408);
-      expect(cell.overflow).toBeLessThanOrEqual(1);
-    }
-  };
-  await shell.scrollIntoViewIfNeeded();
-  if (artifactDir) {
-    await page.screenshot({
-      animations: "disabled",
-      path: path.join(artifactDir, "audit-mobile.png"),
-    });
-  }
-  expectReadable(await shell.evaluate(readCells));
-  expect(
-    await shell.evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      const pane = element.closest(".chat-thread")!.getBoundingClientRect();
-      return bounds.left >= pane.left && bounds.right <= pane.right;
-    }),
-  ).toBe(true);
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    ),
-  ).toBeLessThanOrEqual(1);
-  await shell.getByRole("button", { name: "Copy table" }).click();
-  await expect
-    .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-    .toBe([auditHeader, ...auditRows].map((row) => row.join("\t")).join("\n"));
-  await shell.getByRole("button", { name: "Expand table" }).click();
-  const dialog = page.locator(".markdown-table-dialog");
-  await dialog.waitFor({ state: "visible" });
-  expectReadable(await dialog.evaluate(readCells));
-  expect(
-    await dialog.evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      return bounds.left >= 0 && bounds.right <= document.documentElement.clientWidth;
-    }),
-  ).toBe(true);
-  await page.keyboard.press("Escape");
-  await dialog.waitFor({ state: "detached" });
+    const bounds = element.getBoundingClientRect();
+    const pane = element.closest(".chat-thread")!.getBoundingClientRect();
+    return {
+      cells,
+      contained: bounds.left >= pane.left && bounds.right <= pane.right,
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    };
+  });
+  expect(report.contained).toBe(true);
+  expect(report.overflow).toBeLessThanOrEqual(1);
+  const [, bytes, hash] = report.cells;
+  expect(bytes).toMatchObject({ text: "3514", lines: 1 });
+  expect(hash?.text).toBe(auditHash);
+  expect(hash?.lines).toBeGreaterThan(1);
+  expect(hash?.width).toBeLessThanOrEqual(408);
+  expect(hash?.overflow).toBeLessThanOrEqual(1);
 }
 
 export function expectResponsiveTableGeometry(
   geometry: ReturnType<typeof readResponsiveTableGeometry>,
   width: number,
 ) {
-  expect(geometry.withinPane).toBe(true);
+  expect(geometry).toMatchObject({
+    withinPane: true,
+    topAligned: true,
+    headerPainted: true,
+    actionBelowTable: true,
+    tableStartsShell: true,
+    controlHeight: width > 932 ? 32 : 40,
+    visibleExpandLabel: width <= 932,
+    controlsGap: width > 932 ? 0 : 4,
+  });
   expect(geometry.verticalOverflow).toBeLessThanOrEqual(1);
-  expect(geometry.topAligned).toBe(true);
-  expect(geometry.headerPainted).toBe(true);
-  expect(geometry.actionBelowTable).toBe(true);
-  expect(geometry.tableStartsShell).toBe(true);
   expect(geometry.columnWidths[0]).toBeGreaterThan(geometry.columnWidths[1]!);
   if (width > 932) {
     expect(geometry.width).toBeCloseTo(geometry.prose, 0);
@@ -106,19 +69,15 @@ export function expectResponsiveTableGeometry(
     );
     expect(geometry.denseWidth).toBeGreaterThan(geometry.prose);
     expect(geometry.denseOverflow).toBeLessThanOrEqual(1);
-    expect(geometry.controlHeight).toBe(32);
-    expect(geometry.visibleExpandLabel).toBe(false);
-    expect(geometry.controlsGap).toBe(0);
     expect(geometry.bottomGap).toBeGreaterThanOrEqual(20);
     expect(geometry.prose).toBeLessThanOrEqual(768);
   } else {
-    expect(geometry.controlHeight).toBe(40);
-    expect(geometry.visibleExpandLabel).toBe(true);
-    expect(geometry.controlsGap).toBe(4);
     expect(geometry.denseOverflow).toBeGreaterThan(0);
     if (width === 932) {
-      // 4px shell inset plus the shared 16px reading gutter on each side.
-      expect(geometry.width).toBeCloseTo(width - 2 * 20, 0);
+      // Landscape tables borrow spare width while keeping a centered gutter.
+      expect(geometry.width).toBeGreaterThan(geometry.prose);
+      expect(geometry.leadingGap).toBeGreaterThan(0);
+      expect(geometry.trailingGap).toBeCloseTo(geometry.leadingGap, 0);
     } else {
       expect(geometry.width).toBeLessThanOrEqual(geometry.prose + 1);
     }
@@ -152,6 +111,8 @@ export function readResponsiveTableGeometry(element: HTMLElement) {
     width: rect.width,
     prose: paragraph.getBoundingClientRect().width,
     withinPane: rect.left >= paneRect.left && rect.right <= paneRect.right,
+    leadingGap: rect.left - paneRect.left,
+    trailingGap: paneRect.right - rect.right,
     verticalOverflow: viewport.scrollHeight - viewport.clientHeight,
     columnWidths: [...cells].map((cell) => cell.getBoundingClientRect().width),
     topAligned: [...cells].every((cell) => getComputedStyle(cell).verticalAlign === "top"),

@@ -4,6 +4,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 
 const AUTH_CHALLENGE_TIMEOUT_MS = 20_000;
 const AUTH_CHALLENGE_POLL_MS = 25;
@@ -14,11 +15,6 @@ const BUZZ_RELAY_SOFTWARE = "https://github.com/block/buzz";
 // NIP-11 `self` because no production relay key was configured.
 const BUZZ_LOCAL_DEV_RELAY_PUBLIC_KEY =
   "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
-
-type AuthenticatedBuzzRelaySession = {
-  relay: Relay;
-  relayPublicKey: string;
-};
 
 export function parseBuzzAuthTag(raw: string): string[] | undefined {
   if (!raw.trim()) {
@@ -34,36 +30,6 @@ export function parseBuzzAuthTag(raw: string): string[] | undefined {
     throw new Error('Buzz authTag must be ["auth","<pubkey>","<conditions>","<signature>"]');
   }
   return parsed;
-}
-
-async function waitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  signal.throwIfAborted();
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      const reason = signal.reason;
-      reject(
-        reason instanceof Error
-          ? reason
-          : new Error("Buzz relay authentication aborted", { cause: reason }),
-      );
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    void promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
-  });
-}
-
-function createBuzzAuthSigner(params: {
-  secretKey: Uint8Array;
-  authTag?: string[];
-}): (template: EventTemplate) => Promise<VerifiedEvent> {
-  return async (template) =>
-    finalizeEvent(
-      {
-        ...template,
-        tags: params.authTag ? [...template.tags, params.authTag] : template.tags,
-      },
-      params.secretKey,
-    );
 }
 
 function isLoopbackRelayUrl(relayUrl: string): boolean {
@@ -113,10 +79,15 @@ async function connectAndAuthenticateBuzzRelay(params: {
   authTag?: string[];
   signal?: AbortSignal;
 }): Promise<void> {
-  const signAuth = createBuzzAuthSigner({
-    secretKey: params.secretKey,
-    authTag: params.authTag,
-  });
+  const { secretKey, authTag } = params;
+  const signAuth = async (template: EventTemplate): Promise<VerifiedEvent> =>
+    finalizeEvent(
+      {
+        ...template,
+        tags: authTag ? [...template.tags, authTag] : template.tags,
+      },
+      secretKey,
+    );
   await params.relay.connect({ abort: params.signal });
   await authenticateBuzzRelay({ relay: params.relay, signAuth, signal: params.signal });
   params.relay.onauth = signAuth;
@@ -143,7 +114,10 @@ export async function connectAuthenticatedBuzzRelaySession(params: {
   secretKey: Uint8Array;
   authTag?: string[];
   signal?: AbortSignal;
-}): Promise<AuthenticatedBuzzRelaySession> {
+}): Promise<{
+  relay: Relay;
+  relayPublicKey: string;
+}> {
   const relay = new Relay(params.relayUrl, { enableReconnect: false });
   const setupAbort = new AbortController();
   const signal = params.signal
@@ -187,8 +161,18 @@ async function authenticateBuzzRelay(params: {
   try {
     while (true) {
       signal.throwIfAborted();
+      // nostr-tools keeps the challenge after a close, and auth() then drops the
+      // rejected AUTH send as an unhandled rejection that exits the Gateway.
+      // Signing is synchronous, so no close can land between this check and the send.
+      if (!params.relay.connected) {
+        throw new Error("Buzz relay closed before NIP-42 authentication completed");
+      }
       try {
-        await waitWithSignal(params.relay.auth(params.signAuth), signal);
+        await racePromiseWithAbortSignal(
+          params.relay.auth(params.signAuth),
+          signal,
+          (abortedSignal) => abortedSignal.reason,
+        );
         return;
       } catch (error) {
         const awaitingChallenge =
@@ -197,11 +181,12 @@ async function authenticateBuzzRelay(params: {
         if (!awaitingChallenge) {
           throw error;
         }
-        await waitWithSignal(
+        await racePromiseWithAbortSignal(
           new Promise<void>((resolve) => {
             setTimeout(resolve, AUTH_CHALLENGE_POLL_MS);
           }),
           signal,
+          (abortedSignal) => abortedSignal.reason,
         );
       }
     }

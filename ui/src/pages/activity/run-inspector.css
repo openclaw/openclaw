@@ -2,7 +2,8 @@
   margin-bottom: var(--space-3);
 }
 
-.run-inspector button:focus-visible {
+.run-inspector button:focus-visible,
+.run-inspector__receipt-list a:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -86,10 +87,7 @@
 
 .run-inspector__section h3,
 .run-inspector__panel h3,
-.run-inspector__result-state h3 {
-  margin: 0;
-}
-
+.run-inspector__result-state h3,
 .run-inspector__facts,
 .run-inspector__values {
   margin: 0;
@@ -191,11 +189,6 @@
 
 .run-inspector__receipt-list a:hover {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-}
-
-.run-inspector__receipt-list a:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
 }
 
 .run-inspector__receipt-list a[aria-current="true"] {

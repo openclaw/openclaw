@@ -8,7 +8,6 @@ const pluginSdkLightEntries = [
     source: "src/plugin-sdk/keyed-async-queue.ts",
     test: "src/plugin-sdk/keyed-async-queue.test.ts",
   },
-  { source: "src/plugin-sdk/lazy-value.ts", test: "src/plugin-sdk/lazy-value.test.ts" },
   { source: "src/plugin-sdk/provider-entry.ts", test: "src/plugin-sdk/provider-entry.test.ts" },
   {
     source: "src/plugin-sdk/provider-model-shared.ts",

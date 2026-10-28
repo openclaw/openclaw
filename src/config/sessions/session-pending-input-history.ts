@@ -1,353 +1,172 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import {
-  createSqliteWorkerOperationAdmission,
-  type SqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
-import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import {
-  getOpenClawAgentDatabaseIfOpen,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
-  hasRegisteredSessionPendingInputOwner,
-  projectSessionPendingInput,
+  listLiveSessionPendingInputIds,
+  preserveSessionQueuedInputOwnersForRestart,
   type SessionPendingInputPage,
   type SessionPendingInput,
 } from "./session-accessor.sqlite-pending-inputs.js";
-import {
-  prepareSqliteScope,
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
-import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
-import type { IncognitoHistoryTarget } from "./session-incognito-history-contract.js";
+import { prepareSqliteScope } from "./session-accessor.sqlite-scope.js";
+import { hasSessionActorEmptyPendingInputHistory } from "./session-actor-replica.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type {
-  PendingInputCustodyCandidate,
-  PendingInputHistoryGrant,
   PendingInputHistoryQuery,
-  PendingInputHistoryReceipt,
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
-import {
-  assertSessionStoreReadCandidate,
-  captureSessionStoreCandidateIdentities,
-} from "./session-store-read-candidates.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { projectSessionPendingInput } from "./session-pending-input-value.js";
+import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 type Scope = SessionAccessScope & { agentId: string; sessionId: string };
 
-function owns(path: string, row: PendingInputCustodyCandidate, currentSessionId?: string) {
-  return row.session_id === currentSessionId && hasRegisteredSessionPendingInputOwner(path, row);
-}
-
-function admitCustody(
-  path: string,
-  stage: "transaction" | "commit",
-  facts: PendingInputHistoryGrant,
-) {
-  const protectedRows = facts.protected ? new Int32Array(facts.protected) : undefined;
-  if (stage === "transaction" && protectedRows?.length !== facts.candidates.length) {
-    throw new Error("Pending input history omitted its live custody response");
-  }
-  facts.candidates.forEach((row, index) => {
-    const protectedInput = owns(path, row, facts.currentSessionId);
-    if (protectedRows) {
-      Atomics.store(protectedRows, index, protectedInput ? 1 : 0);
-    } else if (protectedInput) {
-      throw new Error("Pending input acquired live custody before interruption committed");
-    }
-  });
-}
-
-function applyReceipt(snapshot: PendingInputHistorySnapshot, receipt: PendingInputHistoryReceipt) {
-  const interrupted = new Set(receipt.ids);
-  for (const row of snapshot.rows) {
-    if (interrupted.has(row.input_id)) {
-      row.state = "interrupted";
-    }
-  }
-  return snapshot;
-}
-
-/** Inactive until P7d. Accepted reconciliation retains its actor through native settlement. */
-export function createIncognitoPendingInputHistoryReader(params: {
-  actor: Pick<
-    IncognitoAgentDatabaseExecution,
-    "path" | "sessions" | "assertCurrent" | "assertReadable"
-  >;
-  authority: IncognitoSessionAuthority;
-  target: IncognitoHistoryTarget;
-}) {
-  const { actor, authority } = params;
-  actor.assertCurrent();
-  authority.assertCurrent();
-  const target = structuredClone(params.target);
-  const claim = actor.sessions.captureCurrent(target.sessionKey);
-  const assertCurrent = () => {
-    actor.assertCurrent();
-    authority.assertCurrent();
-    claim.assertCurrent();
-  };
-  const boundAuthority: IncognitoSessionAuthority = {
-    assertCurrent,
-    authorize: (stage, facts) => authority.authorize?.(stage, facts),
-  };
-  const readRows = (query: Omit<PendingInputHistoryQuery, "sessionKey" | "sessionId">) => {
-    assertCurrent();
-    const captured = { ...query };
-    return actor.sessions.withSharedState(async () => {
-      const snapshot = await actor.sessions.history(boundAuthority, {
-        type: "session.history.pending-inputs",
-        input: { ...target, query: captured },
-      });
-      assertCurrent();
-      const ids = snapshot.rows
-        .filter(
-          (row) => row.state === "queued" && !owns(actor.path, row, snapshot.currentSessionId),
-        )
-        .map((row) => row.input_id);
-      if (ids.length) {
-        const receipt = await actor.sessions.interruptPendingInputHistory(
-          // The worker checks this session generation in its transaction; its pending
-          // host projection cannot authorize its own mutation.
-          authority,
-          { ...target, ids },
-          (stage, facts) => admitCustody(actor.path, stage, facts),
-        );
-        applyReceipt(snapshot, receipt);
-      }
-      assertCurrent();
-      claim.authorize(authority, "commit");
-      assertCurrent();
-      return snapshot;
-    });
-  };
+/** Capture live queue custody now; preserve it only after the session marker commits. */
+export async function captureSessionQueuedInputsForRestart(scope: Scope) {
+  const captured = captureSessionStoreReadTarget(
+    scope,
+    "Queued shutdown inputs changed their database owner",
+  );
+  const resolved = await prepareSqliteScope(scope);
+  const physical = captured.resolve(resolved);
+  physical.assertCurrent();
+  const queuedInputIds = listLiveSessionPendingInputIds(
+    physical.identity.canonicalPath,
+    resolved.sessionKey,
+    scope.sessionId,
+    true,
+  );
   return {
-    async list(
-      options: { limit?: number; before?: number } = {},
-    ): Promise<SessionPendingInputPage> {
-      const { rows, total, nextBefore } = await readRows(options);
-      assertCurrent();
-      actor.assertReadable();
-      return {
-        items: rows.toReversed().map(projectSessionPendingInput),
-        total: total ?? 0,
-        ...(nextBefore !== undefined ? { nextBefore } : {}),
-      };
-    },
-    async read(id: string): Promise<SessionPendingInput | undefined> {
-      const row = (await readRows({ id, limit: 1 })).rows[0];
-      assertCurrent();
-      actor.assertReadable();
-      return row ? projectSessionPendingInput(row) : undefined;
+    queuedInputIds,
+    preserve: () => {
+      physical.assertCurrent();
+      preserveSessionQueuedInputOwnersForRestart(queuedInputIds);
     },
   };
-}
-
-/** Incognito retains its process-held owner until the separate actor cutover (worker-access P7). */
-async function readIncognito(scope: Scope, query: PendingInputHistoryQuery) {
-  const resolved = resolveSqliteScope(scope);
-  const options = toDatabaseOptions(resolved);
-  const captured = getOpenClawAgentDatabaseIfOpen(options);
-  if (!captured) {
-    return { rows: [], total: 0 };
-  }
-  const { readPendingInputHistoryInDatabase } =
-    await import("./session-pending-input-history.kernel.js");
-  const { interruptPendingInputHistoryInDatabase } =
-    await import("./session-pending-input-history-reconcile.js");
-  if (getOpenClawAgentDatabaseIfOpen(options) !== captured || !captured.db.isOpen) {
-    throw new Error("Pending input history lost its incognito database owner");
-  }
-  const capturedQuery = { ...query, sessionKey: resolved.sessionKey };
-  const read = withOpenClawAgentDatabaseReadOnly(
-    (database) => readPendingInputHistoryInDatabase(database, capturedQuery),
-    options,
-  );
-  if (!read.found) {
-    return { rows: [], total: 0 };
-  }
-  const snapshot = read.value;
-  const path = resolveOpenClawAgentSqlitePath(options);
-  const ids = snapshot.rows
-    .filter((row) => row.state === "queued" && !owns(path, row, snapshot.currentSessionId))
-    .map((row) => row.input_id);
-  if (!ids.length) {
-    return snapshot;
-  }
-  return applyReceipt(
-    snapshot,
-    interruptPendingInputHistoryInDatabase(
-      openOpenClawAgentDatabase(options),
-      options,
-      { ...capturedQuery, ids },
-      (stage, facts) => admitCustody(path, stage, facts),
-      () => {},
-    ),
-  );
 }
 
 async function readPendingInputRows(
   scope: Scope,
   options: Omit<PendingInputHistoryQuery, "sessionKey" | "sessionId">,
+  onRead?: (snapshot: PendingInputHistorySnapshot) => void,
 ): Promise<PendingInputHistorySnapshot> {
+  const currentWindow = (snapshot: PendingInputHistorySnapshot): PendingInputHistorySnapshot =>
+    snapshot.rows.length > 0 && snapshot.currentSessionId !== scope.sessionId
+      ? { rows: [], total: 0 }
+      : snapshot;
+  const authority = { assertCurrent() {}, authorize() {} };
+  const memory = captureSessionActorStorageOwner(scope, authority);
+  if (memory) {
+    return (
+      (await withSessionActorStorage(
+        scope,
+        {
+          lifetime: { assertCurrent() {}, assertReadable() {} },
+          authority: memory.authority,
+        },
+        (binding) => {
+          const query = {
+            ...options,
+            sessionKey: binding.actor.target.sessionKey,
+            sessionId: scope.sessionId,
+            liveInputIds: listLiveSessionPendingInputIds(
+              binding.path,
+              binding.actor.target.sessionKey,
+              scope.sessionId,
+            ),
+          };
+          if (onRead) {
+            const snapshot = currentWindow(
+              binding.actor.storage!.readCurrent(
+                { type: "session.pendingInput.history", input: query },
+                binding.authority,
+              ),
+            );
+            onRead(snapshot);
+            return snapshot;
+          }
+          return binding.actor
+            .storage!.read(
+              { type: "session.pendingInput.history", input: query },
+              binding.authority,
+            )
+            .then(currentWindow);
+        },
+      )) ?? { rows: [], total: 0 }
+    );
+  }
   const captured = {
     ...scope,
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const query = { ...options, sessionKey: scope.sessionKey, sessionId: scope.sessionId };
-  if (isIncognitoSessionKey(captured.sessionKey)) {
-    return readIncognito(captured, query);
-  }
-  const logical = resolveSqliteScope({ ...captured, storePath: undefined });
-  const storePath =
-    logical.path ??
-    captured.storePath ??
-    resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical));
-  const candidates = captureSessionStoreReadCandidates(storePath);
-  const identities = captureSessionStoreCandidateIdentities(candidates);
+  const target = captureSessionStoreReadTarget(
+    captured,
+    "Pending input history changed its captured database owner",
+  );
   const resolved = await prepareSqliteScope(captured);
-  const databaseOptions = toDatabaseOptions(resolved);
-  const path = resolveOpenClawAgentSqlitePath(databaseOptions);
-  const identity = identities.get(assertSessionStoreReadCandidate(path, candidates));
-  if (!identity) {
-    throw new Error("Pending input history changed its captured database owner");
-  }
+  const {
+    options: databaseOptions,
+    identity,
+    source: readSource,
+    assertReadCurrent,
+  } = target.resolve(resolved);
+  const query = {
+    ...options,
+    sessionKey: resolved.sessionKey,
+    sessionId: scope.sessionId,
+    liveInputIds: listLiveSessionPendingInputIds(
+      identity.canonicalPath,
+      resolved.sessionKey,
+      scope.sessionId,
+    ),
+  };
   if (!identity.key.startsWith("file:")) {
     return { rows: [], total: 0 };
   }
-  const assertCurrent = () => {
-    assertSessionStoreReadCandidate(path, candidates);
-    assertExistingDatabaseIdentity(path, identity.key, identity.birthtime);
-  };
-  assertCurrent();
-  const source = {
-    agentId: databaseOptions.agentId,
-    path,
-    databaseIdentity: identity.key.slice(5),
-    databaseBirthtime: identity.birthtime,
-  };
-  return withSessionHistoryWorkerDatabase({ ...databaseOptions, path }, async (owner) => {
+  assertReadCurrent();
+  if (
+    !query.queuedInputIds &&
+    hasSessionActorEmptyPendingInputHistory(identity, resolved.sessionKey, query.sessionId)
+  ) {
+    return { rows: [], total: 0 };
+  }
+  return withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
+    if (onRead) {
+      const { captureSessionEntryNativeMutationWitness } =
+        await import("./session-entry-read-ordered.js");
+      // Final consumers retain writer order through publication; reconciliation
+      // belongs to ordinary history reads and must not reacquire a writer here.
+      return runOpenClawAgentWriteAdmission(
+        databaseOptions,
+        async (_identity, assertOwner) => {
+          const assertNative = captureSessionEntryNativeMutationWitness([
+            { ...databaseOptions, env: captured.env },
+          ]);
+          const snapshot = currentWindow(
+            await owner.readPendingInputHistory({
+              query: { ...query, sessionKey: resolved.sessionKey },
+              env: captured.env,
+              source: readSource,
+            }),
+          );
+          assertReadCurrent();
+          owner.assertCurrent();
+          assertOwner();
+          assertNative();
+          onRead(snapshot);
+          return snapshot;
+        },
+        true,
+      );
+    }
     const snapshot = await owner.readPendingInputHistory({
       query: { ...query, sessionKey: resolved.sessionKey },
       env: captured.env,
-      source,
+      source: readSource,
     });
-    assertCurrent();
-    const ids = snapshot.rows
-      .filter(
-        (row) =>
-          row.state === "queued" && !owns(identity.canonicalPath, row, snapshot.currentSessionId),
-      )
-      .map((row) => row.input_id);
-    if (!ids.length) {
-      return snapshot;
-    }
-    return runOpenClawAgentWorkerWrite({ ...databaseOptions, path }, async () => {
-      assertCurrent();
-      owner.assertCurrent();
-      const execution = captureOpenClawAgentDatabaseExecution(
-        { ...databaseOptions, path },
-        {
-          expectedIdentity: {
-            kind: "file",
-            physicalIdentity: source.databaseIdentity,
-            birthtime: identity.birthtime,
-            nativeLocation: path,
-          },
-        },
-      );
-      let admitted:
-        | {
-            admission: SqliteWorkerOperationAdmission;
-            retained: RetainedWorkerTransactionAdmission;
-          }
-        | undefined;
-      try {
-        const result = await execution.runExisting(
-          {
-            assertCurrent,
-            createAdmission(binding) {
-              return (retained) => {
-                const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-                  binding.authorize(request);
-                  assertCurrent();
-                  owner.assertCurrent();
-                  if (request.stage === "transaction" || request.stage === "commit") {
-                    const facts = isRecord(request.facts) ? request.facts.publication : undefined;
-                    if (!isRecord(facts) || facts.kind !== "pending-input-history-custody") {
-                      throw new Error("Pending input history omitted custody facts");
-                    }
-                    admitCustody(
-                      identity.canonicalPath,
-                      request.stage,
-                      // SAFETY: The paired bounded kernel owns this grant payload; it conveys facts, never authority.
-                      facts as PendingInputHistoryGrant,
-                    );
-                    if (request.stage === "commit") {
-                      admitted = { admission, retained };
-                    }
-                  }
-                  if (!grant()) {
-                    throw new Error("Pending input history authority expired");
-                  }
-                }, binding.attachment);
-                return { nativeLocations: binding.nativeLocations, admission };
-              };
-            },
-          },
-          async (worker) => {
-            const outcome = await worker
-              .execute({
-                type: "session.pendingInputs.interruptHistory",
-                input: { sessionKey: resolved.sessionKey, sessionId: captured.sessionId, ids },
-              })
-              .then(
-                () => ({ ok: true as const }),
-                (error: unknown) => ({ ok: false as const, error }),
-              );
-            if (admitted) {
-              await admitted.retained.settled;
-              const receipt = admitted.admission.committed?.facts;
-              if (
-                admitted.admission.settlement?.kind === "completed" &&
-                isRecord(receipt) &&
-                receipt.kind === "pending-input-history-interrupted"
-              ) {
-                // SAFETY: This admission retains only this exact kernel's committed receipt.
-                return applyReceipt(snapshot, receipt as PendingInputHistoryReceipt);
-              }
-            }
-            if (!outcome.ok) {
-              throw outcome.error;
-            }
-            throw new SqliteWorkerError(
-              "Pending input history has no confirmed native completion and receipt",
-              "outcome-unknown",
-            );
-          },
-        );
-        assertCurrent();
-        if (!result) {
-          throw new Error("Pending input history lost its existing database");
-        }
-        return result;
-      } finally {
-        await execution.release();
-      }
-    });
+    assertReadCurrent();
+    return currentWindow(snapshot);
   });
 }
 
@@ -355,18 +174,6 @@ export async function listSessionPendingInputs(
   scope: Scope,
   options: { limit?: number; before?: number } = {},
 ): Promise<SessionPendingInputPage> {
-  const incognito = captureIncognitoSessionOperation(scope);
-  if (incognito) {
-    return createIncognitoPendingInputHistoryReader({
-      ...incognito,
-      target: {
-        sessionKey: scope.sessionKey,
-        sessionId: scope.sessionId,
-        lifecycleRevision: incognito.actor.sessions.readSharing(scope.sessionKey)?.entry
-          ?.lifecycleRevision,
-      },
-    }).list(options);
-  }
   const { rows, total, nextBefore } = await readPendingInputRows(scope, options);
   return {
     items: rows.toReversed().map(projectSessionPendingInput),
@@ -375,22 +182,53 @@ export async function listSessionPendingInputs(
   };
 }
 
+/** Called only for a session explicitly marked by graceful shutdown. */
+export async function readSessionQueuedInputPage(
+  scope: Scope,
+  options: { queuedInputIds: readonly string[]; before?: number },
+) {
+  if (options.queuedInputIds.length === 0) {
+    return { rows: [], total: 0 };
+  }
+  return readPendingInputRows(scope, {
+    ...options,
+    limit: 20,
+    includeTotal: false,
+  });
+}
+
+/** Prompt context needs only the bounded page, never the full retained-input count. */
+export async function readSessionPendingInputContext(
+  scope: Scope,
+): Promise<Omit<SessionPendingInputPage, "total">> {
+  const { rows, nextBefore } = await readPendingInputRows(scope, { includeTotal: false });
+  return {
+    items: rows.toReversed().map(projectSessionPendingInput),
+    ...(nextBefore !== undefined ? { nextBefore } : {}),
+  };
+}
+
 export async function readSessionPendingInput(
   scope: Scope,
   id: string,
+  /** Consume current facts synchronously before their physical reader and writer order are released. */
+  onRead?: (input: SessionPendingInput | undefined) => void,
 ): Promise<SessionPendingInput | undefined> {
-  const incognito = captureIncognitoSessionOperation(scope);
-  if (incognito) {
-    return createIncognitoPendingInputHistoryReader({
-      ...incognito,
-      target: {
-        sessionKey: scope.sessionKey,
-        sessionId: scope.sessionId,
-        lifecycleRevision: incognito.actor.sessions.readSharing(scope.sessionKey)?.entry
-          ?.lifecycleRevision,
-      },
-    }).read(id);
-  }
-  const row = (await readPendingInputRows(scope, { id, limit: 1 })).rows[0];
+  const row = (
+    await readPendingInputRows(
+      scope,
+      { id, limit: 1 },
+      onRead
+        ? (snapshot) => {
+            const input = snapshot.rows[0];
+            const result = onRead(input ? projectSessionPendingInput(input) : undefined);
+            if (isPromiseLike(result)) {
+              void Promise.resolve(result).catch(() => {});
+              throw new Error("Pending input consumers must remain synchronous");
+            }
+          }
+        : undefined,
+    )
+  ).rows[0];
   return row ? projectSessionPendingInput(row) : undefined;
 }

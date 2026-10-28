@@ -1,16 +1,15 @@
-import {
-  createUpdateStateInspectionReporter,
-  formatUpdateStateInspectionError,
-} from "./update-candidate-state.diagnostics.js";
-import {
-  discoverUpdateStateSchemaInspectionInProcess,
-  readUpdateCandidateStateInventoryInProcess,
-  readUpdateStateSchemaVersionsInProcess,
-  snapshotUpdateCandidateState,
-} from "./update-candidate-state.js";
+import { parentPort } from "node:worker_threads";
+import type {
+  UpdateCandidatePluginFileReply,
+  UpdateCandidatePluginFileRequest,
+} from "./update-candidate-plugin-file.js";
+import type {
+  UpdateCandidatePluginHashReply,
+  UpdateCandidatePluginHashRequest,
+} from "./update-candidate-plugin-hash.js";
 
-// Internal one-shot subprocess: a hard process deadline can interrupt SQLite
-// integrity checks and backup/VACUUM, which expose no AbortSignal contract.
+// Internal one-shot subprocess: a hard process deadline can interrupt synchronous
+// SQLite inspection, backup/VACUUM, and retained-runtime file verification.
 async function snapshotCandidateState(): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
@@ -18,6 +17,11 @@ async function snapshotCandidateState(): Promise<unknown> {
   }
   // SAFETY: Only the updater's typed state inspection launchers serialize this private worker's stdin.
   const input = JSON.parse(Buffer.concat(chunks).toString("utf8")) as
+    | (Parameters<
+        typeof import("./update-retained-runtime-files.js").prepareRetainedRuntimeFiles
+      >[0] & {
+        mode: "runtime-retention";
+      })
     | (Parameters<typeof snapshotUpdateCandidateState>[0] & {
         mode: "snapshot";
         streamProgress?: boolean;
@@ -34,7 +38,31 @@ async function snapshotCandidateState(): Promise<unknown> {
     | (Parameters<
         typeof import("./update-database-restore-source.js").prepareUpdateDatabaseRestoreSourceInProcess
       >[0] & { mode: "database-restore-preparation" })
-    | { mode: "database-generations"; paths: string[] };
+    | {
+        mode: "database-generations";
+        paths: string[];
+        stateDir: string;
+        generationFormat?: "committed" | "paired";
+        pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
+      };
+  if (input.mode === "runtime-retention") {
+    const { prepareRetainedRuntimeFiles } = await import("./update-retained-runtime-files.js");
+    return prepareRetainedRuntimeFiles(input);
+  }
+  if ("stateDir" in input && input.mode !== "database-generations" && input.mode !== "snapshot") {
+    // Older installed drivers omit this from their restricted environment payload.
+    // Metadata discovery must use the same installation as the inspected databases.
+    input.env = { ...input.env, OPENCLAW_STATE_DIR: input.stateDir };
+  }
+  // Runtime retention needs no database/config inspection graph.
+  const { createUpdateStateInspectionReporter } =
+    await import("./update-candidate-state.diagnostics.js");
+  const {
+    discoverUpdateStateSchemaInspectionInProcess,
+    readUpdateCandidateStateInventoryInProcess,
+    readUpdateStateSchemaVersionsInProcess,
+    snapshotUpdateCandidateState,
+  } = await import("./update-candidate-state.js");
   switch (input.mode) {
     case "database-restore-preparation": {
       const { prepareUpdateDatabaseRestoreSourceInProcess } =
@@ -42,15 +70,36 @@ async function snapshotCandidateState(): Promise<unknown> {
       return prepareUpdateDatabaseRestoreSourceInProcess(input);
     }
     case "database-generations": {
-      const { readUpdateDatabaseGenerations } = await import("./update-database-generations.js");
-      return readUpdateDatabaseGenerations(input.paths);
+      const { readUpdatePhysicalDatabaseGenerationPair, isLegacyUpdateGenerationRequest } =
+        await import("./update-physical-database-generations.js");
+      const pair = await readUpdatePhysicalDatabaseGenerationPair(input.paths, input.pluginOwners);
+      if (input.generationFormat === "paired") {
+        return pair;
+      }
+      return input.generationFormat === undefined &&
+        (await isLegacyUpdateGenerationRequest({
+          ...process.env,
+          OPENCLAW_STATE_DIR: input.stateDir,
+        }))
+        ? pair.physical
+        : pair.committed;
     }
     case "inventory": {
+      const { resolveDatabaseFamilyEngines } = await import("./database-engine/registry.js");
       const { databases, ...inventory } = await readUpdateCandidateStateInventoryInProcess({
         ...input,
         onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
       });
-      return { ...inventory, databases: [...databases] };
+      return {
+        ...inventory,
+        databases: [...databases],
+        // PostgreSQL snapshots retain portable exports alongside their private copies.
+        // External stores still follow the global engine when built-in families override it.
+        ...(input.config.database?.engine !== "postgres" &&
+        !Object.values(resolveDatabaseFamilyEngines(input.config)).includes("postgres")
+          ? { snapshotSpace: "single-generation" }
+          : {}),
+      };
     }
     case "database-backup": {
       const { createUpdateDatabaseBackupInProcess } = await import("./update-database-backup.js");
@@ -62,6 +111,8 @@ async function snapshotCandidateState(): Promise<unknown> {
     case "snapshot":
       return snapshotUpdateCandidateState({
         ...input,
+        includeLocalStoreVersions: input.includeLocalStoreVersions === true,
+        includeClientCredentialStoreVersion: input.includeClientCredentialStoreVersion === true,
         onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
       });
     case "discover":
@@ -72,6 +123,8 @@ async function snapshotCandidateState(): Promise<unknown> {
     case "versions":
       return readUpdateStateSchemaVersionsInProcess({
         ...input,
+        includeLocalStoreVersions: input.includeLocalStoreVersions === true,
+        includeClientCredentialStoreVersion: input.includeClientCredentialStoreVersion === true,
         onProgress: createUpdateStateInspectionReporter(!input.inspectionPlan),
       });
     default:
@@ -79,9 +132,58 @@ async function snapshotCandidateState(): Promise<unknown> {
   }
 }
 
-void snapshotCandidateState()
-  .then((value) => process.stdout.write(JSON.stringify(value)))
-  .catch((error: unknown) => {
-    process.stderr.write(formatUpdateStateInspectionError(error));
-    process.exitCode = 1;
-  });
+if (parentPort) {
+  const { assertDirectoryIdentitySync } = await import("@openclaw/fs-safe/advanced");
+  const { root } = await import("./fs-safe.js");
+  const { copyUpdateCandidatePluginFile } = await import("./update-candidate-plugin-file.js");
+  const { hashFileMutationSnapshotSync } = await import("./file-descriptor.js");
+  const { serveWorkerTasks } = await import("./worker-task-server.js");
+  let destination: { path: string; root: Awaited<ReturnType<typeof root>> } | undefined;
+  serveWorkerTasks<UpdateCandidatePluginFileReply | UpdateCandidatePluginHashReply>(
+    async (input, _channel, control) =>
+      control.runNativeSection(
+        async (): Promise<UpdateCandidatePluginFileReply | UpdateCandidatePluginHashReply> => {
+          // SAFETY: The snapshot owner supplies its inventoried file and original root identity.
+          const request = input as
+            | UpdateCandidatePluginFileRequest
+            | UpdateCandidatePluginHashRequest;
+          try {
+            if ("type" in request) {
+              return {
+                type: "hashed",
+                sha256: hashFileMutationSnapshotSync(request.filePath, request.expected),
+              };
+            }
+            assertDirectoryIdentitySync(request.privateRoot, request.rootIdentity);
+            if (destination?.path !== request.privateRoot) {
+              destination = { path: request.privateRoot, root: await root(request.privateRoot) };
+            }
+            assertDirectoryIdentitySync(request.privateRoot, request.rootIdentity);
+            await copyUpdateCandidatePluginFile(request, destination.root);
+            return { type: "copied" };
+          } catch (error) {
+            return {
+              type: "failed",
+              error: error instanceof Error ? error : new Error(String(error)),
+              ...(error instanceof Error && "code" in error && typeof error.code === "string"
+                ? { code: error.code }
+                : {}),
+              ...(error instanceof Error && "details" in error ? { details: error.details } : {}),
+            };
+          }
+        },
+      ),
+  );
+} else {
+  // Stdout carries only the JSON result; raised console levels must not prefix it.
+  const { routeLogsToStderr } = await import("../logging/console.js");
+  routeLogsToStderr();
+  const { formatUpdateStateInspectionError } =
+    await import("./update-candidate-state.diagnostics.js");
+  void snapshotCandidateState()
+    .then((value) => process.stdout.write(JSON.stringify(value)))
+    .catch((error: unknown) => {
+      process.stderr.write(formatUpdateStateInspectionError(error));
+      process.exitCode = 1;
+    });
+}

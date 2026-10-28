@@ -3,6 +3,11 @@ import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-r
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import type {
+  AgentHarnessQuestionGatewayCall,
+  AgentQuestionDispatcher,
+} from "./gateway-question-dispatch.js";
+import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import type {
   AgentHarnessUserInputAnswers,
   AgentHarnessUserInputQuestion,
 } from "./user-input-types.js";
@@ -13,6 +18,21 @@ export type AgentHarnessUserInputPromptOptions = {
   secretWarning?: string;
   otherLabel?: string;
   presentation?: MessagePresentation;
+};
+
+export type RunAgentHarnessGatewayQuestionParams = {
+  questions: readonly AgentHarnessUserInputQuestion[];
+  sessionKey: string;
+  agentId?: string;
+  runId?: string;
+  timeoutMs: number;
+  gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
+  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply"> & {
+    hostCapabilities?: AgentHarnessHostCapabilities;
+  };
+  promptOptions?: AgentHarnessUserInputPromptOptions;
+  signal?: AbortSignal;
+  questionId?: string;
 };
 
 type AgentHarnessQuestionPromptPayload = {
@@ -37,11 +57,8 @@ export function formatAgentHarnessUserInputPrompt(
   const formatText = options.formatText ?? ((text: string) => text);
   const lines = [options.intro ?? "Agent needs input:"];
   questions.forEach((question, index) => {
-    if (questions.length > 1) {
-      lines.push("", `${index + 1}. ${formatText(question.header)}`, formatText(question.question));
-    } else {
-      lines.push("", formatText(question.header), formatText(question.question));
-    }
+    const prefix = questions.length > 1 ? `${index + 1}. ` : "";
+    lines.push("", `${prefix}${formatText(question.header)}`, formatText(question.question));
     if (question.isSecret) {
       lines.push(
         options.secretWarning ?? "This channel may show your reply to other participants.",
@@ -297,15 +314,14 @@ function normalizeAgentHarnessUserInputOption(
   // Convert to zero-based only at the options-array boundary.
   const optionIndex = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
   const indexed = optionIndex >= 0 ? options[optionIndex] : undefined;
-  if (indexed) {
-    return indexed.value ?? indexed.label;
-  }
-  const selected = options.find(
-    (option) =>
-      option.value === answer ||
-      ((!question.isOther || option.value === undefined) &&
-        option.label.toLowerCase() === trimmed.toLowerCase()),
-  );
+  const selected =
+    indexed ||
+    options.find(
+      (option) =>
+        option.value === answer ||
+        ((!question.isOther || option.value === undefined) &&
+          option.label.toLowerCase() === trimmed.toLowerCase()),
+    );
   return selected ? (selected.value ?? selected.label) : undefined;
 }
 

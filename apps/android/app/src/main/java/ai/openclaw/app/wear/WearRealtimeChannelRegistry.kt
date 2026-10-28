@@ -124,7 +124,6 @@ internal class WearRealtimeChannelRegistry(
   private val promotingConnections = mutableMapOf<ChannelKey, Connection>()
   private val latestClaimSequences = mutableMapOf<String, Long>()
   private val openingConnectionsByNode = mutableMapOf<String, Int>()
-  private var openingConnectionCount = 0
 
   fun accept(
     channel: ChannelClient.Channel,
@@ -193,7 +192,7 @@ internal class WearRealtimeChannelRegistry(
         try {
           // The Watch starts capture after the start RPC; do not consume its PCM before that claim owns this path.
           if (!connection.activation.await()) return@launch
-          while (isKnown(connection)) {
+          while (lifecycleMutex.withLock { isKnownLocked(connection) }) {
             val frame = WearRealtimeAudioFraming.read(resources.input) ?: break
             if (frame.type != WearRealtimeAudioFrameType.INPUT_PCM) break
             val owner =
@@ -293,21 +292,12 @@ internal class WearRealtimeChannelRegistry(
       connections[key.nodeId]?.let { active ->
         if (active.claimSequence > sequence) return@withLock ChannelClaimSelection.Superseded
         val current = active.owner
-        if (active.ready && active.channel.path == key.path) {
-          if (current?.attemptId == attemptId) {
-            active.claimSequence = sequence
-            return@withLock ChannelClaimSelection.Claimed(
-              WearRealtimeChannelClaim(current, newlyAcquired = false),
-            )
-          }
-          if (current == null) {
-            val owner = WearRealtimeAttemptOwner(key.nodeId, attemptId, active.generation)
-            active.owner = owner
-            active.claimSequence = sequence
-            return@withLock ChannelClaimSelection.Claimed(
-              WearRealtimeChannelClaim(owner, newlyAcquired = true),
-            )
-          }
+        if (active.ready && active.channel.path == key.path && (current == null || current.attemptId == attemptId)) {
+          val owner = current ?: WearRealtimeAttemptOwner(key.nodeId, attemptId, active.generation).also { active.owner = it }
+          active.claimSequence = sequence
+          return@withLock ChannelClaimSelection.Claimed(
+            WearRealtimeChannelClaim(owner, newlyAcquired = current == null),
+          )
         }
       }
       ChannelClaimSelection.Wait
@@ -319,7 +309,7 @@ internal class WearRealtimeChannelRegistry(
         pendingConnections.keys.count { key -> key.nodeId == nodeId } +
           promotingConnections.keys.count { key -> key.nodeId == nodeId } +
           (openingConnectionsByNode[nodeId] ?: 0)
-      val stagedTotal = pendingConnections.size + promotingConnections.size + openingConnectionCount
+      val stagedTotal = pendingConnections.size + promotingConnections.size + openingConnectionsByNode.values.sum()
       if (
         stagedForNode >= maxStagedConnectionsPerNode ||
         stagedTotal >= maxStagedConnections
@@ -327,7 +317,6 @@ internal class WearRealtimeChannelRegistry(
         return@withLock false
       }
       openingConnectionsByNode[nodeId] = (openingConnectionsByNode[nodeId] ?: 0) + 1
-      openingConnectionCount += 1
       true
     }
 
@@ -338,7 +327,6 @@ internal class WearRealtimeChannelRegistry(
     } else {
       openingConnectionsByNode[nodeId] = count - 1
     }
-    openingConnectionCount -= 1
   }
 
   private suspend fun completePromotion(
@@ -446,8 +434,6 @@ internal class WearRealtimeChannelRegistry(
       if (expired) connection.retire(transport)
     }
   }
-
-  private suspend fun isKnown(item: Connection): Boolean = lifecycleMutex.withLock { isKnownLocked(item) }
 
   private fun isKnownLocked(item: Connection): Boolean =
     connections[item.channel.nodeId] === item ||

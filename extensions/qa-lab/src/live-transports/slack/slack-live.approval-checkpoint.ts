@@ -7,7 +7,6 @@ import {
   SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS,
   type SlackQaApprovalDecision,
   type SlackApprovalCheckpointState,
-  type SlackApprovalCheckpointAck,
   SLACK_QA_APPROVAL_CHECKPOINT_DIR_ENV,
   SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV,
   type SlackMessage,
@@ -35,23 +34,17 @@ function resolveSlackApprovalCheckpointConfig(env: NodeJS.ProcessEnv = process.e
 async function waitForSlackApprovalCheckpointAck(params: {
   ackPath: string;
   timeoutMs: number;
-}): Promise<SlackApprovalCheckpointAck> {
+}): Promise<void> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < params.timeoutMs) {
     try {
       const parsed = JSON.parse(await fs.readFile(params.ackPath, "utf8")) as {
-        capturedAt?: unknown;
         error?: unknown;
-        screenshotPath?: unknown;
       };
       if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
         throw new Error(`Slack approval checkpoint watcher failed: ${parsed.error}`);
       }
-      return {
-        capturedAt: typeof parsed.capturedAt === "string" ? parsed.capturedAt : undefined,
-        screenshotPath:
-          typeof parsed.screenshotPath === "string" ? parsed.screenshotPath : undefined,
-      };
+      return;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
@@ -74,7 +67,7 @@ export async function writeSlackApprovalCheckpoint(params: {
 }) {
   const config = resolveSlackApprovalCheckpointConfig();
   if (!config) {
-    return undefined;
+    return;
   }
   await fs.mkdir(config.checkpointDir, { recursive: true });
   const checkpointPath = path.join(
@@ -103,13 +96,8 @@ export async function writeSlackApprovalCheckpoint(params: {
       2,
     )}\n`,
   );
-  const ack = await waitForSlackApprovalCheckpointAck({
+  await waitForSlackApprovalCheckpointAck({
     ackPath,
     timeoutMs: config.timeoutMs,
   });
-  return {
-    ackPath,
-    checkpointPath,
-    screenshotPath: ack.screenshotPath,
-  };
 }

@@ -1,4 +1,3 @@
-// Runtime boundary for resolving provider auth choices from plugins.
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import { loadInstalledPluginIndexWithDiscovery } from "./installed-plugin-index.js";
@@ -13,7 +12,6 @@ type ResolvePluginProviders = typeof import("./providers.runtime.js").resolvePlu
 
 export { resolveProviderPluginChoice, runProviderModelSelectedHook, resolvePluginSetupProvider };
 
-/** Runtime wrapper for registered model provider discovery. */
 export function resolvePluginProviders(
   params: Parameters<ResolvePluginProviders>[0],
   preparedInstallRecords?: Record<string, PluginInstallRecord>,

@@ -1,13 +1,18 @@
 // Host-owned SQLite leases serialize trusted work across processes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
 } from "./openclaw-state-db-async-lifecycle.js";
+import { isManagedStateTransaction } from "./openclaw-state-db-transaction.js";
 import { acquireOpenClawStateLease } from "./openclaw-state-lease-acquisition.js";
 import { createOpenClawStateLeaseCleanup } from "./openclaw-state-lease-cleanup.js";
 import type {
@@ -18,6 +23,7 @@ import {
   createOpenClawStateLeaseError as leaseError,
   createOpenClawStateLeaseAbortError as abortError,
   createOpenClawStateLeaseLostError,
+  resolveOpenClawStateLeaseOperationError,
   OpenClawStateLeaseError,
 } from "./openclaw-state-lease-error.js";
 import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
@@ -33,6 +39,7 @@ import {
 } from "./openclaw-state-lease-options.js";
 import { registerProcessExitLeaseCleanup } from "./openclaw-state-lease-process-exit.js";
 import {
+  createOpenClawStateLeaseLostErrorFromDatabase,
   prepareLeaseDatabase,
   resolveLeaseDatabasePath,
   renewOpenClawStateLease as renew,
@@ -41,11 +48,13 @@ import {
   releaseOpenClawStateLeaseBestEffort as releaseBestEffort,
   type OpenClawStateLeaseOwnerIdentity as LeaseIdentity,
 } from "./openclaw-state-lease-storage.js";
+import { renewOpenClawStateLeaseUnderWriteFence } from "./openclaw-state-lease-store.js";
 import { createOpenClawStateLeaseWorkerOwner } from "./openclaw-state-lease-worker-owner.js";
 import {
   acquireLease,
   createOpenClawStateLeaseWorkerStorage,
 } from "./openclaw-state-lease-worker-storage.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 export type {
@@ -57,7 +66,7 @@ export { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 /** Run one trusted operation under a host-owned SQLite lease. */
 export async function withOpenClawStateLease<T>(
   options: OpenClawStateLeaseOptions,
-  run: (lease: OpenClawStateLeaseContext) => Promise<T>,
+  run: (lease: OpenClawStateLeaseContext, identity: OpenClawStateLeaseIdentity) => Promise<T>,
 ): Promise<T> {
   return runStateLeaseOwner({ kind: "native", options, run });
 }
@@ -70,7 +79,7 @@ export async function withOpenClawStateLease<T>(
 export async function withOpenClawStateLeaseAsync<T>(
   options: Omit<OpenClawStateLeaseOptions, "database" | "prepareDatabase">,
   context: OpenClawStateWorkerContext,
-  run: (lease: OpenClawStateAsyncLeaseContext) => Promise<T>,
+  run: (lease: OpenClawStateAsyncLeaseContext, identity: OpenClawStateLeaseIdentity) => Promise<T>,
 ): Promise<T> {
   return runStateLeaseOwner({
     kind: "worker",
@@ -100,11 +109,12 @@ async function runStateLeaseOwnerInScope<T>(
   maintenance: OpenClawDatabaseMaintenanceScope | undefined,
 ): Promise<T> {
   const validated = validateOpenClawStateLeaseOptions(invocation.options);
-  const owner = randomUUID();
+  const renewalTimer: { dueAt?: number; lateByMs: number } = { lateByMs: 0 };
   const identity: LeaseIdentity = {
     scope: validated.scope,
     key: validated.key,
-    owner,
+    owner: randomUUID(),
+    renewalTimer,
     leaseLabel: validated.leaseLabel,
   };
   let closed = false;
@@ -120,7 +130,7 @@ async function runStateLeaseOwnerInScope<T>(
     invocation.kind === "worker"
       ? new BigInt64Array(
           new SharedArrayBuffer(
-            (leaseHeartbeatState.startupPhase + 1) * BigInt64Array.BYTES_PER_ELEMENT,
+            (leaseHeartbeatState.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT,
           ),
         )
       : undefined;
@@ -131,12 +141,15 @@ async function runStateLeaseOwnerInScope<T>(
   let workerOperations: ReturnType<typeof createOpenClawStateLeaseWorkerOwner> | undefined;
   let assertAcquisitionCurrent: (() => void) | undefined;
   let confirmedExpiresAt: number | undefined;
+  let nativeLeaseSource:
+    | { context: OpenClawStateWorkerContext; identity: DatabasePathIdentity }
+    | undefined;
   const leaseLost = new AbortController();
   const operationSignal = validated.signal
     ? AbortSignal.any([validated.signal, leaseLost.signal])
     : leaseLost.signal;
   const heartbeatMs = Math.max(250, Math.min(30_000, Math.floor(validated.leaseMs / 3)));
-  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancelExpiry: (() => void) | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let runTimerRenewal: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
   const abortLost = (cause?: unknown) => {
@@ -144,8 +157,11 @@ async function runStateLeaseOwnerInScope<T>(
       leaseLost.abort(
         cause instanceof OpenClawStateLeaseError
           ? cause
-          : createOpenClawStateLeaseLostError(validated, cause),
+          : invocation.kind === "native" && phase === "owned" && !closed
+            ? createOpenClawStateLeaseLostErrorFromDatabase(identity, validated.database, cause)
+            : createOpenClawStateLeaseLostError(validated, cause),
       );
+      materializeErrorStack(leaseLost.signal.reason);
     }
   };
   const assertActive = () => {
@@ -155,18 +171,31 @@ async function runStateLeaseOwnerInScope<T>(
     if (validated.signal?.aborted) {
       throw abortError(validated.signal, "operation", validated.leaseLabel);
     }
-    if (closed || timerHeartbeat?.isExpired()) {
+    if (
+      closed ||
+      timerHeartbeat?.isExpired() ||
+      (phase === "owned" &&
+        expiryObservation !== undefined &&
+        Number(Atomics.load(expiryObservation, leaseHeartbeatState.expiresAt)) <= Date.now())
+    ) {
       abortLost();
       throw leaseLost.signal.reason;
     }
   };
+  const assertOwnerCurrent = () => {
+    assertActive();
+    // Timer delivery can lag the persisted expiry; never admit an effect in that gap.
+    if (closed || confirmedExpiresAt === undefined || Date.now() >= confirmedExpiresAt) {
+      abortLost();
+      throw leaseLost.signal.reason;
+    }
+  };
+  const assertWorkerCurrent = validated.heartbeat === "worker" ? assertActive : assertOwnerCurrent;
   function stopWorker() {
     void workerHeartbeat?.stop().catch(abortLost);
     void startingHeartbeat?.stop().catch(abortLost);
   }
-  function stopTimer() {
-    void timerHeartbeat?.stopRenewal();
-  }
+  const stopTimer = () => void timerHeartbeat?.stopRenewal();
   let unregisterProcessExitCleanup: (() => void) | undefined;
   if (workerStorage) {
     workerOperations = createOpenClawStateLeaseWorkerOwner({
@@ -211,10 +240,17 @@ async function runStateLeaseOwnerInScope<T>(
       operationLabel: validated.operationLabel,
     };
     const execution = workerOperations;
+    // Runtime cleanup joins the worker writer queue; native contention must not abandon its lease.
+    // Existing-schema maintenance keeps its subset writer's no-migration contract.
+    const cleanupStorage =
+      workerStorage ??
+      (nativeLeaseSource && validated.database.schemaPolicy !== "existing"
+        ? createOpenClawStateLeaseWorkerStorage(nativeLeaseSource.context)
+        : undefined);
     await releaseBestEffort(
       params,
-      workerStorage && execution
-        ? () => workerStorage.release(execution, validated.operationLabel)
+      cleanupStorage && execution
+        ? () => cleanupStorage.release(execution, validated.operationLabel)
         : undefined,
     );
     await execution?.settle();
@@ -223,6 +259,7 @@ async function runStateLeaseOwnerInScope<T>(
   const cleanup = createOpenClawStateLeaseCleanup({
     maintenanceScope: maintenance,
     context: invocation.kind === "worker" ? invocation.context : undefined,
+    nativeIdentity: () => nativeLeaseSource?.identity,
     workerOwner: () => workerOperations,
     revoke() {
       closed = true;
@@ -269,11 +306,7 @@ async function runStateLeaseOwnerInScope<T>(
         label: `${validated.leaseLabel} ${validated.scope}/${validated.key}`,
         waitMs: validated.waitMs,
         signal: validated.signal,
-        assertCurrent() {
-          if (leaseLost.signal.aborted) {
-            throw leaseLost.signal.reason;
-          }
-        },
+        assertCurrent: () => leaseLost.signal.throwIfAborted(),
         prepare:
           invocation.kind === "native" &&
           validated.prepareDatabase &&
@@ -301,6 +334,9 @@ async function runStateLeaseOwnerInScope<T>(
                 },
                 assertCurrent,
                 signal,
+                (context, sourceIdentity) => {
+                  nativeLeaseSource = { context, identity: sourceIdentity };
+                },
               );
         },
         acquired(expiresAt) {
@@ -319,6 +355,33 @@ async function runStateLeaseOwnerInScope<T>(
     }
     const acquiredAt = confirmedExpiresAt - validated.leaseMs;
     phase = "owned";
+    // Startup refusal still owns release of the acquired row. Bind callback authority only after startup.
+    workerOperations ??= createOpenClawStateLeaseWorkerOwner({
+      identity: { scope: identity.scope, key: identity.key, owner: identity.owner },
+      databasePath: resolveLeaseDatabasePath(validated.database),
+      sourceContext: nativeLeaseSource?.context,
+      sourceIdentity: nativeLeaseSource?.identity,
+      assertCurrent: (purpose) => {
+        if (purpose === "release") {
+          if (disposed || phase !== "draining" || !heartbeatStopped) {
+            throw new Error("State lease cleanup has not joined its heartbeat");
+          }
+          return;
+        }
+        assertWorkerCurrent();
+        if (validated.database.schemaPolicy === "existing") {
+          throw new Error("This lease mode does not support worker writes");
+        }
+        if (validated.heartbeat === "worker") {
+          if (!workerHeartbeat) {
+            abortLost();
+            throw leaseLost.signal.reason;
+          }
+          // The worker transaction rechecks durable expiry; host grants only check liveness.
+          workerHeartbeat.assertRunning();
+        }
+      },
+    });
     // Legacy native callers release synchronously on process.exit(). Async callers
     // must unwind their scope before exiting so native worker teardown can join.
     unregisterProcessExitCleanup = registerProcessExitLeaseCleanup(() => {
@@ -336,14 +399,13 @@ async function runStateLeaseOwnerInScope<T>(
       });
     });
     const scheduleExpiry = () => {
-      if (expiryTimer) {
-        clearTimeout(expiryTimer);
-      }
-      expiryTimer = setTimeout(
+      cancelExpiry?.();
+      cancelExpiry = scheduleAbsoluteDeadline(
+        confirmedExpiresAt ?? Date.now(),
         () => abortLost(),
-        Math.max(1, (confirmedExpiresAt ?? Date.now()) - Date.now()),
+        undefined,
+        { unref: true },
       );
-      expiryTimer.unref?.();
     };
     const renewAndSchedule = () => {
       confirmedExpiresAt = renew({
@@ -366,6 +428,9 @@ async function runStateLeaseOwnerInScope<T>(
       }
     };
     const renewFromTimer = () => {
+      const now = Date.now();
+      renewalTimer.lateByMs = Math.max(0, now - (renewalTimer.dueAt ?? now));
+      renewalTimer.dueAt = now + heartbeatMs;
       if (!runTimerRenewal) {
         return;
       }
@@ -382,22 +447,18 @@ async function runStateLeaseOwnerInScope<T>(
       }
     };
 
-    const assertOperationOwned = (transaction?: DatabaseSync) => {
+    const assertOperationOwned = (transaction?: EngineConnection) => {
       assertActive();
-      const params = { ...identity, database: validated.database, transaction };
-      const expiresAt = verifyLeaseOwnership(params);
       if (workerHeartbeat) {
         try {
-          workerHeartbeat.assertResponsive(expiresAt);
+          workerHeartbeat.assertRunning();
         } catch (error) {
           abortLost(error);
           throw leaseLost.signal.reason;
         }
-        // Worker acknowledgement is liveness only. Recheck persisted ownership
-        // after waiting, including inside a caller's already-held transaction.
-        assertActive();
-        verifyLeaseOwnership(params);
       }
+      // Durable ownership authorizes the effect; worker liveness adds no authority.
+      verifyLeaseOwnership({ ...identity, database: validated.database, transaction });
     };
     const renewForHandoff = () => {
       const params = { ...identity, database: validated.database };
@@ -488,6 +549,11 @@ async function runStateLeaseOwnerInScope<T>(
       await workerOperations?.drain();
     };
 
+    const usesOwnerCurrent =
+      validated.processBound &&
+      validated.heartbeat !== "worker" &&
+      validated.database.schemaPolicy !== "existing";
+    const assertNativeCurrent = usesOwnerCurrent ? assertWorkerCurrent : assertOperationOwned;
     let result: T;
     try {
       const execution = workerOperations;
@@ -517,6 +583,7 @@ async function runStateLeaseOwnerInScope<T>(
       } else {
         scheduleExpiry();
         runTimerRenewal = AsyncLocalStorage.snapshot();
+        renewalTimer.dueAt = Date.now() + heartbeatMs;
         heartbeat = setInterval(renewFromTimer, heartbeatMs);
         heartbeat.unref?.();
       }
@@ -537,15 +604,19 @@ async function runStateLeaseOwnerInScope<T>(
         await verify();
         const lease: OpenClawStateAsyncLeaseContext = {
           signal: operationSignal,
+          assertCurrent: execution.assertCurrent,
           assertOwned: async () => execution.run(() => verify()),
           renew: async () => execution.run(() => verify(true)),
         };
         execution.bind(lease);
-        result = await invocation.run(lease);
+        result = await invocation.run(lease, identity);
       } else {
-        assertOperationOwned();
+        assertNativeCurrent();
         const lease: OpenClawStateLeaseContext = {
           signal: operationSignal,
+          assertCurrent: usesOwnerCurrent
+            ? assertOwnerCurrent
+            : () => operationSignal.throwIfAborted(),
           renew: renewOperation,
           assertOwned: assertOperationOwned,
           ...(workerHeartbeat
@@ -568,33 +639,46 @@ async function runStateLeaseOwnerInScope<T>(
               }
             : {}),
           assertOwnedInTransaction: assertOperationOwned,
-        };
-        workerOperations = createOpenClawStateLeaseWorkerOwner({
-          lease,
-          identity: { scope: identity.scope, key: identity.key, owner: identity.owner },
-          databasePath: resolveLeaseDatabasePath(validated.database),
-          assertCurrent: () => {
-            assertActive();
-            if (validated.database.schemaPolicy === "existing") {
-              throw new Error("This lease mode does not support worker writes");
+          holdWriteFence(database) {
+            if (!workerHeartbeat || isPostgresSqlConnection(database)) {
+              return undefined;
             }
-            if (validated.heartbeat === "worker") {
-              if (!workerHeartbeat) {
-                abortLost();
-                throw leaseLost.signal.reason;
-              }
-              // The worker transaction rechecks durable expiry; host grants only check liveness.
-              workerHeartbeat.assertRunning();
-              return;
+            if (!isManagedStateTransaction(database)) {
+              throw new Error("Lease write fence requires a managed state transaction");
             }
-            // A delayed expiry timer must not admit another synchronous effect.
-            if (confirmedExpiresAt === undefined || Date.now() >= confirmedExpiresAt) {
-              abortLost();
-              assertActive();
-            }
+            const startedAt = Date.now();
+            const fence = workerHeartbeat.holdOwnerFence();
+            let expiresAt: number | undefined;
+            // Settlement callbacks retain the marker through the physical state
+            // COMMIT/ROLLBACK, including when this fence joins an outer transaction.
+            stageSqliteTransactionState(database, {
+              stage() {},
+              commit: () => fence.release(expiresAt),
+              rollback: () => fence.release(),
+            });
+            assertOperationOwned(database);
+            return {
+              renew() {
+                expiresAt = renewOpenClawStateLeaseUnderWriteFence(
+                  database,
+                  identity,
+                  acquiredAt,
+                  validated.leaseMs,
+                );
+                if (expiresAt === undefined) {
+                  throw createOpenClawStateLeaseLostError(validated);
+                }
+                fence.renewed(expiresAt);
+                const durationMs = Date.now() - startedAt;
+                return durationMs >= validated.leaseMs
+                  ? `${validated.leaseLabel}: state write fence held for ${durationMs} ms; renewed after the native commit.`
+                  : undefined;
+              },
+            };
           },
-        });
-        result = await invocation.run(lease);
+        };
+        execution.bind(lease);
+        result = await invocation.run(lease, identity);
       }
       await drain();
     } catch (error) {
@@ -616,22 +700,14 @@ async function runStateLeaseOwnerInScope<T>(
           ? abortError(validated.signal, "operation", validated.leaseLabel)
           : undefined;
       workerOperations?.rethrowIfUncertain(failure, authorityError);
-      if (authorityError instanceof Error) {
-        if (failure !== error && authorityError instanceof OpenClawStateLeaseError) {
-          // Nested owners may observe the same failed operation differently. Keep
-          // the caller's authority code and all operation/drainage causes.
-          throw leaseError(authorityError.code, authorityError.message, failure);
-        }
-        throw authorityError;
-      }
-      throw failure;
+      throw resolveOpenClawStateLeaseOperationError(error, failure, authorityError);
     }
     if (workerStorage) {
       assertActive();
       await asyncOwnership?.verify();
       assertActive();
     } else {
-      assertOperationOwned();
+      assertNativeCurrent();
     }
     return result;
   };
@@ -642,9 +718,9 @@ async function runStateLeaseOwnerInScope<T>(
     validated.signal?.removeEventListener("abort", stopWorker);
     operationSignal.removeEventListener("abort", stopTimer);
     clearInterval(heartbeat);
-    clearTimeout(expiryTimer);
+    cancelExpiry?.();
     heartbeat = undefined;
-    expiryTimer = undefined;
+    cancelExpiry = undefined;
     runTimerRenewal = undefined;
   });
 }

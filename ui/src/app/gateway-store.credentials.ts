@@ -13,8 +13,9 @@ import {
   sameBootRecordOwner,
   type BootRecordOwner,
 } from "./boot-record.ts";
-import { clearWarmBootState } from "./bootstrap-warm-boot.ts";
 import type { ApplicationGatewayConnection } from "./gateway.ts";
+import { isRemoteControlUiIngress } from "./remote-ingress.ts";
+import { clearWarmBootState } from "./warm-boot-retirement.ts";
 
 type GatewayCredentials = Pick<
   GatewayBrowserClientOptions,
@@ -23,10 +24,14 @@ type GatewayCredentials = Pick<
 
 /** Credential admission owns both the read boot record and its successor hello. */
 export function createGatewayCredentials(ownsWarmBoot: boolean) {
+  const canOwnWarmBoot = ownsWarmBoot && !isRemoteControlUiIngress();
   let scope: string | undefined;
   let capturedOwner: BootRecordOwner | undefined;
   let liveOwner: BootRecordOwner | undefined;
   return {
+    get hasWarmBoot() {
+      return capturedOwner !== undefined;
+    },
     prepare(
       connection: ApplicationGatewayConnection,
       credentialsChanged: boolean,
@@ -34,7 +39,7 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
     ): GatewayCredentials {
       scope = gatewayCredentialScope(connection.gatewayUrl);
       const boot =
-        ownsWarmBoot && !credentialsChanged && !connection.bootstrapToken && !connection.password
+        canOwnWarmBoot && !credentialsChanged && !connection.bootstrapToken && !connection.password
           ? readBootRecord(scope, (method) =>
               method === "token"
                 ? connection.token
@@ -50,7 +55,7 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
       }
       return {
         offlineRecoveryScope:
-          ownsWarmBoot && !credentialsChanged
+          canOwnWarmBoot && !credentialsChanged
             ? (previousClient?.offlineRecoveryScope ?? boot?.recoveryScope)
             : undefined,
         url: connection.gatewayUrl,
@@ -61,7 +66,7 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
       };
     },
     acceptHello(auth: GatewayHelloOk["auth"], token: string): void {
-      if (!ownsWarmBoot) {
+      if (!canOwnWarmBoot) {
         return;
       }
       const credentials = resolveBootRecordAuth(auth, token);
@@ -86,12 +91,9 @@ export function createGatewayCredentials(ownsWarmBoot: boolean) {
       if (!gatewayScope) {
         return;
       }
+      const clear = clearCaches ? clearWarmBootState : clearBootRecords;
       for (const owner of owners) {
-        if (clearCaches) {
-          void clearWarmBootState(gatewayScope, owner);
-        } else {
-          clearBootRecords(gatewayScope, owner);
-        }
+        void clear(gatewayScope, owner);
       }
     },
   };

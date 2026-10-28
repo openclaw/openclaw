@@ -1,5 +1,4 @@
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
-import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import type { ParentForkSourceTranscript } from "./session-accessor.sqlite-parent-fork.js";
 import type {
   ForkSessionEntryFromParentTargetParams,
@@ -11,19 +10,14 @@ import type { SessionEntryPatchReceipt } from "./session-entry-patch.types.js";
 import type { SessionMessageCutIntent } from "./session-message-cut.types.js";
 import type { SessionEntry } from "./types.js";
 
-/** Bundled transformations; opaque released callbacks keep their native transaction. */
+/** Data-only patches applied to the current child row by its writer. */
 export type ParentForkEntryPatch = {
   skipExisting?: boolean;
   skipped?: Partial<SessionEntry>;
   forked?: Partial<SessionEntry>;
 };
-export type ParentForkEntryParams = Omit<
-  ForkSessionEntryFromParentTargetParams,
-  "patch" | "skipPatch" | "skipForkWhen" | "decisionSkipPatch" | "commitGuard"
->;
+export type ParentForkEntryParams = Omit<ForkSessionEntryFromParentTargetParams, "commitGuard">;
 export type ParentForkEntryPreparation = {
-  parent: SqliteLifecycleTargetSnapshot;
-  child: SqliteLifecycleTargetSnapshot;
   parentEntry?: SessionEntry;
   base?: SessionEntry;
 };
@@ -32,9 +26,8 @@ export type ParentForkCommit =
       kind: "entry";
       agentId: string;
       params: ParentForkEntryParams;
-      prepared: ParentForkEntryPreparation;
       patch?: ParentForkEntryPatch;
-      cliSessionBindings?: SessionEntry["cliSessionBindings"];
+      cliForkProviders?: readonly string[];
     }
   | {
       kind: "transcript";

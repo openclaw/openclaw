@@ -31,6 +31,7 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
   profileId?: string;
   profileStore: AuthProfileStore;
   provider: string;
+  modelId?: string;
   agentDir?: string;
   runId: string;
   sessionId: string;
@@ -46,6 +47,7 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
   const bookkeeping = markAuthProfileSuccess({
     store: input.profileStore,
     provider: successProvider,
+    modelId: input.modelId,
     profileId: successProfileId,
     agentDir: input.agentDir,
   })
@@ -56,11 +58,6 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
           `post-run auth-profile success bookkeeping completed after ${durationMs}ms: ` +
             `runId=${input.runId} sessionId=${input.sessionId} ` +
             `provider=${sanitizeForLog(successProvider)} profileId=${safeSuccessProfileId}`,
-        );
-      } else if (log.isEnabled("trace")) {
-        log.trace(
-          `post-run auth-profile success bookkeeping completed: ` +
-            `runId=${input.runId} sessionId=${input.sessionId} durationMs=${durationMs}`,
         );
       }
     })
@@ -97,23 +94,20 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
   const credential = input.profileId ? input.profileStore.profiles[input.profileId] : undefined;
   const pluginHarnessApiKeyInfo = resolvePluginHarnessApiKeyInfo(input);
   const authFingerprint =
-    credential?.type === "oauth" && input.profileId
-      ? fingerprintResolvedAuthProfileCredential({
-          profileId: input.profileId,
-          credential,
-          resolvedAuth: input.apiKeyInfo,
-        })
-      : credential && input.profileId && input.pluginHarnessOwnsAuthBootstrap
-        ? input.attempt.authBindingFingerprint
-        : credential && input.profileId && input.pluginHarnessOwnsTransport
-          ? fingerprintResolvedAuthProfileCredential({
-              profileId: input.profileId,
-              credential,
-              resolvedAuth: pluginHarnessApiKeyInfo,
-            })
-          : input.apiKeyInfo
-            ? fingerprintResolvedProviderAuth(input.apiKeyInfo)
-            : undefined;
+    credential &&
+    input.profileId &&
+    credential.type !== "oauth" &&
+    input.pluginHarnessOwnsAuthBootstrap
+      ? input.attempt.authBindingFingerprint
+      : credential &&
+          input.profileId &&
+          (credential.type === "oauth" || input.pluginHarnessOwnsTransport)
+        ? fingerprintResolvedAuthProfileCredential({
+            profileId: input.profileId,
+            credential,
+            resolvedAuth: credential.type === "oauth" ? input.apiKeyInfo : pluginHarnessApiKeyInfo,
+          })
+        : fingerprintResolvedProviderAuth(input.apiKeyInfo);
   const authProfileOwnerFingerprint =
     input.profileId && credential !== undefined
       ? fingerprintAuthProfileOwnerShape({ profileId: input.profileId, credential })

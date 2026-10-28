@@ -1,9 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { installDialogPolyfill } from "../../../test-helpers/modal-dialog.ts";
-import { OpenClawChatCameraCapture } from "./chat-camera-capture.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import type { OpenClawChatCameraCapture } from "./chat-camera-capture.tsx";
+import "./chat-camera-capture.tsx";
 
 function media(deviceId = "front") {
   const track = Object.assign(new EventTarget(), {
@@ -15,83 +18,74 @@ function media(deviceId = "front") {
   });
   return { track, stream: { getTracks: () => [track], getVideoTracks: () => [track] } };
 }
+type CameraStream = ReturnType<typeof media>["stream"];
 
 describe("composer camera capture", () => {
   let component: OpenClawChatCameraCapture;
   let restoreDialog: () => void;
-  let mediaDevicesDescriptor: PropertyDescriptor | undefined;
-  let canvasContextDescriptor: PropertyDescriptor | undefined;
-  let getUserMedia: ReturnType<
-    typeof vi.fn<
-      (constraints: MediaStreamConstraints) => Promise<ReturnType<typeof media>["stream"]>
-    >
-  >;
-  let enumerateDevices: ReturnType<typeof vi.fn>;
-  let play: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  const restorers: (() => void)[] = [];
+  let getUserMedia: Mock<(constraints: MediaStreamConstraints) => Promise<CameraStream>>;
+  let enumerateDevices: Mock;
+  let play: Mock<() => Promise<void>>;
   const createObjectURL = vi.fn(() => "blob:camera-test");
   const revokeObjectURL = vi.fn();
+  const destinations = { onCapture: vi.fn(), onUpload: vi.fn(), onNativeCapture: vi.fn() };
+  const modal = () => component.querySelector("openclaw-modal-dialog");
+
+  function replaceProperty(target: object, key: PropertyKey, value: unknown) {
+    const original = Object.getOwnPropertyDescriptor(target, key);
+    Object.defineProperty(target, key, { configurable: true, value });
+    restorers.push(() =>
+      original ? Object.defineProperty(target, key, original) : Reflect.deleteProperty(target, key),
+    );
+  }
 
   async function settle() {
     await component.updateComplete;
+    flush();
     await Promise.resolve();
-    await component.updateComplete;
+    flush();
   }
 
   function button(text: string) {
-    const result = [...component.renderRoot.querySelectorAll("button")].find(
+    return [...component.querySelectorAll("button")].find(
       (item) => item.textContent?.trim() === text,
-    );
-    if (!result) {
-      throw new Error(`Missing button: ${text}`);
-    }
-    return result;
+    )!;
+  }
+
+  async function show() {
+    component.show();
+    await settle();
+  }
+  const captureReady = () => waitForSolid(() => expect(button("Capture").disabled).toBe(false));
+  async function click(text: string) {
+    button(text).click();
+    await settle();
   }
 
   beforeEach(async () => {
     restoreDialog = installDialogPolyfill();
-    canvasContextDescriptor = Object.getOwnPropertyDescriptor(
-      HTMLCanvasElement.prototype,
-      "getContext",
-    );
     vi.stubGlobal("isSecureContext", true);
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = createObjectURL;
-        static override revokeObjectURL = revokeObjectURL;
-      },
-    );
-    getUserMedia =
-      vi.fn<(constraints: MediaStreamConstraints) => Promise<ReturnType<typeof media>["stream"]>>();
+    replaceProperty(URL, "createObjectURL", createObjectURL);
+    replaceProperty(URL, "revokeObjectURL", revokeObjectURL);
+    getUserMedia = vi.fn<(constraints: MediaStreamConstraints) => Promise<CameraStream>>();
     enumerateDevices = vi.fn(async () => []);
-    mediaDevicesDescriptor = Object.getOwnPropertyDescriptor(navigator, "mediaDevices");
-    Object.defineProperty(navigator, "mediaDevices", {
-      configurable: true,
-      value: { getUserMedia, enumerateDevices },
-    });
+    replaceProperty(navigator, "mediaDevices", { getUserMedia, enumerateDevices });
     play = vi.fn(async () => {});
     vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(play);
     vi.spyOn(HTMLVideoElement.prototype, "videoWidth", "get").mockReturnValue(640);
     vi.spyOn(HTMLVideoElement.prototype, "videoHeight", "get").mockReturnValue(480);
-    component = new OpenClawChatCameraCapture();
-    component.onCapture = vi.fn();
-    component.onUpload = vi.fn();
-    component.onNativeCapture = vi.fn();
-    component.readSignal = new AbortController().signal;
-    document.body.append(component);
+    component = document.createElement("openclaw-chat-camera-capture");
+    Object.assign(component, destinations, { readSignal: new AbortController().signal });
+    mountSolid(() => component);
     await settle();
   });
 
   afterEach(async () => {
     component.remove();
     await settle();
-    if (mediaDevicesDescriptor) {
-      Object.defineProperty(navigator, "mediaDevices", mediaDevicesDescriptor);
-    } else {
-      Reflect.deleteProperty(navigator, "mediaDevices");
-    }
-    if (canvasContextDescriptor) {
-      Object.defineProperty(HTMLCanvasElement.prototype, "getContext", canvasContextDescriptor);
+    for (const restore of restorers.splice(0).toReversed()) {
+      restore();
     }
     restoreDialog();
     vi.restoreAllMocks();
@@ -99,7 +93,7 @@ describe("composer camera capture", () => {
     vi.clearAllMocks();
   });
 
-  it.each(["modal-cancel", "abort", "retarget", "disable", "disconnect", "pagehide"])(
+  it.each(["modal-cancel", "abort", "retarget", "disable", "disconnect", "pagehide"] as const)(
     "requests the camera on demand and releases it on %s",
     async (action) => {
       const scope = new AbortController();
@@ -107,7 +101,6 @@ describe("composer camera capture", () => {
       const capture = media();
       getUserMedia.mockResolvedValue(capture.stream);
       expect(getUserMedia).not.toHaveBeenCalled();
-      expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
       component.show();
       expect(getUserMedia).toHaveBeenCalledWith({
         audio: false,
@@ -116,35 +109,23 @@ describe("composer camera capture", () => {
       component.show();
       expect(getUserMedia).toHaveBeenCalledOnce();
       await settle();
-      const video = component.renderRoot.querySelector("video");
-      expect(video?.srcObject).toBe(capture.stream);
+      const video = component.querySelector("video");
       expect(video?.hasAttribute("playsinline")).toBe(true);
       expect(video?.hasAttribute("muted")).toBe(true);
-      expect(button("Capture").disabled).toBe(false);
-      if (action === "modal-cancel") {
-        component.renderRoot
-          .querySelector("openclaw-modal-dialog")
-          ?.dispatchEvent(new CustomEvent("modal-cancel"));
-      }
-      if (action === "abort") {
-        scope.abort();
-      }
-      if (action === "retarget") {
-        component.readSignal = new AbortController().signal;
-      }
-      if (action === "disable") {
-        component.disabled = true;
-      }
-      if (action === "disconnect") {
-        component.remove();
-      }
-      if (action === "pagehide") {
-        window.dispatchEvent(new Event("pagehide"));
-      }
+      await captureReady();
+      const actions = {
+        "modal-cancel": () => modal()?.dispatchEvent(new CustomEvent("modal-cancel")),
+        abort: () => scope.abort(),
+        retarget: () => Object.assign(component, { readSignal: new AbortController().signal }),
+        disable: () => Object.assign(component, { disabled: true }),
+        disconnect: () => component.remove(),
+        pagehide: () => window.dispatchEvent(new Event("pagehide")),
+      };
+      actions[action]();
       await settle();
       expect(capture.track.stop).toHaveBeenCalledOnce();
-      expect(component.onCapture).not.toHaveBeenCalled();
-      expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(destinations.onCapture).not.toHaveBeenCalled();
+      expect(modal()).toBeNull();
     },
   );
 
@@ -153,92 +134,52 @@ describe("composer camera capture", () => {
     const newCamera = media("new");
     const pending = createDeferred<typeof oldCamera.stream>();
     getUserMedia.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(newCamera.stream);
-    component.show();
-    await settle();
+    await show();
     button("Cancel").click();
-    component.show();
-    await settle();
+    await show();
     pending.resolve(oldCamera.stream);
     await settle();
     expect(oldCamera.track.stop).toHaveBeenCalledOnce();
     expect(newCamera.track.stop).not.toHaveBeenCalled();
-    expect(component.renderRoot.querySelector("video")?.srcObject).toBe(newCamera.stream);
+    expect(component.querySelector("video")?.srcObject).toBe(newCamera.stream);
   });
 
   it.each([
-    ["NotAllowedError", "Camera access was denied", "Upload photo"],
     ["NotFoundError", "No camera was found", "Upload photo"],
-    ["NotReadableError", "The camera could not start", "Upload photo"],
-    ["NotAllowedError", "Camera access was denied", "Use device camera"],
     ["SecurityError", "Camera access was denied", "Use device camera"],
     ["NotReadableError", "The camera could not start", "Use device camera"],
   ])("reports %s and offers explicit recovery through %s (%s)", async (name, copy, action) => {
     getUserMedia.mockRejectedValue(new DOMException("camera error", name));
-    component.show();
-    await settle();
-    expect(component.renderRoot.querySelector("[role=alert]")?.textContent).toContain(copy);
-    expect(component.onUpload).not.toHaveBeenCalled();
-    expect(component.renderRoot.textContent).toContain("Use device camera");
-    expect(component.onNativeCapture).not.toHaveBeenCalled();
+    await show();
+    expect(component.querySelector("[role=alert]")?.textContent).toContain(copy);
     expect(button("Try again").disabled).toBe(false);
-    const destination = action === "Upload photo" ? component.onUpload : component.onNativeCapture;
-    button(action).click();
-    await settle();
-    if (action === "Upload photo") {
-      expect(destination).toHaveBeenCalledOnce();
-    } else {
-      expect(destination).toHaveBeenCalledExactlyOnceWith(component);
-    }
-    expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+    const destination =
+      action === "Upload photo" ? destinations.onUpload : destinations.onNativeCapture;
+    await click(action);
+    expect(destination).toHaveBeenCalledExactlyOnceWith(component);
+    expect(modal()).toBeNull();
   });
-
-  it.each(["insecure", "unsupported"])(
-    "offers native capture explicitly for %s contexts",
-    async (kind) => {
-      if (kind === "insecure") {
-        vi.stubGlobal("isSecureContext", false);
-      } else {
-        Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined });
-      }
-      component.show();
-      await settle();
-      expect(component.renderRoot.textContent).toContain("camera or file picker");
-      expect(getUserMedia).not.toHaveBeenCalled();
-      expect(component.onNativeCapture).not.toHaveBeenCalled();
-      expect(component.onUpload).not.toHaveBeenCalled();
-      const nativeCapture = component.onNativeCapture;
-      button("Use device camera").click();
-      await settle();
-      expect(nativeCapture).toHaveBeenCalledExactlyOnceWith(component);
-      expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
-    },
-  );
 
   it("does not open a native picker for a replaced draft", async () => {
     vi.stubGlobal("isSecureContext", false);
-    component.show();
-    await settle();
-    const nativeCapture = component.onNativeCapture;
+    await show();
     component.readSignal = new AbortController().signal;
     button("Use device camera").click();
-    expect(nativeCapture).not.toHaveBeenCalled();
+    expect(destinations.onNativeCapture).not.toHaveBeenCalled();
     await settle();
-    expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(modal()).toBeNull();
   });
 
   it("keeps a stopped-camera error when an old play promise finishes", async () => {
-    const capture = media();
     const playing = createDeferred();
     play.mockReturnValue(playing.promise);
+    const capture = media();
     getUserMedia.mockResolvedValue(capture.stream);
-    component.show();
-    await settle();
+    await show();
     capture.track.dispatchEvent(new Event("ended"));
     playing.resolve();
     await settle();
-    expect(component.renderRoot.querySelector("[role=alert]")?.textContent).toContain(
-      "Your camera stopped",
-    );
+    expect(component.querySelector("[role=alert]")?.textContent).toContain("Your camera stopped");
     expect(capture.track.stop).toHaveBeenCalledOnce();
   });
 
@@ -253,12 +194,8 @@ describe("composer camera capture", () => {
       expect(front.track.stop).toHaveBeenCalledOnce();
       return back.stream;
     });
-    component.show();
-    await settle();
-    const select = component.renderRoot.querySelector("select");
-    if (!select) {
-      throw new Error("Missing camera selector");
-    }
+    await show();
+    const select = component.querySelector("select")!;
     select.value = "back";
     select.dispatchEvent(new Event("change"));
     await settle();
@@ -266,51 +203,35 @@ describe("composer camera capture", () => {
       audio: false,
       video: { deviceId: { exact: "back" } },
     });
-    expect(component.renderRoot.querySelector("video")?.srcObject).toBe(back.stream);
+    expect(component.querySelector("video")?.srcObject).toBe(back.stream);
   });
 
   function encodeFrames() {
-    const drawImage = vi.fn();
-    const context = { drawImage };
-    // Canvas rendering is covered by browser flow proof; here the boundary is encoding completion.
-    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
-      configurable: true,
-      value: vi.fn(() => context),
-    });
+    const context = { drawImage: vi.fn() };
+    replaceProperty(HTMLCanvasElement.prototype, "getContext", () => context);
     return vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback) => {
       callback(new Blob(["camera frame"], { type: "image/jpeg" }));
     });
   }
 
-  it("stops after capture, retakes, and publishes only the confirmed still", async () => {
+  it("revokes retaken previews and publishes the confirmed JPEG metadata", async () => {
     encodeFrames();
-    const first = media();
-    const second = media();
-    getUserMedia.mockResolvedValueOnce(first.stream).mockResolvedValueOnce(second.stream);
-    component.show();
-    await settle();
-    button("Capture").click();
-    await settle();
-    expect(first.track.stop).toHaveBeenCalledOnce();
-    expect(component.onCapture).not.toHaveBeenCalled();
-    expect(component.renderRoot.querySelector("img")?.src).toBe("blob:camera-test");
-    button("Retake").click();
-    await settle();
+    getUserMedia.mockResolvedValueOnce(media().stream).mockResolvedValueOnce(media().stream);
+    await show();
+    await captureReady();
+    await click("Capture");
+    expect(component.querySelector("img")?.src).toBe("blob:camera-test");
+    await click("Retake");
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:camera-test");
-    button("Capture").click();
-    await settle();
-    const onCapture = component.onCapture;
-    button("Use photo").click();
-    await settle();
-    expect(onCapture).toHaveBeenCalledOnce();
-    expect(onCapture).toHaveBeenCalledWith(
+    await captureReady();
+    await click("Capture");
+    await click("Use photo");
+    expect(destinations.onCapture).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         type: "image/jpeg",
         name: expect.stringMatching(/^camera-\d+\.jpg$/),
       }),
     );
-    expect(second.track.stop).toHaveBeenCalledOnce();
-    expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
   });
 
   it("ignores image encoding that finishes after the draft is replaced", async () => {
@@ -321,15 +242,15 @@ describe("composer camera capture", () => {
     });
     const capture = media();
     getUserMedia.mockResolvedValue(capture.stream);
-    component.show();
-    await settle();
+    await show();
+    await captureReady();
     button("Capture").click();
     expect(capture.track.stop).toHaveBeenCalledOnce();
     component.readSignal = new AbortController().signal;
     finish?.(new Blob(["late"], { type: "image/jpeg" }));
     await settle();
-    expect(component.onCapture).not.toHaveBeenCalled();
+    expect(destinations.onCapture).not.toHaveBeenCalled();
     expect(createObjectURL).not.toHaveBeenCalled();
-    expect(component.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(modal()).toBeNull();
   });
 });

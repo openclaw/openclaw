@@ -11,6 +11,7 @@ import { resolveControlUiPluginAuthCookieGrants } from "./control-ui-plugin-auth
 import {
   applyHttpOperatorRoleScopeCeiling,
   checkHttpCookieUserProfile,
+  prepareHttpUserProfileCatalog,
 } from "./http-auth-user-profile.js";
 import { sendUnauthorized } from "./http-common.js";
 import { getBearerToken } from "./http-header-value.js";
@@ -22,6 +23,10 @@ import {
   bindHttpResponseAuthority,
   GatewayHttpRequestAuthorityError,
 } from "./http-request-authority.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 import { normalizeOperatorScopeList } from "./operator-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -36,10 +41,12 @@ export function resolveControlUiPluginAuthCookieGeneration(
     : undefined;
 }
 
-export function authorizeControlUiPluginCookieRequest(
+function readControlUiPluginCookieRequest(
   req: IncomingMessage,
-  params: { requestPath: string; authGeneration: string | undefined; res?: ServerResponse },
+  params: { requestPath: string; authGeneration: string | undefined },
 ) {
+  const ingress = getRemoteControlUiIngressContext(req);
+  assertRemoteControlUiIngressCurrent(ingress);
   // WebSocket upgrades bypass this HTTP-only handoff and use
   // checkGatewayHttpRequestAuth directly in attachGatewayUpgradeHandler.
   // Explicit owner/staff credentials retain their own authority even when an
@@ -58,10 +65,50 @@ export function authorizeControlUiPluginCookieRequest(
   if (grants.length === 0) {
     return null;
   }
-  const profileAuth = checkHttpCookieUserProfile(
-    cfg,
-    grants.map((grant) => grant.profileId),
-  );
+  const profileId = grants[0]?.profileId;
+  if (grants.some((grant) => grant.profileId !== profileId)) {
+    return null;
+  }
+  return { cfg, grants, profileId };
+}
+
+export async function prepareControlUiPluginCookieRequest(
+  req: IncomingMessage,
+  params: { requestPath: string; authGeneration: string | undefined; res: ServerResponse },
+) {
+  const selected = readControlUiPluginCookieRequest(req, params);
+  if (
+    !getRemoteControlUiIngressContext(req) &&
+    selected?.profileId &&
+    !(await prepareHttpUserProfileCatalog(params.res))
+  ) {
+    return null;
+  }
+  return authorizeControlUiPluginCookieRequest(req, params);
+}
+
+export function authorizeControlUiPluginCookieRequest(
+  req: IncomingMessage,
+  params: { requestPath: string; authGeneration: string | undefined; res?: ServerResponse },
+) {
+  const selected = readControlUiPluginCookieRequest(req, params);
+  if (!selected) {
+    return null;
+  }
+  const { cfg, grants, profileId } = selected;
+  const ingress = getRemoteControlUiIngressContext(req);
+  const principal = ingress?.resolvePrincipal();
+  const profileAuth = principal
+    ? {
+        ok: true as const,
+        profile: {
+          authenticatedUserProfile: principal.authenticatedUserProfile,
+          operatorRolePolicy: principal.operatorRolePolicy,
+          operatorRoleActor: principal.operatorRoleActor,
+          operatorAccessAuthority: principal.operatorAccessAuthority,
+        },
+      }
+    : checkHttpCookieUserProfile(cfg, profileId);
   if (!profileAuth.ok) {
     if (profileAuth.authResult.reason === "operator_access_denied" && params.res) {
       sendGatewayHttpAuthFailure(params.res, profileAuth.authResult);

@@ -258,7 +258,11 @@ async function closeBenchmarkState(stateDir: string): Promise<void> {
 async function worker(stateDir: string, profile: Profile, operation: Operation) {
   const scope = scopeFor(stateDir, profile);
   const importStarted = performance.now();
-  const history = await import("../src/config/sessions/session-accessor.sqlite-history-events.js");
+  const [history, projection, historyQueries] = await Promise.all([
+    import("../src/config/sessions/session-accessor.sqlite-history-events.js"),
+    import("../src/config/sessions/session-accessor.sqlite-active-projection.js"),
+    import("../src/config/sessions/session-accessor.sqlite-history-query.js"),
+  ]);
   const gateway =
     operation === "gateway-tail"
       ? {
@@ -285,11 +289,13 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
     }
     const result =
       operation === "recent"
-        ? history.readRecentSessionTranscriptHistoryEvents(scope, {
-            maxMessages: 20,
-            maxLines: 20,
-            maxBytes: 256 * 1024,
-          })
+        ? projection.withCurrentProjectionSnapshot(scope, (snapshot) =>
+            historyQueries.readRecentSessionTranscriptHistoryEventsFromProjection(snapshot, {
+              maxMessages: 20,
+              maxLines: 20,
+              maxBytes: 256 * 1024,
+            }),
+          )
         : history.readSessionTranscriptHistoryEventPage(scope, {
             maxMessages: 20,
             offset: 40,
@@ -372,7 +378,7 @@ async function main() {
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = configPath;
   const { replaceTranscriptEvents } =
-    await import("../src/config/sessions/session-accessor.sqlite-transcript-write.js");
+    await import("../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js");
   const { waitForSessionTranscriptIndexReconcilesInStateDir } =
     await import("../src/config/sessions/session-transcript-reconcile.js");
   const { openOpenClawAgentDatabase } = await import("../src/state/openclaw-agent-db.js");

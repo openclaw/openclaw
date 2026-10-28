@@ -12,7 +12,14 @@ import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
 import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 
-type QaManualLaneParams = {
+type ManualLaneResult = {
+  model: string;
+  waited: { status?: string; error?: string };
+  reply: string | null;
+  watchUrl: string;
+};
+
+export async function runQaManualLane(params: {
   repoRoot: string;
   transportId?: QaTransportId;
   providerMode: QaProviderMode;
@@ -22,29 +29,7 @@ type QaManualLaneParams = {
   thinkingDefault?: QaThinkingLevel;
   message: string;
   timeoutMs?: number;
-  replySettleMs?: number;
-};
-
-type ManualLaneResult = {
-  model: string;
-  waited: { status?: string; error?: string };
-  reply: string | null;
-  watchUrl: string;
-};
-
-async function stopManualLaneAuxiliaryResources(resources: {
-  lab?: { stop: () => Promise<void> | void };
-  mock?: { stop: () => Promise<void> | void } | null;
-}): Promise<Error | undefined> {
-  const stopTasks = [resources.mock, resources.lab]
-    .filter((resource): resource is { stop: () => Promise<void> | void } => Boolean(resource))
-    .map((resource) => Promise.resolve().then(() => resource.stop()));
-  const results = await Promise.allSettled(stopTasks);
-  const failed = results.find((result) => result.status === "rejected");
-  return failed ? toQaError(failed.reason) : undefined;
-}
-
-export async function runQaManualLane(params: QaManualLaneParams) {
+}) {
   const sessionSuffix = params.primaryModel.replace(/[^a-z0-9._-]+/gi, "-");
   const gatewayOwner = createQaGatewayChild();
   let lab: Awaited<ReturnType<typeof startQaLabServer>> | undefined;
@@ -120,10 +105,7 @@ export async function runQaManualLane(params: QaManualLaneParams) {
       { timeoutMs: resolveQaGatewayTimeoutWithGraceMs(timeoutMs) },
     )) as { status?: string; error?: string };
 
-    const replySettleMs = params.replySettleMs ?? 500;
-    if (replySettleMs > 0) {
-      await sleep(replySettleMs);
-    }
+    await sleep(500);
 
     const reply =
       lab.state
@@ -154,7 +136,12 @@ export async function runQaManualLane(params: QaManualLaneParams) {
         transportCleanupAfterError = toQaError(error);
       });
     }
-    const auxiliaryCleanupError = await stopManualLaneAuxiliaryResources({ lab, mock });
+    const stopTasks = [mock, lab]
+      .filter((resource) => resource !== undefined && resource !== null)
+      .map((resource) => Promise.resolve().then(() => resource.stop()));
+    const results = await Promise.allSettled(stopTasks);
+    const failed = results.find((entry) => entry.status === "rejected");
+    const auxiliaryCleanupError = failed ? toQaError(failed.reason) : undefined;
     cleanupError =
       transportCleanupBeforeError ??
       gatewayCleanupError ??

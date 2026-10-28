@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import {
   findLegacyToolNamePaths,
@@ -28,9 +27,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TOOL_NAMES =
       match: (value) => findLegacyToolNamePaths(value, migration.migration, [root]).length > 0,
     })),
     apply: (raw, changes) => {
-      if (!isRecord(raw)) {
-        return;
-      }
       const paths = TOOL_POLICY_ROOTS.flatMap((root) =>
         migrateLegacyToolNamePolicies(raw[root], migration.migration, [root]),
       );

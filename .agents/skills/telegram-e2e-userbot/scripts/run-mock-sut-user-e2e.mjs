@@ -121,6 +121,8 @@ function parseArgs(argv) {
     output: "",
     chat: "",
     dm: false,
+    createForum: false,
+    createDmTopic: false,
     // Messages posted as the QA user before the driven turn, so history-scoped
     // scenarios (historyLimit, context visibility) have prior turns to scope.
     preSend: [],
@@ -160,7 +162,10 @@ function parseArgs(argv) {
       );
     } else if (arg === "--chat") args.chat = argv[++i] || "";
     else if (arg === "--dm") args.dm = true;
-    else if (arg === "--pre-send") args.preSend.push(argv[++i] || "");
+    else if (arg === "--create-forum") args.createForum = true;
+    else if (arg === "--create-dm-topic") {
+      args.createDmTopic = true;
+    } else if (arg === "--pre-send") args.preSend.push(argv[++i] || "");
     else if (arg === "--scenario") args.scenarioPath = argv[++i] || "";
     else if (arg === "--source-gateway") args.sourceGateway = true;
     else if (arg === "--gateway-ready-timeout-ms") {
@@ -210,6 +215,22 @@ function parseArgs(argv) {
       throw new Error("Scenario forwardBurst actions require --dm.");
     }
   }
+  if (args.createForum) {
+    if (!args.scenario || args.dm || args.chat) {
+      throw new Error("--create-forum takes a --scenario and replaces --dm/--chat.");
+    }
+    if (args.scenario.actions.some((action) => action.forumTopicId !== undefined)) {
+      throw new Error("--create-forum sends every scenario message to its created topic.");
+    }
+  }
+  if (args.createDmTopic) {
+    if (!args.scenario || !args.dm || args.chat || args.createForum) {
+      throw new Error("--create-dm-topic requires --dm and a --scenario.");
+    }
+    if (args.scenario.actions.some((action) => action.forumTopicId !== undefined)) {
+      throw new Error("--create-dm-topic sends every scenario message to its created topic.");
+    }
+  }
   if (!args.expectPassed) args.expect.push("OPENCLAW_E2E_OK");
   return args;
 }
@@ -248,6 +269,10 @@ Runtime:
 Chat selection:
   --dm                direct chat with the leased SUT
   --chat TARGET       TDLib id, username, or supported Telegram link
+  --create-forum      create a run-owned forum and topic for a --scenario, send its
+                      messages to that topic, and delete the forum during cleanup
+  --create-dm-topic   enable the leased bot's Threaded Mode, create a DM topic for a
+                      --dm --scenario, then delete it and disable Threaded Mode at cleanup
   Scenario send actions accept forumTopicId for a specific forum topic.
   Scenario forwardBurst actions require --dm and forward bot-authored text and photo in one TDLib call.
 
@@ -986,7 +1011,11 @@ async function checkScenarioCredential(credential, { signal, args }) {
     signal,
     dm: args?.dm,
     chat: args?.chat,
-    requireForum: args?.scenario?.actions.some((action) => action.forumTopicId !== undefined),
+    requireForum:
+      !args?.createDmTopic &&
+      args?.scenario?.actions.some((action) => action.forumTopicId !== undefined),
+    createForum: args?.createForum,
+    createDmTopic: args?.createDmTopic,
   });
 }
 
@@ -1007,6 +1036,13 @@ export async function runTelegramTestScenario({
         scope.observeLease(credential);
         await checkCredential(credential, { signal: scope.signal, args });
         scope.assertActive();
+        const forumTopicId =
+          credential.testForum?.setup.forumTopicId ?? credential.testDmTopic?.setup.forumTopicId;
+        if (forumTopicId) {
+          for (const action of args.scenario.actions) {
+            if (action.type === "send") action.forumTopicId = forumTopicId;
+          }
+        }
         const result = await driveScenario(args, repoRoot, credential, {
           signal: scope.signal,
         });
@@ -1026,6 +1062,16 @@ export async function runTelegramTestScenario({
       const evidenceDir = dirname(resolve(args.output));
       fs.mkdirSync(evidenceDir, { recursive: true });
       writePrivateJson(path.join(evidenceDir, "test-group.json"), credential.testGroup);
+    }
+    for (const fixtureKey of ["testForum", "testDmTopic"]) {
+      if (args?.output && credential?.[fixtureKey]) {
+        // Release has run: preserve both creation and restoration evidence.
+        const summaryPath = resolve(args.output);
+        writePrivateJson(summaryPath, {
+          ...readJson(summaryPath),
+          [fixtureKey]: credential[fixtureKey],
+        });
+      }
     }
   }
 }

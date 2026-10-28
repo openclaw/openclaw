@@ -1,36 +1,26 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import * as authStore from "../agents/auth-profiles/store.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  applyModelOverrideWithAuthProfileCompatibility,
-  shouldPreserveSessionAuthProfileOverride,
+  applyModelOverrideWithAuthProfileCompatibility as applyOverride,
+  shouldPreserveSessionAuthProfileOverride as shouldPreserve,
 } from "./auth-profile-preservation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const workspaceAliasPlugin = {
-  id: "fixture-provider",
-  channels: [],
-  providers: ["fixture-provider", "fixture-provider-plan"],
-  cliBackends: [],
-  skills: [],
-  hooks: [],
-  origin: "workspace",
-  rootDir: "/plugins/fixture-provider",
-  source: "test",
-  manifestPath: "/plugins/fixture-provider/openclaw.plugin.json",
-  providerAuthAliases: { "fixture-provider-plan": "fixture-provider" },
-} satisfies PluginManifestRecord;
+beforeAll(() => prepareSharedAuthStoreOwnership());
+afterEach(() => vi.restoreAllMocks());
 
-const metadataSnapshot = {
-  plugins: [workspaceAliasPlugin],
-} satisfies Pick<PluginMetadataSnapshot, "plugins">;
+function profileConfig(provider: string, id = "team:prod"): OpenClawConfig {
+  return { auth: { profiles: { [id]: { provider, mode: "api_key" } } } };
+}
 
 const entry = {
   sessionId: "session-auth-profile-preservation",
@@ -38,172 +28,138 @@ const entry = {
   authProfileOverride: "fixture-provider:work",
 } satisfies SessionEntry;
 
-describe("shouldPreserveSessionAuthProfileOverride", () => {
-  it.each([
-    { credentialProvider: "arcee", expected: false },
-    { credentialProvider: "openrouter", expected: true },
-  ])(
-    "checks a pin's stored $credentialProvider realm against the configured endpoint",
-    ({ credentialProvider, expected }) => {
-      const plugin: PluginManifestRecord = {
-        ...workspaceAliasPlugin,
-        id: "arcee",
-        origin: "bundled",
-        providers: ["arcee"],
-        providerAuthAliases: {
-          arcee: { provider: "openrouter", baseUrls: ["https://openrouter.ai/api/v1"] },
-        },
-      };
-      expect(
-        shouldPreserveSessionAuthProfileOverride({
-          cfg: {
-            models: {
-              providers: { arcee: { baseUrl: "https://openrouter.ai/api/v1", models: [] } },
-            },
-            auth: { profiles: { "team:prod": { provider: credentialProvider, mode: "api_key" } } },
-          },
-          agentDir: tempDirs.make("openclaw-endpoint-profile-pin-"),
-          entry: { ...entry, authProfileOverride: "team:prod" },
-          currentProvider: "arcee",
-          provider: "arcee",
-          metadataSnapshot: { plugins: [plugin] },
-        }),
-      ).toBe(expected);
-    },
-  );
+const defaults = { cfg: {}, agentDir: "/fixture/agent", entry, currentProvider: "openai" };
+function preserves(overrides: Partial<Parameters<typeof shouldPreserve>[0]>) {
+  return shouldPreserve({ ...defaults, provider: "openai", ...overrides });
+}
 
-  it("uses config trust when resolving workspace provider aliases", () => {
-    const allowedConfig = {
-      plugins: { entries: { "fixture-provider": { enabled: true } } },
-    } satisfies OpenClawConfig;
-
-    expect(
-      shouldPreserveSessionAuthProfileOverride({
-        cfg: allowedConfig,
-        agentDir: "/tmp/openclaw-auth-profile-preservation-allowed",
-        entry,
-        currentProvider: "fixture-provider",
-        provider: "fixture-provider-plan",
-        metadataSnapshot,
-      }),
-    ).toBe(true);
-    expect(
-      shouldPreserveSessionAuthProfileOverride({
-        cfg: {},
-        agentDir: "/tmp/openclaw-auth-profile-preservation-denied",
-        entry,
-        currentProvider: "fixture-provider",
-        provider: "fixture-provider-plan",
-        metadataSnapshot,
-      }),
-    ).toBe(false);
-  });
-
-  it("uses the recorded provider for an arbitrary stored profile id", () => {
-    const agentDir = tempDirs.make("openclaw-auth-profile-preservation-");
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "team:prod": { type: "api_key", provider: "openai", key: "test" },
-        },
-      },
-      agentDir,
-    );
-
-    expect(
-      shouldPreserveSessionAuthProfileOverride({
-        cfg: {},
-        agentDir,
-        entry: { ...entry, authProfileOverride: "team:prod" },
-        currentProvider: "openai",
-        provider: "openai",
-      }),
-    ).toBe(true);
-    expect(
-      shouldPreserveSessionAuthProfileOverride({
-        cfg: {},
-        agentDir,
-        entry: { ...entry, authProfileOverride: "team:prod" },
-        currentProvider: "openai",
-        provider: "anthropic",
-      }),
-    ).toBe(false);
-  });
-
-  it.each(["openai", "anthropic"])(
-    "retains a missing personal pin only when the selected provider %s is compatible",
-    async (provider) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const personalId = `personal:${randomUUID()}:${randomUUID()}`;
-        const sessionEntry: SessionEntry = {
-          ...entry,
-          authProfileOverride: personalId,
-          authProfileOverrideSource: "user-link",
-        };
-
-        applyModelOverrideWithAuthProfileCompatibility({
-          cfg: {},
-          agentDir: state.agentDir(),
-          entry: sessionEntry,
-          currentProvider: "openai",
-          selection: { provider, model: "another-model" },
-        });
-
-        expect(sessionEntry.authProfileOverride).toBe(
-          provider === "openai" ? personalId : undefined,
-        );
-        expect(sessionEntry.authProfileOverrideSource).toBe(
-          provider === "openai" ? "user-link" : undefined,
-        );
-      });
-    },
-  );
-
-  it.each([
-    {
-      name: "retains a compatible auth profile when resetting to a same-provider default",
-      provider: "openai",
-      model: "gpt-5",
-      expectedProfile: "team:prod",
-      expectedSource: "user" as const,
-      expectedCompactionCount: 2,
-    },
-    {
-      name: "clears an incompatible auth profile when resetting to a cross-provider default",
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      expectedProfile: undefined,
-      expectedSource: undefined,
-      expectedCompactionCount: undefined,
-    },
-  ])("$name", ({ provider, model, expectedProfile, expectedSource, expectedCompactionCount }) => {
-    const sessionEntry = {
-      ...entry,
-      providerOverride: "openai",
-      modelOverride: "gpt-4.1",
-      modelOverrideSource: "user" as const,
-      authProfileOverride: "team:prod",
-      authProfileOverrideSource: "user" as const,
-      authProfileOverrideCompactionCount: 2,
+it.each([
+  { provider: "openai", configured: "anthropic", expected: true },
+  { provider: "anthropic", configured: "openai", expected: false },
+  { provider: undefined, configured: "openai", expected: true },
+])(
+  "consumes prepared provider $provider before config $configured without synchronous reads",
+  ({ provider, configured, expected }) => {
+    const unexpectedRead = () => {
+      throw new Error("unprepared synchronous credential read");
     };
-
-    const result = applyModelOverrideWithAuthProfileCompatibility({
-      cfg: {
-        auth: { profiles: { "team:prod": { provider: "openai", mode: "api_key" } } },
+    for (const reader of [
+      "findPersistedAuthProfileCredential",
+      "getRuntimeAuthProfileStoreSnapshot",
+    ] as const) {
+      vi.spyOn(authStore, reader).mockImplementation(unexpectedRead);
+    }
+    const selectedEntry = { ...entry, authProfileOverride: "openai:missing" };
+    const params = {
+      ...defaults,
+      cfg: profileConfig(configured, "openai:missing"),
+      entry: selectedEntry,
+      recordedProvider: { provider },
+    };
+    applyOverride({ ...params, selection: { provider: "openai", model: "selected-model" } });
+    expect(selectedEntry.authProfileOverride).toBe(expected ? "openai:missing" : undefined);
+  },
+);
+it.each([
+  { credentialProvider: "arcee", expected: false },
+  { credentialProvider: "openrouter", expected: true },
+])(
+  "checks a pin's stored $credentialProvider realm against the configured endpoint",
+  ({ credentialProvider, expected }) => {
+    const plugin = createPluginManifestRecordFixture({
+      id: "arcee",
+      origin: "bundled",
+      providers: ["arcee"],
+      providerAuthAliases: {
+        arcee: { provider: "openrouter", baseUrls: ["https://openrouter.ai/api/v1"] },
       },
-      agentDir: tempDirs.make("openclaw-auth-profile-default-"),
-      entry: sessionEntry,
-      currentProvider: "openai",
-      selection: { provider, model, isDefault: true },
     });
+    const actual = preserves({
+      cfg: {
+        models: {
+          providers: { arcee: { baseUrl: "https://openrouter.ai/api/v1", models: [] } },
+        },
+        ...profileConfig(credentialProvider),
+      },
+      agentDir: tempDirs.make("openclaw-endpoint-profile-pin-"),
+      entry: { ...entry, authProfileOverride: "team:prod" },
+      currentProvider: "arcee",
+      provider: "arcee",
+      metadataSnapshot: { plugins: [plugin] },
+    });
+    expect(actual).toBe(expected);
+  },
+);
 
-    expect(result.updated).toBe(true);
-    expect(sessionEntry.providerOverride).toBeUndefined();
-    expect(sessionEntry.modelOverride).toBeUndefined();
-    expect(sessionEntry.modelOverrideSource).toBeUndefined();
-    expect(sessionEntry.authProfileOverride).toBe(expectedProfile);
-    expect(sessionEntry.authProfileOverrideSource).toBe(expectedSource);
-    expect(sessionEntry.authProfileOverrideCompactionCount).toBe(expectedCompactionCount);
+it("uses a missing ordinary profile's provider prefix", () => {
+  expect(preserves({ provider: "fixture-provider" })).toBe(true);
+});
+
+it("uses the recorded provider for an arbitrary stored profile id", () => {
+  const agentDir = tempDirs.make("openclaw-auth-profile-preservation-");
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles: { "team:prod": { type: "api_key", provider: "openai", key: "test" } },
+    },
+    agentDir,
+  );
+
+  const params = { agentDir, entry: { ...entry, authProfileOverride: "team:prod" } };
+  expect(preserves(params)).toBe(true);
+  expect(preserves({ ...params, provider: "anthropic" })).toBe(false);
+});
+
+it.each(["openai", "anthropic"])(
+  "retains a missing personal pin only when the selected provider %s is compatible",
+  async (provider) => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      await prepareSharedAuthStoreOwnership(state.env);
+      const personalId = `personal:${randomUUID()}:${randomUUID()}`;
+      const sessionEntry: SessionEntry = {
+        ...entry,
+        authProfileOverride: personalId,
+        authProfileOverrideSource: "user-link",
+      };
+
+      applyOverride({
+        ...defaults,
+        agentDir: state.agentDir(),
+        entry: sessionEntry,
+        selection: { provider, model: "another-model" },
+      });
+
+      expect([sessionEntry.authProfileOverride, sessionEntry.authProfileOverrideSource]).toEqual(
+        provider === "openai" ? [personalId, "user-link"] : [undefined, undefined],
+      );
+    });
+  },
+);
+
+it("clears an incompatible auth profile when resetting to a cross-provider default", () => {
+  const sessionEntry = {
+    ...entry,
+    providerOverride: "openai",
+    modelOverride: "gpt-4.1",
+    modelOverrideSource: "user" as const,
+    authProfileOverride: "team:prod",
+    authProfileOverrideSource: "user" as const,
+    authProfileOverrideCompactionCount: 2,
+  };
+
+  const result = applyOverride({
+    ...defaults,
+    cfg: profileConfig("openai"),
+    agentDir: tempDirs.make("openclaw-auth-profile-default-"),
+    entry: sessionEntry,
+    selection: { provider: "anthropic", model: "claude-opus-4-6", isDefault: true },
   });
+
+  expect(result.updated).toBe(true);
+  expect(sessionEntry.providerOverride).toBeUndefined();
+  expect(sessionEntry.modelOverride).toBeUndefined();
+  expect(sessionEntry.modelOverrideSource).toBeUndefined();
+  expect(sessionEntry.authProfileOverride).toBeUndefined();
+  expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+  expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
 });

@@ -41,12 +41,7 @@ export function resolveConfiguredBindingRecord(params: {
 }): ConfiguredBindingRecordResolution | null {
   const resolved = resolveConfiguredBinding({
     cfg: params.cfg,
-    conversation: {
-      channel: params.channel,
-      accountId: params.accountId,
-      conversationId: params.conversationId,
-      parentConversationId: params.parentConversationId,
-    },
+    conversation: params,
   });
   return resolved ? { record: resolved.record, statefulTarget: resolved.statefulTarget } : null;
 }

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { tryReadDiskSpace } from "./disk-space.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { openLocalFileSafely, type OpenResult } from "./fs-safe.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
@@ -12,6 +12,15 @@ import type { RunStepOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 const LARGE_CANDIDATE_PACK_WARNING_BYTES = 256 * 1024 * 1024;
+
+function reportStep(step: RunStepOptions, result: UpdateStepResult, cleanup = false) {
+  step.results?.push(result);
+  return reportUpdateStepCompletion(step.progress, {
+    ...result,
+    index: cleanup ? 0 : step.stepIndex,
+    total: cleanup ? 0 : step.totalSteps,
+  });
+}
 
 async function recordStagingFailure(
   step: RunStepOptions,
@@ -28,12 +37,7 @@ async function recordStagingFailure(
     exitCode: 1,
     stderrTail: message,
   };
-  step.results?.push(failure);
-  await reportUpdateStepCompletion(step.progress, {
-    ...failure,
-    index: step.stepIndex,
-    total: step.totalSteps,
-  });
+  await reportStep(step, failure);
   return undefined;
 }
 
@@ -146,6 +150,13 @@ export async function prepareGitCandidateTransfer(params: {
     if (local === undefined) {
       return undefined;
     }
+    const invalidInventory = () =>
+      recordStagingFailure(
+        { ...step, cwd: installedRoot },
+        "git-retained-object-inventory",
+        "verify retained Git object availability",
+        "Incomplete retained Git object availability inventory",
+      );
     const pending = new Set(beforeTree.split("\n"));
     for (const line of local.split("\n")) {
       const [oid, type, ...extra] = line.split(" ");
@@ -156,24 +167,14 @@ export async function prepareGitCandidateTransfer(params: {
         !pending.delete(oid) ||
         !["blob", "tree", "missing"].includes(type)
       ) {
-        return await recordStagingFailure(
-          { ...step, cwd: installedRoot },
-          "git-retained-object-inventory",
-          "verify retained Git object availability",
-          "Incomplete retained Git object availability inventory",
-        );
+        return await invalidInventory();
       }
       if (type !== "missing") {
         retained.add(oid);
       }
     }
     if (pending.size) {
-      return await recordStagingFailure(
-        { ...step, cwd: installedRoot },
-        "git-retained-object-inventory",
-        "verify retained Git object availability",
-        "Incomplete retained Git object availability inventory",
-      );
+      return await invalidInventory();
     }
   }
   // Only physically available retained-HEAD objects are safe to borrow. Objects
@@ -256,12 +257,7 @@ export async function prepareGitCandidateTransfer(params: {
     stdoutTail: `Git update pack and index: ${requiredBytes} bytes; ${capacity ? `${capacity.availableBytes} bytes available` : "free space unknown"} in ${objectDirectory}.`,
     ...(warnings.length ? { warnings } : {}),
   };
-  step.results?.push(measured);
-  await reportUpdateStepCompletion(step.progress, {
-    ...measured,
-    index: step.stepIndex,
-    total: step.totalSteps,
-  });
+  await reportStep(step, measured);
   const keepMessage = `openclaw-update-${randomUUID()}`;
   const retainedPack = stagedPack.move();
   return {
@@ -308,12 +304,7 @@ export async function prepareGitCandidateTransfer(params: {
           throw new Error("Cannot locate the retained Git update pack");
         }
         const keepPath = location.stdout.trim();
-        const message = await fs.readFile(keepPath, "utf8").catch((error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return undefined;
-          }
-          throw error;
-        });
+        const message = await fs.readFile(keepPath, "utf8").catch(ignoreMissingPath);
         // index-pack never overwrites an existing keep file. Do not remove one
         // created by another updater or operator, even for an identical pack.
         if (message === `${keepMessage}\n`) {
@@ -335,8 +326,7 @@ export async function prepareGitCandidateTransfer(params: {
             message: `Git update pack could not be removed: ${String(error)}`,
           },
         };
-        target.results?.push(warning);
-        await reportUpdateStepCompletion(target.progress, { ...warning, index: 0, total: 0 });
+        await reportStep(target, warning, true);
       }
     },
   };

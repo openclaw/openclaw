@@ -37,6 +37,7 @@ export type SlackChannelE2eSession = {
   driver: QaChannelE2eDriver;
   cleanup: () => Promise<void>;
   artifactPath: string;
+  recordScenarioMessages: (afterMessageId: string, messageIds: readonly string[]) => Promise<void>;
 };
 
 export function createSlackChannelE2e(params: {
@@ -166,7 +167,6 @@ export function createSlackChannelE2e(params: {
     }
   };
   const driver: QaChannelE2eDriver = {
-    signal: params.signal,
     assertActive,
     async doctor() {
       const result = await doctor();
@@ -414,6 +414,45 @@ export function createSlackChannelE2e(params: {
     },
   };
 
+  const rememberSutReceipt = (messageId: string, threadId?: string) => {
+    receipts.set(messageId, {
+      message: {
+        id: messageId,
+        channelId: params.channelId,
+        threadId,
+        text: "",
+        actor: "sut",
+      },
+    });
+  };
+
+  const recordScenarioMessages = async (afterMessageId: string, messageIds: readonly string[]) => {
+    params.assertLease();
+    const ingress = own(afterMessageId);
+    const root = ingress.message.threadId ?? ingress.message.id;
+    const candidates = new Set(messageIds);
+    const writes = await params.readNativeWrites();
+    params.assertLease();
+    // The module scenario supplies its capture window; native acceptance, channel,
+    // ingress ordering and thread ownership still belong to the receipt owner.
+    for (const write of writes) {
+      if (
+        write.evidence !== "api-accepted" ||
+        write.method !== "chat.postMessage" ||
+        write.channelId !== params.channelId ||
+        !write.messageId ||
+        !candidates.has(write.messageId) ||
+        Number(write.messageId) <= Number(afterMessageId) ||
+        (write.threadId && write.threadId !== root) ||
+        receipts.has(write.messageId)
+      ) {
+        continue;
+      }
+      rememberSutReceipt(write.messageId, write.threadId);
+    }
+    await persist();
+  };
+
   const cleanup = async () => {
     closing = true;
     await Promise.allSettled(pending);
@@ -468,15 +507,7 @@ export function createSlackChannelE2e(params: {
             receipts.get(write.threadId)?.message.actor === "driver" &&
             !receipts.has(write.messageId)
           ) {
-            receipts.set(write.messageId, {
-              message: {
-                id: write.messageId,
-                channelId: params.channelId,
-                threadId: write.threadId,
-                text: "",
-                actor: "sut",
-              },
-            });
+            rememberSutReceipt(write.messageId, write.threadId);
           }
           if (
             write.method === "files.completeUploadExternal" &&
@@ -555,5 +586,5 @@ export function createSlackChannelE2e(params: {
       );
     }
   };
-  return { driver, cleanup, artifactPath };
+  return { driver, cleanup, artifactPath, recordScenarioMessages };
 }

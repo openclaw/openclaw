@@ -3,7 +3,7 @@
  * Shared by agent/session tool inventory resolvers and UI/API callers that
  * present enabled tools grouped by source.
  */
-import type { ToolsEffectiveEntry } from "../../packages/gateway-protocol/src/schema/tools-catalog.js";
+import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -14,8 +14,6 @@ export type {
   ToolsEffectiveNotice as EffectiveToolInventoryNotice,
   ToolsEffectiveResult as EffectiveToolInventoryResult,
 } from "../../packages/gateway-protocol/src/schema/tools-catalog.js";
-
-export type EffectiveToolSource = ToolsEffectiveEntry["source"];
 
 /** Inputs for resolving the effective tool inventory in a session/runtime context. */
 export type ResolveEffectiveToolInventoryParams = {
@@ -42,7 +40,8 @@ export type ResolveEffectiveToolInventoryParams = {
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
-  replyToMode?: "off" | "first" | "all" | "batched";
+  replyToMode?: ReplyToMode;
+  webSearchEnabled?: boolean;
   modelHasVision?: boolean;
   requireExplicitMessageTarget?: boolean;
   disableMessageTool?: boolean;

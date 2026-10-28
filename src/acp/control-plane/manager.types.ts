@@ -1,4 +1,3 @@
-/** Shared types and dependency wiring for the ACP session manager control plane. */
 import type {
   AcpElicitationHandler,
   AcpRuntime,
@@ -66,6 +65,8 @@ export type AcpInitializeSessionInput = {
   agent: string;
   mode: AcpRuntimeSessionMode;
   resumeSessionId?: string;
+  /** Re-read caller-owned resume authority after preparation and return its synchronous initialization guard. */
+  revalidateResume?: () => Promise<() => void>;
   runtimeOptions?: Partial<AcpSessionRuntimeOptions>;
   modelExplicit?: boolean;
   thinkingExplicit?: boolean;
@@ -98,6 +99,18 @@ export type AcpRunTurnInput = {
 type AcpTurnLifecycleEvent = {
   type: "prompt_submitted";
   at: number;
+};
+
+/** Input for cancelling captured ACP invocations or an idle persistent runtime. */
+export type AcpCancelSessionInput = {
+  assertActive?: () => void;
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+  reason?: string;
+  expectedRunId?: string;
+  expectedInstanceId?: string;
+  expectedOwnerKey?: string;
 };
 
 /** Input for closing, resetting, or cleaning up an ACP session. */
@@ -163,8 +176,6 @@ export type AcpStartupIdentityReconcileResult = {
 };
 
 export type ActiveTurnState = {
-  requestId: string;
-  instanceId: string;
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
   abortController: AbortController;

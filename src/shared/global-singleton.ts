@@ -4,7 +4,11 @@
  */
 const GLOBAL_SINGLETON_RESETS_KEY = Symbol.for("openclaw.globalSingletonLifecycleResets");
 
-type GlobalSingletonLifecycle = "close-and-restart" | "close-only" | "plugin-registry";
+type GlobalSingletonLifecycle =
+  | "close-and-restart"
+  | "close-only"
+  | "plugin-registry"
+  | "shared-state";
 type GlobalSingletonReset<T> = (value: T) => void | Promise<void>;
 type RegisteredGlobalSingletonReset = {
   lifecycle: GlobalSingletonLifecycle;
@@ -81,10 +85,20 @@ export function resolveGlobalSet<T>(key: symbol, lifecycle: GlobalSingletonLifec
 
 /** Resets every opt-in singleton while preserving shared object identity for the next lifecycle. */
 export async function drainGlobalSingletonLifecycleState(
-  event: "close" | "plugin-registry" | "restart" = "close",
+  event: "close" | "plugin-registry" | "restart" | "shared-state" = "close",
+  options: {
+    retainSharedState?: boolean;
+    measureReset?: (name: string, reset: () => Promise<void>) => Promise<void>;
+  } = {},
 ): Promise<void> {
-  const resets = [...resolveGlobalSingletonResetRegistry().values()]
-    .filter(({ lifecycle }) => {
+  const resets = [...resolveGlobalSingletonResetRegistry().entries()]
+    .filter(([, { lifecycle }]) => {
+      if (event === "shared-state") {
+        return lifecycle === "shared-state";
+      }
+      if (lifecycle === "shared-state") {
+        return event !== "plugin-registry" && !options.retainSharedState;
+      }
       if (event === "plugin-registry") {
         return lifecycle === "plugin-registry";
       }
@@ -93,16 +107,21 @@ export async function drainGlobalSingletonLifecycleState(
       }
       return event === "close" || lifecycle === "close-and-restart";
     })
-    .map(({ reset }) => {
-      try {
-        return Promise.resolve(reset());
-      } catch (error) {
-        return Promise.reject(
-          error instanceof Error
-            ? error
-            : new Error("Global singleton reset failed", { cause: error }),
-        );
-      }
+    .map(([key, { reset }]) => {
+      const runReset = () => {
+        try {
+          return Promise.resolve(reset());
+        } catch (error) {
+          return Promise.reject(
+            error instanceof Error
+              ? error
+              : new Error("Global singleton reset failed", { cause: error }),
+          );
+        }
+      };
+      return options.measureReset
+        ? options.measureReset(key.description ?? String(key), runReset)
+        : runReset();
     });
   const settled = await Promise.allSettled(resets);
   const errors = settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));

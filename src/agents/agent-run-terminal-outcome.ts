@@ -91,13 +91,6 @@ type LegacyAgentRunAttemptTerminalInput = {
 
 // Timeout owns mechanical abort/failure observations; within a timeout, the
 // latest concrete phase/source can only refine toward stronger attribution.
-const ATTEMPT_TERMINAL_KIND_RANK = {
-  ok: 0,
-  failed: 1,
-  aborted: 2,
-  timeout: 3,
-} as const;
-
 const ATTEMPT_TIMEOUT_PHASE_RANK = {
   prompt: 0,
   tool_execution: 1,
@@ -120,7 +113,7 @@ const ATTEMPT_ABORT_SOURCE_RANK = {
 
 function mergeAgentRunAttemptTimeoutPhase(
   phase: "prompt" | AgentRunAttemptTimeoutObservation,
-  observation: AgentRunAttemptTimeoutObservation | undefined,
+  observation: typeof phase | undefined,
 ): "prompt" | AgentRunAttemptTimeoutObservation {
   return observation && ATTEMPT_TIMEOUT_PHASE_RANK[observation] > ATTEMPT_TIMEOUT_PHASE_RANK[phase]
     ? observation
@@ -231,11 +224,9 @@ export function mergeAgentRunAttemptTerminal(
     return current.kind === "ok" && !current.settlementWarning ? incoming : current;
   }
   const failure = getAgentRunAttemptFailure(incoming) ?? getAgentRunAttemptFailure(current);
+  let merged: AgentRunAttemptTerminal = incoming;
   if (current.kind === "timeout" && incoming.kind === "timeout") {
-    const phase =
-      ATTEMPT_TIMEOUT_PHASE_RANK[incoming.phase] > ATTEMPT_TIMEOUT_PHASE_RANK[current.phase]
-        ? incoming.phase
-        : current.phase;
+    const phase = mergeAgentRunAttemptTimeoutPhase(current.phase, incoming.phase);
     const selected =
       ATTEMPT_TIMEOUT_SOURCE_RANK[incoming.source] > ATTEMPT_TIMEOUT_SOURCE_RANK[current.source]
         ? incoming
@@ -245,35 +236,27 @@ export function mergeAgentRunAttemptTerminal(
         current.phase === "compaction" || incoming.phase === "compaction"
           ? "compaction"
           : "tool_execution";
-      return withAgentRunAttemptFailure(
-        { kind: "timeout", phase: observationPhase, source: "observation" },
-        failure,
-      );
-    }
-    return withAgentRunAttemptFailure(
-      {
+      merged = { kind: "timeout", phase: observationPhase, source: "observation" };
+    } else {
+      merged = {
         kind: "timeout",
         phase,
         source: selected.source,
         ...((hasAgentRunAttemptTimeoutAbort(current) ||
           hasAgentRunAttemptTimeoutAbort(incoming)) && { aborted: true as const }),
-      },
-      failure,
-    );
-  }
-  if ((current.kind === "aborted" || current.kind === "failed") && incoming.kind === "timeout") {
-    return withAgentRunAttemptFailure(
-      mergeAgentRunAttemptTimeoutInterruption(incoming, current),
-      failure,
-    );
-  }
-  if (current.kind === "timeout" && (incoming.kind === "aborted" || incoming.kind === "failed")) {
-    return withAgentRunAttemptFailure(
-      mergeAgentRunAttemptTimeoutInterruption(current, incoming),
-      failure,
-    );
-  }
-  if (
+      };
+    }
+  } else if (
+    (current.kind === "aborted" || current.kind === "failed") &&
+    incoming.kind === "timeout"
+  ) {
+    merged = mergeAgentRunAttemptTimeoutInterruption(incoming, current);
+  } else if (
+    current.kind === "timeout" &&
+    (incoming.kind === "aborted" || incoming.kind === "failed")
+  ) {
+    merged = mergeAgentRunAttemptTimeoutInterruption(current, incoming);
+  } else if (
     (current.kind === "aborted" || current.kind === "failed") &&
     (incoming.kind === "aborted" || incoming.kind === "failed")
   ) {
@@ -285,19 +268,16 @@ export function mergeAgentRunAttemptTerminal(
           : current.source;
       selected = { kind: "aborted", source };
     } else {
-      selected =
-        ATTEMPT_TERMINAL_KIND_RANK[incoming.kind] >= ATTEMPT_TERMINAL_KIND_RANK[current.kind]
-          ? incoming
-          : current;
+      selected = current.kind === "aborted" ? current : incoming;
     }
     for (const observation of [current.timeoutObservation, incoming.timeoutObservation]) {
       if (observation) {
         selected = withAgentRunAttemptTimeoutObservation(selected, observation);
       }
     }
-    return withAgentRunAttemptFailure(selected, failure);
+    merged = selected;
   }
-  return withAgentRunAttemptFailure(incoming, failure);
+  return withAgentRunAttemptFailure(merged, failure);
 }
 
 /** Normalizes the shipped harness result shape at the Plugin SDK boundary. */
@@ -353,6 +333,12 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
   const externalAbort =
     (terminal.kind === "aborted" || terminal.kind === "timeout") && terminal.source === "external";
   const timedOut = terminal.kind === "timeout" && terminal.source !== "observation";
+  const timeoutPhase =
+    terminal.kind === "timeout"
+      ? terminal.phase
+      : terminal.kind === "ok"
+        ? undefined
+        : terminal.timeoutObservation;
   return {
     ...(terminal.kind === "ok" &&
       terminal.settlementWarning && { settlementWarning: terminal.settlementWarning }),
@@ -368,14 +354,8 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
     promptErrorSource: failure?.source ?? null,
     timedOut,
     timedOutByRunBudget: terminal.kind === "timeout" && terminal.source === "run_budget",
-    timedOutDuringCompaction:
-      (terminal.kind === "timeout" && terminal.phase === "compaction") ||
-      ((terminal.kind === "aborted" || terminal.kind === "failed") &&
-        terminal.timeoutObservation === "compaction"),
-    timedOutDuringToolExecution:
-      (terminal.kind === "timeout" && terminal.phase === "tool_execution") ||
-      ((terminal.kind === "aborted" || terminal.kind === "failed") &&
-        terminal.timeoutObservation === "tool_execution"),
+    timedOutDuringCompaction: timeoutPhase === "compaction",
+    timedOutDuringToolExecution: timeoutPhase === "tool_execution",
   };
 }
 
@@ -384,7 +364,59 @@ export {
   hasExecutionSettlement,
   isDefinitiveRunLifecycle,
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-export { mergeAgentRunTerminalOutcome } from "./agent-run-terminal-outcome-merge.js";
+function completedBeforeOrAtTimeout(params: {
+  completed: AgentRunTerminalOutcome;
+  timeout: AgentRunTerminalOutcome;
+}): boolean {
+  return (
+    params.completed.reason === "completed" &&
+    params.completed.endedAt !== undefined &&
+    params.timeout.endedAt !== undefined &&
+    params.completed.endedAt <= params.timeout.endedAt
+  );
+}
+
+/** Merges observations without overwriting a proven cancellation or hard timeout. */
+export function mergeAgentRunTerminalOutcome(
+  current: AgentRunTerminalOutcome | undefined,
+  incoming: AgentRunTerminalOutcome,
+): AgentRunTerminalOutcome {
+  if (!current) {
+    return incoming;
+  }
+  if (current.reason === "superseded" || current.reason === "cancelled") {
+    // Timestamps, not callback ordering, decide whether an earlier provider timeout won.
+    if (
+      incoming.reason === "hard_timeout" &&
+      incoming.endedAt !== undefined &&
+      current.endedAt !== undefined &&
+      incoming.endedAt <= current.endedAt
+    ) {
+      return incoming;
+    }
+    return current.reason === "superseded" || incoming.reason !== "superseded" ? current : incoming;
+  }
+  // A hard timeout owns the run unless an earlier completion or cancellation is proven.
+  if (current.reason === "hard_timeout") {
+    if (
+      (incoming.reason === "superseded" || incoming.reason === "cancelled") &&
+      incoming.endedAt !== undefined &&
+      current.endedAt !== undefined &&
+      incoming.endedAt < current.endedAt
+    ) {
+      return incoming;
+    }
+    return completedBeforeOrAtTimeout({ completed: incoming, timeout: current })
+      ? incoming
+      : current;
+  }
+  if (incoming.reason === "hard_timeout") {
+    return completedBeforeOrAtTimeout({ completed: current, timeout: incoming })
+      ? current
+      : incoming;
+  }
+  return incoming;
+}
 
 type AgentRunTerminalInput = AgentRunTerminalFactInput & {
   error?: unknown;

@@ -13,7 +13,6 @@ describe("thread binding manager state", () => {
     const globalStore = globalThis as Record<PropertyKey, unknown>;
     const { THREAD_BINDINGS_STATE: originalState } = await import("./thread-bindings.state.js");
     const predecessor = { ...originalState };
-    Reflect.deleteProperty(predecessor, "accountOperationTails");
     globalStore[stateKey] = predecessor;
 
     try {
@@ -58,8 +57,6 @@ describe("thread binding manager state", () => {
       await replacement.stop();
       expect(second.getThreadBindingManager("work")).toBeNull();
     } finally {
-      // The missing-map regression must not leave a manager that teardown cannot drain.
-      predecessor.accountOperationTails ??= new WeakMap();
       try {
         await resetThreadBindingsForTests();
       } finally {

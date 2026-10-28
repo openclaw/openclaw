@@ -6,6 +6,11 @@ export type AttemptTranscriptMessage =
   | NonNullable<TranscriptRecorder["message"]>
   | Extract<AgentMessage, { role: "assistant" | "toolResult" }>;
 
+export function readIdempotencyKey(message: object): string | undefined {
+  const key = "idempotencyKey" in message ? message.idempotencyKey : undefined;
+  return typeof key === "string" && key ? key : undefined;
+}
+
 export function userText(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -93,13 +98,12 @@ export function isSameUserTurn(
   }
   const candidateKey = candidate.idempotencyKey;
   const currentKey = current.idempotencyKey;
-  if (typeof candidateKey === "string" || typeof currentKey === "string") {
-    if (typeof candidateKey === "string" && typeof currentKey === "string") {
+  if (candidateKey !== undefined || currentKey !== undefined) {
+    if (candidateKey !== undefined && currentKey !== undefined) {
       return candidateKey === currentKey;
     }
     if (
-      typeof candidateKey !== "string" ||
-      typeof currentKey === "string" ||
+      candidateKey === undefined ||
       (!candidateKey.startsWith("copilot:") && candidateKey !== currentRunUserKey)
     ) {
       return false;

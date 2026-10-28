@@ -12,7 +12,10 @@ export function resolveCurrentDiagnosticOwner(
   assertCurrent?: () => void,
 ): DiagnosticOwnerRegistration | undefined {
   const registration = activeDiagnosticOwners.get(owner.generation);
-  if (registration?.owner !== owner) {
+  if (
+    registration?.owner !== owner ||
+    registration.activity.activeEmbeddedRuns.get(owner.workKey)?.generation !== owner.generation
+  ) {
     return undefined;
   }
   try {
@@ -20,17 +23,14 @@ export function resolveCurrentDiagnosticOwner(
   } catch {
     return undefined;
   }
-  // The caller assertion may synchronously retire or replace the registration.
-  return activeDiagnosticOwners.get(owner.generation) === registration &&
-    registration.activity.activeEmbeddedRuns.get(owner.workKey)?.generation === owner.generation
-    ? registration
-    : undefined;
+  return registration;
 }
 
 /** Retains a provider wait only while its logical run still owns this attempt. */
 export function beginDiagnosticRetryWait(params: {
   owner: DiagnosticEmbeddedRunOwner;
   deadlineAtMs: number;
+  rateLimitStopMessage?: string;
   signal: AbortSignal;
   assertCurrent: () => void;
 }): (completed?: boolean) => boolean {
@@ -38,12 +38,36 @@ export function beginDiagnosticRetryWait(params: {
     params.signal.throwIfAborted();
     params.assertCurrent();
   };
+  const ownedWait = params.owner.watchdogAttempt?.beginWait({
+    kind: "retry",
+    deadlineAtMs: params.deadlineAtMs,
+    rateLimitStopMessage: params.rateLimitStopMessage,
+    isCurrent: () => {
+      assertCurrent();
+      return true;
+    },
+  });
   const registration = resolveCurrentDiagnosticOwner(params.owner, assertCurrent);
   if (!registration) {
+    if (ownedWait) {
+      return (completed = false) => {
+        ownedWait.close();
+        if (!completed) {
+          return false;
+        }
+        try {
+          assertCurrent();
+          return params.owner.watchdogAttempt!.isCurrent();
+        } catch {
+          return false;
+        }
+      };
+    }
     return () => false;
   }
   registration.retryWait?.close();
   const close = (completed = false) => {
+    ownedWait?.close();
     const resumed =
       completed &&
       registration.retryWait === wait &&
@@ -73,13 +97,29 @@ export function beginDiagnosticBackendActivity(params: {
   owner: DiagnosticEmbeddedRunOwner;
   noOutputTimeoutMs: number;
   assertCurrent: () => void;
-}): {
-  observeOutput: (modelProgress: boolean) => boolean;
-  observeAttributedAgentProgress: (parentToolCallId: string) => boolean;
-  setOutstandingWork: (active: boolean) => void;
-  close: () => void;
-} {
+}) {
   const { owner, noOutputTimeoutMs, assertCurrent } = params;
+  const attempt = owner.watchdogAttempt;
+  let closed = false;
+  const ownsAttempt = () => {
+    if (closed || !attempt?.isCurrent()) {
+      return false;
+    }
+    try {
+      assertCurrent();
+    } catch {
+      return false;
+    }
+    return !closed && attempt.isCurrent();
+  };
+  const ownedWait = attempt?.beginWait({
+    kind: "backend",
+    deadlineAtMs: Date.now() + noOutputTimeoutMs,
+    isCurrent: () => {
+      assertCurrent();
+      return true;
+    },
+  });
   let quietAllowanceMs = noOutputTimeoutMs;
   const registration = resolveCurrentDiagnosticOwner(owner, assertCurrent);
   const backendActivity: DiagnosticBackendActivity = {
@@ -94,41 +134,55 @@ export function beginDiagnosticBackendActivity(params: {
     return current?.backendActivity === backendActivity ? current.activity : undefined;
   };
   return {
-    observeOutput: (modelProgress) => {
+    observeOutput: (modelProgress: boolean) => {
+      if (closed || (attempt && !ownsAttempt())) {
+        return false;
+      }
       const activity = currentActivity();
-      if (!activity) {
+      if (closed || (attempt && !ownsAttempt())) {
         return false;
       }
       const now = Date.now();
       backendActivity.deadlineAtMs = now + quietAllowanceMs;
+      ownedWait?.updateDeadline(backendActivity.deadlineAtMs);
+      const progressed = modelProgress
+        ? (attempt?.progressModel("model_call:stream_progress") ?? false)
+        : (attempt?.progress("transport", "model_call:stream_progress") ?? false);
+      if (!activity) {
+        return progressed;
+      }
       if (!modelProgress || activity.activeTools.size > 0) {
         return false;
       }
       touchSessionActivity(activity, "model_call:stream_progress", now);
       return true;
     },
-    observeAttributedAgentProgress: (parentToolCallId) => {
-      const activity = currentActivity();
-      const toolCallId = parentToolCallId.trim();
-      if (!activity || !toolCallId) {
+    observeAttributedAgentProgress: (parentToolCallId: string) => {
+      if (closed || (attempt && !ownsAttempt())) {
         return false;
       }
-      for (const tool of activity.activeTools.values()) {
-        if (tool.toolCallId !== toolCallId) {
-          continue;
-        }
-        if (!FOREGROUND_AGENT_TOOL_NAMES.has(tool.toolName)) {
-          return false;
-        }
-        const now = Date.now();
-        backendActivity.deadlineAtMs = now + quietAllowanceMs;
-        touchSessionActivity(activity, `tool:${tool.toolName}:subagent_progress`, now);
-        return true;
+      const toolCallId = parentToolCallId.trim();
+      const ownedProgress = attempt?.progressTool(toolCallId, ["Agent", "Task"]) ?? false;
+      const activity = currentActivity();
+      const tool = toolCallId
+        ? [...(activity?.activeTools.values() ?? [])].find(
+            (active) =>
+              active.toolCallId === toolCallId && FOREGROUND_AGENT_TOOL_NAMES.has(active.toolName),
+          )
+        : undefined;
+      if (attempt ? !ownedProgress : !tool) {
+        return false;
       }
-      return false;
+      const now = Date.now();
+      backendActivity.deadlineAtMs = now + quietAllowanceMs;
+      ownedWait?.updateDeadline(backendActivity.deadlineAtMs);
+      if (activity && tool) {
+        touchSessionActivity(activity, `tool:${tool.toolName}:subagent_progress`, now);
+      }
+      return true;
     },
-    setOutstandingWork: (active) => {
-      if (!currentActivity()) {
+    setOutstandingWork: (active: boolean) => {
+      if (closed || (attempt ? !ownsAttempt() : !currentActivity())) {
         return;
       }
       const allowanceMs = active
@@ -137,8 +191,11 @@ export function beginDiagnosticBackendActivity(params: {
       // Work-state changes preserve the last output's origin, not a new progress clock.
       backendActivity.deadlineAtMs += allowanceMs - quietAllowanceMs;
       quietAllowanceMs = allowanceMs;
+      ownedWait?.updateDeadline(backendActivity.deadlineAtMs);
     },
     close: () => {
+      closed = true;
+      ownedWait?.close();
       // Compare-release remains valid after abort and cannot retire a later attempt.
       const current = activeDiagnosticOwners.get(owner.generation);
       if (current?.owner === owner && current.backendActivity === backendActivity) {

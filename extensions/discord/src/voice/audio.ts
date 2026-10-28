@@ -41,7 +41,6 @@ const FFMPEG_PCM_ARGUMENTS = [
 
 type OpusDecodeCallbacks = {
   onError?: (err: unknown) => void;
-  onVerbose: (message: string) => void;
   onWarn: (message: string) => void;
 };
 
@@ -75,17 +74,13 @@ function buildWavBuffer(chunks: readonly Buffer[]): Buffer {
   return wav;
 }
 
-export function createDiscordOpusEncodeStream(): DiscordOpusEncodeStream {
-  return new DiscordOpusEncodeStream();
-}
-
 export function createDiscordOpusPlaybackStream(input: Readable | string): Readable {
   const inputSource = typeof input === "string" ? input : "pipe:0";
   const ffmpeg = spawn(resolveFfmpegBin(), ["-i", inputSource, ...FFMPEG_PCM_ARGUMENTS, "pipe:1"], {
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
-  const opusStream = createDiscordOpusEncodeStream();
+  const opusStream = new DiscordOpusEncodeStream();
   const stderr = Buffer.alloc(FFMPEG_ERROR_OUTPUT_BYTES);
   let stderrBytes = 0;
   let ffmpegClosed = false;
@@ -150,7 +145,7 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
   return opusStream;
 }
 
-class DiscordOpusEncodeStream extends Duplex {
+export class DiscordOpusEncodeStream extends Duplex {
   #partialFrame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
   #partialBytes = 0;
   #pending: { chunk: Buffer; offset: number; done: StreamCallback } | undefined;
@@ -318,19 +313,6 @@ export async function decodeOpusStreamChunks(
     onChunk: (pcm48kStereo: Buffer, packet: Buffer) => void | Promise<void>;
   },
 ): Promise<void> {
-  try {
-    for await (const { pcm, packet } of decodeOpusFrames(stream, params)) {
-      await params.onChunk(pcm, packet);
-    }
-  } catch (err) {
-    params.onError?.(err);
-  }
-}
-
-async function* decodeOpusFrames(
-  stream: Readable,
-  params: OpusDecodeCallbacks,
-): AsyncGenerator<{ pcm: Buffer; packet: Buffer }> {
   let decoder: LibopusDecoder;
   try {
     decoder = await createLibopusDecoder({ channels: CHANNELS, sampleRate: SAMPLE_RATE });
@@ -339,12 +321,11 @@ async function* decodeOpusFrames(
     if (!warnedOpusMissing) {
       warnedOpusMissing = true;
       params.onWarn(
-        `discord voice: no usable opus decoder available (libopus-wasm: ${formatErrorMessage(err)}); cannot decode voice audio`,
+        "discord voice: no usable opus decoder available (libopus-wasm); cannot decode voice audio",
       );
     }
     return;
   }
-  params.onVerbose("opus decoder: libopus-wasm");
   try {
     for await (const chunk of stream) {
       if (!chunk || !(chunk instanceof Buffer) || chunk.length === 0) {
@@ -352,16 +333,16 @@ async function* decodeOpusFrames(
       }
       const decoded = decoder.decode(chunk, { maxFrameSize: DISCORD_OPUS_MAX_DECODE_FRAME_SIZE });
       if (decoded.length > 0) {
-        yield {
-          pcm: Buffer.from(decoded.buffer, decoded.byteOffset, decoded.byteLength),
-          packet: chunk,
-        };
+        await params.onChunk(
+          Buffer.from(decoded.buffer, decoded.byteOffset, decoded.byteLength),
+          chunk,
+        );
       }
     }
   } catch (err) {
     params.onError?.(err);
     if (shouldLogVerbose()) {
-      logVerbose(`discord voice: opus decode failed: ${formatErrorMessage(err)}`);
+      logVerbose("discord voice: opus decode failed");
     }
   } finally {
     decoder.free();
@@ -445,7 +426,7 @@ export function createRealtimePcmToDiscordConverter() {
 
 export async function writeVoiceWavFile(
   chunks: readonly Buffer[],
-): Promise<{ path: string; durationSeconds: number; cleanup: () => Promise<void> }> {
+): Promise<{ path: string; cleanup: () => Promise<void> }> {
   // Snapshot borrowed PCM before workspace creation can suspend the receive owner.
   const wav = buildWavBuffer(chunks);
   const workspace = await tempWorkspace({
@@ -456,8 +437,6 @@ export async function writeVoiceWavFile(
     const filePath = await workspace.write("segment.wav", wav);
     return {
       path: filePath,
-      durationSeconds:
-        (wav.length - VOICE_WAV_HEADER_BYTES) / ((BIT_DEPTH / 8) * CHANNELS * SAMPLE_RATE),
       cleanup: () => workspace[Symbol.asyncDispose](),
     };
   } catch (error) {

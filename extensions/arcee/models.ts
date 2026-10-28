@@ -54,15 +54,5 @@ export const ARCEE_MODEL_CATALOG: ModelDefinitionConfig[] = [
 export function buildArceeModelDefinition(
   model: (typeof ARCEE_MODEL_CATALOG)[number],
 ): ModelDefinitionConfig {
-  return {
-    id: model.id,
-    name: model.name,
-    api: "openai-completions",
-    reasoning: model.reasoning,
-    input: model.input,
-    cost: model.cost,
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-    ...(model.compat ? { compat: model.compat } : {}),
-  };
+  return { ...model, api: "openai-completions" };
 }

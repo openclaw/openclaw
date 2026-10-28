@@ -119,7 +119,7 @@ export async function readTranscriptLibraryStatus(
       active.push(projected);
     }
   }
-  const configuredStarts = readConfiguredTranscriptStarts(cfg.transcripts);
+  const configuredStarts = readConfiguredTranscriptStarts();
   const configuredSources: TranscriptsStatusResult["configuredSources"] = config.autoStart
     .slice(0, TRANSCRIPTS_PAGE_MAX)
     .map((configured, index) => {

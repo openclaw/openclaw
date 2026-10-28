@@ -420,7 +420,8 @@ function assertReplayEgress(
   expect(transport.inputItemShape[0]).toBe("compaction");
   expect(transport.compactionInputIndexes).toEqual([0]);
   expect(transport.inputItems).toBe(transport.inputItemShape.length);
-  expect(transport.inputItemShape.at(-1)).toBe("message:user");
+  // Turn-scoped runtime context follows the user prompt as a developer item.
+  expect(transport.inputItemShape.slice(-2)).toEqual(["message:user", "message:developer"]);
 }
 
 describeLive("Gateway OpenAI long-context compaction (live)", () => {
@@ -466,7 +467,7 @@ describeLive("Gateway OpenAI long-context compaction (live)", () => {
 
       const gatewayEvents: OpenAILongContextAgentEvent[] = [];
       const deviceIdentity = loadOrCreateDeviceIdentity({
-        path: instance.state.path("operator-device.sqlite"),
+        path: instance.state.path("operator-device", "client", "credentials.sqlite"),
       });
       let client = await connectGatewayClient({
         url: instance.url,

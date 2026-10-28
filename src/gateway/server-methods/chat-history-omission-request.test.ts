@@ -5,7 +5,7 @@ import type { WebSocket } from "ws";
 import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
+import { getMaxChatHistoryMessagesBytes } from "../chat-history-budget.js";
 import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "../test-helpers.js";
 import { installConnectedControlUiServerSuite } from "../test-with-server.js";
 
@@ -21,7 +21,8 @@ describe("chat.history request truncation diagnostic", () => {
   test("a real request reports older history omitted by the production budget", async () => {
     const sessionId = "sess-omission-proof";
     const sessionKey = "agent:main:main";
-    const messageCount = 70;
+    // Count actual budget omissions within one source window, not unread older history.
+    const messageCount = 10;
     const textBytes = 100_000;
     const budgetBytes = getMaxChatHistoryMessagesBytes();
     const dir = tempDirs.make();

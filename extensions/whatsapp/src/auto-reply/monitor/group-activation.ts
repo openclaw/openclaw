@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeGroupActivation } from "openclaw/plugin-sdk/group-activation";
+import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
-import { normalizeGroupActivation } from "./group-activation.runtime.js";
 
 export async function resolveGroupActivationFor(params: {
   cfg: OpenClawConfig;
@@ -13,7 +13,7 @@ export async function resolveGroupActivationFor(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.agentId,
   });
-  const entry = getSessionEntry({
+  const entry = await getSessionEntryAsync({
     storePath,
     agentId: params.agentId,
     sessionKey: params.sessionKey,

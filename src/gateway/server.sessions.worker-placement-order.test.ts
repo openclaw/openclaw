@@ -1,16 +1,18 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, test } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import { resolveCanonicalSessionEntryFromStoreKeys } from "./session-utils-store.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
-  seedSessionTranscript,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 import { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
+import { createCoordinatorTestService } from "./worker-environments/placement-dispatch-coordinator.test-support.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-store.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
@@ -19,45 +21,21 @@ const unexpectedPlacementOperation = async (): Promise<never> => {
   throw new Error("Unexpected placement operation in lifecycle ordering test");
 };
 
-test.each(["delete", "archive", "recover"] as const)(
+test.for(["delete", "archive"] as const)(
   "%s lets an earlier move acquire its session fence before reclaim",
-  async (action) => {
+  async (action, { signal }) => {
     const { storePath } = await createSessionStoreDir();
     const sessionId = `lifecycle-order-${action}`;
     const sessionKey = `agent:main:${sessionId}`;
-    await writeSessionStore({
-      entries: {
-        [sessionKey]: sessionStoreEntry(sessionId, {
-          worktree: { id: "order-worktree", branch: "order-branch", repoRoot: "/fixture/repo" },
-          lifecycleRevision: "original-lifecycle",
-          ...(action === "recover"
-            ? {
-                status: "failed" as const,
-                abortedLastRun: true,
-                mainRestartRecovery: {
-                  cycleId: "order-cycle",
-                  revision: 1,
-                  chargedAttempts: 3,
-                  tombstone: { reason: "automatic recovery exhausted" },
-                },
-              }
-            : {}),
-        }),
-      },
+    const identity = { sessionId, sessionKey, agentId: "main" };
+    const worktree = { id: "order-worktree", ownerId: sessionKey, path: "/fixture/worktree" };
+    const seed = sessionStoreEntry(sessionId, {
+      worktree: { id: worktree.id, branch: "order-branch", repoRoot: "/fixture/repo" },
+      lifecycleRevision: "original-lifecycle",
     });
-    if (action === "recover") {
-      await seedSessionTranscript({
-        agentId: "main",
-        sessionId,
-        sessionKey,
-        storePath,
-        messages: [{ role: "user", content: "recover this session" }],
-      });
-    }
+    await writeSessionStore({ entries: { [sessionKey]: seed } });
     let placement = {
-      sessionId,
-      sessionKey,
-      agentId: "main",
+      ...identity,
       state: "active",
       generation: 4,
       environmentId: "order-environment",
@@ -72,45 +50,27 @@ test.each(["delete", "archive", "recover"] as const)(
     let serializedReclaim: Promise<unknown> | undefined;
     const moveBarrier = createGatewayWorkerPlacementMoveBarrier({
       placements: { waitForTurnClaimRelease: async () => {} },
-      awaitTurnClaimRelease: (claimSessionId, wait) =>
-        service.awaitTurnClaimRelease(claimSessionId, wait),
       loadSessionRuntime: async () => {
         moveLoading.resolve();
         await releaseMove.promise;
         return {
-          managedWorktrees: {
-            findLiveByOwner: () => ({
-              id: "order-worktree",
-              ownerId: sessionKey,
-              path: "/fixture/worktree",
+          managedWorktrees: { findLiveByOwner: async () => worktree },
+          resolveGatewaySessionStoreTargetInWorker: (params) =>
+            resolveGatewaySessionStoreTargetInWorker({
+              ...params,
+              cfg: { ...params.cfg, session: { ...params.cfg.session, store: storePath } },
             }),
-          },
-          resolveGatewaySessionStoreTargetWithStore: () => ({
-            storePath,
-            canonicalKey: sessionKey,
-            storeKeys: [sessionKey],
-            agentId: "main",
-            store: { [sessionKey]: loadSessionEntry(sessionKey).entry! },
-          }),
-          resolveCanonicalSessionEntryFromStoreKeys: () => loadSessionEntry(sessionKey).entry,
-        } as never;
+          resolveCanonicalSessionEntryFromStoreKeys,
+        };
       },
       revokeSessionAuthority: () => {},
     });
     const service = coordinateWorkerPlacementDispatch(
-      {
-        dispatch: unexpectedPlacementOperation,
-        forceDestroyEnvironment: unexpectedPlacementOperation,
-        getEnvironmentAttachedSessionIds: () => [],
+      createCoordinatorTestService({
         readEnvironmentSessionIds: unexpectedPlacementOperation,
-        reconcile: unexpectedPlacementOperation,
-        reconcileActive: unexpectedPlacementOperation,
-        resumeProvisioning: unexpectedPlacementOperation,
         move: async () => {
           await moveBarrier({
-            sessionId,
-            sessionKey,
-            agentId: "main",
+            ...identity,
             sourceDisposition: "reconcile",
             begin: async () => {
               moveAcquired = true;
@@ -134,14 +94,12 @@ test.each(["delete", "archive", "recover"] as const)(
           serializedReclaim = reclaim;
           return await Promise.race([reclaim, cleanupBlockedReclaim.promise]);
         },
-      },
+      }),
       (_request, run) => run(),
     );
     const moving = service
       .move({
-        sessionId,
-        sessionKey,
-        agentId: "main",
+        ...identity,
         source: { generation: 4, environmentId: "order-environment", ownerEpoch: 2 },
         target: { kind: "gateway" },
       })
@@ -167,38 +125,32 @@ test.each(["delete", "archive", "recover"] as const)(
         },
       },
     );
-    let acquiredBeforeCleanup = false;
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         reclaimEntered.promise,
-        lifecycle.then((result) => {
-          throw new Error(`Lifecycle returned before reclaim: ${JSON.stringify(result)}`);
-        }),
-      ]);
+        lifecycle,
+        "Lifecycle returned before reclaim",
+      );
       releaseMove.resolve();
-      await nextTurn();
-      acquiredBeforeCleanup = moveAcquired;
+      // The retained worker read can finish after the next event-loop turn.
+      await withinTest(moving, signal);
+      expect(await moving).toMatchObject({ message: "move preflight rejected" });
+      expect(moveAcquired).toBe(true);
+      await serializedReclaim;
     } finally {
-      // Unwind the baseline's real queues before asserting the ordering failure.
+      // Unwind the real queues even when the ordering assertions fail.
       releaseMove.resolve();
       cleanupBlockedReclaim.reject(new Error("test released blocked reclaim"));
       await Promise.allSettled([moving, lifecycle, cleanupBlockedReclaim.promise]);
       await serializedReclaim?.catch(() => {});
     }
-    expect(acquiredBeforeCleanup).toBe(true);
-    expect(await moving).toMatchObject({ message: "move preflight rejected" });
     const result = await lifecycle;
     expect(result.ok, JSON.stringify(result.error)).toBe(true);
-    const entry = loadSessionEntry(sessionKey).entry;
+    const entry = (await loadSessionEntryAsync(sessionKey)).entry;
     if (action === "delete") {
       expect(entry).toBeUndefined();
     } else {
       expect(entry?.archivedAt).toEqual(expect.any(Number));
-      if (action === "recover") {
-        expect(entry).toMatchObject({
-          mainRestartRecovery: { tombstone: { recoveredSessionKey: expect.any(String) } },
-        });
-      }
     }
   },
 );

@@ -3,6 +3,7 @@ import type { AgentsListResult, GatewaySessionRow, SessionBranch } from "../../a
 import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
+import type { ApplicationOverlays } from "../../app/overlays-types.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type {
   ChatAttachment,
@@ -12,12 +13,14 @@ import type {
 } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
+import type { ChatPendingInputView } from "./chat-pending-inputs.types.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { ChatRunError, LocalTerminalReconcile } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
 import type {
-  LiveToolStreamState,
+  ChatReasoning,
+  ToolStreamState,
   ProviderPolicyNotice,
   RunOutputUsage,
 } from "./tool-stream-contract.ts";
@@ -30,12 +33,24 @@ export type ChatHistorySessions = Pick<SessionCapability, "captureReconcile">;
 
 export type ChatHistoryHost = ChatState & { sessions: ChatHistorySessions };
 
+export type SessionApprovalReplayState = {
+  client: GatewayBrowserClient | null;
+  connectionEpoch: number;
+  sessionKey: string;
+  agentId?: string;
+  complete: boolean;
+};
+
 export type ChatState = StreamCausalBoundaryState & {
   uploadConfig?: ApplicationConfigCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;
+  /** Gateway admission can pause while the transport still owns in-flight results. */
+  gatewayWorkPaused?: boolean;
   chatSubmissions?: ApplicationChatSubmissions;
+  reconcileApprovalTerminals?: ApplicationOverlays["reconcileApprovalTerminals"];
   hasPendingInitialTurn?: (sessionKey: string) => boolean;
+  isRouteSessionPending?: () => boolean;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
   /** Config changes retire preview tickets even when session permissions stay inherited. */
@@ -46,11 +61,11 @@ export type ChatState = StreamCausalBoundaryState & {
   chatLoading: boolean;
   chatHistoryPagination: ChatHistoryPagination;
   chatMessages: unknown[];
+  chatPendingInputs?: ChatPendingInputView;
   chatMessagesBySession?: ChatMessageCache;
   chatHistoryCursor?: ChatHistoryCursor;
   /** Active leaf of the history snapshot currently rendered by this pane. */
   chatDisplayedLeafEntryId?: string | null;
-  chatThinkingLevel: string | null;
   chatVerboseLevel: string | null;
   /** Pane-owned explicit session queue override from the latest history response. */
   chatQueueModeOverride?: GatewaySessionRow["queueMode"];
@@ -71,7 +86,9 @@ export type ChatState = StreamCausalBoundaryState & {
   providerPolicyNotice?: ProviderPolicyNotice | null;
   /** Producer-cumulative text; visible tails derive from the segment baseline. */
   chatStream: string | null;
+  /** Identified assistant item at the tail of the current cumulative stream. */
   chatStreamStartedAt: number | null;
+  chatReasoning?: ChatReasoning | null;
   chatRunStartup?: ChatRunStartupState | null;
   lastError: string | null;
   chatError?: string | null;
@@ -91,12 +108,12 @@ export type ChatState = StreamCausalBoundaryState & {
   chatSessionMessageSubscriptionRequestedKey?: string | null;
   chatSessionMessageSubscription?: SessionMessageSubscription | null;
   chatSessionApprovalQueue?: ExecApprovalRequest[];
+  chatSessionApprovalReplay?: SessionApprovalReplayState;
   chatBranches?: SessionBranch[];
   chatBranchesSessionKey?: string | null;
   chatBranchesConnectionEpoch?: number | null;
-  requestUpdate?: () => void;
   /** Reports transcript loading edges; see CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT. */
   transcriptLoadingChanged?: () => void;
   /** Reports transient read recovery to the shell connection indicator. */
   historyRecoveryChanged?: () => void;
-} & LiveToolStreamState;
+} & ToolStreamState;

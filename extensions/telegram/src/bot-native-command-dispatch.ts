@@ -4,19 +4,15 @@ import type {
   OpenClawConfig,
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramDmAllow } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
-import type { TelegramBotDeps } from "./bot-deps.js";
-import type { TelegramResolvedGroupConfig } from "./bot-handlers.types.js";
 import { resolveTelegramMessageTurnSettings } from "./bot-message.js";
-import {
-  defaultTelegramNativeCommandDeps,
-  type TelegramNativeCommandDeps,
-} from "./bot-native-command-deps.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
   buildTelegramThreadParams,
@@ -27,7 +23,7 @@ import {
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
 import {
-  inspectTelegramConversationRoute,
+  inspectTelegramConversationRouteAsync,
   resolveTelegramTargetSession,
   touchTelegramConversationRoute,
 } from "./conversation-route.js";
@@ -35,18 +31,36 @@ import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
+import type { TelegramGroupConfigResolver } from "./group-config-helpers.js";
 import {
-  buildTelegramNativeCommandOwnerContext,
+  createTelegramIngressResolver,
   resolveTelegramCommandIngressAuthorization,
+  telegramConversation,
 } from "./ingress.js";
 import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
+import { getTelegramRuntime } from "./runtime.js";
 
 const loadTelegramNativeCommandDeliveryRuntime = createLazyRuntimeModule(
   () => import("./bot/delivery.js"),
 );
-const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(
-  () => import("./bot-native-commands.runtime.js"),
-);
+const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(async () => {
+  const {
+    ensureConfiguredBindingRouteReady,
+    getAgentScopedMediaLocalRoots,
+    getSessionEntryAsync,
+    recordDeliveredCommandExchange,
+    resolveChunkMode,
+    resolveStorePath,
+  } = await import("./bot-native-commands.runtime.js");
+  return {
+    ensureConfiguredBindingRouteReady,
+    getAgentScopedMediaLocalRoots,
+    getSessionEntryAsync,
+    recordDeliveredCommandExchange,
+    resolveChunkMode,
+    resolveStorePath,
+  };
+});
 
 type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNativeCommandRuntime>>;
 type TelegramNativeCommandDeliveryRuntime = Awaited<
@@ -66,12 +80,7 @@ export type TelegramCommandExecutorParams = {
   accountId: string;
   mediaMaxBytes?: number;
   resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
-  resolveTelegramGroupConfig: (
-    chatId: string | number,
-    messageThreadId: number | undefined,
-    cfg: OpenClawConfig,
-  ) => TelegramResolvedGroupConfig;
-  telegramDeps?: TelegramNativeCommandDeps;
+  resolveTelegramGroupConfig: TelegramGroupConfigResolver;
   opts: Pick<
     TelegramBotOptions,
     | "token"
@@ -90,16 +99,16 @@ type TelegramCommandAuthResult = NonNullable<
 
 export type TelegramCommandDispatch = TelegramCommandExecutorParams &
   TelegramCommandAuthResult & {
-    telegramDeps: TelegramNativeCommandDeps;
     runtimeCfg: OpenClawConfig;
     runtimeTelegramCfg: TelegramAccountConfig;
-    threadParams: ReturnType<typeof buildTelegramThreadParams>;
     nativeCommandRuntime: TelegramNativeCommandRuntime;
-    buildDeliveryBaseOptions: (params?: {
-      sessionKeyForInternalHooks?: string;
-      policySessionKey?: string;
-    }) => DeliveryBaseOptions;
+    deliveryOptions: DeliveryBaseOptions;
     loadDeliveryRuntime: () => Promise<TelegramNativeCommandDeliveryRuntime>;
+    recordDeliveredReply: (
+      commandText: string,
+      replyText: string,
+      replyId: string,
+    ) => Promise<void>;
   };
 
 export async function resolveTelegramNativeCommandThreadContext(params: {
@@ -124,7 +133,6 @@ export async function resolveTelegramNativeCommandThreadContext(params: {
   return {
     chatId,
     isGroup,
-    isForum,
     threadSpec,
     threadParams: buildTelegramThreadParams(threadSpec),
   };
@@ -137,7 +145,6 @@ async function resolveTelegramCommandAuth(params: {
   cfg: OpenClawConfig;
   accountId: string;
   telegramCfg: TelegramAccountConfig;
-  readChannelAllowFromStore: TelegramBotDeps["readChannelAllowFromStore"];
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   resolveGroupPolicy: TelegramCommandExecutorParams["resolveGroupPolicy"];
@@ -145,12 +152,11 @@ async function resolveTelegramCommandAuth(params: {
   requireAuth: boolean;
 }) {
   const { msg, bot, cfg, accountId, telegramCfg, requireAuth } = params;
-  const { chatId, isGroup, isForum, threadSpec, threadParams } =
+  const { chatId, isGroup, threadSpec, threadParams } =
     await resolveTelegramNativeCommandThreadContext({ msg, bot });
   const senderId = msg.from?.id ? String(msg.from.id) : "";
-  const senderUsername = msg.from?.username ?? "";
   const scopedConfig = params.resolveTelegramGroupConfig(chatId, threadSpec.id, cfg);
-  const inspectedRoute = inspectTelegramConversationRoute({
+  const inspectedRoute = await inspectTelegramConversationRouteAsync({
     cfg,
     accountId,
     chatId,
@@ -159,7 +165,7 @@ async function resolveTelegramCommandAuth(params: {
     senderId,
     topicAgentId: scopedConfig.topicConfig?.agentId,
   });
-  const { route, bindingMode } = inspectedRoute;
+  const { route } = inspectedRoute;
   const targetSessionKey = resolveTelegramTargetSession({
     cfg,
     route,
@@ -169,26 +175,53 @@ async function resolveTelegramCommandAuth(params: {
     dmThreadId: threadSpec.scope === "dm" ? threadSpec.id : undefined,
     botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(params.botUser),
   });
-  const ownerContext = await buildTelegramNativeCommandOwnerContext({
+  const ingressParams = {
     cfg,
     accountId,
     chatId,
     isGroup,
-    resolvedThreadId: threadSpec.id,
     senderId,
     dmPolicy: telegramCfg.dmPolicy ?? "pairing",
-    agentId: route.agentId,
-    sessionKey: targetSessionKey,
-    messageId: String(msg.message_id),
-    rawBody: msg.text ?? "",
+  };
+  const ownerThreadId = threadSpec.id;
+  const agentId = route.agentId;
+  const messageId = String(msg.message_id);
+  const rawBody = msg.text ?? "";
+  const conversation = telegramConversation({ ...ingressParams, resolvedThreadId: ownerThreadId });
+  // Bind the transport identity to the real command route. Command and room
+  // policy still decide admission after this identity-only context is prepared.
+  const channelIngress = await createTelegramIngressResolver({
+    accountId,
+    cfg,
+    useDefaultPairingStore: false,
+  }).event({
+    subject: { stableId: senderId },
+    conversation,
+    contextBinding: {
+      agentId,
+      sessionKey: targetSessionKey,
+      messageId,
+      inboundEventKind: "user_request",
+    },
+    event: { kind: "native-command", authMode: "none", mayPair: false },
+    dmPolicy: ingressParams.dmPolicy,
+    groupPolicy: "allowlist",
+    command: false,
+  });
+  const ownerContext = getTelegramRuntime().channel.inbound.buildContext({
+    channel: "telegram",
+    accountId,
+    channelIngress,
+    messageId,
+    from: isGroup ? `telegram:group:${chatId}` : `telegram:${chatId}`,
+    sender: { id: senderId },
+    conversation,
+    route: { agentId, routeSessionKey: targetSessionKey },
+    reply: { to: `telegram:${chatId}`, messageThreadId: ownerThreadId },
+    message: { rawBody, inboundEventKind: "user_request" },
   });
   const preContextCommandAccess = await resolveTelegramCommandIngressAuthorization({
-    cfg,
-    accountId,
-    chatId,
-    isGroup,
-    senderId,
-    dmPolicy: telegramCfg.dmPolicy ?? "pairing",
+    ...ingressParams,
     ownerContext,
   });
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
@@ -202,7 +235,7 @@ async function resolveTelegramCommandAuth(params: {
     threadSpec,
     groupAllowFrom: params.groupAllowFrom,
     skipPairingStoreRead: preContextCommandAccess.authorizedByConfig,
-    readChannelAllowFromStore: params.readChannelAllowFromStore,
+    readChannelAllowFromStore,
     resolveTelegramGroupConfig: () => scopedConfig,
   });
   const {
@@ -210,10 +243,8 @@ async function resolveTelegramCommandAuth(params: {
     dmThreadId,
     storeAllowFrom,
     groupConfig,
-    topicConfig,
     groupAllowOverride,
     effectiveGroupAllow,
-    hasGroupAllowOverride,
   } = groupAllowContext;
   const effectiveDmPolicy = resolveTelegramEffectiveDmPolicy({
     isGroup,
@@ -240,10 +271,7 @@ async function resolveTelegramCommandAuth(params: {
   };
 
   const baseAccess = evaluateTelegramGroupBaseAccess({
-    groupConfig,
-    topicConfig,
-    hasGroupAllowOverride,
-    effectiveGroupAllow,
+    ...groupAllowContext,
     senderId,
     enforceAllowOverride: requireAuth,
     requireSenderForAllowOverride: true,
@@ -263,13 +291,11 @@ async function resolveTelegramCommandAuth(params: {
   }
 
   const policyAccess = evaluateTelegramGroupPolicyAccess({
+    ...groupAllowContext,
     isGroup,
     chatId,
     cfg,
     telegramCfg,
-    topicConfig,
-    groupConfig,
-    effectiveGroupAllow,
     senderId,
     resolveGroupPolicy: params.resolveGroupPolicy,
     enforceAllowlistAuthorization: requireAuth && !preContextCommandAccess.authorizedByConfig,
@@ -305,13 +331,9 @@ async function resolveTelegramCommandAuth(params: {
     senderIsOwner,
     assertOwnerCurrent,
   } = await resolveTelegramCommandIngressAuthorization({
-    accountId,
-    cfg,
+    ...ingressParams,
     dmPolicy: effectiveDmPolicy,
-    isGroup,
-    chatId,
     resolvedThreadId,
-    senderId,
     effectiveDmAllow: dmAllow,
     effectiveGroupAllow,
     eventKind: "native-command",
@@ -323,18 +345,13 @@ async function resolveTelegramCommandAuth(params: {
   return {
     chatId,
     isGroup,
-    isForum,
-    resolvedThreadId,
     senderId,
-    senderUsername,
-    groupConfig,
-    topicConfig,
     threadSpec,
+    threadParams,
     commandAuthorized,
     senderIsOwner,
     assertOwnerCurrent,
     route,
-    bindingMode,
     targetSessionKey,
     inspectedRoute,
     ownerContext,
@@ -344,8 +361,7 @@ async function resolveTelegramCommandAuth(params: {
 export async function prepareTelegramCommandDispatch(
   params: TelegramCommandExecutorParams & { requireAuth: boolean },
 ): Promise<TelegramCommandDispatch | null> {
-  const telegramDeps = params.telegramDeps ?? defaultTelegramNativeCommandDeps;
-  const runtimeCfg = telegramDeps.getRuntimeConfig();
+  const runtimeCfg = getRuntimeConfig();
   const runtimeTelegramCfg = resolveTelegramAccount({
     cfg: runtimeCfg,
     accountId: params.accountId,
@@ -357,23 +373,16 @@ export async function prepareTelegramCommandDispatch(
     opts: params.opts,
   });
   const auth = await resolveTelegramCommandAuth({
-    botUser: params.botUser,
-    msg: params.msg,
-    bot: params.bot,
+    ...params,
     cfg: runtimeCfg,
-    accountId: params.accountId,
     telegramCfg: runtimeTelegramCfg,
-    readChannelAllowFromStore: telegramDeps.readChannelAllowFromStore,
     allowFrom: turnSettings.allowFrom,
     groupAllowFrom: turnSettings.groupAllowFrom,
-    resolveGroupPolicy: params.resolveGroupPolicy,
-    resolveTelegramGroupConfig: params.resolveTelegramGroupConfig,
-    requireAuth: params.requireAuth,
   });
   if (!auth) {
     return null;
   }
-  const { route, bindingMode } = auth;
+  const { route, bindingMode } = auth.inspectedRoute;
   const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
   auth.assertOwnerCurrent?.();
   await touchTelegramConversationRoute(auth.inspectedRoute);
@@ -396,7 +405,7 @@ export async function prepareTelegramCommandDispatch(
           params.bot.api.sendMessage(
             auth.chatId,
             "Configured ACP binding is unavailable right now. Please try again.",
-            buildTelegramThreadParams(auth.threadSpec) ?? {},
+            auth.threadParams ?? {},
           ),
       });
       return null;
@@ -414,13 +423,13 @@ export async function prepareTelegramCommandDispatch(
   const richMessages = resolveTelegramRichMessages(richMessagesParams);
   const tableMode = resolveTelegramTableMode(richMessagesParams);
   const chunkMode = nativeCommandRuntime.resolveChunkMode(runtimeCfg, "telegram", route.accountId);
-  const buildDeliveryBaseOptions: TelegramCommandDispatch["buildDeliveryBaseOptions"] = (keys) => ({
+  const deliveryOptions: DeliveryBaseOptions = {
     cfg: runtimeCfg,
     ownerAgentId: params.opts.ownerAgentId,
     chatId: String(auth.chatId),
     accountId: route.accountId,
-    sessionKeyForInternalHooks: keys?.sessionKeyForInternalHooks,
-    policySessionKey: keys?.policySessionKey,
+    sessionKeyForInternalHooks: auth.targetSessionKey,
+    policySessionKey: auth.targetSessionKey,
     mirrorIsGroup: auth.isGroup,
     mirrorGroupId: auth.isGroup ? String(auth.chatId) : undefined,
     token: params.opts.token,
@@ -435,16 +444,42 @@ export async function prepareTelegramCommandDispatch(
     chunkMode,
     linkPreview: runtimeTelegramCfg.linkPreview,
     richMessages,
+  };
+  const storePath = nativeCommandRuntime.resolveStorePath(runtimeCfg.session?.store, {
+    agentId: route.agentId,
   });
+  let transcriptSessionId = (
+    await nativeCommandRuntime.getSessionEntryAsync({
+      agentId: route.agentId,
+      sessionKey: auth.targetSessionKey,
+      storePath,
+    })
+  )?.sessionId;
   return {
     ...params,
-    telegramDeps,
     runtimeCfg,
     runtimeTelegramCfg,
     ...auth,
-    threadParams: buildTelegramThreadParams(auth.threadSpec),
     nativeCommandRuntime,
-    buildDeliveryBaseOptions,
+    deliveryOptions,
     loadDeliveryRuntime: loadTelegramNativeCommandDeliveryRuntime,
+    recordDeliveredReply: async (commandText, replyText, replyId) => {
+      const result = await nativeCommandRuntime.recordDeliveredCommandExchange({
+        config: runtimeCfg,
+        agentId: route.agentId,
+        sessionKey: auth.targetSessionKey,
+        expectedSessionId: transcriptSessionId,
+        assertCurrent: auth.assertOwnerCurrent,
+        commandText,
+        replyText,
+        commandId: `telegram:${route.accountId}:${auth.chatId}:${params.msg.message_id}`,
+        replyId,
+      });
+      if (result.ok) {
+        transcriptSessionId = result.target.sessionId;
+      } else {
+        logVerbose(`telegram command transcript skipped: ${result.reason}`);
+      }
+    },
   };
 }

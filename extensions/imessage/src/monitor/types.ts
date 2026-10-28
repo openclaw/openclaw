@@ -1,4 +1,3 @@
-// Imessage type declarations define plugin contracts.
 import type {
   ChannelAccountSnapshot,
   ChannelRuntimeSurface,
@@ -6,6 +5,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { IMessagePollSentOption as IMessagePollOption } from "../actions.runtime.js";
 
 export type IMessageAttachment = {
   original_path?: string | null;
@@ -13,11 +13,6 @@ export type IMessageAttachment = {
   missing?: boolean | null;
   transfer_name?: string | null;
   uti?: string | null;
-};
-
-type IMessagePollOption = {
-  id: string;
-  text: string;
 };
 
 type IMessagePollVote = {

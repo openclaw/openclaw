@@ -35,14 +35,12 @@ export type WebPushMutationProfileFacts = {
   bindingCurrent: boolean;
 };
 
-export type WebPushMutationGuard =
-  | {
-      family: "worker";
-      profiles: WebPushMutationProfiles;
-      assertCurrent: () => void;
-      assertProfiles: (facts: WebPushMutationProfileFacts) => void;
-    }
-  | { family: "native-compatibility"; assertCurrent: () => void };
+export type WebPushMutationGuard = {
+  family: "worker";
+  profiles: WebPushMutationProfiles;
+  assertCurrent: () => void;
+  assertProfiles: (facts: WebPushMutationProfileFacts) => void;
+};
 
 export type VapidKeyPair = {
   publicKey: string;

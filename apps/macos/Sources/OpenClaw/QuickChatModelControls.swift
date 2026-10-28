@@ -73,14 +73,10 @@ enum QuickChatModelControlLogic {
         currentSessionSelectionID: String? = nil) -> QuickChatModelPatchDecision
     {
         guard let selectionID else { return .none }
-        if selectionID == OpenClawChatViewModel.defaultModelSelectionID {
-            guard selectionID != appliedSelectionID else { return .none }
-            return .patch(nil)
-        }
-        if selectionID == currentSessionSelectionID { return .none }
-        if currentSessionSelectionID != nil { return .patch(selectionID) }
-        guard selectionID != appliedSelectionID else { return .none }
-        return .patch(selectionID)
+        let isDefault = selectionID == OpenClawChatViewModel.defaultModelSelectionID
+        let current = isDefault ? appliedSelectionID : (currentSessionSelectionID ?? appliedSelectionID)
+        guard selectionID != current else { return .none }
+        return .patch(isDefault ? nil : selectionID)
     }
 
     static func displayName(

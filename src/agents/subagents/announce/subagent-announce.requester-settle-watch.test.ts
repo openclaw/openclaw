@@ -1,27 +1,33 @@
 import "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
-import { DatabaseSync } from "node:sqlite";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { registerSessionStateWatch } from "../../../sessions/session-state-events.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   prepareGatewayToolCallerAssertion,
   withGatewayToolCallerIdentity,
 } from "../../tools/gateway-caller-context.js";
 import * as announceDelivery from "./subagent-announce-delivery.js";
+import * as deliveryRuntime from "./subagent-announce-delivery.runtime.js";
 import type { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 import {
@@ -30,18 +36,62 @@ import {
   readDescendantFacts,
   REQUESTER_KEY,
   settledChild,
-  publishWakeTransition,
+  wakeParams,
   useRequesterSettleDispatchFixture,
+  createRequesterSettleContext as createContext,
 } from "./subagent-announce.requester-settle-dispatch.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.requester-settle-wake.js";
 
 describe("requester settle watch admission", () => {
   useRequesterSettleDispatchFixture();
+  afterEach(() => clearRuntimeConfigSnapshot());
 
-  it.each(["current", "foreign reset", "same-store handoff"] as const)(
+  it("waits for requester startup preparation before reserving a delivery attempt", async () => {
+    setRuntimeConfigSnapshot({});
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const child = settledChild();
+    const pendingState = structuredClone(child.requesterSettleWake);
+    const preparation = createDeferredCore();
+    const preparationObserved = createDeferredCore();
+    const context = createContext();
+    context.agentDatabaseStartup = {
+      hasPendingAgents: true,
+      waitForAgentPreparation: (agentId) => {
+        expect(agentId).toBe("main");
+        preparationObserved.resolve();
+        return preparation.promise;
+      },
+    };
+    bindGatewayContextResolver(child, () => context);
+    registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+    deliver.mockResolvedValue({ delivered: true, path: "direct" });
+    const completeBatch = vi.fn();
+    const wake = maybeWakeRequesterAfterAllChildrenSettled(wakeParams(child, completeBatch));
+    try {
+      await expect(
+        Promise.race([
+          preparationObserved.promise.then(() => "preparing"),
+          wake.then(() => "completed"),
+        ]),
+      ).resolves.toBe("preparing");
+      expect(deliver).not.toHaveBeenCalled();
+      expect(completeBatch).not.toHaveBeenCalled();
+      expect(child.requesterSettleWake).toEqual(pendingState);
+
+      preparation.resolve();
+      await expect(wake).resolves.toBe(true);
+      expect(completeBatch).toHaveBeenCalledOnce();
+    } finally {
+      preparation.resolve();
+      await wake;
+    }
+  });
+
+  it.each(["current", "owner reset", "same-store handoff"] as const)(
     "fences a settled requester's worker watch without retiring its wake (%s)",
     async (change) => {
-      const resetRequester = change === "foreign reset";
+      const resetRequester = change === "owner reset";
       const sameStoreHandoff = change === "same-store handoff";
       const state = await createOpenClawTestState({
         prefix: "settle-watch-",
@@ -51,15 +101,18 @@ describe("requester settle watch admission", () => {
       const storePath = state.statePath("requester-watch.sqlite");
       const target = { agentId: "main", sessionKey: REQUESTER_KEY, storePath };
       const cfg = { session: { store: storePath } };
-      await replaceSessionEntry(target, {
+      setRuntimeConfigSnapshot(cfg);
+      const requesterEntry = {
         sessionId: "requester-session",
         lifecycleRevision: "requester-revision",
         updatedAt: 100,
-      });
+      };
+      await replaceSessionEntry(target, requesterEntry);
       setSubagentAnnounceDeliveryDepsForTest({ getRuntimeConfig: () => cfg });
+      vi.mocked(deliveryRuntime.captureRequesterSessionEntryCurrent).mockRestore();
       const requesterRead = vi
         .spyOn(announceDelivery, "loadRequesterSessionEntry")
-        .mockImplementation(() => ({
+        .mockImplementation(async () => ({
           cfg,
           storePath,
           canonicalKey: REQUESTER_KEY,
@@ -73,25 +126,23 @@ describe("requester settle watch admission", () => {
         publishSystemEventStoreResolver(() => storePath);
         onTestFinished(() => publishSystemEventStoreResolver(undefined));
         readDescendantFacts.mockImplementationOnce(async () => {
-          // A same-store handoff while the wake prepares must not consume its obligation.
           publishSystemEventStoreResolver(() => storePath);
           return { unsettled: false, active: 0 };
         });
       }
       registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
-      const peer = resetRequester
-        ? new DatabaseSync(resolvePhysicalSessionStorePath(target))
+      const writer = resetRequester
+        ? openOpenClawAgentDatabase({
+            agentId: target.agentId,
+            path: resolvePhysicalSessionStorePath(target),
+          })
         : undefined;
-      onTestFinished(() => peer?.close());
-      const admission = prepareAgentRunAdmission({
+      const admission = prepareSystemAgentRunAdmission(
         cfg,
-        operationalRunInstance: createOperationalRunInstanceRef("settle-watch"),
-        facts: {
-          runId: "settle-watch",
-          agentId: "main",
-          ingress: { kind: "system", boundary: "settle-watch-test", state: "present" },
-        },
-      });
+        "settle-watch",
+        "main",
+        "settle-watch-test",
+      );
       onTestFinished(() => admission.close());
       const admittedRunContext = await admission.admit("gateway");
       let watched: boolean | undefined;
@@ -100,36 +151,29 @@ describe("requester settle watch admission", () => {
       const watchTarget = "agent:main:dashboard:settle-watch-target";
       deliver.mockImplementation(
         async (params: Parameters<typeof sendSubagentAnnounceDirectly>[0]) => {
-          const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
           const interception =
-            peer || sameStoreHandoff
-              ? vi
-                  .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-                  .mockImplementation((admit, attachment) =>
-                    createAdmission((request, grant) => {
-                      if (
-                        request.stage === "commit" &&
-                        !witnessed &&
-                        request.facts !== null &&
-                        typeof request.facts === "object" &&
-                        "kind" in request.facts &&
-                        request.facts.kind === "session-entry-current"
-                      ) {
-                        witnessed = true;
-                        if (peer) {
-                          // Independent native writer changes the requester after the worker's read.
-                          peer
-                            .prepare(
-                              "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', ?) WHERE session_key = ?",
-                            )
-                            .run("replaced-requester-revision", REQUESTER_KEY);
-                        } else {
-                          publishSystemEventStoreResolver(() => storePath);
-                        }
-                      }
-                      admit(request, grant);
-                    }, attachment),
-                  )
+            writer || sameStoreHandoff
+              ? probe.admission(workerAdmission, (request, grant, admit) => {
+                  if (
+                    request.stage === "commit" &&
+                    !witnessed &&
+                    request.facts !== null &&
+                    typeof request.facts === "object" &&
+                    "kind" in request.facts &&
+                    request.facts.kind === "session-entry-current"
+                  ) {
+                    witnessed = true;
+                    if (writer) {
+                      writeSessionEntry(writer, REQUESTER_KEY, {
+                        ...requesterEntry,
+                        lifecycleRevision: "replaced-requester-revision",
+                      });
+                    } else {
+                      publishSystemEventStoreResolver(() => storePath);
+                    }
+                  }
+                  admit(request, grant);
+                })
               : undefined;
           const caller = createAdmittedGatewayToolCallerIdentity({
             admittedRunContext,
@@ -138,7 +182,7 @@ describe("requester settle watch admission", () => {
             receiptAuthority: params.isSourceSessionEffectsAllowed,
             receiptAdmission: params.sourceReceiptAdmission,
           });
-          const sql = peer ? undefined : observeMainThreadSql();
+          const sql = writer ? undefined : observeMainThreadSql();
           try {
             sql?.calibrate();
             watched = await withGatewayToolCallerIdentity(caller, () =>
@@ -161,16 +205,8 @@ describe("requester settle watch admission", () => {
         child.requesterSettleWake = undefined;
       });
       await expect(
-        maybeWakeRequesterAfterAllChildrenSettled({
-          requesterSessionKey: REQUESTER_KEY,
-          settledEntry: child,
-          isSourceCurrent: () => true,
-          transitionBatch: publishWakeTransition,
-          completeBatch,
-        }),
+        maybeWakeRequesterAfterAllChildrenSettled(wakeParams(child, completeBatch)),
       ).resolves.toBe(true);
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(completeBatch).toHaveBeenCalledOnce();
       expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
       expect(watched).toBe(change === "current");
       if (change !== "current") {

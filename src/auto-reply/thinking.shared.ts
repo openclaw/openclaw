@@ -1,4 +1,4 @@
-/** Shared normalization for thinking, verbosity, tracing, reasoning, and usage directives. */
+import type { ModelCatalogContextWindowOption } from "@openclaw/model-catalog-core/model-catalog-types";
 import {
   type FastMode,
   normalizeFastMode,
@@ -36,6 +36,9 @@ export type ThinkingCatalogEntry = {
   baseUrl?: string;
   contextWindow?: number;
   contextTokens?: number;
+  contextWindows?: ModelCatalogContextWindowOption[];
+  contextWindowDefault?: string;
+  contextWindowSource?: "synthetic";
   reasoning?: boolean;
   configuredReasoning?: boolean;
   /** Concrete runtime owner of thinking policy; internal and never project to clients. */
@@ -65,6 +68,18 @@ export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
   ultra: 80,
 };
 
+export function formatThinkingLevelClampNotice(params: {
+  requested?: ThinkLevel;
+  effective?: string;
+  provider: string;
+  model: string;
+}): string | undefined {
+  if (!params.requested || !params.effective || params.requested === params.effective) {
+    return undefined;
+  }
+  return `Thinking level clamped to ${params.effective} for ${params.provider}/${params.model} (requested ${params.requested}; preference retained).`;
+}
+
 /** Normalizes user-provided thinking level strings to the canonical enum. */
 export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
   const key = normalizeOptionalLowercaseString(raw);
@@ -72,26 +87,22 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
     return undefined;
   }
   const collapsed = key.replace(/[\s_-]+/g, "");
-  if (collapsed === "adaptive" || collapsed === "auto") {
-    return "adaptive";
-  }
-  if (collapsed === "max" || collapsed === "maximum") {
-    return "max";
-  }
-  if (collapsed === "ultra") {
-    return "ultra";
-  }
-  if (collapsed === "xhigh" || collapsed === "extrahigh") {
-    return "xhigh";
-  }
   // `none` is a documented provider-native spelling for disabled reasoning; store canonical off.
-  return normalizeAliasedLevel<ThinkLevel>(key, [
-    ["off", "none"],
-    ["low", "on", "enable", "enabled", "thinkhard", "think-hard", "think_hard"],
-    ["minimal", "min", "think"],
-    ["medium", "mid", "med", "thinkharder", "think-harder", "harder"],
-    ["high", "ultrathink", "thinkhardest", "highest"],
-  ]);
+  return (
+    normalizeAliasedLevel<ThinkLevel>(collapsed, [
+      ["adaptive", "auto"],
+      ["max", "maximum"],
+      ["ultra"],
+      ["xhigh", "extrahigh"],
+    ]) ??
+    normalizeAliasedLevel<ThinkLevel>(key, [
+      ["off", "none"],
+      ["low", "on", "enable", "enabled", "thinkhard", "think-hard", "think_hard"],
+      ["minimal", "min", "think"],
+      ["medium", "mid", "med", "thinkharder", "think-harder", "harder"],
+      ["high", "ultrathink", "thinkhardest", "highest"],
+    ])
+  );
 }
 
 /** Returns true for command values that clear an inherited session override. */

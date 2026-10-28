@@ -1,9 +1,10 @@
-import { appendFile } from "node:fs/promises";
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
-import type { ApplicationContext } from "../app/context.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import type { notifyRenderLifecycleForTest } from "../pages/chat/render-lifecycle.ts";
+import {
+  evaluateControlUiContext,
+  getControlUiContextHandle,
+} from "../test-helpers/control-ui-e2e-context.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -14,37 +15,22 @@ import {
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.test-support.ts";
 
-// Durable runtime budgets for the chat streaming surface. Byte budgets
-// (scripts/check-control-ui-performance.mts) cannot see rendering work, so
-// these tests protect the landed streaming optimizations at the DOM boundary:
-// the animation-frame render queue (ui/src/pages/chat/chat-state-render.ts),
-// the bounded live tool stream (ui/src/pages/chat/tool-stream.ts), and the
-// transcript/heap cost of long sessions. Structural counts are exact and
-// machine-speed independent; wall-clock/heap ceilings carry several-fold
-// headroom so shared runners stay green while algorithmic regressions
-// (per-event renders, quadratic transcript work, retained stream buffers)
-// still violate them by an order of magnitude.
 const suite = createChatFlowE2eSuite();
 
 type ChatFlowSuite = ReturnType<typeof createChatFlowE2eSuite>;
 type ChatFlowPage = Parameters<Parameters<ChatFlowSuite["withPage"]>[1]>[0]["page"];
 
-// Each delta lands in its own message task. The animation-frame queue must
-// coalesce those invalidations and keep them off message tasks.
+// Each delta lands in its own message task. The owner publication queue must
+// coalesce them before the transcript changes.
 const BURST_DELTA_COUNT = 240;
-// Sanity floor: the burst must invalidate the chat page host at least twice,
-// proving the probe observed the streaming path at all.
-const MIN_BURST_HOST_UPDATES = 2;
-// A direct update per delta produces at least 240 host invalidations. Keep the
-// burst below that count so frame scheduling alone cannot hide lost coalescing.
-const MAX_BURST_HOST_UPDATES = 180;
-// Minimum share of host invalidations that must execute inside an animation
-// frame callback. The queue guarantees this for every stream-driven update;
-// only rare timer-driven strays (poll controllers) fall outside frames.
-const FRAME_SCHEDULED_MIN_RATIO = 0.9;
+// The emitter crosses a frame halfway through, so both batches must reach DOM.
+const MIN_BURST_MUTATION_BATCHES = 2;
+// A direct DOM update per delta produces at least 240 batches. Measure the
+// visible transcript instead of the retired generic page invalidation path.
+const MAX_BURST_MUTATION_BATCHES = 180;
 // Unrelated page timers can contribute one host update after the probe resets;
 // ordinary characters must not invalidate the pane themselves.
-const MAX_STEADY_COMPOSER_HOST_UPDATES = 1;
+const MAX_STEADY_COMPOSER_INVALIDATIONS = 1;
 
 // Shipped live-tool ceiling: ui/src/pages/chat/tool-stream.ts TOOL_STREAM_LIMIT.
 const TOOL_STREAM_LIMIT_CONTRACT = 50;
@@ -76,17 +62,8 @@ const IDLE_TASK_DURATION_CEILING_MS = 600;
 
 type StreamPerfProbe = {
   mutationBatches: number;
-  rafCount: number;
-  hostUpdates: number;
-  hostUpdatesInsideFrame: number;
-  offFrameUpdates: Array<{
-    host: "page" | "pane";
-    property: string;
-    rafCount: number;
-    phase: "burst" | "settling";
-    callers: string[];
-  }>;
-  droppedOffFrameUpdates: number;
+  invalidations: number;
+  commits: number;
 };
 
 type ToolProjectionProbe = {
@@ -97,6 +74,7 @@ type ToolProjectionProbe = {
 };
 
 type ScopedWindow = Window & {
+  openclawRenderLifecycleTestHook?: typeof notifyRenderLifecycleForTest;
   ocStreamPerf?: StreamPerfProbe;
   ocIdleProbe?: { longTasks: number; longTaskMs: number };
   ocBurstDone?: boolean;
@@ -106,26 +84,33 @@ type ScopedWindow = Window & {
   };
 };
 
-let metricsArtifactDir: string;
-beforeEach(() => {
-  metricsArtifactDir = createControlUiE2eArtifactDir("stream-runtime-budgets");
-});
-
-async function recordBudgetMetrics(
-  testName: string,
-  metrics: Record<string, number>,
-): Promise<void> {
-  await appendFile(
-    path.join(metricsArtifactDir, "metrics.jsonl"),
-    `${JSON.stringify({ testName, metrics, recordedAt: new Date().toISOString() })}\n`,
-  );
-}
-
 // Rendered transcripts strip markdown markers, so visibility polls match the
 // plain-text projection of the burst chunk emitted in-page
 // (`delta N with **boldN** and \`codeN\` tail`).
 function renderedChunkText(index: number): string {
   return `delta ${index} with bold${index} and code${index} tail`;
+}
+
+async function settleInitialModelCatalog(
+  page: ChatFlowPage,
+  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+) {
+  const name = "Runtime budget model";
+  await gateway.waitForRequest("models.list");
+  await gateway.resolveDeferred("models.list", {
+    models: [{ id: "gpt-5.5", name, provider: "openai" }],
+  });
+  // A usable cached catalog can still be refreshing. Join this reply's rendered receipt.
+  await waitForCommittedState(
+    page,
+    (modelName) =>
+      document
+        .querySelector(
+          'openclaw-chat-pane.chat-pane-cache__pane--active [data-chat-model-select="true"]',
+        )
+        ?.textContent?.includes(modelName) === true,
+    name,
+  );
 }
 
 async function installRenderProbe(page: ChatFlowPage) {
@@ -135,115 +120,43 @@ async function installRenderProbe(page: ChatFlowPage) {
     if (!chatPage) {
       throw new Error("openclaw-chat-page is not mounted");
     }
+    const thread = chatPage.querySelector(".chat-thread");
+    if (!thread) {
+      throw new Error("chat transcript is not mounted");
+    }
     scope.ocStreamPerf = {
       mutationBatches: 0,
-      rafCount: 0,
-      hostUpdates: 0,
-      hostUpdatesInsideFrame: 0,
-      offFrameUpdates: [],
-      droppedOffFrameUpdates: 0,
+      invalidations: 0,
+      commits: 0,
     };
     new MutationObserver((records) => {
       if (records.length > 0) {
         scope.ocStreamPerf!.mutationBatches += 1;
       }
-    }).observe(document.body, { childList: true, subtree: true, characterData: true });
-    let insideFrame = false;
-    const originalRequestAnimationFrame = window.requestAnimationFrame.bind(window);
-    window.requestAnimationFrame = (callback: FrameRequestCallback): number =>
-      originalRequestAnimationFrame((time) => {
-        scope.ocStreamPerf!.rafCount += 1;
-        const previous = insideFrame;
-        insideFrame = true;
-        try {
-          callback(time);
-        } finally {
-          insideFrame = previous;
-        }
-      });
-    // Walk to the Lit base that owns requestUpdate and shadow it there so
-    // every host invalidation (any element) is attributed to whether it ran
-    // inside an animation frame callback. Stream-driven updates dominate the
-    // window, so the frame-scheduled share stays representative.
-    let owner: object | null = Object.getPrototypeOf(chatPage);
-    while (owner && !Object.hasOwn(owner, "requestUpdate")) {
-      owner = Object.getPrototypeOf(owner);
-    }
-    if (!owner || typeof (owner as { requestUpdate?: unknown }).requestUpdate !== "function") {
-      throw new Error("requestUpdate owner not found on chat page prototype chain");
-    }
-    const ownerPrototype = owner as { requestUpdate: (...args: unknown[]) => unknown };
-    const originalRequestUpdate = ownerPrototype.requestUpdate;
-    const propertyNames = (
-      "data navDrawerOpen presented layout narrow mergedChrome dropIndicator " +
-      "paneId presentationId chatMessagesBySession sessionSnapshotStore sessionKey " +
-      "routeLoadingSkeleton agentId inputRegion compact workContext draft focusComposer " +
-      "dashboardExpanded routeFace onFaceChange onFocusPane onSessionDeleted paneTitle " +
-      "onboarding onOpenSplitView onSplitDown onSplitRight onClosePane boardProvider"
-    ).split(" ");
-    const chunkNames = [
-      "control-ui-boot-chat",
-      "control-ui-boot-shared",
-      "control-ui-boot-new",
-      "control-ui-core",
-      "control-ui-foundation",
-      "lit-runtime",
-      "index",
-    ];
-    const sourceNames = new Set([
-      "chat-state-render",
-      "chat-state-controller",
-      "chat-state-events",
-      "chat-state-refresh",
-      "chat-pane-context",
-      "chat-pane-base",
-      "chat-page",
-      "chat-page-retained-sessions",
-      "subscriptions-controller",
-      "poll-controller",
-      "reactive-element",
-    ]);
-    const classifyCaller = (frame: string): string => {
-      const location = frame.match(/\/([^/\s?#]+)\.(js|ts)(?:\?[^\s]*)?:(\d{1,7}):(\d{1,7})\)?$/);
-      const name = location?.[1] ?? "";
-      const knownChunk = chunkNames.some(
-        (prefix) =>
-          name.startsWith(`${prefix}-`) &&
-          /^[A-Za-z0-9_-]{1,64}$/.test(name.slice(prefix.length + 1)),
-      );
-      return location && (knownChunk || sourceNames.has(name))
-        ? `${name}.${location[2]}:${location[3]}:${location[4]}`
-        : "unknown";
-    };
-    ownerPrototype.requestUpdate = function patchedRequestUpdate(this: object, ...args: unknown[]) {
-      const probe = scope.ocStreamPerf!;
-      const tag = (this as HTMLElement).localName;
-      if (tag === "openclaw-chat-page" || tag === "openclaw-chat-pane") {
-        probe.hostUpdates += 1;
-        if (insideFrame) {
-          probe.hostUpdatesInsideFrame += 1;
-        } else if (probe.offFrameUpdates.length < 12) {
-          // Keep only known source/asset basenames and coordinates, never raw stacks or values.
-          // The asset suffix identifies the exact source map; RAF count counts callbacks.
-          const stack = new Error().stack ?? "";
-          probe.offFrameUpdates.push({
-            host: tag === "openclaw-chat-page" ? "page" : "pane",
-            property:
-              args[0] === undefined
-                ? "explicit"
-                : (propertyNames.find((name) => name === args[0]) ?? "other"),
-            rafCount: probe.rafCount,
-            phase: scope.ocBurstDone === true ? "settling" : "burst",
-            callers: stack.slice(0, 4096).split("\n").slice(2, 8).map(classifyCaller),
-          });
-        } else {
-          probe.droppedOffFrameUpdates += 1;
-        }
+    }).observe(thread, { childList: true, subtree: true, characterData: true });
+    scope.openclawRenderLifecycleTestHook = (host, phase) => {
+      const nativeCommit = host instanceof HTMLElement;
+      const element: unknown = nativeCommit ? host : Reflect.get(host, "element");
+      if (
+        !(element instanceof HTMLElement) ||
+        (element.localName !== "openclaw-chat-page" && element.localName !== "openclaw-chat-pane")
+      ) {
+        return;
       }
-      return originalRequestUpdate.apply(this, args);
+      const probe = scope.ocStreamPerf!;
+      if (phase === "commit") {
+        if (nativeCommit) {
+          probe.commits += 1;
+        }
+        return;
+      }
+      // State admission happens in the runtime; its Solid consumer invalidates later.
+      if (nativeCommit) {
+        return;
+      }
+      probe.invalidations += 1;
     };
-    // Frames queued before instrumentation run without the wrapper. Drain them
-    // before callers reset the counters and begin the measured interaction.
+    // Drain already queued frames before the measured interaction.
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => resolve());
     });
@@ -255,11 +168,8 @@ async function resetRenderProbe(page: ChatFlowPage) {
     const scope = window as ScopedWindow;
     scope.ocStreamPerf = {
       mutationBatches: 0,
-      rafCount: 0,
-      hostUpdates: 0,
-      hostUpdatesInsideFrame: 0,
-      offFrameUpdates: [],
-      droppedOffFrameUpdates: 0,
+      invalidations: 0,
+      commits: 0,
     };
   });
 }
@@ -593,30 +503,33 @@ function buildLongTranscriptFixture(messageCount: number): Array<Record<string, 
 suite.define(() => {
   it("commits a streamed delta burst in frame-bound transcript batches", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(page, { deferredMethods: ["sessions.describe"] });
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["models.list"],
+        heldMethods: ["sessions.describe"],
+      });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      await settleInitialModelCatalog(page, gateway);
       const runId = await openStreamingTurn(page, gateway, "burst coalescing probe");
 
-      // Release the startup fact read after Send so it observes the running turn,
-      // then join its publication before measuring stream invalidations.
+      // Keep every startup fact read parked until Send, then release them together
+      // so the latest observation publishes the running turn before measurement.
       await gateway.waitForRequest("sessions.describe");
       await gateway.resolveDeferred("sessions.describe");
-      await waitForCommittedState(
-        page,
-        ({ sessionKey }) => {
-          const app = document.querySelector<
-            HTMLElement & { runtime?: { context: ApplicationContext } }
-          >("openclaw-app");
-          return (
-            app?.runtime?.context.sessions.state.result?.sessions.some(
+      const applicationHandle = await getControlUiContextHandle(page);
+      try {
+        await waitForCommittedState(
+          page,
+          ({ application, sessionKey }) =>
+            application.sessions.state.result?.sessions.some(
               (row) =>
                 row.key === sessionKey && row.status === "running" && row.hasActiveRun === true,
-            ) === true
-          );
-        },
-        { sessionKey: "agent:main:main" },
-      );
+            ) === true,
+          { application: applicationHandle, sessionKey: "agent:main:main" },
+        );
+      } finally {
+        await applicationHandle.dispose();
+      }
 
       // The delayed swarm child query publishes roster metadata after first paint.
       // Observe its committed result before measuring stream-driven invalidations.
@@ -626,15 +539,14 @@ suite.define(() => {
       const childScope = requireRecord(childList.params);
       await expect
         .poll(() =>
-          page.evaluate((scope) => {
-            const app = document.querySelector<
-              HTMLElement & {
-                runtime?: { context: ApplicationContext };
-              }
-            >("openclaw-app");
-            const snapshot = app?.runtime?.context.sessions.listSnapshot(scope);
-            return Boolean(snapshot?.result && !snapshot.loading && !snapshot.error);
-          }, childScope),
+          evaluateControlUiContext(
+            page,
+            (application, scope) => {
+              const snapshot = application.sessions.listSnapshot(scope);
+              return Boolean(snapshot?.result && !snapshot.loading && !snapshot.error);
+            },
+            childScope,
+          ),
         )
         .toBe(true);
       await waitForChatScrollIdle(page);
@@ -667,19 +579,11 @@ suite.define(() => {
         .not.toBeNull();
 
       const probe = await readRenderProbe(page);
-      await recordBudgetMetrics("delta-burst-commits", {
-        mutationBatches: probe.mutationBatches,
-        rafCount: probe.rafCount,
-        hostUpdates: probe.hostUpdates,
-        hostUpdatesInsideFrame: probe.hostUpdatesInsideFrame,
-      });
-
-      expect(probe.hostUpdates).toBeGreaterThanOrEqual(MIN_BURST_HOST_UPDATES);
-      expect(probe.hostUpdates).toBeLessThanOrEqual(MAX_BURST_HOST_UPDATES);
-      expect(
-        probe.hostUpdatesInsideFrame / probe.hostUpdates,
-        `frame-scheduled update budget: ${JSON.stringify(probe)}`,
-      ).toBeGreaterThanOrEqual(FRAME_SCHEDULED_MIN_RATIO);
+      // Text updates reach the transcript without re-preparing its page or pane.
+      // The visible tail and mutation batches above prove the stream rendered.
+      expect(probe.commits).toBe(0);
+      expect(probe.mutationBatches).toBeGreaterThanOrEqual(MIN_BURST_MUTATION_BATCHES);
+      expect(probe.mutationBatches).toBeLessThanOrEqual(MAX_BURST_MUTATION_BATCHES);
     });
   });
 
@@ -687,7 +591,7 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const runId = await openStreamingTurn(page, gateway, "tool flood probe");
 
       await probeDeferredToolProjection(page, runId);
@@ -738,7 +642,7 @@ suite.define(() => {
 
       const loadStartedAt = Date.now();
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await page
         .locator(".chat-thread-inner")
         .getByText("LONG-TAIL-SENTINEL")
@@ -759,11 +663,6 @@ suite.define(() => {
       const { metrics } = await cdpSession.send("Performance.getMetrics");
       const heapUsedBytes = metrics.find((metric) => metric.name === "JSHeapUsedSize")!.value;
       expect(heapUsedBytes).toBeLessThanOrEqual(STREAM_SESSION_HEAP_CEILING_BYTES);
-
-      await recordBudgetMetrics("long-transcript-rich-turn", {
-        loadMs,
-        heapUsedBytes: Math.round(heapUsedBytes),
-      });
     });
   });
 
@@ -780,10 +679,12 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         historyMessages: buildLongTranscriptFixture(LONG_TRANSCRIPT_MESSAGE_COUNT),
+        deferredMethods: ["models.list"],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await page.locator(".chat-thread-inner").getByText("LONG-TAIL-SENTINEL").waitFor();
+      await settleInitialModelCatalog(page, gateway);
 
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       const scopeKey = "chat:v3:agent:main:main\u0000agent:main";
@@ -792,26 +693,35 @@ suite.define(() => {
       // The first saved draft notifies presence subscribers. Drain that transition
       // before measuring edits to an already-present draft.
       await waitForCommittedComposerDraft(page, scopeKey, "seed", 0);
-      const scrollDuringWait = scrollAwayAndBack
-        ? page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate(async (element) => {
-            const thread = element as HTMLElement;
-            const originalTop = thread.scrollTop;
-            // Move during the stability sample, then restore its original geometry.
-            await new Promise<void>((resolve) => {
-              globalThis.setTimeout(resolve, 100);
-            });
-            thread.scrollTo({ top: originalTop - 8, behavior: "instant" });
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => resolve());
-            });
-            const awayTop = thread.scrollTop;
-            thread.scrollTo({ top: originalTop, behavior: "instant" });
-            return { originalTop, awayTop, restoredTop: thread.scrollTop };
-          })
-        : Promise.resolve(null);
+      const scroll = scrollAwayAndBack
+        ? await (async () => {
+            const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+            await thread.hover();
+            // Keep the saved offset inside the range when virtualizer measurements shrink it.
+            await page.mouse.wheel(0, -200);
+            await waitForChatScrollIdle(page);
+            const originalTop = await thread.evaluate((element) => element.scrollTop);
+            // Real reader input retires end-follow; an 8 px offset is still at the end.
+            await page.mouse.wheel(0, -100);
+            await expect
+              .poll(() => thread.evaluate((element) => element.scrollTop))
+              .toBeLessThan(originalTop - 8);
+            // Virtualizer measurements can adjust the wheel's final offset.
+            await waitForChatScrollIdle(page);
+            const awayTop = await thread.evaluate((element) => element.scrollTop);
+            await page.mouse.wheel(0, originalTop - awayTop);
+            await expect
+              .poll(() => thread.evaluate((element) => element.scrollTop))
+              .toBe(originalTop);
+            return {
+              originalTop,
+              awayTop,
+              restoredTop: await thread.evaluate((element) => element.scrollTop),
+            };
+          })()
+        : null;
       // Finish startup scrolling before measuring steady-state composer invalidations.
       await waitForChatScrollIdle(page);
-      const scroll = await scrollDuringWait;
       if (scroll) {
         expect(scroll.awayTop).toBeLessThan(scroll.originalTop);
         expect(scroll.restoredTop).toBe(scroll.originalTop);
@@ -825,7 +735,7 @@ suite.define(() => {
       expect(await composer.inputValue()).toBe(`seed${suffix}`);
       const probe = await readRenderProbe(page);
 
-      expect(probe.hostUpdates).toBeLessThanOrEqual(MAX_STEADY_COMPOSER_HOST_UPDATES);
+      expect(probe.invalidations).toBeLessThanOrEqual(MAX_STEADY_COMPOSER_INVALIDATIONS);
 
       const send = page.locator(".chat-send-btn--send");
       await composer.fill("");
@@ -843,7 +753,7 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page, context }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
 
       const runId = await openStreamingTurn(page, gateway, "idle quiescence probe");
       await gateway.emitChatFinal({ runId, text: "short finalized turn" });
@@ -876,12 +786,6 @@ suite.define(() => {
       )!.value;
       const taskDurationMs = (taskDurationAfter - taskDurationBefore) * 1_000;
       const idle = await page.evaluate(() => (window as ScopedWindow).ocIdleProbe!);
-      await recordBudgetMetrics("idle-quiescence", {
-        longTasks: idle.longTasks,
-        longTaskMs: Math.round(idle.longTaskMs),
-        taskDurationMs: Math.round(taskDurationMs),
-      });
-
       expect(idle.longTaskMs).toBeLessThanOrEqual(IDLE_LONGTASK_TOTAL_CEILING_MS);
       expect(taskDurationMs).toBeLessThanOrEqual(IDLE_TASK_DURATION_CEILING_MS);
     });

@@ -4,7 +4,7 @@ import { asSchemaObject, type ConfigJsonSchemaObject } from "./schema.shared.js"
 
 const ROOT_TIER_PATHS = `
 accessGroups acp agents approvals attachments auth bindings broadcast browser channels
-cloudWorkers commands cron desktop diagnostics discovery env gateway hooks logging mcp memory messages
+cloudWorkers commands cron database desktop diagnostics discovery env gateway hooks logging mcp memory messages
 meta models nodeHost plugins proxy secrets security session skills storage surfaces talk telemetry tools transcripts
 tts ui update wizard worktreeAcceleration worktreeMaxCount worktreeRoot
 `
@@ -20,10 +20,8 @@ const COMMON_TIER_PATHS = `
 bindings commands messages session
 acp.allowedAgents
 agents.defaults.elevatedDefault agents.defaults.embeddedAgent.projectSettingsPolicy
-agents.defaults.fastModeDefault agents.defaults.heartbeat.accountId
-agents.defaults.heartbeat.activeHours agents.defaults.heartbeat.directPolicy
-agents.defaults.heartbeat.model agents.defaults.heartbeat.target agents.defaults.heartbeat.to
-agents.defaults.compaction.memoryFlush.model agents.defaults.compaction.model
+agents.defaults.fastModeDefault
+agents.defaults.compaction.model
 agents.defaults.imageModel.primary agents.defaults.model
 agents.defaults.mediaModels agents.defaults.model.primary agents.defaults.modelPolicy.allow
 agents.defaults.pdfModel.primary agents.defaults.sandbox.browser.enabled
@@ -38,7 +36,7 @@ agents.defaults.workspace agents.entries.*.groupChat.mentionPatterns
 agents.entries.*.groupChat.unmentionedInbound agents.entries.*.identity
 agents.entries.*.memory.search.enabled agents.entries.*.memory.search.provider
 agents.entries.*.memory.search.rememberAcrossConversations agents.entries.*.memory.search.model
-agents.entries.*.memory.search.remote.apiKey agents.entries.*.heartbeat.model
+agents.entries.*.memory.search.remote.apiKey
 agents.entries.*.model agents.entries.*.model.primary agents.entries.*.name
 agents.entries.*.runtime.acp.agent agents.entries.*.runtime.type
 agents.entries.*.sandbox.ssh.workspaceRoot agents.entries.*.sandbox.workspaceRoot
@@ -150,8 +148,8 @@ plugins.slots.contextEngine plugins.slots.memory secrets.providers.*.command
 secrets.providers.*.path secrets.providers.*.source skills.allowBundled
 skills.entries.*.apiKey skills.entries.*.config skills.entries.*.enabled
 skills.entries.*.env skills.install.allowUploadedArchives skills.install.nodeManager
-skills.load.allowSymlinkTargets skills.load.extraDirs skills.workshop.approvalPolicy
-skills.workshop.autonomous.mode talk.provider talk.providers.*.apiKey
+skills.load.allowSymlinkTargets skills.load.extraDirs
+skills.workshop.autonomous.channelNotices skills.workshop.autonomous.mode talk.provider talk.providers.*.apiKey
 talk.realtime.brain talk.realtime.mode talk.realtime.provider
 talk.realtime.model talk.realtime.providers.*.apiKey talk.realtime.speakerVoice talk.speechLocale
 tools.alsoAllow tools.deny tools.exec
@@ -175,9 +173,11 @@ wizard.accessMode wizard.appRecommendations
   .split(/\s+/);
 
 const ADVANCED_TUNING_PATHS = new Set([
-  "agents.defaults.heartbeat.every",
   "agents.entries.*.tools.github.allowInSandbox",
+  "agents.entries.*.tools.github.app",
   "session.maintenance.preserveRecent",
+  "tools.github.app",
+  "tools.sessions.allowThreadTargets",
 ]);
 
 function splitPath(path: string): string[] {

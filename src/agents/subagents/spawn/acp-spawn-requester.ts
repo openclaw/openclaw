@@ -1,44 +1,35 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
-import { readAcpResumeSessionOwner } from "../../../acp/runtime/session-meta-resume.js";
+  attributeDelegatedSessionCreator,
+  buildSessionCreationStamp,
+  inheritSessionGitContributorProfileIds,
+} from "../../../config/sessions/session-entry-provenance.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { listSessionBindingsBySessionAsync } from "../../../infra/outbound/session-binding-service.js";
 import {
   isSubagentSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
-import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
-import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
+import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
+import {
+  resolveRequesterOriginForChild,
+  resolveSpawnRequesterConversationTarget,
+  type SpawnRequesterConversationSource,
+} from "../../spawn-requester-origin.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../tools/sessions-helpers.js";
-import {
-  hasSessionLocalHeartbeatRelayRoute,
-  isHeartbeatEnabledForSessionAgent,
-} from "./acp-spawn-heartbeat.js";
 
-type AcpSpawnRequesterContext = {
+type AcpSpawnRequesterContext = SpawnRequesterConversationSource & {
   agentChannel?: string;
   agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
   agentGroupSpace?: string | null;
   agentMemberRoleIds?: string[];
-};
-
-export type AcpSpawnRequesterState = {
-  isSubagentSession: boolean;
-  hasActiveSubagentBinding: boolean;
-  hasThreadContext: boolean;
-  heartbeatEnabled: boolean;
-  heartbeatRelayRouteUsable: boolean;
-  origin: ReturnType<typeof normalizeDeliveryContext>;
 };
 
 export async function readAcpSpawnParentDeliveryContext(params: {
@@ -73,52 +64,54 @@ export function resolveRequesterInternalSessionKey(params: {
     : alias;
 }
 
-export function resolveAcpSpawnRequesterState(params: {
+export async function resolveAcpSpawnRequesterState(params: {
   cfg: OpenClawConfig;
   parentSessionKey?: string;
   requesterAgentId: string;
-  targetAgentId: string;
+  ownerAgentId: string;
   ctx: AcpSpawnRequesterContext;
-}): AcpSpawnRequesterState {
-  const bindingService = getSessionBindingService();
+  assertActive?: () => void;
+}) {
   const requesterParsedSession = parseAgentSessionKey(params.parentSessionKey);
   const isSubagentSession =
     Boolean(requesterParsedSession) && isSubagentSessionKey(params.parentSessionKey);
   const hasActiveSubagentBinding =
     isSubagentSession && params.parentSessionKey
-      ? bindingService
-          .listBySession(params.parentSessionKey)
-          .some((record) => record.targetKind === "subagent" && record.status !== "ended")
+      ? (await listSessionBindingsBySessionAsync(params.parentSessionKey)).some(
+          (record) => record.targetKind === "subagent" && record.status !== "ended",
+        )
       : false;
-  const hasThreadContext =
-    typeof params.ctx.agentThreadId === "string"
-      ? Boolean(normalizeOptionalString(params.ctx.agentThreadId))
-      : params.ctx.agentThreadId != null;
+  params.assertActive?.();
+  const requesterConversation = resolveSpawnRequesterConversationTarget(params.ctx);
+  const hasThreadContext = requesterConversation.threadId != null;
+  const sessionRelayRouteUsable = Boolean(
+    isSubagentSession &&
+    !hasActiveSubagentBinding &&
+    !hasThreadContext &&
+    params.parentSessionKey &&
+    params.cfg.session?.scope !== "global" &&
+    hasDeliveryTargetFields(
+      await readAcpSpawnParentDeliveryContext({
+        parentSessionKey: params.parentSessionKey,
+        requesterAgentId: params.requesterAgentId,
+        assertActive: params.assertActive,
+      }),
+    ),
+  );
+  params.assertActive?.();
   return {
     isSubagentSession,
     hasActiveSubagentBinding,
     hasThreadContext,
-    heartbeatEnabled: isHeartbeatEnabledForSessionAgent({
-      cfg: params.cfg,
-      requesterAgentId: params.requesterAgentId,
-      sessionKey: params.parentSessionKey,
-    }),
-    heartbeatRelayRouteUsable:
-      params.parentSessionKey && params.requesterAgentId
-        ? hasSessionLocalHeartbeatRelayRoute({
-            cfg: params.cfg,
-            parentSessionKey: params.parentSessionKey,
-            requesterAgentId: params.requesterAgentId,
-          })
-        : false,
+    sessionRelayRouteUsable,
     origin: resolveRequesterOriginForChild({
       cfg: params.cfg,
-      targetAgentId: params.targetAgentId,
+      targetAgentId: params.ownerAgentId,
       requesterAgentId: params.requesterAgentId,
       requesterChannel: params.ctx.agentChannel,
       requesterAccountId: params.ctx.agentAccountId,
-      requesterTo: params.ctx.agentTo,
-      requesterThreadId: params.ctx.agentThreadId,
+      requesterTo: requesterConversation.to,
+      requesterThreadId: requesterConversation.threadId,
       requesterGroupSpace: params.ctx.agentGroupSpace,
       requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
     }),
@@ -129,7 +122,7 @@ export function shouldStreamAcpSpawnToParent(params: {
   spawnMode: "run" | "session";
   requestThreadBinding: boolean;
   streamToParentRequested: boolean;
-  requester: AcpSpawnRequesterState;
+  requester: Awaited<ReturnType<typeof resolveAcpSpawnRequesterState>>;
 }): boolean {
   // Thread-bound requesters require an explicit request to avoid unsolicited progress chatter.
   const implicitStreamToParent =
@@ -138,52 +131,31 @@ export function shouldStreamAcpSpawnToParent(params: {
     params.requester.isSubagentSession &&
     !params.requester.hasActiveSubagentBinding &&
     !params.requester.hasThreadContext &&
-    params.requester.heartbeatEnabled &&
-    params.requester.heartbeatRelayRouteUsable;
+    params.requester.sessionRelayRouteUsable;
 
   return params.streamToParentRequested || implicitStreamToParent;
 }
 
-export async function validateAcpResumeSessionOwnership(params: {
+/** Build immutable creator facts from the requester captured before spawn awaits. */
+export function buildAcpSpawnCreationStamp(params: {
   cfg: OpenClawConfig;
-  targetAgentId: string;
-  backendId?: string;
-  requesterSessionKey?: string;
-  resumeSessionId?: string;
-  assertCurrent?: () => void;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  const resumeSessionId = normalizeOptionalString(params.resumeSessionId);
-  if (!resumeSessionId) {
-    return { ok: true };
-  }
-  const requesterSessionKey = normalizeOptionalString(params.requesterSessionKey);
-  if (!requesterSessionKey) {
-    return {
-      ok: false,
-      error: "sessions_spawn resumeSessionId requires an active requester session context.",
-    };
-  }
-
-  const owner = await readAcpResumeSessionOwner({
-    cfg: params.cfg,
-    agentId: params.targetAgentId,
-    backendId: normalizeOptionalLowercaseString(params.backendId),
-    resumeSessionId,
-    assertCurrent: params.assertCurrent,
+  parentEntry?: SessionEntry;
+  requesterAgentId: string;
+  requesterSessionKey: string;
+  creatorProfileId?: string;
+  gitContributorProfileId?: string;
+}) {
+  return buildSessionCreationStamp({
+    via: "spawn",
+    actor: attributeDelegatedSessionCreator(
+      { type: "agent", id: params.requesterAgentId },
+      params.creatorProfileId,
+    ),
+    inheritedGitContributorProfileIds: inheritSessionGitContributorProfileIds(params.parentEntry, {
+      config: params.cfg,
+      agentId: params.requesterAgentId,
+      sessionKey: params.requesterSessionKey,
+      requesterProfileId: params.gitContributorProfileId,
+    }),
   });
-  params.assertCurrent?.();
-  if (
-    owner &&
-    (owner.sessionKey === requesterSessionKey ||
-      normalizeOptionalString(owner.entry.spawnedBy) === requesterSessionKey ||
-      normalizeOptionalString(owner.entry.parentSessionKey) === requesterSessionKey)
-  ) {
-    return { ok: true };
-  }
-
-  return {
-    ok: false,
-    error:
-      "sessions_spawn resumeSessionId is only allowed for ACP sessions previously recorded for this requester. Omit resumeSessionId to start a fresh ACP session.",
-  };
 }

@@ -20,7 +20,12 @@ import {
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { replaceConfigFile, resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, type SecretProviderConfig } from "../config/types.secrets.js";
-import { normalizePluginConfigId } from "../plugins/plugin-config-trust.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
+import {
+  findPluginConfigEntry,
+  hasPluginConfigId,
+  normalizePluginConfigId,
+} from "../plugins/plugin-config-trust.js";
 import { resolveUserPath } from "../utils.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { listAuthProfileStoreTargets, type AuthProfileStoreTarget } from "./auth-store-paths.js";
@@ -50,6 +55,11 @@ type AuthStoreSnapshot = {
   target: AuthProfileStoreTarget;
   persistence: ReturnType<typeof captureAuthProfileStorePersistenceSnapshot>;
   owned?: ReturnType<typeof captureAuthProfileStorePersistenceSnapshot>;
+};
+
+type ProjectedAuthStore = {
+  target: AuthProfileStoreTarget;
+  store: Record<string, unknown>;
 };
 
 type ResolvedPlanTargetEntry = {
@@ -83,23 +93,6 @@ function planContainsExecReferences(plan: SecretsApplyPlan): boolean {
   return Object.values(plan.providerUpserts ?? {}).some((provider) => provider.source === "exec");
 }
 
-function hasPluginPolicyId(list: unknown, pluginId: string): boolean {
-  return Array.isArray(list) && list.some((entry) => normalizePluginConfigId(entry) === pluginId);
-}
-
-function findPluginEntry(entries: unknown, pluginId: string): Record<string, unknown> | undefined {
-  if (!isRecord(entries)) {
-    return undefined;
-  }
-  for (const [key, value] of Object.entries(entries)) {
-    if (normalizePluginConfigId(key) !== pluginId) {
-      continue;
-    }
-    return isRecord(value) ? value : {};
-  }
-  return undefined;
-}
-
 function resolveTarget(
   target: SecretsPlanTarget,
 ): NonNullable<ReturnType<typeof resolveValidatedPlanTarget>> {
@@ -114,43 +107,27 @@ function scrubEnvRaw(
   raw: string,
   migratedValues: Set<string>,
   allowedEnvKeys: Set<string>,
-): {
-  nextRaw: string;
-  removed: number;
-} {
+): string {
   if (migratedValues.size === 0 || allowedEnvKeys.size === 0) {
-    return { nextRaw: raw, removed: 0 };
+    return raw;
   }
   const lines = raw.split(/\r?\n/);
-  const nextLines: string[] = [];
-  let removed = 0;
-  for (const line of lines) {
+  const nextLines = lines.filter((line) => {
     const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-    if (!match) {
-      nextLines.push(line);
-      continue;
-    }
-    const envKey = match[1] ?? "";
-    if (!allowedEnvKeys.has(envKey)) {
-      nextLines.push(line);
-      continue;
-    }
-    const parsedValue = parseEnvAssignmentValue(match[2] ?? "");
-    if (migratedValues.has(parsedValue)) {
-      removed += 1;
-      continue;
-    }
-    nextLines.push(line);
+    return (
+      !match ||
+      !allowedEnvKeys.has(match[1] ?? "") ||
+      !migratedValues.has(parseEnvAssignmentValue(match[2] ?? ""))
+    );
+  });
+  if (nextLines.length === lines.length) {
+    return raw;
   }
   const hadTrailingNewline = raw.endsWith("\n");
   const joined = nextLines.join("\n");
-  return {
-    nextRaw:
-      hadTrailingNewline || joined.length === 0
-        ? `${joined}${joined.endsWith("\n") ? "" : "\n"}`
-        : joined,
-    removed,
-  };
+  return hadTrailingNewline || joined.length === 0
+    ? `${joined}${joined.endsWith("\n") ? "" : "\n"}`
+    : joined;
 }
 
 function applyProviderPlanMutations(params: {
@@ -174,7 +151,7 @@ function applyProviderPlanMutations(params: {
     if (isDeepStrictEqual(previous, providerConfig)) {
       continue;
     }
-    currentProviders[providerAlias] = structuredClone(providerConfig);
+    currentProviders[providerAlias] = providerConfig;
     changed = true;
   }
 
@@ -191,12 +168,12 @@ function applyProviderPlanMutations(params: {
         `Cannot apply plugin-managed SecretRef provider "${pluginId}" because plugins.enabled is false. Enable plugins before applying this plan.`,
       );
     }
-    if (hasPluginPolicyId(params.config.plugins.deny, pluginId)) {
+    if (hasPluginConfigId(params.config.plugins.deny, pluginId)) {
       throw new Error(
         `Cannot apply plugin-managed SecretRef provider "${pluginId}" because plugins.deny includes "${pluginId}". Remove the deny rule before applying this plan.`,
       );
     }
-    const previousEntry = findPluginEntry(params.config.plugins.entries, pluginId);
+    const previousEntry = findPluginConfigEntry(params.config.plugins.entries, pluginId);
     if (previousEntry?.enabled === false) {
       throw new Error(
         `Cannot apply plugin-managed SecretRef provider "${pluginId}" because plugins.entries.${pluginId}.enabled is false. Enable the plugin explicitly before applying this plan.`,
@@ -205,7 +182,7 @@ function applyProviderPlanMutations(params: {
     if (
       Array.isArray(params.config.plugins.allow) &&
       params.config.plugins.allow.length > 0 &&
-      !hasPluginPolicyId(params.config.plugins.allow, pluginId)
+      !hasPluginConfigId(params.config.plugins.allow, pluginId)
     ) {
       throw new Error(
         `Cannot apply plugin-managed SecretRef provider "${pluginId}" because plugins.allow does not include "${pluginId}". Add the plugin to plugins.allow before applying this plan.`,
@@ -216,7 +193,7 @@ function applyProviderPlanMutations(params: {
       continue;
     }
     params.config.plugins.entries[pluginId] = {
-      ...(isRecord(previousEntry) ? previousEntry : {}),
+      ...previousEntry,
       enabled: true,
     };
     changed = true;
@@ -269,78 +246,8 @@ async function projectPlanState(params: {
     changedFiles.add(configPath);
   }
 
-  const targetMutations = applyConfigTargetMutations({
-    planTargets: params.plan.targets,
-    nextConfig,
-    stateDir,
-    env: params.env,
-    authStoreByPath: new Map<string, Record<string, unknown>>(),
-    authStoreTargetByPath: new Map<string, AuthProfileStoreTarget>(),
-    changedFiles,
-  });
-  if (targetMutations.configChanged) {
-    changedFiles.add(configPath);
-  }
-
-  const authStoreByPath = scrubAuthStoresForProviderTargets({
-    nextConfig,
-    stateDir,
-    env: params.env,
-    providerTargets: targetMutations.providerTargets,
-    scrubbedValues: targetMutations.scrubbedValues,
-    authStoreByPath: targetMutations.authStoreByPath,
-    authStoreTargetByPath: targetMutations.authStoreTargetByPath,
-    changedFiles,
-    warnings,
-    enabled: options.scrubAuthProfilesForProviderTargets,
-  });
-
-  const envRawByPath = scrubEnvFiles({
-    configPath,
-    stateDir,
-    scrubbedValues: targetMutations.scrubbedValues,
-    changedFiles,
-    enabled: options.scrubEnv,
-  });
-  const checkFullRuntime = params.write ? changedFiles.size > 0 : params.allowExecInDryRun;
-
-  const validation = await validateProjectedSecretsState({
-    env: params.env,
-    nextConfig,
-    resolvedTargets: targetMutations.resolvedTargets,
-    authStoreByPath,
-    write: params.write,
-    allowExecInDryRun: params.allowExecInDryRun,
-    checkFullRuntime,
-  });
-
-  return {
-    nextConfig,
-    authStoreEnv,
-    configSnapshot: snapshot,
-    configPath,
-    configWriteOptions: writeOptions,
-    authStoreByPath,
-    authStoreTargetByPath: targetMutations.authStoreTargetByPath,
-    envRawByPath,
-    changedFiles,
-    warnings,
-    refsChecked: validation.refsChecked,
-    skippedExecRefs: validation.skippedExecRefs,
-    resolvabilityComplete: validation.resolvabilityComplete,
-  };
-}
-
-function applyConfigTargetMutations(params: {
-  planTargets: SecretsPlanTarget[];
-  nextConfig: OpenClawConfig;
-  stateDir: string;
-  env: NodeJS.ProcessEnv;
-  authStoreByPath: Map<string, Record<string, unknown>>;
-  authStoreTargetByPath: Map<string, AuthProfileStoreTarget>;
-  changedFiles: Set<string>;
-}) {
-  const resolvedTargets = params.planTargets.map((target) => ({
+  const authStores = new Map<string, ProjectedAuthStore>();
+  const resolvedTargets = params.plan.targets.map((target) => ({
     target,
     resolved: resolveTarget(target),
   }));
@@ -352,21 +259,20 @@ function applyConfigTargetMutations(params: {
     if (resolved.entry.configFile === "auth-profile-store") {
       const { path, store } = resolveAuthStoreForTarget({
         target,
-        nextConfig: params.nextConfig,
-        stateDir: params.stateDir,
+        nextConfig,
+        stateDir,
         env: params.env,
-        authStoreByPath: params.authStoreByPath,
-        authStoreTargetByPath: params.authStoreTargetByPath,
+        authStores,
       });
       const containerChanged = ensureAuthProfileContainer({ target, resolved, store });
       const refChanged = applySecretRefTargetMutation(store, target, resolved, scrubbedValues);
       if (containerChanged || refChanged) {
-        params.changedFiles.add(path);
+        changedFiles.add(path);
       }
       continue;
     }
 
-    if (applySecretRefTargetMutation(params.nextConfig, target, resolved, scrubbedValues)) {
+    if (applySecretRefTargetMutation(nextConfig, target, resolved, scrubbedValues)) {
       configChanged = true;
     }
     if (
@@ -378,87 +284,157 @@ function applyConfigTargetMutations(params: {
     }
   }
 
-  return {
-    resolvedTargets,
-    scrubbedValues,
-    providerTargets,
-    configChanged,
-    authStoreByPath: params.authStoreByPath,
-    authStoreTargetByPath: params.authStoreTargetByPath,
-  };
-}
-
-function scrubAuthStoresForProviderTargets(params: {
-  nextConfig: OpenClawConfig;
-  stateDir: string;
-  env: NodeJS.ProcessEnv;
-  providerTargets: Set<string>;
-  scrubbedValues: Set<string>;
-  authStoreByPath: Map<string, Record<string, unknown>>;
-  authStoreTargetByPath: Map<string, AuthProfileStoreTarget>;
-  changedFiles: Set<string>;
-  warnings: string[];
-  enabled: boolean;
-}): Map<string, Record<string, unknown>> {
-  if (!params.enabled || params.providerTargets.size === 0) {
-    return params.authStoreByPath;
+  if (configChanged) {
+    changedFiles.add(configPath);
   }
 
-  for (const target of listAuthProfileStoreTargets(
-    params.nextConfig,
-    params.stateDir,
-    params.env,
-  )) {
-    const authStorePath = target.path;
-    const existing = params.authStoreByPath.get(authStorePath);
-    if (!existing && !fs.existsSync(authStorePath)) {
-      continue;
-    }
-    const parsed =
-      existing ??
-      (target.kind === "shared"
-        ? loadPersistedSharedAuthProfileStore(target.env)
-        : loadPersistedAuthProfileStore(target.agentDir));
-    if (!parsed || !isRecord(parsed.profiles)) {
-      continue;
-    }
-    let mutated = false;
-    for (const profile of iterateAuthProfileCredentials(parsed.profiles)) {
-      const provider = normalizeProviderId(profile.provider);
-      if (!params.providerTargets.has(provider)) {
+  if (options.scrubAuthProfilesForProviderTargets && providerTargets.size > 0) {
+    for (const target of listAuthProfileStoreTargets(nextConfig, stateDir, params.env)) {
+      const authStorePath = target.path;
+      const existing = authStores.get(authStorePath)?.store;
+      if (!existing && !fs.existsSync(authStorePath)) {
         continue;
       }
-      if (profile.kind === "api_key" || profile.kind === "token") {
-        if (isNonEmptyString(profile.value)) {
-          params.scrubbedValues.add(profile.value.trim());
-        }
-        if (profile.valueField in profile.profile) {
-          delete profile.profile[profile.valueField];
-          mutated = true;
-        }
-        if (
-          profile.refField in profile.profile &&
-          coerceSecretRef(profile.refValue, params.nextConfig.secrets?.defaults) === null
-        ) {
-          delete profile.profile[profile.refField];
-          mutated = true;
-        }
+      const parsed =
+        existing ??
+        (target.kind === "shared"
+          ? loadPersistedSharedAuthProfileStore(target.env)
+          : loadPersistedAuthProfileStore(target.agentDir));
+      if (!parsed || !isRecord(parsed.profiles)) {
         continue;
       }
-      if (profile.kind === "oauth" && (profile.hasAccess || profile.hasRefresh)) {
-        params.warnings.push(
-          `Provider "${provider}" has OAuth credentials in ${authStorePath}; those still take precedence and are out of scope for static SecretRef migration.`,
+      let mutated = false;
+      for (const profile of iterateAuthProfileCredentials(parsed.profiles)) {
+        const provider = normalizeProviderId(profile.provider);
+        if (!providerTargets.has(provider)) {
+          continue;
+        }
+        if (profile.kind === "api_key" || profile.kind === "token") {
+          if (isNonEmptyString(profile.value)) {
+            scrubbedValues.add(profile.value.trim());
+          }
+          if (profile.valueField in profile.profile) {
+            delete profile.profile[profile.valueField];
+            mutated = true;
+          }
+          if (
+            profile.refField in profile.profile &&
+            coerceSecretRef(profile.refValue, nextConfig.secrets?.defaults) === null
+          ) {
+            delete profile.profile[profile.refField];
+            mutated = true;
+          }
+          continue;
+        }
+        if (profile.kind === "oauth" && (profile.hasAccess || profile.hasRefresh)) {
+          warnings.push(
+            `Provider "${provider}" has OAuth credentials in ${authStorePath}; those still take precedence and are out of scope for static SecretRef migration.`,
+          );
+        }
+      }
+      if (mutated) {
+        authStores.set(authStorePath, { store: parsed, target });
+        changedFiles.add(authStorePath);
+      }
+    }
+  }
+
+  const envRawByPath = new Map<string, string>();
+  if (options.scrubEnv && scrubbedValues.size > 0) {
+    const knownSecretEnvVars = new Set(listKnownSecretEnvVarNames());
+    for (const envPath of listSecretsDotEnvPaths({ configPath, stateDir })) {
+      if (!fs.existsSync(envPath)) {
+        continue;
+      }
+      const bytes = fs.readFileSync(envPath);
+      const current = bytes.toString("utf8");
+      const scrubbed = scrubEnvRaw(current, scrubbedValues, knownSecretEnvVars);
+      if (scrubbed !== current) {
+        // No-op inspections may tolerate legacy bytes; rewrites must not replace them.
+        decodeUtf8Input(bytes, `File ${envPath}`);
+        envRawByPath.set(envPath, scrubbed);
+        changedFiles.add(envPath);
+      }
+    }
+  }
+  const checkFullRuntime = params.write ? changedFiles.size > 0 : params.allowExecInDryRun;
+  const { env, write, allowExecInDryRun } = params;
+  const cache = {};
+  let refsChecked = 0;
+  let skippedExecRefs = 0;
+  for (const { target, resolved: resolvedTarget } of resolvedTargets) {
+    if (!write && target.ref.source === "exec" && !allowExecInDryRun) {
+      skippedExecRefs += 1;
+      const staticError = getSkippedExecRefStaticError({
+        ref: target.ref,
+        config: nextConfig,
+      });
+      if (staticError) {
+        throw new Error(staticError);
+      }
+      continue;
+    }
+    const resolved = await resolveSecretRefValue(target.ref, {
+      config: nextConfig,
+      env,
+      cache,
+    });
+    refsChecked += 1;
+    assertExpectedResolvedSecretValue({
+      value: resolved,
+      expected: resolvedTarget.entry.expectedResolvedValue,
+      errorMessage:
+        resolvedTarget.entry.expectedResolvedValue === "string"
+          ? `Ref ${target.ref.source}:${target.ref.provider}:${target.ref.id} is not a non-empty string.`
+          : `Ref ${target.ref.source}:${target.ref.provider}:${target.ref.id} is not string/object.`,
+    });
+  }
+
+  const authStoreLookup = new Map<string, Record<string, unknown>>();
+  for (const [authStorePath, { store }] of authStores) {
+    authStoreLookup.set(resolveUserPath(authStorePath, env), store);
+  }
+  if (checkFullRuntime) {
+    await prepareSecretsRuntimeSnapshot({
+      config: nextConfig,
+      env,
+      // Dry-run preflight only needs auth-store materialization when this plan
+      // actually touches auth-profile state. Write mode keeps the stricter
+      // whole-runtime check.
+      includeAuthStoreRefs: write || authStores.size > 0,
+      loadAuthStore: (agentDir?: string) => {
+        const storePath = resolveUserPath(
+          agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath(env),
+          env,
         );
-      }
-    }
-    if (mutated) {
-      params.authStoreByPath.set(authStorePath, parsed);
-      params.authStoreTargetByPath.set(authStorePath, target);
-      params.changedFiles.add(authStorePath);
-    }
+        const override = authStoreLookup.get(storePath);
+        if (override) {
+          return (
+            coercePersistedAuthProfileStore(override) ?? {
+              version: AUTH_STORE_VERSION,
+              profiles: {},
+            }
+          );
+        }
+        return loadAuthProfileStoreForSecretsRuntime(agentDir);
+      },
+    });
   }
-
-  return params.authStoreByPath;
+  return {
+    nextConfig,
+    authStoreEnv,
+    configSnapshot: snapshot,
+    configPath,
+    configWriteOptions: writeOptions,
+    authStores,
+    envRawByPath,
+    changedFiles,
+    warnings,
+    refsChecked,
+    skippedExecRefs,
+    // Dry-run without exec consent intentionally skips full runtime preflight.
+    resolvabilityComplete: write || allowExecInDryRun || skippedExecRefs === 0,
+  };
 }
 
 function resolveAuthStoreForTarget(params: {
@@ -466,8 +442,7 @@ function resolveAuthStoreForTarget(params: {
   nextConfig: OpenClawConfig;
   stateDir: string;
   env: NodeJS.ProcessEnv;
-  authStoreByPath: Map<string, Record<string, unknown>>;
-  authStoreTargetByPath: Map<string, AuthProfileStoreTarget>;
+  authStores: Map<string, ProjectedAuthStore>;
 }): { path: string; store: MutableAuthProfileStore } {
   const agentId = (params.target.agentId ?? "").trim();
   if (!agentId) {
@@ -485,7 +460,7 @@ function resolveAuthStoreForTarget(params: {
     path: resolveAuthProfileDatabasePath(agentDir),
   };
   const authStorePath = authStoreTarget.path;
-  const existing = params.authStoreByPath.get(authStorePath);
+  const existing = params.authStores.get(authStorePath)?.store;
   const loaded = existing ?? loadPersistedAuthProfileStore(authStoreTarget.agentDir);
   const next: Record<string, unknown> = isRecord(loaded) ? loaded : {};
   const profiles = isRecord(next.profiles) ? next.profiles : {};
@@ -493,8 +468,7 @@ function resolveAuthStoreForTarget(params: {
     next.version = AUTH_STORE_VERSION;
   }
   const store = { ...next, profiles };
-  params.authStoreByPath.set(authStorePath, store);
-  params.authStoreTargetByPath.set(authStorePath, authStoreTarget);
+  params.authStores.set(authStorePath, { store, target: authStoreTarget });
   return { path: authStorePath, store };
 }
 
@@ -571,115 +545,6 @@ function applySecretRefTargetMutation(
   return setPathCreateStrict(root, resolved.pathTokens, target.ref);
 }
 
-function scrubEnvFiles(params: {
-  configPath: string;
-  stateDir: string;
-  scrubbedValues: Set<string>;
-  changedFiles: Set<string>;
-  enabled: boolean;
-}): Map<string, string> {
-  const envRawByPath = new Map<string, string>();
-  if (!params.enabled || params.scrubbedValues.size === 0) {
-    return envRawByPath;
-  }
-  const knownSecretEnvVars = new Set(listKnownSecretEnvVarNames());
-  for (const envPath of listSecretsDotEnvPaths({
-    configPath: params.configPath,
-    stateDir: params.stateDir,
-  })) {
-    if (!fs.existsSync(envPath)) {
-      continue;
-    }
-    const current = fs.readFileSync(envPath, "utf8");
-    const scrubbed = scrubEnvRaw(current, params.scrubbedValues, knownSecretEnvVars);
-    if (scrubbed.removed > 0 && scrubbed.nextRaw !== current) {
-      envRawByPath.set(envPath, scrubbed.nextRaw);
-      params.changedFiles.add(envPath);
-    }
-  }
-  return envRawByPath;
-}
-
-async function validateProjectedSecretsState(params: {
-  env: NodeJS.ProcessEnv;
-  nextConfig: OpenClawConfig;
-  resolvedTargets: ResolvedPlanTargetEntry[];
-  authStoreByPath: Map<string, Record<string, unknown>>;
-  write: boolean;
-  allowExecInDryRun: boolean;
-  checkFullRuntime: boolean;
-}): Promise<{ refsChecked: number; skippedExecRefs: number; resolvabilityComplete: boolean }> {
-  const cache = {};
-  let refsChecked = 0;
-  let skippedExecRefs = 0;
-  for (const { target, resolved: resolvedTarget } of params.resolvedTargets) {
-    if (!params.write && target.ref.source === "exec" && !params.allowExecInDryRun) {
-      skippedExecRefs += 1;
-      const staticError = getSkippedExecRefStaticError({
-        ref: target.ref,
-        config: params.nextConfig,
-      });
-      if (staticError) {
-        throw new Error(staticError);
-      }
-      continue;
-    }
-    const resolved = await resolveSecretRefValue(target.ref, {
-      config: params.nextConfig,
-      env: params.env,
-      cache,
-    });
-    refsChecked += 1;
-    assertExpectedResolvedSecretValue({
-      value: resolved,
-      expected: resolvedTarget.entry.expectedResolvedValue,
-      errorMessage:
-        resolvedTarget.entry.expectedResolvedValue === "string"
-          ? `Ref ${target.ref.source}:${target.ref.provider}:${target.ref.id} is not a non-empty string.`
-          : `Ref ${target.ref.source}:${target.ref.provider}:${target.ref.id} is not string/object.`,
-    });
-  }
-
-  const authStoreLookup = new Map<string, Record<string, unknown>>();
-  for (const [authStorePath, store] of params.authStoreByPath.entries()) {
-    authStoreLookup.set(resolveUserPath(authStorePath, params.env), store);
-  }
-  if (params.checkFullRuntime) {
-    await prepareSecretsRuntimeSnapshot({
-      config: params.nextConfig,
-      env: params.env,
-      // Dry-run preflight only needs auth-store materialization when this plan
-      // actually touches auth-profile state. Write mode keeps the stricter
-      // whole-runtime check.
-      includeAuthStoreRefs: params.write || params.authStoreByPath.size > 0,
-      loadAuthStore: (agentDir?: string) => {
-        const storePath = resolveUserPath(
-          agentDir
-            ? resolveAuthProfileDatabasePath(agentDir)
-            : resolveSharedAuthStorePath(params.env),
-          params.env,
-        );
-        const override = authStoreLookup.get(storePath);
-        if (override) {
-          return (
-            coercePersistedAuthProfileStore(override) ?? {
-              version: AUTH_STORE_VERSION,
-              profiles: {},
-            }
-          );
-        }
-        return loadAuthProfileStoreForSecretsRuntime(agentDir);
-      },
-    });
-  }
-  return {
-    refsChecked,
-    skippedExecRefs,
-    // Dry-run without exec consent intentionally skips full runtime preflight.
-    resolvabilityComplete: params.write || params.allowExecInDryRun || skippedExecRefs === 0,
-  };
-}
-
 function captureFileSnapshot(pathname: string): FileSnapshot {
   if (!fs.existsSync(pathname)) {
     return { existed: false, content: "", mode: 0o600 };
@@ -687,19 +552,23 @@ function captureFileSnapshot(pathname: string): FileSnapshot {
   const stat = fs.statSync(pathname);
   return {
     existed: true,
-    content: fs.readFileSync(pathname, "utf8"),
+    content: decodeUtf8Input(fs.readFileSync(pathname), `File ${pathname}`),
     mode: stat.mode & 0o777,
   };
 }
 
-function restoreFileSnapshot(pathname: string, snapshot: FileSnapshot): void {
+function restoreFileSnapshot(
+  pathname: string,
+  snapshot: FileSnapshot,
+  env: NodeJS.ProcessEnv,
+): void {
   if (!snapshot.existed) {
     if (fs.existsSync(pathname)) {
       fs.rmSync(pathname, { force: true });
     }
     return;
   }
-  writeTextFileAtomic(pathname, snapshot.content, snapshot.mode || 0o600);
+  writeTextFileAtomic(pathname, snapshot.content, snapshot.mode || 0o600, env);
 }
 
 /** Applies a normalized secrets plan, or reports file/auth-store changes in dry-run mode. */
@@ -748,26 +617,18 @@ export async function runSecretsApply(params: {
       snapshots.set(pathname, captureFileSnapshot(pathname));
     }
   };
-  const captureAuthStore = (pathname: string, target: AuthProfileStoreTarget) => {
-    if (!authStoreSnapshots.has(pathname)) {
-      authStoreSnapshots.set(pathname, {
-        target,
-        persistence: captureAuthProfileStorePersistenceSnapshot(
-          target.kind === "agent" ? target.agentDir : undefined,
-          {
-            env: target.kind === "shared" ? target.env : projected.authStoreEnv,
-          },
-        ),
-      });
-    }
-  };
-
   capture(projected.configPath);
   for (const pathname of projected.envRawByPath.keys()) {
     capture(pathname);
   }
-  for (const [pathname, target] of projected.authStoreTargetByPath.entries()) {
-    captureAuthStore(pathname, target);
+  for (const [pathname, { target }] of projected.authStores) {
+    authStoreSnapshots.set(pathname, {
+      target,
+      persistence: captureAuthProfileStorePersistenceSnapshot(
+        target.kind === "agent" ? target.agentDir : undefined,
+        { env: target.kind === "shared" ? target.env : projected.authStoreEnv },
+      ),
+    });
   }
 
   try {
@@ -779,12 +640,11 @@ export async function runSecretsApply(params: {
       afterWrite: { mode: "auto" },
     });
     for (const [pathname, raw] of projected.envRawByPath.entries()) {
-      writeTextFileAtomic(pathname, raw, 0o600);
+      writeTextFileAtomic(pathname, raw, 0o600, env);
     }
-    for (const [pathname, value] of projected.authStoreByPath.entries()) {
-      const target = projected.authStoreTargetByPath.get(pathname);
+    for (const [pathname, { store: value, target }] of projected.authStores) {
       const store = coercePersistedAuthProfileStore(value);
-      if (target && store) {
+      if (store) {
         const snapshot = authStoreSnapshots.get(pathname);
         if (!snapshot) {
           throw new Error(`missing captured auth profile store for ${pathname}`);
@@ -808,7 +668,7 @@ export async function runSecretsApply(params: {
     // config/auth/env stores out of sync when a later write fails.
     for (const [pathname, snapshot] of snapshots.entries()) {
       try {
-        restoreFileSnapshot(pathname, snapshot);
+        restoreFileSnapshot(pathname, snapshot, env);
       } catch {
         // Best effort only; preserve original error.
       }
@@ -848,4 +708,3 @@ export const testing = {
     return projected.nextConfig;
   },
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

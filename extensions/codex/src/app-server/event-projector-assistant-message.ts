@@ -87,16 +87,23 @@ export function createAssistantCommentaryMessage(
   return message;
 }
 
-export function createAssistantAsyncMessage(
+export function createAssistantAsyncDelivery(
   params: CodexAssistantMessageParams,
-  text: string,
+  text: string | undefined,
   itemId: string,
-  timestamp: number,
+  timestamp: number | undefined,
   questions?: CodexAsyncQuestion[],
-): CodexAsyncAssistantMessage {
+): { itemId: string; message: CodexAsyncAssistantMessage; text: string } | undefined {
+  if (!text?.trim() || timestamp === undefined) {
+    return undefined;
+  }
   return {
-    ...createNonterminalAssistantMessage(params, [{ type: "text", text }], timestamp),
-    openclawAsyncDelivery: { itemId, ...(questions ? { questions } : {}) },
+    itemId,
+    message: {
+      ...createNonterminalAssistantMessage(params, [{ type: "text", text }], timestamp),
+      openclawAsyncDelivery: { itemId, ...(questions ? { questions } : {}) },
+    },
+    text,
   };
 }
 

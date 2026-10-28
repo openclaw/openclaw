@@ -86,12 +86,7 @@ export function normalizeAgentTargetLabel(
     hydratedIdentity?.nameSource && hydratedIdentity.nameSource !== "default"
       ? normalizeOptionalString(hydratedIdentity.name)
       : undefined;
-  return (
-    resolvedName ??
-    normalizeOptionalString(agent.name) ??
-    normalizeOptionalString(agent.identity?.name) ??
-    agent.id
-  );
+  return resolvedName ?? normalizeAgentLabel(agent);
 }
 
 export function resolveAgentTextAvatar(
@@ -107,22 +102,15 @@ export function resolveAgentTextAvatar(
   return candidates.map(resolveAssistantTextAvatar).find(Boolean) ?? null;
 }
 
-type FormatBytesOptions = {
-  fallback?: string;
-  maxUnit?: "kilo" | "mega" | "giga" | "tera";
-  fractionDigits?: Parameters<typeof formatByteSize>[1]["fractionDigits"];
-};
-
-export function formatBytes(bytes?: number, options: FormatBytesOptions = {}) {
+export function formatBytes(bytes?: number) {
   if (bytes == null || !Number.isFinite(bytes)) {
-    return options.fallback ?? "-";
+    return "-";
   }
   return formatByteSize(bytes, {
     style: "legacy-binary",
-    maxUnit: options.maxUnit ?? "tera",
+    maxUnit: "tera",
     separator: " ",
-    fractionDigits:
-      options.fractionDigits ?? ((value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0)),
+    fractionDigits: (value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0),
   });
 }
 
@@ -141,23 +129,13 @@ export function resolveAgentConfig(config: Record<string, unknown> | null, agent
 /** Resolves the effective skill allowlist, including inherited agent defaults. */
 export function resolveAgentSkillsFilter(config: Record<string, unknown> | null, agentId: string) {
   const resolved = resolveAgentConfig(config, agentId);
-  if (Array.isArray(resolved.entry?.skills)) {
-    return normalizeStringEntries(resolved.entry.skills);
-  }
-  return Array.isArray(resolved.defaults?.skills)
-    ? normalizeStringEntries(resolved.defaults.skills)
-    : undefined;
+  const skills = Array.isArray(resolved.entry?.skills)
+    ? resolved.entry.skills
+    : resolved.defaults?.skills;
+  return Array.isArray(skills) ? normalizeStringEntries(skills) : undefined;
 }
 
-export type AgentContext = {
-  workspace: string;
-  model: string;
-  runtime: string;
-  identityName: string;
-  identityAvatar: string;
-  skillsLabel: string;
-  isDefault: boolean;
-};
+export type AgentContext = ReturnType<typeof buildAgentContext>;
 
 export function buildAgentContext(
   agent: AgentsListResult["agents"][number],
@@ -165,7 +143,7 @@ export function buildAgentContext(
   agentFilesList: AgentsFilesListResult | null,
   defaultId: string | null,
   agentIdentity?: AgentIdentityResult | null,
-): AgentContext {
+) {
   const config = resolveAgentConfig(configForm, agent.id);
   const workspaceFromFiles =
     agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;

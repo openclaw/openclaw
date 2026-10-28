@@ -282,6 +282,13 @@ const compilerResponse = `
     return ${JSON.stringify(mode)}.startsWith('failure') ? 17 : 0;
   }`;
 modules.set("scripts/lib/managed-child-process", compilerResponse);
+// The synthetic compiler has no declaration program or outputs to cache.
+const cacheUrl = pathToFileURL(path.join(source, "scripts/lib/build-artifact-cache.mts")).href;
+modules.set(
+  "scripts/lib/build-artifact-cache",
+  `export * from ${JSON.stringify(cacheUrl + "?original")};
+  export const resolveBuildStepCacheState = () => ({cacheable: false, fresh: false, reason: 'fixture compiler'});`,
+);
 registerHooks({
   resolve(specifier, context, next) {
     if (specifier.includes("?original")) {

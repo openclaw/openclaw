@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 // Static method policy is shared by metadata discovery and runtime target resolution.
 // Keep it independent of session storage so scope/profile classification does not load the runtime.
 type SessionMutationTargetField = "key" | "parentSessionKey" | "sessionKey";
@@ -5,6 +7,7 @@ type SessionMutationTargetField = "key" | "parentSessionKey" | "sessionKey";
 type SessionTargetPolicy = {
   fields?: readonly SessionMutationTargetField[];
   required?: boolean;
+  mayCreate?: boolean;
   readOnly?: boolean;
   profileIndependent?: boolean;
   approval?: boolean;
@@ -12,15 +15,17 @@ type SessionTargetPolicy = {
 };
 
 const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
+  ["worktrees.recoverFile", { fields: ["sessionKey"], required: true }],
   ["skills.library.activate", { fields: ["sessionKey"], required: true }],
   ["agent", { fields: ["sessionKey"], runStart: true }],
   ["board.event", { fields: ["sessionKey"], required: true }],
+  ["board.get", { fields: ["sessionKey"], required: true }],
   ["board.update", { fields: ["sessionKey"], required: true }],
   ["board.widget.grant", { fields: ["sessionKey"], required: true }],
   ["board.widget.put", { fields: ["sessionKey"], required: true }],
   ["chat.abort", { fields: ["sessionKey"], required: true }],
   ["chat.inject", { fields: ["sessionKey"], required: true }],
-  ["chat.send", { fields: ["sessionKey"], required: true, runStart: true }],
+  ["chat.send", { fields: ["sessionKey"], required: true, runStart: true, mayCreate: true }],
   ["mcp.app.onboard", { fields: ["sessionKey"], required: true, runStart: true }],
   ["mcp.app.launch", { fields: ["sessionKey"], required: true }],
   ["mcp.app.settings", { fields: ["sessionKey"], required: true }],
@@ -46,23 +51,23 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["sessions.companion.reset", { fields: ["sessionKey"], required: true }],
   ["sessions.companion.state", { fields: ["sessionKey"], readOnly: true }],
   ["sessions.compact", { fields: ["key"], required: true }],
-  ["sessions.create", { fields: ["key", "parentSessionKey"] }],
+  ["sessions.create", { fields: ["key", "parentSessionKey"], mayCreate: true }],
   ["sessions.messages.subscribe", { fields: ["key"], required: true }],
   ["sessions.delete", { fields: ["key"], required: true }],
   ["sessions.dispatch", { fields: ["key"], required: true, runStart: true }],
   ["sessions.files.set", { fields: ["sessionKey"], required: true }],
   ["sessions.github.publish", { fields: ["sessionKey"], required: true }],
+  ["sessions.github.action", { fields: ["sessionKey"], required: true }],
   ["sessions.github.confirm", { fields: ["sessionKey"], required: true }],
   ["sessions.fork", { fields: ["sessionKey"], required: true }],
-  ["sessions.patch", { fields: ["key"], required: true }],
+  ["sessions.patch", { fields: ["key"], required: true, mayCreate: true }],
   ["sessions.goal.update", { fields: ["sessionKey"], required: true }],
   ["sessions.goal.clear", { fields: ["sessionKey"], required: true }],
   ["sessions.providerReview.continue", { fields: ["sessionKey"], required: true, runStart: true }],
   ["sessions.pluginPatch", { fields: ["key"], required: true }],
-  ["sessions.recover", { fields: ["key"], required: true }],
   ["sessions.reset", { fields: ["key"], required: true }],
   ["sessions.rewind", { fields: ["sessionKey"], required: true }],
-  ["sessions.send", { fields: ["key"], required: true, runStart: true }],
+  ["sessions.send", { fields: ["key"], required: true, runStart: true, mayCreate: true }],
   ["sessions.steer", { fields: ["key"], required: true, runStart: true }],
   ["sessions.branches.switch", { fields: ["sessionKey"], required: true }],
   ["talk.voice.set", { fields: ["sessionKey"] }],
@@ -71,14 +76,21 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["sessions.reclaim", { fields: ["key"], required: true }],
   ["taskSuggestions.create", { fields: ["sessionKey"], required: true }],
   ["talk.client.close", { fields: ["sessionKey"], required: true, profileIndependent: true }],
-  ["talk.client.create", { fields: ["sessionKey"], profileIndependent: true, runStart: true }],
+  [
+    "talk.client.create",
+    { fields: ["sessionKey"], profileIndependent: true, runStart: true, mayCreate: true },
+  ],
+  ["talk.client.say", { fields: ["sessionKey"], required: true, profileIndependent: true }],
   ["talk.client.steer", { fields: ["sessionKey"], required: true, profileIndependent: true }],
   [
     "talk.client.toolCall",
     { fields: ["sessionKey"], required: true, profileIndependent: true, runStart: true },
   ],
   ["talk.client.transcript", { fields: ["sessionKey"], required: true, profileIndependent: true }],
-  ["talk.session.create", { fields: ["sessionKey"], profileIndependent: true, runStart: true }],
+  [
+    "talk.session.create",
+    { fields: ["sessionKey"], profileIndependent: true, runStart: true, mayCreate: true },
+  ],
   ["talk.session.steer", { fields: ["sessionKey"], profileIndependent: true }],
   ["wake", { fields: ["sessionKey"], profileIndependent: true, runStart: true }],
   ["board.action", { required: true }],
@@ -93,6 +105,8 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
 const DIRECT_SESSION_READ_METHODS = new Set([
   "board.get",
   "chat.history",
+  "controlUi.sessionPullRequests.subscribe",
+  "controlUi.sessionPullRequests.checks",
   "sessions.processes.list",
   "sessions.describe",
   "sessions.get",
@@ -102,6 +116,7 @@ const DIRECT_SESSION_READ_METHODS = new Set([
   "sessions.companion.state",
   "sessions.diff",
   "sessions.files.get",
+  "sessions.files.download",
   "sessions.files.assets",
   "sessions.files.list",
   "sessions.files.reveal",
@@ -144,6 +159,16 @@ export function isDirectSessionReadMethod(method: string): boolean {
   return DIRECT_SESSION_READ_METHODS.has(method);
 }
 
+/** Read admission is separate from whether direct keys wholly bound authorization. */
+export function sessionMethodDatabaseAdmission(method: string): "read" | "write" {
+  return isDirectSessionReadMethod(method) ||
+    method === "sessions.messages.subscribe" ||
+    method === "sessions.resolve" ||
+    method === "chat.metadata"
+    ? "read"
+    : "write";
+}
+
 export function sessionMutationTargetFields(method: string): readonly SessionMutationTargetField[] {
   const policy = SESSION_TARGET_POLICY_BY_METHOD.get(method);
   return policy?.readOnly ? [] : (policy?.fields ?? []);
@@ -151,6 +176,10 @@ export function sessionMutationTargetFields(method: string): readonly SessionMut
 
 export function isRequiredSessionTargetMethod(method: string): boolean {
   return SESSION_TARGET_POLICY_BY_METHOD.get(method)?.required === true;
+}
+
+export function mayCreateSessionTarget(method: string): boolean {
+  return SESSION_TARGET_POLICY_BY_METHOD.get(method)?.mayCreate === true;
 }
 
 export function isApprovalSessionTargetMethod(method: string): boolean {
@@ -174,4 +203,14 @@ export function isAgentRunStartMethod(method: string, requestParams: unknown): b
       "action" in requestParams &&
       requestParams.action === "resume")
   );
+}
+
+export function isSessionArchiveMutation(method: string, requestParams: unknown): boolean {
+  const patch =
+    method === "sessions.patchMany" && isRecord(requestParams)
+      ? requestParams.patch
+      : method === "sessions.patch"
+        ? requestParams
+        : undefined;
+  return isRecord(patch) && typeof patch.archived === "boolean";
 }

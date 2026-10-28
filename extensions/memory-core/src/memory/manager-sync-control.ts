@@ -4,6 +4,13 @@ import type {
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
+export class MemoryBackgroundRebuildInterruptedError extends Error {
+  constructor() {
+    super("Memory background rebuild interrupted by foreground activity");
+    this.name = "MemoryBackgroundRebuildInterruptedError";
+  }
+}
+
 export function hasTargetedSessionSyncParams(params: MemorySyncParams | undefined): boolean {
   return Boolean(
     params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||

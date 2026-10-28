@@ -28,16 +28,16 @@ describe("session snooze", () => {
     expect(now.getTime()).toBe(before);
   });
 
-  it("finds the earliest future deadline without retaining expired or malformed values", () => {
+  it("finds the earliest future deadline without retaining absent or expired values", () => {
     expect(
       nextSessionSnoozeWakeAt(
-        [undefined, Infinity, 100, 300, 200].map((snoozedUntil) => ({
+        [undefined, 100, 300, 200].map((snoozedUntil) => ({
           snoozedUntil,
         })),
         100,
       ),
     ).toBe(200);
-    for (const snoozedUntil of [undefined, Number.NaN, Infinity, -Infinity, 0, -1, 99, 100]) {
+    for (const snoozedUntil of [undefined, 0, -1, 99, 100]) {
       expect(nextSessionSnoozeWakeAt([{ snoozedUntil }], 100)).toBeNull();
     }
     expect(nextSessionSnoozeWakeAt([], 100)).toBeNull();

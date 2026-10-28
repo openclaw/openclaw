@@ -12,25 +12,39 @@ import {
   type ModelRoutingPercentiles,
   type ModelRoutingSortConfig,
 } from "../../llm-core/src/model-data.js";
+import type { ModelInferenceCapabilities } from "./model-inference-capabilities.js";
 
-/** Supported API protocols for model catalog entries. */
+export type {
+  ModelInferenceCapabilities,
+  ModelDecisionCapabilities,
+} from "./model-inference-capabilities.js";
+
+// Tier capacity is separate from the model's full context window. Leave room
+// below the observed serving boundary for output and tool-round growth.
+const OPENAI_ULTRAFAST_CONTEXT_TOKENS = 260_000;
+
+/** Prompt capacity for models served through a context-limited processing tier. */
+export function resolveModelServiceTierContextTokens(
+  provider: string | undefined,
+  serviceTier: string | undefined,
+): number | undefined {
+  return provider === "openai" && serviceTier === "ultrafast"
+    ? OPENAI_ULTRAFAST_CONTEXT_TOKENS
+    : undefined;
+}
+
 export const MODEL_CATALOG_APIS = [...MODEL_DATA_APIS] as const;
 
-/** API protocol for a model catalog entry. */
 export type ModelCatalogApi = (typeof MODEL_CATALOG_APIS)[number];
 
-/** Supported model thinking/reasoning wire formats. */
 export const MODEL_CATALOG_THINKING_FORMATS = [...MODEL_DATA_THINKING_FORMATS] as const;
 
-/** Thinking/reasoning wire format for model compatibility. */
 export type ModelCatalogThinkingFormat = (typeof MODEL_CATALOG_THINKING_FORMATS)[number];
 
-/** Narrow a string to a supported model catalog thinking format. */
 export function isModelCatalogThinkingFormat(value: string): value is ModelCatalogThinkingFormat {
   return (MODEL_CATALOG_THINKING_FORMATS as readonly string[]).includes(value);
 }
 
-/** Compatibility flags and provider-specific routing metadata for one model. */
 export type ModelCatalogCompatConfig = {
   supportsStore?: boolean;
   supportsDeveloperRole?: boolean;
@@ -90,21 +104,35 @@ export type ModelCatalogOpenRouterRouting = {
   preferred_max_latency?: number | ModelRoutingPercentiles;
 };
 
-/** Vercel AI Gateway routing preferences. */
 export type ModelCatalogVercelGatewayRouting = {
   only?: string[];
   order?: string[];
 };
 
-/** Image input limits for a model. */
 export type ModelCatalogImageInputConfig = ModelDataImageInputConfig;
 
-/** Media input limits for a model. */
 export type ModelCatalogMediaInputConfig = ModelDataMediaInputConfig;
 
-/** Supported input modality for a model. */
-export type ModelCatalogInput = "text" | "image" | "document";
-/** Model-level thinking settings carried by provider catalog metadata. */
+// Lowercase, hyphen-separated token; the Gateway protocol's ModelChoice schema mirrors it.
+const MODEL_FAMILY_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+const MODEL_FAMILY_MAX_LENGTH = 64;
+
+/**
+ * Canonical model family: the developer lineage a catalog declares for a model, such as
+ * `anthropic`. Callers pass only provider or catalog metadata, never a model id or name.
+ */
+export function normalizeModelFamily(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const family = value.trim().toLowerCase();
+  return family.length <= MODEL_FAMILY_MAX_LENGTH && MODEL_FAMILY_PATTERN.test(family)
+    ? family
+    : undefined;
+}
+
+export const MODEL_CATALOG_INPUTS = ["text", "image", "video", "document"] as const;
+export type ModelCatalogInput = (typeof MODEL_CATALOG_INPUTS)[number];
 export const MODEL_CATALOG_THINKING_LEVELS = [...MODEL_DATA_THINKING_LEVELS] as const;
 export type ModelCatalogThinkingLevel = (typeof MODEL_CATALOG_THINKING_LEVELS)[number];
 export type ModelCatalogThinkingLevelMap = ModelDataThinkingLevelMap;
@@ -152,11 +180,9 @@ export function listMappedModelThinkingLevels(model: {
   return MODEL_CATALOG_THINKING_LEVELS.filter((level) => mapped.has(level));
 }
 
-/** Discovery lifecycle for a provider catalog. */
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
-/** Availability state for a model. */
-export type ModelCatalogStatus = "available" | "preview" | "deprecated" | "disabled";
-/** Source of a model catalog row. */
+export const MODEL_CATALOG_STATUSES = ["available", "preview", "deprecated", "disabled"] as const;
+export type ModelCatalogStatus = (typeof MODEL_CATALOG_STATUSES)[number];
 export type ModelCatalogSource =
   | "manifest"
   | "provider-index"
@@ -164,7 +190,6 @@ export type ModelCatalogSource =
   | "config"
   | "runtime-refresh";
 
-/** Unified catalog kind across text and generated media models. */
 export type UnifiedModelCatalogKind =
   | "text"
   | "voice"
@@ -172,7 +197,6 @@ export type UnifiedModelCatalogKind =
   | "video_generation"
   | "music_generation";
 
-/** Source for unified model catalog entries. */
 export type UnifiedModelCatalogSource =
   | "manifest"
   | "provider-index"
@@ -200,10 +224,8 @@ export type UnifiedModelCatalogEntry<TCapabilities = unknown> = {
   warnings?: readonly string[];
 };
 
-/** Tiered token cost row. */
 export type ModelCatalogTieredCost = ModelDataRawPricingTier;
 
-/** Token cost metadata for one model. */
 export type ModelCatalogCost = Partial<ModelDataCostRates> & {
   tieredPricing?: ModelCatalogTieredCost[];
 };
@@ -217,9 +239,10 @@ export type ModelCatalogContextWindowOption = {
 
 export const MODEL_CATALOG_MAX_CONTEXT_WINDOWS = 16;
 
-/** Provider manifest model entry. */
 export type ModelCatalogModel = {
   id: string;
+  /** Task facts for this exact served route, independent of chat wire metadata. */
+  inference?: ModelInferenceCapabilities;
   name?: string;
   api?: ModelCatalogApi;
   baseUrl?: string;
@@ -230,6 +253,10 @@ export type ModelCatalogModel = {
   contextWindows?: ModelCatalogContextWindowOption[];
   contextWindowDefault?: string;
   contextTokens?: number;
+  /** Total model parameters, including inactive experts. */
+  parameterCount?: number;
+  /** Canonical developer lineage of this model; overrides the provider-level family. */
+  family?: string;
   maxTokens?: number;
   thinkingLevelMap?: ModelCatalogThinkingLevelMap;
   cost?: ModelCatalogCost;
@@ -249,21 +276,34 @@ export type ModelCatalogModel = {
   tags?: string[];
 };
 
-/** Provider manifest catalog entry. */
 export type ModelCatalogProvider = {
+  /** Credential owner; omitted providers keep agent-owned profile/env/config auth. */
+  authScope?: "agent" | "plugin";
   baseUrl?: string;
   api?: ModelCatalogApi;
   headers?: Record<string, string>;
+  /**
+   * Canonical family of every model in this provider's catalog, for single-developer
+   * catalogs. Rows inherit it like `api`; multi-developer hosts declare it per row.
+   */
+  family?: string;
   /** Provider-recommended primary model id. */
   defaultModel?: string;
   /** Provider-recommended small model id for short internal utility tasks. */
   defaultUtilityModel?: string;
-  /** Ordered provider shortlist reserved for picker ordering; not yet used. */
+  /**
+   * Multi-vendor routers: small model id per vendor, keyed by the vendor prefix of the
+   * primary model id (`<vendor>/<model>`). Used only when the router offers that model.
+   */
+  defaultUtilityModels?: Record<string, string>;
+  /**
+   * Hosted catalog v2 projection of the curated global list onto this provider's
+   * model ids, best first; reserved for picker ordering and not yet used.
+   */
   recommendedModels?: string[];
   models: ModelCatalogModel[];
 };
 
-/** Provider alias entry. */
 export type ModelCatalogAlias = {
   provider: string;
   api?: ModelCatalogApi;
@@ -291,6 +331,8 @@ export type ModelCatalog = {
   aliases?: Record<string, ModelCatalogAlias>;
   suppressions?: ModelCatalogSuppression[];
   discovery?: Record<string, ModelCatalogDiscovery>;
+  /** Runtime catalogs bound to the configured origin, or the manifest default when absent. */
+  configuredEndpointDiscovery?: string[];
   runtimeAugment?: boolean;
 };
 

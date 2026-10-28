@@ -5,7 +5,6 @@ import {
   normalizeSessionColorValue,
   normalizeSessionIconValue,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import { normalizeSessionConversationLink } from "./conversation-link.js";
 import { SessionStoreMigrationRequiredError } from "./migration-required.js";
 import { hasLegacySessionEntryState } from "./session-entry-state-format.js";
 import { assertSupportedSessionStoreEntry } from "./supported-session-store.js";
@@ -23,12 +22,26 @@ function normalizeSessionEntryArchiveReason(
     : undefined;
 }
 
-function normalizeOptionalTimestamp(value: unknown): number | undefined {
+export function normalizeOptionalTimestamp(value: unknown): number | undefined {
   return value === undefined ? undefined : (asNonNegativeFiniteNumber(value) ?? 0);
 }
 
-/** Removes retired runtime locator fields before a session entry is persisted or returned. */
-export function projectCanonicalSessionEntryShape(value: Record<string, unknown>): SessionEntry {
+/** Removes retired and projected fields before a session entry is persisted or returned. */
+export function projectCanonicalSessionEntryShape(
+  value: Partial<
+    Record<
+      | keyof SessionEntry
+      | "sessionFile"
+      | "transcriptPath"
+      | "conversationLink"
+      | "titleRefinement"
+      | "owner"
+      | "participants"
+      | "participantCount",
+      unknown
+    >
+  >,
+): SessionEntry {
   assertSupportedSessionStoreEntry(value);
   if (hasLegacySessionEntryState(value)) {
     throw new SessionStoreMigrationRequiredError(
@@ -38,12 +51,25 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
   const {
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
+    conversationLink: _retiredConversationLink,
+    titleRefinement: _retiredTitleRefinement,
     owner: _projectedOwner,
     participants: _projectedParticipants,
     participantCount: _projectedParticipantCount,
     ...canonicalValue
   } = value;
-  const setOptionalField = (key: keyof SessionEntry, normalized: unknown) => {
+  // Retired execution-recovery metadata is inert on existing installs.
+  for (const key of Object.keys(canonicalValue)) {
+    if (
+      key === "mainRestartRecovery" ||
+      key === "pendingExecNotifications" ||
+      key === "subagentRecovery" ||
+      key.startsWith("restartRecovery")
+    ) {
+      Reflect.deleteProperty(canonicalValue, key);
+    }
+  }
+  const setOptionalField = (key: keyof typeof canonicalValue, normalized: unknown) => {
     if (normalized) {
       canonicalValue[key] = normalized;
     } else {
@@ -51,8 +77,16 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     }
   };
   setOptionalField(
-    "conversationLink",
-    normalizeSessionConversationLink(canonicalValue.conversationLink),
+    "clientCapabilities",
+    Array.isArray(canonicalValue.clientCapabilities)
+      ? [
+          ...new Set(
+            canonicalValue.clientCapabilities.filter(
+              (cap): cap is string => typeof cap === "string",
+            ),
+          ),
+        ].toSorted()
+      : undefined,
   );
   const icon =
     typeof canonicalValue.icon === "string" ? normalizeSessionIconValue(canonicalValue.icon) : null;
@@ -123,11 +157,13 @@ export function normalizePendingFinalDelivery(
     return undefined;
   }
   const intentId = normalizeOptionalString(value.intentId);
+  const sourceRunId = normalizeOptionalString(value.sourceRunId);
   const deliveries = normalizePendingFinalDeliveries(value.deliveries);
   const base = {
     createdAt,
     ...(isRecord(value.context) ? { context: value.context } : {}),
     ...(intentId ? { intentId } : {}),
+    ...(sourceRunId ? { sourceRunId } : {}),
     ...(deliveries ? { deliveries } : {}),
   };
   if (value.kind === "transport-only") {
@@ -147,13 +183,29 @@ function normalizePendingFinalDeliveries(
     value.flatMap((item) => {
       const id = isRecord(item) ? normalizeOptionalString(item.id) : undefined;
       const state = isRecord(item) ? item.state : undefined;
+      const receipt = isRecord(item) && isRecord(item.receipt) ? item.receipt : undefined;
+      const platformMessageId = normalizeOptionalString(receipt?.platformMessageId);
+      const resultCount = receipt?.resultCount;
       return id &&
         (state === "prepared" ||
           state === "queued" ||
           state === "delivered" ||
           state === "suppressed" ||
           state === "unknown")
-        ? [{ id, state }]
+        ? [
+            {
+              id,
+              state,
+              ...(platformMessageId && Number.isSafeInteger(resultCount) && Number(resultCount) > 0
+                ? {
+                    receipt: {
+                      platformMessageId,
+                      resultCount: Number(resultCount),
+                    },
+                  }
+                : {}),
+            },
+          ]
         : [];
     });
   return deliveries.length > 0 ? deliveries : undefined;
@@ -246,7 +298,7 @@ export function normalizeMemoryFlush(value: unknown): SessionEntry["memoryFlush"
   };
 }
 
-function normalizeCount(value: unknown): number | undefined {
+export function normalizeCount(value: unknown): number | undefined {
   const number = asNonNegativeFiniteNumber(value);
   return number === undefined ? undefined : Math.floor(number);
 }

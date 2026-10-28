@@ -31,15 +31,7 @@ public enum WebViewJavaScriptSupport {
 
     @MainActor
     public static func evaluateToString(webView: WKWebView, javaScript: String) async throws -> String {
-        try await withCheckedThrowingContinuation { cont in
-            webView.evaluateJavaScript(javaScript) { result, error in
-                if let error {
-                    cont.resume(throwing: error)
-                    return
-                }
-                cont.resume(returning: self.evaluationResultString(result))
-            }
-        }
+        try await self.evaluationResultString(webView.evaluateJavaScript(javaScript, contentWorld: .page))
     }
 
     static func evaluationResultString(_ result: Any?) -> String {

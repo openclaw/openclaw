@@ -17,15 +17,7 @@ export async function resolveRequestedChannel(params: {
   context: GatewayRequestContext;
   config?: OpenClawConfig;
   rejectWebchatAsInternalOnly?: boolean;
-}): Promise<
-  | {
-      cfg: OpenClawConfig;
-      channel: string;
-    }
-  | {
-      error: ReturnType<typeof errorShape>;
-    }
-> {
+}) {
   const channelInput = readStringValue(params.requestChannel);
   const normalizedChannel = channelInput ? normalizeMessageChannel(channelInput) : undefined;
   if (params.rejectWebchatAsInternalOnly && normalizedChannel === INTERNAL_MESSAGE_CHANNEL) {
@@ -53,34 +45,23 @@ export async function resolveRequestedChannel(params: {
   return { cfg, channel };
 }
 
-export function resolveGatewayOutboundTarget(params: {
+export async function resolveGatewayOutboundTarget(params: {
   channel: string;
   to: string;
   cfg: OpenClawConfig;
   accountId?: string;
-}):
-  | {
-      ok: true;
-      to: string;
-    }
-  | {
-      ok: false;
-      error: ReturnType<typeof errorShape>;
-    } {
-  const resolved = resolveOutboundTarget({
-    channel: params.channel,
-    to: params.to,
-    cfg: params.cfg,
-    accountId: params.accountId,
+}) {
+  const resolved = await resolveOutboundTarget({
+    ...params,
     mode: "explicit",
   });
   if (!resolved.ok) {
     return {
-      ok: false,
+      ok: false as const,
       error: errorShape(ErrorCodes.INVALID_REQUEST, String(resolved.error)),
     };
   }
-  return { ok: true, to: resolved.to };
+  return { ok: true as const, to: resolved.to };
 }
 
 export function resolveMessageActionRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {

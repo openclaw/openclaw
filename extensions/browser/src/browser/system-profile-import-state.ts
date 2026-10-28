@@ -18,11 +18,14 @@ export type SystemProfileImportState =
       updatedAt: number;
     };
 
-let importStateStore: PluginStateKeyedStore<SystemProfileImportState> | undefined;
+type ImportStateStore = Pick<
+  PluginStateKeyedStore<SystemProfileImportState>,
+  "lookup" | "register"
+>;
 
-export function configureSystemProfileImportStateStore(
-  store: PluginStateKeyedStore<SystemProfileImportState>,
-): void {
+let importStateStore: ImportStateStore | undefined;
+
+export function configureSystemProfileImportStateStore(store: ImportStateStore): void {
   importStateStore = store;
 }
 

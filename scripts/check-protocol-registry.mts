@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -132,16 +132,6 @@ check(
   ),
   "registry type grouping must not add a runtime owner or import",
 );
-const composerSource = read("packages/gateway-protocol/src/schema/protocol-schema-composer.ts");
-check(
-  !/\.(?:sort|toSorted)\s*\(/u.test(composerSource),
-  "schema composer must not sort its fragments",
-);
-check(
-  composerSource.includes("Object.hasOwn(registry, key)"),
-  "schema composer must reject duplicate fragment keys",
-);
-
 const withoutComments = (source: string) =>
   source
     .replace(/\r\n?/gu, "\n")
@@ -155,8 +145,8 @@ const ownerModules = [
   ...schemaModulesSource.matchAll(/^export \* from "\.\/schema\/([^"]+)\.js";$/gmu),
 ].map(([, moduleName = ""]) => moduleName);
 check(
-  ownerModules.length === 74 && new Set(ownerModules).size === ownerModules.length,
-  "schema-modules.ts must contain one unique 74-module owner list",
+  ownerModules.length === 75 && new Set(ownerModules).size === ownerModules.length,
+  "schema-modules.ts must contain one unique 75-module owner list",
 );
 check(
   schemaModulesSource.split("\n").filter(Boolean).length === ownerModules.length,

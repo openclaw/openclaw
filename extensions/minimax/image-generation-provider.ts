@@ -2,17 +2,12 @@ import {
   resolveInlineImageJsonResponseMaxBytes,
   type ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { resolveGeneratedImageDownloadMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import {
-  assertOkOrThrowHttpError,
-  postJsonRequest,
-  readProviderJsonResponse,
-  resolveProviderHttpRequestConfig,
-  sanitizeConfiguredModelProviderRequest,
-} from "openclaw/plugin-sdk/provider-http";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
+import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { postJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { resolveMinimaxMediaRequestConfig } from "./media-provider-runtime.js";
 
 const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
 const CN_MINIMAX_IMAGE_BASE_URL = "https://api.minimaxi.com";
@@ -29,21 +24,6 @@ const MINIMAX_SUPPORTED_ASPECT_RATIOS = [
   "9:16",
   "21:9",
 ] as const;
-
-type MinimaxImageApiResponse = {
-  data?: {
-    image_base64?: string[];
-  };
-  metadata?: {
-    success_count?: number;
-    failed_count?: number;
-  };
-  id?: string;
-  base_resp?: {
-    status_code?: number;
-    status_msg?: string;
-  };
-};
 
 function isMinimaxCnHost(value: string | undefined): boolean {
   const trimmed = value?.trim();
@@ -74,13 +54,15 @@ function resolveMinimaxImageBaseUrl(
   return DEFAULT_MINIMAX_IMAGE_BASE_URL;
 }
 
-function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider {
+export function buildMinimaxImageGenerationProvider(
+  providerId = "minimax",
+): ImageGenerationProvider {
   return {
     id: providerId,
     label: "MiniMax",
     defaultModel: DEFAULT_MODEL,
     models: [DEFAULT_MODEL],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: providerId, ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: providerId, ...ctx }),
     capabilities: {
       generate: {
         maxCount: MINIMAX_MAX_IMAGE_RESULTS,
@@ -101,35 +83,19 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       },
     },
     async generateImage(req) {
-      const auth = await resolveApiKeyForProvider({
-        provider: providerId,
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("MiniMax API key missing");
-      }
-
       const baseUrl = resolveMinimaxImageBaseUrl(req.cfg, providerId);
       const {
         baseUrl: resolvedBaseUrl,
         allowPrivateNetwork,
         headers,
         dispatcherPolicy,
-      } = resolveProviderHttpRequestConfig({
+      } = await resolveMinimaxMediaRequestConfig({
+        cfg: req.cfg,
+        providerId,
+        agentDir: req.agentDir,
+        authStore: req.authStore,
         baseUrl,
-        defaultBaseUrl: DEFAULT_MINIMAX_IMAGE_BASE_URL,
-        defaultHeaders: {
-          Authorization: `Bearer ${auth.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        provider: providerId,
         capability: "image",
-        transport: "http",
-        request: sanitizeConfiguredModelProviderRequest(
-          req.cfg.models?.providers?.[providerId]?.request,
-        ),
       });
 
       const body: Record<string, unknown> = {
@@ -143,14 +109,26 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         body.aspect_ratio = req.aspectRatio.trim();
       }
 
-      // Map input images to subject_reference for image-to-image generation
       const ref = req.inputImages?.at(0);
       if (ref) {
         const mime = ref.mimeType || "image/jpeg";
         const dataUrl = `data:${mime};base64,${ref.buffer.toString("base64")}`;
         body.subject_reference = [{ type: "character", image_file: dataUrl }];
       }
-      const { response, release } = await postJsonRequest({
+      const data = await postJsonResponse<{
+        data?: {
+          image_base64?: string[];
+        };
+        metadata?: {
+          success_count?: number;
+          failed_count?: number;
+        };
+        id?: string;
+        base_resp?: {
+          status_code?: number;
+          status_msg?: string;
+        };
+      }>({
         url: `${resolvedBaseUrl}/v1/image_generation`,
         headers,
         body,
@@ -159,68 +137,52 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         allowPrivateNetwork,
         ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
+        errorLabel: "MiniMax image generation failed",
+        responseLabel: "minimax.image-generation",
+        readOptions: {
+          maxBytes: resolveInlineImageJsonResponseMaxBytes(
+            MINIMAX_MAX_IMAGE_RESULTS,
+            resolveGeneratedImageDownloadMaxBytes(req.cfg),
+          ),
+        },
       });
-      try {
-        await assertOkOrThrowHttpError(response, "MiniMax image generation failed");
 
-        const data = await readProviderJsonResponse<MinimaxImageApiResponse>(
-          response,
-          "minimax.image-generation",
-          {
-            maxBytes: resolveInlineImageJsonResponseMaxBytes(
-              MINIMAX_MAX_IMAGE_RESULTS,
-              resolveGeneratedMediaMaxBytes(req.cfg, "image"),
-            ),
-          },
-        );
-
-        const baseResp = data.base_resp;
-        if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
-          const msg = baseResp.status_msg ?? "";
-          throw new Error(`MiniMax image generation API error (${baseResp.status_code}): ${msg}`);
-        }
-
-        const base64Images = data.data?.image_base64 ?? [];
-        const failedCount = data.metadata?.failed_count ?? 0;
-
-        if (base64Images.length === 0) {
-          const reason =
-            failedCount > 0 ? `${failedCount} image(s) failed to generate` : "no images returned";
-          throw new Error(`MiniMax image generation returned no images: ${reason}`);
-        }
-
-        const images = base64Images
-          .map((b64, index) => {
-            if (!b64) {
-              return null;
-            }
-            const canonicalBase64 = canonicalizeBase64(b64);
-            if (!canonicalBase64) {
-              throw new Error("MiniMax image generation returned malformed image base64");
-            }
-            return {
-              buffer: Buffer.from(canonicalBase64, "base64"),
-              mimeType: DEFAULT_OUTPUT_MIME,
-              fileName: `image-${index + 1}.png`,
-            };
-          })
-          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-
-        return {
-          images,
-          model: req.model || DEFAULT_MODEL,
-        };
-      } finally {
-        await release();
+      const baseResp = data.base_resp;
+      if (baseResp && typeof baseResp.status_code === "number" && baseResp.status_code !== 0) {
+        const msg = baseResp.status_msg ?? "";
+        throw new Error(`MiniMax image generation API error (${baseResp.status_code}): ${msg}`);
       }
+
+      const base64Images = data.data?.image_base64 ?? [];
+      const failedCount = data.metadata?.failed_count ?? 0;
+
+      if (base64Images.length === 0) {
+        const reason =
+          failedCount > 0 ? `${failedCount} image(s) failed to generate` : "no images returned";
+        throw new Error(`MiniMax image generation returned no images: ${reason}`);
+      }
+
+      const images = base64Images
+        .map((b64, index) => {
+          if (!b64) {
+            return null;
+          }
+          const canonicalBase64 = canonicalizeBase64(b64);
+          if (!canonicalBase64) {
+            throw new Error("MiniMax image generation returned malformed image base64");
+          }
+          return {
+            buffer: Buffer.from(canonicalBase64, "base64"),
+            mimeType: DEFAULT_OUTPUT_MIME,
+            fileName: `image-${index + 1}.png`,
+          };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+
+      return {
+        images,
+        model: req.model || DEFAULT_MODEL,
+      };
     },
   };
-}
-
-export function buildMinimaxImageGenerationProvider(): ImageGenerationProvider {
-  return buildMinimaxImageProvider("minimax");
-}
-
-export function buildMinimaxPortalImageGenerationProvider(): ImageGenerationProvider {
-  return buildMinimaxImageProvider("minimax-portal");
 }

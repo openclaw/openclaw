@@ -4,7 +4,15 @@ import type { CDPSession, Page } from "playwright";
 const RENDERER_STALL_BUDGET_MS = 3_000;
 const RENDERER_STALL_SAMPLE_MS = 500;
 const RENDERER_STALL_FRAME_LIMIT = 16;
-const controlUiE2eRendererStallProbes = new WeakMap<Page, Promise<CDPSession | null>>();
+const controlUiE2eRendererStallProbes = new WeakMap<
+  Page,
+  Promise<{
+    session: CDPSession;
+    scripts: Map<string, string>;
+    captureStack: boolean;
+    cleanup(): void;
+  } | null>
+>();
 
 type RendererStallFrame = { functionName: string; script: string; line: number; column: number };
 type RendererStall = {
@@ -87,11 +95,10 @@ function recordLongAnimationFrames() {
 }
 
 /**
- * Arm stalled-renderer evidence when a page is created, before navigation and
- * before the test opens CDP sessions. A stall that ends leaves a script-attributed
- * long animation frame. For one that never ends, V8 services `Debugger.pause` and
- * `Performance.getMetrics` inside the busy task, but `Debugger.enable` waits for
- * it, so the agent must already be enabled.
+ * Install passive stall evidence before navigation and the test's own CDP
+ * sessions. Full stacks are opt-in: enabling the debugger slows every app boot.
+ * A never-ending task still serves Performance metrics, but Debugger.enable
+ * waits for it, so proof captures must arm the debugger before the stall.
  */
 export async function installControlUiE2eRendererStallProbe(page: Page): Promise<void> {
   if (controlUiE2eRendererStallProbes.has(page)) {
@@ -101,12 +108,28 @@ export async function installControlUiE2eRendererStallProbe(page: Page): Promise
     try {
       await page.addInitScript(recordLongAnimationFrames);
       const session = await page.context().newCDPSession(page);
-      // Collected scripts stay collectable, so heap budgets measure the app alone.
-      await session.send("Debugger.enable", { maxScriptsCacheSize: 0 });
-      // Inactive breakpoints skip `debugger` statements; explicit pauses still stop.
-      await session.send("Debugger.setBreakpointsActive", { active: false });
+      const captureStack = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+      const scripts = new Map<string, string>();
+      const parsed = ({ scriptId, url }: { scriptId: string; url: string }) => {
+        const pathname = stallScriptPath(url);
+        if (pathname && scripts.size < 256) {
+          scripts.set(scriptId, pathname);
+        }
+      };
+      if (captureStack) {
+        session.on("Debugger.scriptParsed", parsed);
+        // Collected scripts stay collectable, so heap budgets measure the app alone.
+        await session.send("Debugger.enable", { maxScriptsCacheSize: 0 });
+        // Inactive breakpoints skip `debugger` statements; explicit pauses still stop.
+        await session.send("Debugger.setBreakpointsActive", { active: false });
+      }
       await session.send("Performance.enable");
-      return session;
+      return {
+        session,
+        scripts,
+        captureStack,
+        cleanup: () => session.off("Debugger.scriptParsed", parsed),
+      };
     } catch {
       // Evidence is best effort: closed pages, non-Chromium contexts, and test
       // doubles run without a probe.
@@ -120,7 +143,10 @@ export async function installControlUiE2eRendererStallProbe(page: Page): Promise
 function stallScriptPath(url: string) {
   try {
     const parsed = new URL(url);
-    return /^https?:$/u.test(parsed.protocol) ? parsed.pathname : "";
+    return /^https?:$/u.test(parsed.protocol) &&
+      /^\/assets\/[A-Za-z0-9_.-]+\.js$/u.test(parsed.pathname)
+      ? parsed.pathname
+      : "";
   } catch {
     return "";
   }
@@ -138,48 +164,63 @@ export async function captureControlUiE2eRendererStall(
   controlUiE2eRendererStallProbes.delete(page);
   const deadline = performance.now() + RENDERER_STALL_BUDGET_MS;
   const remaining = () => Math.max(1, deadline - performance.now());
-  const session = probe ? await withTimeout(probe, remaining()).catch(() => null) : null;
-  if (!session) {
+  const armed = probe ? await withTimeout(probe, remaining()).catch(() => null) : null;
+  if (!armed) {
     return null;
   }
+  const { session, scripts } = armed;
   const stall: RendererStall = { busyMs: null, sampleMs: 0, stack: null };
   let pauseRequested = false;
   try {
     const sample = async () => {
-      const { metrics } = await withTimeout(session.send("Performance.getMetrics"), remaining());
+      const { metrics } = await withTimeout(
+        session.send("Performance.getMetrics"),
+        Math.min(RENDERER_STALL_SAMPLE_MS, remaining() / 2),
+      );
       return (name: string) => metrics.find((metric) => metric.name === name)?.value ?? 0;
     };
-    const before = await sample();
-    // Leave at least half of the remaining budget for the stack and cleanup.
-    stall.sampleMs = Math.round(Math.min(RENDERER_STALL_SAMPLE_MS, remaining() / 2));
-    await new Promise((resolve) => {
-      setTimeout(resolve, stall.sampleMs);
-    });
-    const after = await sample();
-    const busy = (name: string) => Math.round((after(name) - before(name)) * 1_000);
-    stall.busyMs = {
-      task: busy("TaskDuration"),
-      script: busy("ScriptDuration"),
-      layout: busy("LayoutDuration"),
-      style: busy("RecalcStyleDuration"),
-    };
-    const paused = new Promise<RendererStallFrame[]>((resolve) => {
-      session.once("Debugger.paused", ({ callFrames }) => {
-        resolve(
-          callFrames.slice(0, RENDERER_STALL_FRAME_LIMIT).map((frame) => ({
+    try {
+      const before = await sample();
+      // Leave at least half of the remaining budget for the stack and cleanup.
+      stall.sampleMs = Math.round(Math.min(RENDERER_STALL_SAMPLE_MS, remaining() / 2));
+      await new Promise((resolve) => {
+        setTimeout(resolve, stall.sampleMs);
+      });
+      const after = await sample();
+      const busy = (name: string) => Math.round((after(name) - before(name)) * 1_000);
+      stall.busyMs = {
+        task: busy("TaskDuration"),
+        script: busy("ScriptDuration"),
+        layout: busy("LayoutDuration"),
+        style: busy("RecalcStyleDuration"),
+      };
+    } catch {
+      // A native renderer stall can block metrics; still try the armed debugger.
+    }
+    if (!armed.captureStack) {
+      return stall;
+    }
+    const paused = new Promise<void>((resolve) => {
+      session.on("Debugger.paused", ({ callFrames }) => {
+        try {
+          if (stall.stack !== null) {
+            return;
+          }
+          stall.stack = callFrames.slice(0, RENDERER_STALL_FRAME_LIMIT).map((frame) => ({
             functionName: frame.functionName || "(anonymous)",
-            script: stallScriptPath(frame.url),
+            script: stallScriptPath(frame.url) || scripts.get(frame.location.scriptId) || "",
             line: frame.location.lineNumber + 1,
             column: (frame.location.columnNumber ?? 0) + 1,
-          })),
-        );
+          }));
+        } finally {
+          void session.send("Debugger.resume").catch(() => {});
+          resolve();
+        }
       });
     });
     pauseRequested = true;
-    // Resume every pause before detaching; another enabled debugger can keep one held.
-    session.on("Debugger.paused", () => void session.send("Debugger.resume").catch(() => {}));
     await withTimeout(session.send("Debugger.pause"), remaining());
-    stall.stack = await withTimeout(paused, remaining());
+    await withTimeout(paused, remaining());
   } catch {
     // Missing samples stay null: a stack timeout means no script was running.
   } finally {
@@ -188,6 +229,8 @@ export async function captureControlUiE2eRendererStall(
     }
     // Detaching also retires a pause that a native stall left pending.
     await withTimeout(session.detach(), remaining()).catch(() => {});
+    armed.cleanup();
+    scripts.clear();
   }
   return stall;
 }

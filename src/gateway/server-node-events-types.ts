@@ -1,5 +1,5 @@
-// Gateway node event types.
 // Defines the narrowed context and event envelope for node-originated handlers.
+import type { NodePairingGeneration } from "../infra/device-pairing.js";
 import type { NodeRegistry } from "./node-registry.js";
 import type { NodePresenceActivityUpdate } from "./node-registry.presence.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -11,7 +11,6 @@ export type NodeEventContext = Pick<
   | "broadcastVoiceWakeChanged"
   | "addChatRun"
   | "removeChatRun"
-  | "chatAbortControllers"
   | "dedupe"
   | "agentRunSeq"
   | "getHealthCache"
@@ -23,7 +22,11 @@ export type NodeEventContext = Pick<
   nodeSubscribe: (nodeId: string, sessionKey: string, connId?: string) => void | Promise<void>;
   nodeUnsubscribe: (nodeId: string, sessionKey: string, connId?: string) => void | Promise<void>;
   loadGatewayModelCatalogSnapshot?: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
-  authorizeNodeSystemRunEvent: NodeRegistry["authorizeSystemRunEvent"];
+  authorizeNodeSystemRunEvent: (
+    params: Omit<Parameters<NodeRegistry["authorizeSystemRunEventWithState"]>[0], "terminal"> & {
+      event: "exec.started" | "exec.finished" | "exec.denied";
+    },
+  ) => boolean | NonNullable<ReturnType<NodeRegistry["authorizeSystemRunEventWithState"]>>;
   updateNodePresenceActivity?: (
     params: Omit<NodePresenceActivityUpdate, "observedAtMs">,
   ) => { lastActiveAtMs: number; presenceUpdatedAtMs: number } | null;
@@ -39,4 +42,22 @@ export type NodeEventContext = Pick<
 export type NodeEvent = {
   event: string;
   payloadJSON?: string | null;
+};
+
+export type NodeEventHandleResult = {
+  ok: true;
+  event: string;
+  handled: boolean;
+  reason?: string;
+};
+
+export type NodeEventHandlerOptions = {
+  connId?: string;
+  deviceId?: string;
+  pairingGeneration?: NodePairingGeneration;
+  presenceAllowed?: boolean;
+  isConnectionCurrent?: () => boolean | Promise<boolean>;
+  assertSessionEventCurrent?: () => void;
+  resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
+  assertApnsRegistrationCurrent?: () => void;
 };

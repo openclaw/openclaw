@@ -21,7 +21,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.defaultAccount`                              | Default account for outbound routing                                                                                                    | `default`                            |
 | `channels.feishu.verificationToken`                           | Required for webhook mode                                                                                                               | -                                    |
 | `channels.feishu.encryptKey`                                  | Required for webhook mode                                                                                                               | -                                    |
-| `channels.feishu.webhookPath`                                 | Canonical HTTP request path (must start with `/`)                                                                                       | `/feishu/events`                     |
+| `channels.feishu.webhookPath`                                 | Normalized HTTP request path (must start with `/`)                                                                                      | `/feishu/events`                     |
 | `channels.feishu.legacyWebhook`                               | Explicit forwarding listener: `{ port, host? }`; omitted or `false` opens no listener, subject to account inheritance                   | none                                 |
 | `channels.feishu.accounts.<id>.appId`                         | App ID                                                                                                                                  | -                                    |
 | `channels.feishu.accounts.<id>.appSecret`                     | App Secret                                                                                                                              | -                                    |
@@ -72,11 +72,11 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.tools.bitable`                 | Per-account Bitable/Base tool gate                                                                                                      | inherited                            |
 
 In webhook mode, both `channels.feishu.webhookPath` and
-`channels.feishu.accounts.<id>.webhookPath` must be canonical HTTP request paths
+`channels.feishu.accounts.<id>.webhookPath` must be normalized HTTP request paths
 beginning with `/`, such as `/feishu/events`. An optional query string is
 supported and must match exactly. Full URLs, relative paths, URL fragments, dot
 segments, and unencoded spaces or Unicode are rejected. If an existing
-configuration contains a noncanonical path, run `openclaw doctor --fix` to
+configuration contains a path that is not normalized, run `openclaw doctor --fix` to
 repair it before starting the gateway.
 
 ## Gateway webhook route
@@ -116,7 +116,7 @@ receive a retryable `503` unless a live successor already accepts their signatur
 The plugin's Doctor migration moves `webhookPort` and `webhookHost`
 into `legacyWebhook: { port, host }`, preserving the effective old defaults when
 only one key was set. The normal config backup protects the original
-settings. Existing canonical `legacyWebhook` settings, including `false`, win.
+settings. Existing `legacyWebhook` settings, including `false`, win.
 The one-shot pin preserves an existing install that omitted both old settings;
 it requires evidence of prior operation and is not applied to a fresh install.
 

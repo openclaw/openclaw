@@ -105,17 +105,12 @@ export function resolveProviderModelRouteAuthRequirement(
   if (authRequirement !== undefined) {
     return authRequirement ?? undefined;
   }
-  switch (mode) {
-    case "api-key":
-    case "api_key":
-    case "aws-sdk":
-      return "api-key";
-    case "oauth":
-    case "token":
-      return "subscription";
-    default:
-      return undefined;
-  }
+  const normalized = resolveProviderModelMaterializationAuthMode(mode);
+  return normalized === undefined
+    ? undefined
+    : normalized === "api_key" || normalized === "aws-sdk"
+      ? "api-key"
+      : "subscription";
 }
 
 export function providerModelRouteAcceptsAuthMode(params: {
@@ -453,10 +448,8 @@ export function selectProviderModelRouteAuth(params: {
     );
   }
   let rejectedProfile: ProviderModelAuthProfileSource | undefined;
-  if (sourceDecision.selection.kind === "unavailable") {
-    rejectedProfile = sourceDecision.selection.source;
-  } else if (
-    sourceDecision.selection.kind === "selected" &&
+  if (
+    sourceDecision.selection.kind !== "none" &&
     sourceDecision.selection.source.kind === "profile"
   ) {
     rejectedProfile = sourceDecision.selection.source;
@@ -500,17 +493,14 @@ export function selectProviderModelRouteAuth(params: {
       },
     );
   }
-  const sameRouteAttempts = winner
-    ? routeProfileAttempts.filter(
-        (attempt) => attempt.route.authRequirement === winner.route.authRequirement,
-      )
-    : [];
-  const crossRouteAttempts = winner
-    ? routeProfileAttempts.filter(
-        (attempt) => attempt.route.authRequirement !== winner.route.authRequirement,
-      )
-    : routeProfileAttempts;
-  const orderedProfileAttempts = [...sameRouteAttempts, ...crossRouteAttempts];
+  const orderedProfileAttempts = [
+    ...routeProfileAttempts.filter(
+      (attempt) => attempt.route.authRequirement === winner?.route.authRequirement,
+    ),
+    ...routeProfileAttempts.filter(
+      (attempt) => attempt.route.authRequirement !== winner?.route.authRequirement,
+    ),
+  ];
   const attempts: ProviderModelRouteAuthAttempt[] = orderedProfileAttempts.map(
     (attempt, index) => ({
       kind: "profile",

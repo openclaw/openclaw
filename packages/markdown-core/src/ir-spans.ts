@@ -35,21 +35,24 @@ export function applyMarkdownTextEdits(text: string, edits: readonly MarkdownTex
   };
 }
 
-export type MarkdownStyle =
-  | "bold"
-  | "italic"
-  | "underline"
-  | "strikethrough"
-  | "code"
-  | "code_block"
-  | "spoiler"
-  | "blockquote"
-  | "heading_1"
-  | "heading_2"
-  | "heading_3"
-  | "heading_4"
-  | "heading_5"
-  | "heading_6";
+export const MARKDOWN_STYLE_ORDER = [
+  "blockquote",
+  "code_block",
+  "code",
+  "heading_1",
+  "heading_2",
+  "heading_3",
+  "heading_4",
+  "heading_5",
+  "heading_6",
+  "bold",
+  "italic",
+  "underline",
+  "strikethrough",
+  "spoiler",
+] as const;
+
+export type MarkdownStyle = (typeof MARKDOWN_STYLE_ORDER)[number];
 
 export type MarkdownStyleSpan = {
   start: number;

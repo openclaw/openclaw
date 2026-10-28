@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { canonicalBytes, sha256Hex } from "./canonical.js";
 
 export type GuardDirection = "outbound" | "inbound";
@@ -117,25 +118,18 @@ export function admitGuardAdapter(raw: RawGuardAdapter, timeoutMs = 10_000): Gua
     pinnedModel: raw.pinnedModel,
     async classify(request) {
       const controller = new AbortController();
-      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const timeout = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
+        const rawVerdict = await raceWithTimeout(
+          () => raw.classifyRaw(request, controller.signal),
+          timeoutMs,
+          () => {
             controller.abort();
-            reject(new Error("guard timeout"));
-          }, timeoutMs);
-        });
-        const rawVerdict = await Promise.race([
-          raw.classifyRaw(request, controller.signal),
-          timeout,
-        ]);
+            throw new Error("guard timeout");
+          },
+        );
         return admitVerdict(rawVerdict, raw.pinnedModel, request.policyVersion);
       } catch {
         return guardFailure(raw.pinnedModel, request.policyVersion);
-      } finally {
-        if (timer !== undefined) {
-          clearTimeout(timer);
-        }
       }
     },
   };

@@ -1,4 +1,3 @@
-// Line type declarations define plugin contracts.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
@@ -64,11 +63,6 @@ export type LineProbeResult = BaseProbeResult<string> & {
   quota?: LineMessageQuota;
 };
 
-type LineFlexMessagePayload = {
-  altText: string;
-  contents: unknown;
-};
-
 export type LineQuickReplyItem = {
   label: string;
   action: { type: "command"; command: string } | { type: "callback"; value: string };
@@ -113,7 +107,10 @@ export type LineTemplateMessagePayload =
 export type LineChannelData = Static<typeof lineChannelDataSchema>["line"] & {
   quickReplies?: string[];
   quickReplyItems?: LineQuickReplyItem[];
-  flexMessage?: LineFlexMessagePayload;
+  flexMessage?: {
+    altText: string;
+    contents: unknown;
+  };
   templateMessage?: LineTemplateMessagePayload;
 };
 

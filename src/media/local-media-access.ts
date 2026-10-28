@@ -9,7 +9,6 @@ import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
 
-/** Machine-readable reasons local media path validation can fail. */
 export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
   | "invalid-root"
@@ -21,7 +20,6 @@ export type LocalMediaAccessErrorCode =
   | "invalid-path"
   | "not-file";
 
-/** Error raised when a local media path escapes the configured allowlist. */
 export class LocalMediaAccessError extends Error {
   code: LocalMediaAccessErrorCode;
 
@@ -46,7 +44,6 @@ export { getDefaultMediaLocalRoots as getDefaultLocalRootsCore };
 
 type LocalMediaBoundaryOptions = {
   inboundRoots?: readonly string[];
-  resolvedRoots?: readonly string[];
   resolveRoots?: () => Promise<readonly string[]>;
 };
 
@@ -154,10 +151,7 @@ async function resolveLocalMediaBoundary(
   }
   const roots = localRoots ?? getDefaultMediaLocalRoots();
   const resolved = await resolveLocalMediaPathForContainment(mediaPath);
-  const resolvedRoots =
-    options?.resolvedRoots ??
-    (await options?.resolveRoots?.()) ??
-    (await resolveLocalMediaRoots(roots));
+  const resolvedRoots = (await options?.resolveRoots?.()) ?? (await resolveLocalMediaRoots(roots));
   const workspaceRootIndex = roots.findIndex((root) => path.basename(root) === "workspace");
   const workspaceRoot = roots[workspaceRootIndex];
   if (workspaceRoot) {

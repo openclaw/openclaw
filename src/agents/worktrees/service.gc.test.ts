@@ -7,18 +7,27 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as backoff from "../../infra/backoff.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
-import * as pidAlive from "../../shared/pid-alive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import * as stateLease from "../../state/openclaw-state-lease.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
+import { git } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
 import { requireGit } from "./git.js";
-import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.js";
+import { updateRegistryWorktree } from "./registry.js";
+import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.test-support.js";
 import { managedWorktreeGcEntrypoint } from "./service-gc-runtime.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
@@ -27,11 +36,6 @@ import {
 } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-  return stdout.trim();
-}
 
 /** Commits both sides of a modify/delete conflict for a tracked `entry` file. */
 async function commitConflictedParent(repo: string): Promise<void> {
@@ -92,21 +96,42 @@ describe("ManagedWorktreeService garbage collection", () => {
     repo = await initializeRepository(root);
     stateDir = path.join(root, "state");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    now = 1_700_000_000_000;
-    service = new ManagedWorktreeService({ env, now: () => now });
+    now = Date.now();
+    setRuntimeConfigSnapshot({});
+    service = new ManagedWorktreeService({ env });
   });
 
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("skips allocation leases for registered artifacts and discovers a later orphan", async () => {
+    const registered = await materializeDownstreamFixture("retained");
+    const acquire = vi.spyOn(stateLease, "withOpenClawStateLeaseAsync");
+    try {
+      expect((await service.gc()).orphansDeleted).toBe(0);
+      expect((await service.gc()).orphansDeleted).toBe(0);
+      expect(acquire.mock.calls.length).toBe(0);
+      const orphan = await fs.mkdtemp(path.join(path.dirname(registered.path), "orphan-"));
+      expect((await service.gc()).orphansDeleted).toBe(1);
+      expect(acquire.mock.calls.length).toBe(1);
+      await expect(fs.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(path.join(registered.path, "README.md"), "utf8")).toBe("base\n");
+    } finally {
+      acquire.mockRestore();
+    }
   });
 
   it("exempts manual worktrees and garbage collects idle run-owned worktrees", async () => {
     const manual = await materializeDownstreamFixture("manual-idle");
     const created = await materializeRunOwnedFixture("idle-dead", "workboard");
     await git(repo, "worktree", "lock", "--reason", "openclaw pid=999999", created.path);
-    now += IDLE_GC_MS + 1;
+    for (const record of [manual, created]) {
+      await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    }
 
     const result = await service.gc();
     expect(result.removed).toEqual([created.id]);
@@ -114,6 +139,155 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
     expect(await fs.stat(manual.path)).toBeTruthy();
   });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "removes read-only orphan dependencies without changing symlink targets or hardlinked files",
+    async () => {
+      const orphan = path.join(stateDir, "worktrees", "fingerprint", ".openclaw-removing-fixture");
+      const dependency = path.join(orphan, "node_modules", ".pnpm", "package", "nested");
+      const outside = path.join(root, "outside");
+      const sharedFile = path.join(outside, "shared.txt");
+      await fs.mkdir(dependency, { recursive: true });
+      await fs.mkdir(outside);
+      await fs.writeFile(sharedFile, "preserve shared content\n");
+      await fs.link(sharedFile, path.join(dependency, "hardlink.txt"));
+      await fs.symlink(outside, path.join(dependency, "external"));
+      await fs.chmod(sharedFile, 0o444);
+      await fs.chmod(outside, 0o555);
+      await fs.chmod(dependency, 0o555);
+      await fs.chmod(path.dirname(dependency), 0o555);
+      try {
+        expect(await service.gc()).toMatchObject({ orphansDeleted: 1, outcome: "completed" });
+        await expect(fs.lstat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+        expect((await fs.stat(outside)).mode & 0o777).toBe(0o555);
+        expect((await fs.stat(sharedFile)).mode & 0o777).toBe(0o444);
+        expect(await fs.readFile(sharedFile, "utf8")).toBe("preserve shared content\n");
+        expect((await service.gc()).orphansDeleted).toBe(0);
+      } finally {
+        await fs.chmod(outside, 0o755);
+        for (const directory of [path.dirname(dependency), dependency]) {
+          await fs.chmod(directory, 0o755).catch(() => undefined);
+        }
+      }
+    },
+  );
+
+  it("reports a failed orphan once, cleans its siblings, and retries only on request", async () => {
+    const fingerprint = path.join(stateDir, "worktrees", "fingerprint");
+    const orphan = path.join(fingerprint, "blocked");
+    const sibling = path.join(fingerprint, "healthy");
+    await fs.mkdir(orphan, { recursive: true });
+    await fs.mkdir(sibling);
+    const permissionError = Object.assign(new Error("fixture access denied"), { code: "EACCES" });
+    const remove = fs.rm;
+    let attempts = 0;
+    let blocked = true;
+    const removal = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (target === orphan) {
+        attempts += 1;
+        if (blocked) {
+          throw permissionError;
+        }
+      }
+      return await remove(target, options);
+    });
+    let warnings = createWarnLogCapture("openclaw-orphan-first-failure");
+    try {
+      expect(await service.gc()).toMatchObject({ orphansDeleted: 1, failedCount: 1 });
+      await expect(fs.lstat(sibling)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(attempts).toBe(2);
+      expect(
+        await warnings.findText(`worktree orphan cleanup deferred for ${orphan}`),
+      ).toBeDefined();
+      warnings.cleanup();
+      warnings = createWarnLogCapture("openclaw-orphan-repeated-failure");
+      expect(await service.gc()).toMatchObject({ orphansDeleted: 0, failedCount: 1 });
+      expect(attempts).toBe(2);
+      expect(await warnings.findText("worktree orphan cleanup deferred")).toBeUndefined();
+      for (const directory of [path.dirname(fingerprint), fingerprint]) {
+        const readdir = fs.readdir;
+        const enumeration = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+          if (args[0] === directory) {
+            throw permissionError;
+          }
+          return await readdir(...args);
+        });
+        try {
+          expect((await service.gc()).outcome).toBe("partial");
+        } finally {
+          enumeration.mockRestore();
+        }
+        expect((await service.gc()).failedCount).toBe(1);
+        expect(attempts).toBe(2);
+        expect(await warnings.findText("worktree orphan cleanup deferred")).toBeUndefined();
+      }
+      blocked = false;
+      expect((await service.gc({ retryDeferred: true })).orphansDeleted).toBe(1);
+      expect(attempts).toBe(3);
+    } finally {
+      removal.mockRestore();
+      warnings.cleanup();
+    }
+  });
+
+  it("does not defer a replacement orphan after the previous directory fails removal", async () => {
+    const orphan = path.join(stateDir, "worktrees", "fingerprint", "replaced");
+    const retained = path.join(root, "retained-original");
+    await fs.mkdir(orphan, { recursive: true });
+    const remove = fs.rm;
+    const removal = vi.spyOn(fs, "rm").mockImplementationOnce(async (target, options) => {
+      if (target !== orphan) {
+        return await remove(target, options);
+      }
+      await fs.rename(orphan, retained);
+      await fs.mkdir(orphan);
+      await fs.writeFile(path.join(orphan, "replacement.txt"), "new incarnation\n");
+      throw Object.assign(new Error("fixture replaced during removal"), { code: "EACCES" });
+    });
+    try {
+      expect(await service.gc()).toMatchObject({ orphansDeleted: 0, failedCount: 1 });
+      expect(await fs.readFile(path.join(orphan, "replacement.txt"), "utf8")).toBe(
+        "new incarnation\n",
+      );
+      expect(await service.gc()).toMatchObject({ orphansDeleted: 1, outcome: "completed" });
+      await expect(fs.lstat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.stat(retained)).toBeTruthy();
+    } finally {
+      removal.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "does not repair directory permissions for another owner",
+    async () => {
+      const orphan = path.join(stateDir, "worktrees", "fingerprint", "foreign");
+      const dependency = path.join(orphan, "node_modules", "package");
+      await fs.mkdir(dependency, { recursive: true });
+      await fs.writeFile(path.join(dependency, "file.txt"), "retained\n");
+      await fs.chmod(dependency, 0o555);
+      // Ownership mismatch uses real permissions without requiring privileged chown.
+      const lstat = fs.lstat;
+      const ownership = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        const stat = await lstat(...args);
+        if (args[0] === dependency) {
+          if (typeof stat.uid === "bigint") {
+            stat.uid += 1n;
+          } else {
+            stat.uid += 1;
+          }
+        }
+        return stat;
+      });
+      try {
+        expect(await service.gc()).toMatchObject({ orphansDeleted: 0, failedCount: 1 });
+        expect((await fs.stat(dependency)).mode & 0o777).toBe(0o555);
+        expect(await fs.readFile(path.join(dependency, "file.txt"), "utf8")).toBe("retained\n");
+      } finally {
+        ownership.mockRestore();
+        await fs.chmod(dependency, 0o755);
+      }
+    },
+  );
 
   it("preserves orphan registry state when caller authority is revoked after path inspection", async () => {
     const created = await materializeDownstreamFixture("revoked-orphan");
@@ -158,7 +332,7 @@ describe("ManagedWorktreeService garbage collection", () => {
       await fs.writeFile(path.join(dependencies, `generated-dependency-file-${index}.txt`), "");
     }
     await fs.writeFile(path.join(created.path, "README.md"), "preserve local edit\n");
-    now += IDLE_GC_MS + 1;
+    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
     const realRun = worktreeGit.runGitBuffered;
     const capped = vi
       .spyOn(worktreeGit, "runGitBuffered")
@@ -216,7 +390,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
     await fs.writeFile(path.join(generated, "cache", "rebuildable.txt"), "ignored\n");
     await fs.writeFile(path.join(created.path, "README.md"), "preserve local edit\n");
-    now += IDLE_GC_MS + 1;
+    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
     const capped = await capUntrackedListing(created.path);
     const warnLogs = createWarnLogCapture("openclaw-worktree-gc-bounded-untracked");
     try {
@@ -256,7 +430,7 @@ describe("ManagedWorktreeService garbage collection", () => {
       await fs.rm(parentPath);
       await fs.mkdir(parentPath);
       await fs.writeFile(path.join(parentPath, "child.txt"), "discovered child\n");
-      now += IDLE_GC_MS + 1;
+      await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
       const warnLogs = createWarnLogCapture(`openclaw-worktree-gc-replaced-${_label}`);
       try {
         expect((await service.gc()).removed).toEqual([created.id]);
@@ -285,7 +459,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     await fs.mkdir(parentPath);
     const nested = await initializeNestedRepository(created.path, "entry/nested");
     await fs.writeFile(path.join(nested, "local.txt"), "nested state\n");
-    now += IDLE_GC_MS + 1;
+    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
     const warnLogs = createWarnLogCapture("openclaw-worktree-gc-replaced-conflicted");
     try {
       expect((await service.gc()).removed).toEqual([]);
@@ -315,7 +489,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     await fs.rm(parentPath, { force: true });
     await fs.mkdir(parentPath);
     await fs.writeFile(path.join(parentPath, "child.txt"), "replacement\n");
-    now += IDLE_GC_MS + 1;
+    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
 
     expect((await service.gc()).removed).toEqual([created.id]);
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
@@ -334,7 +508,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
     const nested = await initializeNestedRepository(created.path, "generated/package/nested");
     await fs.writeFile(path.join(nested, "local.txt"), "nested state\n");
-    now += IDLE_GC_MS + 1;
+    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
     const capped = await capUntrackedListing(created.path);
     const warnLogs = createWarnLogCapture("openclaw-worktree-gc-bounded-nested");
     try {
@@ -362,14 +536,11 @@ describe("ManagedWorktreeService garbage collection", () => {
     const commit = await git(created.path, "commit-tree", tree, "-p", parent, "-m", "large tree");
     await git(created.path, "update-ref", "HEAD", commit);
     await fs.writeFile(path.join(created.path, "README.md"), "preserve local edit\n");
-    now += IDLE_GC_MS + 1;
+    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
 
     // Gateway cleanup runs on Node's main thread, whose stack limit differs from Vitest workers.
     const collected = await runNodeScript(
-      (workerArgv) => [
-        ...workerArgv(resolveRuntimeWorkerUrl(managedWorktreeGcEntrypoint)),
-        String(now),
-      ],
+      (workerArgv) => workerArgv(resolveRuntimeWorkerUrl(managedWorktreeGcEntrypoint)),
       env,
       60_000,
       { requireProcessTreeExit: true },
@@ -388,83 +559,42 @@ describe("ManagedWorktreeService garbage collection", () => {
     });
   });
 
-  it("preserves an ignored unregistered nested linked worktree without cleanup warnings", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), ".claude/\n");
+  it.each(["linked", "foreign"])("preserves an ignored nested %s repository", async (kind) => {
+    const relative = kind === "linked" ? ".claude/worktrees/nested-agent" : "vendor/dependency";
+    await fs.writeFile(path.join(repo, ".gitignore"), `${relative.split("/")[0]}/\n`);
     await git(repo, "add", ".gitignore");
-    await git(repo, "commit", "-m", "ignore agent checkout state");
-
-    const created = await materializeRunOwnedFixture("ignored-nested", "workboard");
-    const nested = path.join(created.path, ".claude", "worktrees", "nested-agent");
-    await fs.mkdir(path.dirname(nested), { recursive: true });
-    await git(repo, "worktree", "add", "--detach", nested, "HEAD");
-    expect((await fs.stat(path.join(nested, ".git"))).isFile()).toBe(true);
-    await fs.writeFile(path.join(nested, "local.txt"), "ignored agent state\n");
+    await git(repo, "commit", "-m", "ignore nested repository");
+    const created = await materializeRunOwnedFixture(`ignored-${kind}`, "workboard");
+    const nested = path.join(created.path, relative);
+    if (kind === "linked") {
+      await fs.mkdir(path.dirname(nested), { recursive: true });
+      await git(repo, "worktree", "add", "--detach", nested, "HEAD");
+      await fs.writeFile(path.join(nested, "local.txt"), "local\n");
+    } else {
+      await initializeNestedRepository(created.path, relative);
+      expect(await fs.readdir(nested)).toEqual([".git"]);
+      expect(
+        await git(created.path, "ls-files", "--others", "--ignored", "--exclude-standard"),
+      ).toContain(`${relative}/`);
+    }
     expect(findLiveRegistryWorktreeByPath(env, nested)).toBeUndefined();
     expect(await git(created.path, "ls-files", "--others", "--exclude-standard")).toBe("");
-    now += IDLE_GC_MS + 1;
-
-    const warnLogs = createWarnLogCapture("openclaw-worktree-gc-nested-linked");
+    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    const warnLogs = createWarnLogCapture(`openclaw-worktree-gc-nested-${kind}`);
     try {
       expect((await service.gc()).removed).toEqual([]);
       expect((await service.gc()).removed).toEqual([]);
       expect(await warnLogs.findText(`idle cleanup failed for ${created.id}`)).toBeUndefined();
-      expect(await fs.readFile(path.join(nested, "local.txt"), "utf8")).toBe(
-        "ignored agent state\n",
-      );
-      expect(await git(repo, "worktree", "list", "--porcelain")).toContain(nested);
+      const marker = await fs.stat(path.join(nested, ".git"));
+      expect(kind === "linked" ? marker.isFile() : marker.isDirectory()).toBe(true);
+      if (kind === "linked") {
+        expect(await fs.readFile(path.join(nested, "local.txt"), "utf8")).toBe("local\n");
+        expect(await git(repo, "worktree", "list", "--porcelain")).toContain(nested);
+      }
       expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
     } finally {
       warnLogs.cleanup();
     }
-  });
-
-  it("preserves an empty ignored nested foreign repository", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), "vendor/\n");
-    await git(repo, "add", ".gitignore");
-    await git(repo, "commit", "-m", "ignore vendored repositories");
-
-    const created = await materializeRunOwnedFixture("ignored-foreign", "workboard");
-    const nested = await initializeNestedRepository(created.path, "vendor/dependency");
-    expect(await fs.readdir(nested)).toEqual([".git"]);
-    expect(
-      await git(created.path, "ls-files", "--others", "--ignored", "--exclude-standard"),
-    ).toContain("vendor/dependency/");
-    expect(await git(created.path, "ls-files", "--others", "--exclude-standard")).toBe("");
-    now += IDLE_GC_MS + 1;
-
-    const warnLogs = createWarnLogCapture("openclaw-worktree-gc-nested-foreign");
-    try {
-      expect((await service.gc()).removed).toEqual([]);
-      expect((await service.gc()).removed).toEqual([]);
-      expect(await warnLogs.findText(`idle cleanup failed for ${created.id}`)).toBeUndefined();
-      expect((await fs.stat(path.join(nested, ".git"))).isDirectory()).toBe(true);
-      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-    } finally {
-      warnLogs.cleanup();
-    }
-  });
-
-  it("garbage collects modified provisioned files into the immutable snapshot", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
-    await git(repo, "add", ".gitignore", ".worktreeinclude");
-    await git(repo, "commit", "-m", "configure worktree provisioning");
-    await fs.writeFile(path.join(repo, ".env.local"), "value=old-source\n");
-
-    const created = await materializeDownstreamFixture("idle-rotated", {
-      ownerKind: "workboard",
-      provisionedPaths: [".env.local"],
-    });
-    await fs.rm(path.join(repo, ".worktreeinclude"));
-    await fs.writeFile(path.join(created.path, ".env.local"), "value=rotated-only-copy\n");
-    now += IDLE_GC_MS + 1;
-
-    expect((await service.gc()).removed).toEqual([created.id]);
-    await fs.writeFile(path.join(repo, ".env.local"), "value=newer-source\n");
-    const restored = await service.restore({ id: created.id });
-    expect(await fs.readFile(path.join(restored.path, ".env.local"), "utf8")).toBe(
-      "value=rotated-only-copy\n",
-    );
   });
 
   it("shares one fresh lock inventory across idle prefilters for a repository", async () => {
@@ -474,7 +604,9 @@ describe("ManagedWorktreeService garbage collection", () => {
       await git(repo, "worktree", "lock", "--reason", "other-tool", record.path);
       records.push(record);
     }
-    now += IDLE_GC_MS + 1;
+    for (const record of records) {
+      await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+    }
     const inventories = vi.spyOn(worktreeGit, "listGitWorktrees");
     const warnLogs = createWarnLogCapture("openclaw-worktree-gc-lock-inventory");
     try {
@@ -494,7 +626,7 @@ describe("ManagedWorktreeService garbage collection", () => {
 
   it("rechecks a lock acquired after the GC prefilter before removing the checkout", async () => {
     const record = await materializeRunOwnedFixture("late-foreign-lock", "session");
-    now += IDLE_GC_MS + 1;
+    await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
     const readInventory = worktreeGit.listGitWorktrees;
     const inventories = vi
       .spyOn(worktreeGit, "listGitWorktrees")
@@ -516,25 +648,9 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
   });
 
-  it("checks process liveness only for the requested GC candidates", async () => {
-    const manual = await materializeDownstreamFixture("unrelated-live-lock");
-    const candidate = await materializeRunOwnedFixture("candidate-live-lock", "session");
-    await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.ppid}`, manual.path);
-    await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.pid}`, candidate.path);
-    now += IDLE_GC_MS + 1;
-    const liveness = vi.spyOn(pidAlive, "isPidDefinitelyDead");
-    try {
-      expect((await service.gc()).removed).toEqual([]);
-      expect(liveness).toHaveBeenCalledWith(process.pid);
-      expect(liveness).not.toHaveBeenCalledWith(process.ppid);
-    } finally {
-      liveness.mockRestore();
-    }
-  });
-
   it("preserves a worktree used after the idle cleanup inspection", async () => {
     const created = await materializeRunOwnedFixture("resumed", "session", "agent:main:resumed");
-    now += IDLE_GC_MS + 1;
+    await updateRegistryWorktree(env, created.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
     const remove = service.remove.bind(service);
     const resumed = vi.spyOn(service, "remove").mockImplementationOnce(async (params) => {
       await service.acquire(created.id);
@@ -542,9 +658,11 @@ describe("ManagedWorktreeService garbage collection", () => {
       return await remove(params);
     });
     try {
+      const started = Date.now();
       const result = await service.gc();
       expect(result.removed).toEqual([]);
-      expect(getRegistryWorktree(env, created.id)).toMatchObject({ lastActiveAt: now });
+      expect(getRegistryWorktree(env, created.id)?.lastActiveAt).toBeGreaterThanOrEqual(started);
+      expect(getRegistryWorktree(env, created.id)?.lastActiveAt).toBeLessThanOrEqual(Date.now());
       expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
     } finally {
       resumed.mockRestore();
@@ -563,7 +681,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     });
     await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.pid}`, busy.path);
     await fs.writeFile(path.join(retired.path, "uncommitted.txt"), "archived work\n");
-    const result = await service.gc({ shouldRemoveOwner: () => true });
+    const result = await service.gc({ readOwnerState: () => "retired" });
     expect(result.removed).toEqual([retired.id]);
     expect(getRegistryWorktree(env, busy.id)?.removedAt).toBeUndefined();
     expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
@@ -579,53 +697,82 @@ describe("ManagedWorktreeService garbage collection", () => {
       "session",
       "agent:main:removed",
     );
+    const removedStarted = Date.now();
     const snapshot = await service.remove({ id: removed.id, reason: "test-retention" });
     const snapshotCommit = await git(repo, "rev-parse", snapshot.snapshotRef!);
     const live = await materializeRunOwnedFixture("live-owner", "session", "agent:main:live");
-    const shouldRemoveOwner = vi.fn(() => false);
+    const readOwnerState = vi.fn(() => "idle" as const);
 
-    const result = await service.gc({ shouldRemoveOwner });
+    const result = await service.gc({ readOwnerState });
 
-    expect(shouldRemoveOwner.mock.calls).toEqual([["session", live.ownerId]]);
+    expect(readOwnerState.mock.calls).toEqual([["session", live.ownerId]]);
     expect(result.removed).toEqual([]);
     expect(result.snapshotsPruned).toBe(0);
     expect(getRegistryWorktree(env, removed.id)).toMatchObject({
-      removedAt: now,
+      removedAt: expect.any(Number),
       snapshotRef: snapshot.snapshotRef,
     });
+    expect(getRegistryWorktree(env, removed.id)?.removedAt).toBeGreaterThanOrEqual(removedStarted);
+    expect(getRegistryWorktree(env, removed.id)?.removedAt).toBeLessThanOrEqual(Date.now());
     expect(await git(repo, "rev-parse", snapshot.snapshotRef!)).toBe(snapshotCommit);
     expect(getRegistryWorktree(env, live.id)?.removedAt).toBeUndefined();
+  });
+
+  it("preserves expired recovery refs when the removal pin is locked", async () => {
+    const created = await materializeDownstreamFixture("locked-expiry-pin");
+    const removed = await service.remove({ id: created.id, reason: "retention" });
+    const snapshotRef = removed.snapshotRef!;
+    const snapshot = await git(repo, "rev-parse", snapshotRef);
+    const pendingRef = `refs/openclaw/removals/${created.id}`;
+    await git(repo, "update-ref", pendingRef, snapshot);
+    await git(repo, "pack-refs", "--all");
+    const lock = path.join(repo, ".git", `${pendingRef}.lock`);
+    await fs.mkdir(path.dirname(lock), { recursive: true });
+    await fs.writeFile(lock, "", { flag: "wx" });
+    await updateRegistryWorktree(env, created.id, {
+      removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
+    });
+    try {
+      expect((await service.gc()).snapshotsPruned).toBe(0);
+      expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBe(snapshotRef);
+      expect(await git(repo, "rev-parse", "--verify", snapshotRef)).toBe(snapshot);
+      expect(await git(repo, "rev-parse", "--verify", pendingRef)).toBe(snapshot);
+    } finally {
+      await fs.unlink(lock);
+    }
+    expect((await service.gc()).snapshotsPruned).toBe(1);
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+    expect(await git(repo, "for-each-ref", "--format=%(refname)", snapshotRef, pendingRef)).toBe(
+      "",
+    );
   });
 
   it("does not restore a snapshot while garbage collection is expiring it", async () => {
     useInProcessWorktreeCapacityTransport();
     const disk = fsSync.statfsSync(root);
-    const diskSpace = vi.spyOn(fsSync, "statfsSync").mockReturnValue({
-      type: disk.type,
-      files: disk.files,
-      frsize: disk.frsize,
-      ffree: disk.ffree,
-      bsize: 4096,
-      blocks: 1024 ** 4 / 4096,
-      bavail: (100 * 1024 ** 3) / 4096,
-      bfree: (100 * 1024 ** 3) / 4096,
-    });
+    const diskSpace = vi
+      .spyOn(fsSync, "statfsSync")
+      .mockReturnValue(createWorktreeCapacityStatfs(disk, 100 * 1024 ** 3));
     service = new ManagedWorktreeService({
       env,
-      now: () => now,
       getConfig: () => ({ worktreeAcceleration: false }),
     });
     const created = await materializeDownstreamFixture("restoring-expired");
     await fs.writeFile(path.join(created.path, "README.md"), "saved edit\n");
     const removed = await service.remove({ id: created.id, reason: "retention" });
-    now += SNAPSHOT_RETENTION_MS + 1;
+    await updateRegistryWorktree(env, created.id, {
+      removedAt: Date.now() - SNAPSHOT_RETENTION_MS - 1,
+    });
     const deleting = createDeferred();
     const resume = createDeferred();
     const realGit = worktreeGit.requireGit;
     const blockedDeletion = vi
       .spyOn(worktreeGit, "requireGit")
       .mockImplementation(async (cwd, args, options) => {
-        if (args[0] === "update-ref" && args[1] === "-d" && args[2] === removed.snapshotRef) {
+        if (
+          args[0] === "update-ref" &&
+          options?.input?.toString().includes(`delete ${removed.snapshotRef}\0`)
+        ) {
           deleting.resolve();
           await resume.promise;
         }

@@ -11,6 +11,7 @@ import {
 import { createConfigIO } from "../config/io.factory.js";
 import { transformConfigFileWithRetry } from "../config/mutate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { withConfigWriteLock } from "../config/write-lock.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
@@ -43,15 +44,15 @@ import {
   loadFreshManagedPluginMetadata,
   refreshManagedPluginMetadata,
 } from "./management-service.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
 import {
   tracePluginLifecyclePhase,
   tracePluginLifecyclePhaseAsync,
 } from "./plugin-lifecycle-trace.js";
+import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { withPluginSourceCleanup } from "./source-cleanup.js";
 import { buildPluginSnapshotReport } from "./status.js";
-import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
 import {
   prepareConfigForDisabledPluginSet,
   recordPluginPackageUninstallPlan,
@@ -126,7 +127,7 @@ export async function preparePluginUninstall(
   );
   const config = withPluginInstallRecords(snapshot.config, installRecords);
   // CLI selection uses its status projection; management retains its broader metadata aliases.
-  const metadata = cli ? undefined : loadFreshManagedPluginMetadata(config, env);
+  const metadata = cli ? undefined : await loadFreshManagedPluginMetadata(config, env);
   const index = metadata?.index ?? loadInstalledPluginIndex({ config, installRecords });
   const plugins = metadata
     ? metadata.index.plugins.map((record) => {
@@ -144,9 +145,9 @@ export async function preparePluginUninstall(
         () => buildPluginSnapshotReport({ config }),
         { command: "uninstall" },
       ).plugins;
-  const requestedId = metadata
-    ? metadata.normalizePluginId(params.pluginId.trim())
-    : params.pluginId;
+  const rawId = params.pluginId.trim();
+  const requestedId =
+    metadata && !Object.hasOwn(installRecords, rawId) ? metadata.normalizePluginId(rawId) : rawId;
   const selection: Result<{ pluginId: string; plugin?: (typeof plugins)[number] }, string> = cli
     ? resolvePluginUninstallId({ rawId: requestedId, config, plugins })
     : ok({ pluginId: requestedId, plugin: plugins.find((plugin) => plugin.id === requestedId) });
@@ -169,7 +170,15 @@ export async function preparePluginUninstall(
     return ownership;
   }
   const { installOwner: pluginId, pluginIds } = ownership.value;
-  const policyPluginIds = pluginIds.length ? pluginIds : [pluginId];
+  let policyPluginIds = pluginIds.length ? pluginIds : [pluginId];
+  if (ownership.value.kind === "orphan") {
+    const normalizeId = metadata?.normalizePluginId ?? createPluginRegistryIdNormalizer(index);
+    const aliasOwnerId = normalizeId(pluginId);
+    // 孤立安装记录不拥有已归属于其他插件的别名配置。
+    if (aliasOwnerId !== pluginId && plugins.some((entry) => entry.id === aliasOwnerId)) {
+      policyPluginIds = [];
+    }
+  }
   let channelIds: string[] | undefined;
   if (cli) {
     if (pluginIds.length === 1 && pluginIds[0] === requestedPluginId) {
@@ -234,9 +243,10 @@ export async function preparePluginUninstall(
 /** Shared leased removal; callbacks preserve CLI output at its original mutation boundaries. */
 export async function uninstallPluginWithPolicy(
   params: UninstallPolicy & {
-    clawManaged?: boolean;
+    templateManaged?: boolean;
     invalidateRuntimeCache?: boolean;
     beforePersistentApply?: () => void;
+    beforePersistentEffect?: () => void | Promise<void>;
     signal?: AbortSignal;
     applyRuntime?: PluginLifecycleRuntimeApply;
     deferRuntime?: PluginInstallRuntimeDeferral;
@@ -250,16 +260,21 @@ export async function uninstallPluginWithPolicy(
   const applyRuntime = params.applyRuntime
     ? capturePluginRuntimeApplications(params.applyRuntime).applyRuntime
     : undefined;
-  // Nested CLI calls inherit a Claw owner's exact database lease.
-  return await withPluginLifecycleLease(
+  // Nested CLI calls inherit a Template owner's exact database lease.
+  return await withPluginLifecycleLeaseAsync(
     { ...(cli ? {} : { env }), signal: params.signal },
     async (lease) => {
-      const beforePersistentApply = () => {
-        params.signal?.throwIfAborted();
-        lease.assertOwned();
-        params.beforePersistentApply?.();
-      };
+      const beforePersistentApply = composeConfigWriteAssertions(
+        () => params.signal?.throwIfAborted(),
+        lease.assertCurrent,
+        params.beforePersistentApply,
+      );
       beforePersistentApply();
+      const prepareEffect = async () => {
+        await params.beforePersistentEffect?.();
+        await lease.assertOwned();
+        beforePersistentApply();
+      };
       if (cli) {
         assertConfigWriteAllowedInCurrentMode();
       }
@@ -279,10 +294,10 @@ export async function uninstallPluginWithPolicy(
           plan: initialPlan,
         } = prepared;
         const snapshot = prepared.snapshot;
-        const assertConfigPathForWrite = () => {
-          snapshot.writeOptions.assertConfigPathForWrite?.();
-          beforePersistentApply();
-        };
+        const assertConfigPathForWrite = composeConfigWriteAssertions(
+          snapshot.writeOptions.assertConfigPathForWrite,
+          beforePersistentApply,
+        );
         let directoryResult: Awaited<ReturnType<typeof applyPluginUninstallDirectoryRemoval>> = {
           directoryRemoved: false,
           warnings: [],
@@ -301,6 +316,7 @@ export async function uninstallPluginWithPolicy(
               writeOptions: {
                 ...snapshot.writeOptions,
                 assertConfigPathForWrite,
+                beforeCommit: prepareEffect,
                 afterWrite:
                   params.applyRuntime || params.deferRuntime
                     ? { mode: "none", reason: "plugin lifecycle applies runtime" }
@@ -309,6 +325,7 @@ export async function uninstallPluginWithPolicy(
             }),
           );
           // Durable disable precedes drain; retain source files until the old runtime settles.
+          await prepareEffect();
           await applyRuntime?.({
             config: disabledConfig,
             write,
@@ -409,7 +426,7 @@ export async function uninstallPluginWithPolicy(
                 nextInstallRecords,
                 nextConfig,
                 baseHash,
-                beforePersistentEffect: beforePersistentApply,
+                beforePersistentEffect: prepareEffect,
                 writeOptions: { ...writeOptions, afterWrite },
               });
               commitReceipt = receipt;
@@ -431,13 +448,6 @@ export async function uninstallPluginWithPolicy(
         const nextConfig = mutation.nextConfig;
         params.deferRuntime?.record({ operation: "uninstall", pluginId, write: committed });
         const warnings = [
-          ...(!cli
-            ? await collectClawPluginUninstallWarnings({
-                pluginId,
-                installRecord: installRecords[pluginId],
-                env,
-              })
-            : []),
           ...(!cli && (requestedPluginId !== pluginId || pluginIds.length > 1)
             ? [
                 `Uninstalled package "${pluginId}" and all owned plugin entries: ${pluginIds.join(", ")}.`,
@@ -461,8 +471,13 @@ export async function uninstallPluginWithPolicy(
           },
         });
         if (!cli) {
-          refreshManagedPluginMetadata({ config: nextConfig, env });
+          await refreshManagedPluginMetadata({
+            config: nextConfig,
+            env,
+            assertCurrent: beforePersistentApply,
+          });
         }
+        await prepareEffect();
         const application = await applyRuntime?.({
           config: nextConfig,
           write: committed.configWrite,
@@ -491,7 +506,7 @@ export async function uninstallPluginWithPolicy(
         record?.source === "clawhub"
           ? (record.clawhubPackage ?? parseClawHubPluginSpec(record.spec ?? "")?.name)
           : undefined;
-      if (params.clawManaged || !packageName || (!cli && !params.applyRuntime)) {
+      if (params.templateManaged || !packageName || (!cli && !params.applyRuntime)) {
         return await uninstall();
       }
       return await withClawPackageLifecycleLease(
@@ -510,6 +525,7 @@ export async function uninstallManagedPlugin(params: {
   keepFiles?: boolean;
   signal?: AbortSignal;
   beforePersistentApply?: () => void;
+  beforePersistentEffect?: () => void | Promise<void>;
   applyRuntime?: PluginLifecycleRuntimeApply;
 }): Promise<{
   pluginId: string;
@@ -518,7 +534,7 @@ export async function uninstallManagedPlugin(params: {
   application?: PluginRuntimeApplication;
 }> {
   const env = params.env ?? process.env;
-  return await withPluginLifecycleLease({ env, signal: params.signal }, async () => {
+  return await withPluginLifecycleLeaseAsync({ env, signal: params.signal }, async () => {
     const result = await uninstallPluginWithPolicy({ ...params, caller: "management" });
     if (!result.ok) {
       throw new ManagedPluginLifecycleError(result.error);

@@ -166,16 +166,16 @@ function pruneEmptyConfigValue(value: unknown, originalValue: unknown): unknown 
     return value;
   }
   const original = isRecord(originalValue) ? originalValue : null;
-  const next: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value)) {
-    const existed = original !== null && Object.hasOwn(original, key);
-    const pruned = pruneEmptyConfigValue(item, existed ? original[key] : undefined);
-    if (!existed && isRecord(pruned) && Object.keys(pruned).length === 0) {
-      continue;
-    }
-    next[key] = pruned;
-  }
-  return next;
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([key, item]) => {
+      const existed = original !== null && Object.hasOwn(original, key);
+      const pruned = pruneEmptyConfigValue(item, existed ? original[key] : undefined);
+      if (!existed && isRecord(pruned) && Object.keys(pruned).length === 0) {
+        return [];
+      }
+      return [[key, pruned]];
+    }),
+  );
 }
 
 /** Prune newly empty objects without removing authored empties or array positions. */
@@ -190,60 +190,95 @@ export function pruneEmptyConfigForm(
   return isRecord(pruned) ? pruned : form;
 }
 
-const FORBIDDEN_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+type PathPatchResult = { ok: true; value: unknown } | { ok: false };
 
-function isForbiddenKey(key: string | number): boolean {
-  return typeof key === "string" && FORBIDDEN_KEYS.has(key);
+function patchPathValue(
+  current: unknown,
+  path: Array<string | number>,
+  index: number,
+  replacement: unknown,
+  mode: "copy" | "copy-set" | "copy-remove" | "set" | "remove",
+): PathPatchResult {
+  const segment = path[index];
+  if (segment === undefined) {
+    return { ok: false };
+  }
+  const last = index === path.length - 1;
+  const copy = mode === "copy" || mode === "copy-set" || mode === "copy-remove";
+  const remove =
+    mode === "remove" || mode === "copy-remove" || (mode === "copy" && replacement === undefined);
+  if ((mode === "remove" || mode === "copy-remove") && current == null) {
+    return { ok: false };
+  }
+
+  if (typeof segment === "number") {
+    if (current != null && !Array.isArray(current)) {
+      return { ok: false };
+    }
+    const next = Array.isArray(current) ? (copy ? [...current] : current) : [];
+    if (last) {
+      if (remove) {
+        next.splice(segment, 1);
+      } else {
+        next[segment] = replacement;
+      }
+      return { ok: true, value: next };
+    }
+    const child = patchPathValue(
+      Object.hasOwn(next, segment) ? next[segment] : undefined,
+      path,
+      index + 1,
+      replacement,
+      mode,
+    );
+    if (!child.ok) {
+      return child;
+    }
+    next[segment] = child.value;
+    return { ok: true, value: next };
+  }
+
+  const record = current ?? {};
+  if (!isRecord(record)) {
+    return { ok: false };
+  }
+  const next = copy ? { ...record } : record;
+  const child: PathPatchResult = last
+    ? { ok: true, value: replacement }
+    : patchPathValue(
+        Object.hasOwn(next, segment) ? next[segment] : undefined,
+        path,
+        index + 1,
+        replacement,
+        mode,
+      );
+  if (!child.ok) {
+    return child;
+  }
+  if (last && remove) {
+    delete next[segment];
+  } else {
+    // Own keys are data: never invoke the inherited __proto__ setter.
+    Object.defineProperty(next, segment, {
+      value: child.value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+  return { ok: true, value: next };
 }
 
-type PathContainer = {
-  current: unknown;
-  lastKey: string | number;
-};
-
-function resolvePathContainer(
-  obj: Record<string, unknown> | unknown[],
+export function copyWithPathPatch(
+  current: unknown,
   path: Array<string | number>,
-  createMissing: boolean,
-): PathContainer | null {
-  if (path.length === 0 || path.some(isForbiddenKey)) {
-    return null;
+  replacement: unknown,
+  mode: "copy" | "copy-set" | "copy-remove" = "copy",
+): PathPatchResult {
+  if (path.length === 0) {
+    return { ok: true, value: mode === "copy" ? replacement : current };
   }
-
-  let current: unknown = obj;
-  for (let i = 0; i < path.length - 1; i += 1) {
-    const key = path[i];
-    const nextKey = path[i + 1];
-    if (key === undefined) {
-      return null;
-    }
-    if (
-      typeof current !== "object" ||
-      current === null ||
-      (typeof key === "number" && !Array.isArray(current))
-    ) {
-      return null;
-    }
-    const record = current as Record<string | number, unknown>;
-    let child = record[key];
-    if (child == null) {
-      if (!createMissing) {
-        return null;
-      }
-      child = typeof nextKey === "number" ? [] : {};
-      record[key] = child;
-    }
-    current = child;
-  }
-
-  const lastKey = path.at(-1);
-  if (lastKey === undefined) {
-    return null;
-  }
-  return {
-    current,
-    lastKey,
-  };
+  return patchPathValue(current, path, 0, replacement, mode);
 }
 
 export function setPathValue(
@@ -251,38 +286,12 @@ export function setPathValue(
   path: Array<string | number>,
   value: unknown,
 ) {
-  const container = resolvePathContainer(obj, path, true);
-  if (!container) {
-    return;
-  }
-
-  if (typeof container.lastKey === "number") {
-    if (Array.isArray(container.current)) {
-      container.current[container.lastKey] = value;
-    }
-    return;
-  }
-  if (typeof container.current === "object" && container.current != null) {
-    (container.current as Record<string, unknown>)[container.lastKey] = value;
-  }
+  patchPathValue(obj, path, 0, value, "set");
 }
 
 export function removePathValue(
   obj: Record<string, unknown> | unknown[],
   path: Array<string | number>,
 ) {
-  const container = resolvePathContainer(obj, path, false);
-  if (!container) {
-    return;
-  }
-
-  if (typeof container.lastKey === "number") {
-    if (Array.isArray(container.current)) {
-      container.current.splice(container.lastKey, 1);
-    }
-    return;
-  }
-  if (typeof container.current === "object" && container.current != null) {
-    delete (container.current as Record<string, unknown>)[container.lastKey];
-  }
+  patchPathValue(obj, path, 0, undefined, "remove");
 }

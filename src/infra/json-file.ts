@@ -5,7 +5,7 @@ import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { tryReadJsonSync, writeJsonSync } from "@openclaw/fs-safe/json";
 import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
 
-export function resolveJsonSaveTarget(pathname: string): string {
+function resolveJsonSaveTarget(pathname: string): string {
   if (!fs.lstatSync(pathname, { throwIfNoEntry: false })?.isSymbolicLink()) {
     return pathname;
   }

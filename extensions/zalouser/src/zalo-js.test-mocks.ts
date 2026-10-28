@@ -18,6 +18,7 @@ type ZaloJsMocks = {
   resolveZaloOwnUserIdMock: Mock<ZaloJsModule["resolveZaloOwnUserId"]>;
   sendZaloDeliveredEventMock: Mock<ZaloJsModule["sendZaloDeliveredEvent"]>;
   sendZaloSeenEventMock: Mock<ZaloJsModule["sendZaloSeenEvent"]>;
+  sendZaloReactionMock: Mock<ZaloJsModule["sendZaloReaction"]>;
   sendZaloTypingEventMock: Mock<ZaloJsModule["sendZaloTypingEvent"]>;
   startZaloListenerMock: Mock<ZaloJsModule["startZaloListener"]>;
   startZaloQrLoginMock: Mock<ZaloJsModule["startZaloQrLogin"]>;
@@ -57,6 +58,7 @@ const zaloJsMocks = vi.hoisted((): ZaloJsMocks => ({
   resolveZaloOwnUserIdMock: vi.fn(async () => "owner-1"),
   sendZaloDeliveredEventMock: vi.fn(async () => {}),
   sendZaloSeenEventMock: vi.fn(async () => {}),
+  sendZaloReactionMock: vi.fn(async () => {}),
   sendZaloTypingEventMock: vi.fn(async () => {}),
   startZaloListenerMock: vi.fn(async () => ({ stop: vi.fn() })),
   startZaloQrLoginMock: vi.fn(async () => ({
@@ -82,9 +84,11 @@ export const startZaloQrLoginMock = zaloJsMocks.startZaloQrLoginMock;
 export const waitForZaloQrLoginMock = zaloJsMocks.waitForZaloQrLoginMock;
 export const sendZaloDeliveredEventMock = zaloJsMocks.sendZaloDeliveredEventMock;
 export const sendZaloSeenEventMock = zaloJsMocks.sendZaloSeenEventMock;
+export const sendZaloReactionMock = zaloJsMocks.sendZaloReactionMock;
 export const sendZaloTypingEventMock = zaloJsMocks.sendZaloTypingEventMock;
 
-vi.mock("./zalo-js.js", () => ({
+vi.mock("./zalo-js.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./zalo-js.js")>()),
   checkZaloAuthenticated: zaloJsMocks.checkZaloAuthenticatedMock,
   getZaloUserInfo: zaloJsMocks.getZaloUserInfoMock,
   listZaloFriends: listZaloFriendsMock,
@@ -100,6 +104,7 @@ vi.mock("./zalo-js.js", () => ({
   resolveZaloOwnUserId: zaloJsMocks.resolveZaloOwnUserIdMock,
   sendZaloDeliveredEvent: sendZaloDeliveredEventMock,
   sendZaloSeenEvent: sendZaloSeenEventMock,
+  sendZaloReaction: sendZaloReactionMock,
   sendZaloTypingEvent: sendZaloTypingEventMock,
   startZaloListener: startZaloListenerMock,
   startZaloQrLogin: startZaloQrLoginMock,

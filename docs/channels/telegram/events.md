@@ -14,14 +14,14 @@ Operational Telegram surfaces: reaction wakes, config writes, and what the bot s
 
 <AccordionGroup>
   <Accordion title="Reaction notifications">
-    Telegram reactions arrive as `message_reaction` updates, separate from message payloads. When enabled, OpenClaw enqueues system events like `Telegram reaction added: 👍 by Alice (@alice) on msg 42`.
+    Telegram reactions arrive as `message_reaction` updates, separate from message payloads. When enabled, OpenClaw enqueues system events like `Telegram reaction added: 👍 by Alice (@alice) on msg 42`. Custom emoji are reported as `custom emoji <id>`; paid reactions are ignored.
 
     - `channels.telegram.reactionNotifications`: `off | own | all` (default: `own`)
     - `channels.telegram.reactionLevel`: `off | ack | minimal | extensive` (default: `minimal`)
 
     `own` means user reactions to bot-sent messages only (best-effort via a sent-message cache). Reaction events still respect Telegram access controls (`dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`); unauthorized senders are dropped.
 
-    Telegram does not provide topic metadata in reaction updates. Ordinary non-forum groups remain chat-scoped. Forum and channel Direct Messages reactions recover the originating topic from OpenClaw's bounded message cache (keyed by account, chat, and message ID), so topic config, topic agents, and conversation bindings still apply. If the cached topic is missing or belongs to the wrong scope, OpenClaw skips the reaction notification and logs a warning instead of falling back to General or the base chat.
+    Telegram does not provide topic metadata in reaction updates. Ordinary non-forum groups remain chat-scoped. Forum, channel Direct Messages, and private-chat topic reactions recover the originating topic from OpenClaw's bounded message cache (keyed by account, chat, and message ID), so topic config, topic agents, and conversation bindings still apply. Forum and channel Direct Messages reactions are skipped with a warning if the cached topic is missing or belongs to the wrong scope. A private-chat reaction without a cached topic remains on the base DM session; with `requireTopic`, it is dropped instead.
 
     `allowed_updates` for polling/webhook include `message_reaction` automatically.
 

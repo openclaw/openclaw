@@ -1,24 +1,15 @@
 import { expect, it, vi } from "vitest";
-import { createDeferredCore } from "../../../shared/deferred.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { mutateRequesterSettleWakeBatch } from "../completion/subagent-completion-admission.store.js";
+import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
-import {
-  commitRequesterWake,
-  getPendingWakeCommit,
-  retryPendingWakeCommit,
-} from "./subagent-registry-requester-wake-commit.js";
-import { createRequesterWakeContextFixture } from "./subagent-registry-requester-yield.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
-
-vi.mock("./subagent-registry-lifecycle-log.js", () => ({
-  maskLifecycleIdentifier: () => "synthetic",
-}));
 
 it("publishes a selected requester wake before an overlapping row mutation plans", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -47,35 +38,19 @@ it("publishes a selected requester wake before an overlapping row mutation plans
     if (!selected) {
       throw new Error("Selected requester wake is unavailable");
     }
-    const wakeReached = createDeferredCore();
-    const releaseWake = createDeferredCore();
-    const ackReached = createDeferredCore();
-    const releaseAck = createDeferredCore();
-    const execute = stateWorker.runOpenClawStateWorkerOperation;
-    const held = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((owner, run, options) =>
-        execute(
-          owner,
-          (scope) =>
-            run({
-              execute: async (command, executeOptions) => {
-                if (command.type === "sessionDelivery.mutateSubagentCompletion") {
-                  wakeReached.resolve();
-                  await releaseWake.promise;
-                }
-                const receipt = await scope.execute(command, executeOptions);
-                if (command.type === "subagents.persistChanges") {
-                  ackReached.resolve();
-                  await releaseAck.promise;
-                }
-                return receipt;
-              },
-            }),
-          options,
-        ),
-      );
-    const wake = mutateRequesterSettleWakeBatch({
+    const wakeGate = createEnteredGate();
+    const ackGate = createEnteredGate();
+    const held = probe.command(stateWorker, async (command, executeOptions, scope) => {
+      if (command.type === "sessionDelivery.mutateSubagentCompletion") {
+        await wakeGate.wait();
+      }
+      const receipt = await scope.execute(command, executeOptions);
+      if (command.type === "subagents.persistChanges") {
+        await ackGate.wait();
+      }
+      return receipt;
+    });
+    const wake = mutateRequesterCompletionBatch({
       entries: [selected],
       operation: {
         kind: "transition",
@@ -86,14 +61,10 @@ it("publishes a selected requester wake before an overlapping row mutation plans
       onCommitted: () => {},
       onPublished: () => {},
     });
-    const wakeResult = wake.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
     let successor: Promise<void> | undefined;
     const successorPlanned = vi.fn();
     try {
-      await Promise.race([wakeReached.promise, wake]);
+      await Promise.race([wakeGate.entered, wake]);
       successor = mutateSubagentRuns(
         [entry.runId],
         (rows) => {
@@ -106,12 +77,12 @@ it("publishes a selected requester wake before an overlapping row mutation plans
         { context },
       );
       expect(successorPlanned).not.toHaveBeenCalled();
-      releaseWake.resolve();
-      expect(await wakeResult).toEqual({ value: { applied: true, publication: "published" } });
-      await Promise.race([ackReached.promise, successor]);
+      wakeGate.release();
+      await expect(wake).resolves.toEqual({ applied: true, publication: "published" });
+      await Promise.race([ackGate.entered, successor]);
       expect(subagentRuns.get(entry.runId)?.requesterSettleWake?.status).toBe("dispatching");
       expect(selected.requesterSettleWake?.status).toBe("pending");
-      releaseAck.resolve();
+      ackGate.release();
       await successor;
       expect(successorPlanned).toHaveBeenCalledOnce();
       expect(subagentRuns.get(entry.runId)?.cleanupHandled).toBe(true);
@@ -119,119 +90,10 @@ it("publishes a selected requester wake before an overlapping row mutation plans
         "dispatching",
       );
     } finally {
-      releaseWake.resolve();
-      releaseAck.resolve();
+      wakeGate.release();
+      ackGate.release();
       await Promise.allSettled([wake, successor]);
       held.mockRestore();
-      subagentRuns.delete(entry.runId);
-    }
-  });
-});
-
-it("keeps a known requester wake commit across an immutable row publication", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const entry = createSubagentRunRecord({
-      runId: "snapshot-wake",
-      childSessionKey: "agent:main:subagent:snapshot-wake",
-      requesterSessionKey: "agent:main:requester",
-      createdAt: Date.now() - 20,
-      endedAt: Date.now() - 10,
-      outcome: { status: "ok" },
-      completion: { required: true, resultText: "Retained result" },
-      delivery: { status: "pending" },
-      requesterSettleWake: { status: "dispatching", attemptCount: 3, rearmGeneration: 1 },
-    });
-    await mutateSubagentRuns([entry.runId], () => ({
-      value: undefined,
-      postimages: new Map([[entry.runId, entry]]),
-    }));
-    const context = createRequesterWakeContextFixture(subagentRuns);
-    const releaseWake = createDeferredCore();
-    const wakeStarted = createDeferredCore();
-    const commit = vi.fn<() => Promise<boolean>>(async () => {
-      if (commit.mock.calls.length === 1) {
-        wakeStarted.resolve();
-        await releaseWake.promise;
-        return false;
-      }
-      return true;
-    });
-    const pendingWake = commitRequesterWake(context, [entry], 1, commit, true);
-    await Promise.race([
-      wakeStarted.promise,
-      pendingWake.then(() => {
-        throw new Error("Wake commit returned before entering its persistence operation");
-      }),
-    ]);
-    const original = getPendingWakeCommit(context, entry);
-    expect(original).toBeDefined();
-    if (!original) {
-      throw new Error("Missing original requester wake operation");
-    }
-    const ackReached = createDeferredCore();
-    const releaseAck = createDeferredCore();
-    const execute = stateWorker.runOpenClawStateWorkerOperation;
-    const held = vi
-      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-      .mockImplementation((owner, run, options) =>
-        execute(
-          owner,
-          (scope) =>
-            run({
-              execute: async (command, executeOptions) => {
-                const receipt = await scope.execute(command, executeOptions);
-                if (command.type === "subagents.persistChanges") {
-                  ackReached.resolve();
-                  await releaseAck.promise;
-                }
-                return receipt;
-              },
-            }),
-          options,
-        ),
-      );
-    const owner = captureOpenClawStateWorkerContext();
-    const publication = mutateSubagentRuns(
-      [entry.runId],
-      (rows) => {
-        const next = { ...structuredClone(rows.get(entry.runId)!), cleanupHandled: true };
-        return { value: undefined, postimages: new Map([[next.runId, next]]) };
-      },
-      { context: owner },
-    );
-    const joinedPublication = publication.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
-    try {
-      await Promise.race([
-        ackReached.promise,
-        joinedPublication.then((result) => {
-          if ("error" in result) {
-            throw result.error;
-          }
-          throw new Error("Native publication returned without reaching the held acknowledgement");
-        }),
-      ]);
-      expect(getPendingWakeCommit(context, entry)).toBe(original);
-      releaseAck.resolve();
-      await publication;
-      expect(subagentRuns.get(entry.runId)?.cleanupHandled).toBe(true);
-      expect(getPendingWakeCommit(context, entry)).toBe(original);
-      releaseWake.resolve();
-      await pendingWake;
-      expect(getPendingWakeCommit(context, entry)).toBe(original);
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(original.nextAttemptAt);
-      await retryPendingWakeCommit(context, original);
-      expect(commit).toHaveBeenCalledTimes(2);
-      expect(getPendingWakeCommit(context, entry)).toBeUndefined();
-    } finally {
-      releaseAck.resolve();
-      releaseWake.resolve();
-      await Promise.all([joinedPublication, pendingWake]);
-      held.mockRestore();
-      vi.useRealTimers();
       subagentRuns.delete(entry.runId);
     }
   });

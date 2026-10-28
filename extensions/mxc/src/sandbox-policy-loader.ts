@@ -31,11 +31,6 @@ export type LoadedSandboxBaselinePolicy = {
   configuredPaths: SandboxConfiguredPaths;
 };
 
-type MutableConfiguredPathMaps = {
-  readonlyPaths: Map<string, SandboxConfiguredPathEntry>;
-  readwritePaths: Map<string, SandboxConfiguredPathEntry>;
-};
-
 const stringArraySchema = z.array(z.string());
 const hardeningBooleanSchema = z.literal(true);
 const filesystemPolicySchema = z
@@ -105,7 +100,7 @@ function mergeSandboxPolicyLayers(
   layers: readonly SandboxPolicyLayer[],
 ): LoadedSandboxBaselinePolicy {
   const timeoutCandidates = [300];
-  const configuredPathMaps: MutableConfiguredPathMaps = {
+  const configuredPathMaps = {
     readonlyPaths: new Map<string, SandboxConfiguredPathEntry>(),
     readwritePaths: new Map<string, SandboxConfiguredPathEntry>(),
   };

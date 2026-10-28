@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { replaceManagedMarkdownBlock } from "openclaw/plugin-sdk/memory-host-markdown";
+import { decodeUtf8Input } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { readRegularFile, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { readStore } from "./short-term-promotion-store.js";
@@ -52,7 +54,10 @@ export async function readDreamsFile(dreamsPath: string, workspaceDir?: string):
     return await files.readDreams(dreamsPath);
   }
   try {
-    return (await readRegularFile({ filePath: dreamsPath })).buffer.toString("utf-8");
+    return decodeUtf8Input(
+      (await readRegularFile({ filePath: dreamsPath })).buffer,
+      `DREAMS.md ${dreamsPath} (preserve the original and convert a copy to UTF-8 before retrying)`,
+    );
   } catch (err) {
     if (isEmptyDreamsReadError(err, extractErrorCode(err))) {
       return "";
@@ -84,19 +89,28 @@ export async function writeDreamsFileAtomic(
   content: string,
   workspaceDir?: string,
 ): Promise<void> {
+  const assertCurrent = captureMemoryMutationAuthority();
+  assertCurrent?.();
   const files = workspaceDir ? getMemoryWorkspaceMaintenance(workspaceDir) : undefined;
   if (files) {
-    return await files.writeDreams(dreamsPath, content);
+    return await files.writeDreams(dreamsPath, content, assertCurrent);
   }
-  await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
+  const directoryPath = path.dirname(dreamsPath);
+  const createdDirectory = await fs.mkdir(directoryPath, { recursive: true });
+  // fs-safe's 0o700 default would chmod an existing workspace, which fails with
+  // EPERM for a gateway user that can write it but not own it. A directory
+  // created here keeps that private default.
+  const dirMode = createdDirectory ? 0o700 : (await fs.stat(directoryPath)).mode & 0o7777;
   await assertSafeDreamsPath(dreamsPath);
   await replaceFileAtomic({
     filePath: dreamsPath,
     content,
+    dirMode,
     mode: 0o600,
     preserveExistingMode: true,
     tempPrefix: `${path.basename(dreamsPath)}.dreams`,
     throwOnCleanupError: true,
+    assertBeforeMutation: assertCurrent,
   });
 }
 
@@ -214,25 +228,29 @@ export function clampDreamDiaryContextEntry(entry: string): string {
   return `${truncateUtf16Safe(normalized, RECENT_DIARY_CONTEXT_MAX_CHARS).trimEnd()}...`;
 }
 
+function diaryTextLines(block: string): string[] {
+  return block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("<!--") && !line.startsWith("#"));
+}
+
 function normalizeDiaryBlockBody(block: string): string {
-  const bodyLines: string[] = [];
-  for (const line of block.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("<!--") || trimmed.startsWith("#")) {
-      continue;
-    }
-    if (trimmed.startsWith("*") && trimmed.endsWith("*") && trimmed.length > 2) {
-      continue;
-    }
-    bodyLines.push(trimmed);
-  }
+  const bodyLines = diaryTextLines(block).filter(
+    (line) => !(line.startsWith("*") && line.endsWith("*") && line.length > 2),
+  );
   return clampDreamDiaryContextEntry(bodyLines.join(" "));
 }
 
 function isOptionalDiaryContextReadError(err: unknown): boolean {
   const code = extractErrorCode(err);
   // Optional prompt context may omit unreadable diaries; updates must preserve the failure.
-  return code === "EACCES" || code === "EPERM" || isEmptyDreamsReadError(err, code);
+  return (
+    code === "EACCES" ||
+    code === "EPERM" ||
+    code === "ERR_INVALID_UTF8" ||
+    isEmptyDreamsReadError(err, code)
+  );
 }
 
 function readDiaryBlocks(existing: string): string[] | null {
@@ -272,18 +290,11 @@ export async function readRecentDreamDiaryEntries(params: {
 }
 
 function normalizeDiaryBlockFingerprint(block: string): string {
-  const lines = block
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
   let dateLine = "";
   const bodyLines: string[] = [];
-  for (const line of lines) {
+  for (const line of diaryTextLines(block)) {
     if (!dateLine && line.startsWith("*") && line.endsWith("*") && line.length > 2) {
       dateLine = line.slice(1, -1).trim();
-      continue;
-    }
-    if (line.startsWith("<!--") || line.startsWith("#")) {
       continue;
     }
     bodyLines.push(line);
@@ -308,17 +319,24 @@ function dedupeDiaryBlocks(blocks: string[], seen = new Set<string>()): string[]
   });
 }
 
-function stripBackfillDiaryBlocks(existing: string): { updated: string; removed: number } {
+function filterDiaryContent(existing: string, filter: (blocks: string[]) => string[]) {
   const ensured = ensureDiarySection(existing);
   const blocks = readDiaryBlocks(ensured);
   if (!blocks) {
-    return { updated: ensured, removed: 0 };
+    return { updated: ensured, removed: 0, kept: 0 };
   }
-  const kept = blocks.filter((block) => !block.includes(BACKFILL_ENTRY_MARKER));
+  const kept = filter(blocks);
   return {
     updated: replaceDiaryContent(ensured, joinDiaryBlocks(kept)),
     removed: blocks.length - kept.length,
+    kept: kept.length,
   };
+}
+
+function stripBackfillDiaryBlocks(existing: string) {
+  return filterDiaryContent(existing, (blocks) =>
+    blocks.filter((block) => !block.includes(BACKFILL_ENTRY_MARKER)),
+  );
 }
 
 function formatBackfillDiaryDate(isoDay: string): string {
@@ -414,24 +432,10 @@ export async function dedupeDreamDiaryEntries(params: {
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
     updater: (existing, dreamsPath) => {
-      const ensured = ensureDiarySection(existing);
-      const blocks = readDiaryBlocks(ensured);
-      if (!blocks) {
-        return {
-          content: ensured,
-          result: { dreamsPath, removed: 0, kept: 0 },
-          shouldWrite: false,
-        };
-      }
-      const keptBlocks = dedupeDiaryBlocks(blocks);
-      const removed = blocks.length - keptBlocks.length;
+      const { updated, removed, kept } = filterDiaryContent(existing, dedupeDiaryBlocks);
       return {
-        content: replaceDiaryContent(ensured, joinDiaryBlocks(keptBlocks)),
-        result: {
-          dreamsPath,
-          removed,
-          kept: keptBlocks.length,
-        },
+        content: updated,
+        result: { dreamsPath, removed, kept },
         shouldWrite: removed > 0,
       };
     },

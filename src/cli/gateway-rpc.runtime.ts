@@ -5,6 +5,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isImplicitLocalGatewayTarget } from "../gateway/call.js";
 import { assertGatewayCliMessageContext } from "../gateway/operator-cli-message-input.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
@@ -21,17 +22,6 @@ export type GatewayRpcExtraOptions = {
   sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
 };
 
-type CallGatewayFromCliRuntimeExtra = GatewayRpcExtraOptions & {
-  defaultTimeoutMs?: number;
-  timeoutMs?: number | null;
-  label?: string;
-  useStoredDeviceAuth?: boolean;
-  requiredStoredDeviceAuthScopes?: Parameters<
-    typeof callGateway
-  >[0]["requiredStoredDeviceAuthScopes"];
-  requireLocalBackendSharedAuth?: boolean;
-};
-
 type GatewayCliTransportRpcOpts = Omit<GatewayRpcOpts, "timeout"> & {
   config?: OpenClawConfig;
   timeout?: string | null;
@@ -39,6 +29,20 @@ type GatewayCliTransportRpcOpts = Omit<GatewayRpcOpts, "timeout"> & {
 };
 
 const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 30_000;
+
+/** Database-free RPCs do not need the local store's credentials. */
+export async function prepareCliGatewayStateAccess(): Promise<void> {
+  if (getDatabaseEngineSelection()) {
+    return;
+  }
+  const { readConfigSnapshotForEngineSelection } =
+    await import("../commands/config-preflight-snapshot.js");
+  const snapshot = await readConfigSnapshotForEngineSelection(process.env, { isolateEnv: false });
+  if (!getDatabaseEngineSelection()) {
+    const { createConfigReadError } = await import("../config/io.invalid-config.js");
+    throw createConfigReadError(snapshot);
+  }
+}
 
 export async function isImplicitLocalGatewayTargetFromCliRuntime(
   opts: GatewayCliTransportRpcOpts,
@@ -54,7 +58,16 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCliTransportRpcOpts,
   params?: unknown,
-  extra?: CallGatewayFromCliRuntimeExtra,
+  extra?: GatewayRpcExtraOptions & {
+    defaultTimeoutMs?: number;
+    timeoutMs?: number | null;
+    label?: string;
+    useStoredDeviceAuth?: boolean;
+    requiredStoredDeviceAuthScopes?: Parameters<
+      typeof callGateway
+    >[0]["requiredStoredDeviceAuthScopes"];
+    requireLocalBackendSharedAuth?: boolean;
+  },
 ) {
   assertGatewayCliMessageContext(method, params);
   const localPortOverride = resolveGatewayLocalPortOverride(opts);
@@ -86,6 +99,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
         method,
         params,
         deviceIdentity: extra?.deviceIdentity,
+        beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
         scopes: extra?.scopes,
         useStoredDeviceAuth: extra?.useStoredDeviceAuth,

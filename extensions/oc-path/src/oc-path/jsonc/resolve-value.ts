@@ -1,29 +1,24 @@
-import { isPositionalSeg, parseArrayIndexSegment, resolvePositionalSeg } from "../oc-path.js";
+import {
+  isPositionalSeg,
+  parseArrayIndexSegment,
+  resolvePositionalSeg,
+  unquoteSeg,
+} from "../oc-path.js";
 import type { JsoncEntry, JsoncValue } from "./ast.js";
 
-type JsoncValueOcPathMatch =
-  | { readonly kind: "value"; readonly node: JsoncValue; readonly path: (string | number)[] }
-  | {
-      readonly kind: "object-entry";
-      readonly node: JsoncEntry;
-      readonly path: (string | number)[];
-    };
-
-export function resolveJsoncValueOcPath(
-  root: JsoncValue,
-  segments: readonly string[],
-): JsoncValueOcPathMatch | null {
+export function resolveJsoncValueOcPath(root: JsoncValue, segments: readonly string[]) {
   let current: JsoncValue = root;
   let lastEntry: JsoncEntry | null = null;
   // jsonc-parser edits distinguish object keys from array indices.
   const walked: (string | number)[] = [];
 
-  for (let seg of segments) {
-    if (seg.length === 0) {
+  for (const rawSeg of segments) {
+    let seg = unquoteSeg(rawSeg);
+    if (rawSeg.length === 0) {
       return null;
     }
-    if (isPositionalSeg(seg)) {
-      const concrete = resolveJsoncPositionalSegment(current, seg);
+    if (isPositionalSeg(rawSeg)) {
+      const concrete = resolveJsoncPositionalSegment(current, rawSeg);
       if (concrete !== null) {
         seg = concrete;
       }
@@ -56,9 +51,9 @@ export function resolveJsoncValueOcPath(
   }
 
   if (lastEntry !== null && current === lastEntry.value) {
-    return { kind: "object-entry", node: lastEntry, path: walked };
+    return { kind: "object-entry", node: lastEntry, path: walked } as const;
   }
-  return { kind: "value", node: current, path: walked };
+  return { kind: "value", node: current, path: walked } as const;
 }
 
 export function resolveJsoncPositionalSegment(node: JsoncValue, seg: string): string | null {

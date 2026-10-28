@@ -1,13 +1,46 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+// teamBoot includes a matching config backup so early environment selection exercises
+// config-health recovery reads. Seed with --case teamBoot --fixture-root <path> --seed-only;
+// measure a fresh copy per boot with --runs 1 --warmup 0 and --output <json>.
+// Compare >=5 boots per revision; --heap-prof-dir collects allocations in a separate pass.
+// slowAgentDatabase measures authenticated connect and sessions.list while one real
+// integrity scan is held by --agent-gate-delay-ms. Seed separate fixtures per arm;
+// use --agent-database-mib 8 for an inexpensive controlled startup-recovery probe.
+// Every agent starts unsealed; ready-agent scans wait at most 6s, exceeding the
+// 5s foreground admission budget, so their migrations overlap the slow inspection.
+// --publication-api-delay-ms 500 seeds four historical publications; a private gh/fetch
+// fixture delays read-only GitHub observations and never uses real credentials or GitHub.
+import assert from "node:assert/strict";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { createCipheriv } from "node:crypto";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { loadavg, tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.ts";
+import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { validateConfigObjectRaw } from "../src/config/validation-core.js";
+import { isMainModule } from "../src/infra/is-main.js";
+import { writeBenchmarkJson } from "./lib/benchmark-harness.mts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
-import { getFreePort, readProcessRssMb, readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
+import {
+  getFreePort,
+  readProcessTreeCpuMs,
+  startGatewayRssSampling,
+} from "./lib/gateway-bench-probes.ts";
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
@@ -21,6 +54,7 @@ import {
   formatMb,
   formatMs,
   formatStats,
+  gatewayBenchCpuProfileArgs,
   hasHelpFlag,
   parseGatewayBenchRuntimeOptions,
   parseNonNegativeInt,
@@ -40,9 +74,11 @@ import {
   waitForInitialProbe as waitForProbe,
 } from "./lib/gateway-bench-runtime.ts";
 import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ranking.js";
+import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
 type GatewayBenchCase = {
   agentTopology?: "incident-scale" | "single" | "shared-eleven-plus-distinct-one";
+  bundledPluginFixture?: OpenClawConfig;
   completionTracePhase?: string;
   config: Record<string, unknown>;
   env?: Record<string, string>;
@@ -54,26 +90,49 @@ type GatewayBenchCase = {
   providerCatalogStallMs?: number;
   providerStaticCatalogModelCount?: number;
   providerStaticCatalogStallMs?: number;
+  publicationGitDelayMs?: number;
+  publicationApiDelayMs?: number;
   runByDefault?: boolean;
 };
 
 type GatewaySample = {
+  publicationRecovery?: { startedAtMs: number; releasedAtMs: number; delayMs: number };
+  publicationApi?: {
+    calls: { endpoint: string; startedAtMs: number; releasedAtMs: number }[];
+    receipts: { request_id: string; status: string; pull_request_url: string | null }[];
+  };
+  /** Successful ordinary per-agent chat.history completion, measured from spawn. */
+  agentRecoveryMs?: Record<string, number>;
+  integrityGateMs?: Record<string, number>;
+  agentDatabaseAdmissionErrors?: number;
   completionMs: number | null;
   cpuCoreRatio: number | null;
   cpuMs: number | null;
   exitedBeforeTeardown?: boolean;
   exitCode: number | null;
   firstOutputMs: number | null;
+  firstSessionRpc: {
+    ms: number | null;
+    connectMs: number | null;
+    attempts: number;
+    lastError: string | null;
+  };
   gatewayReadyLogLine: string | null;
   gatewayReadyLogMs: number | null;
   healthz: InitialProbeResult;
+  heapProfilePath?: string;
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
+  hostLoadBefore: number[];
+  hostLoadAfter: number[];
   maxRssMb: number | null;
   outputTail: string;
   readyz: InitialProbeResult;
+  shutdownForced: boolean;
+  shutdownMs: number;
   signal: string | null;
   startupTrace: Record<string, number>;
+  startupTraceLines: string[];
 };
 
 type CaseResult = ReturnType<typeof summarizeCase>;
@@ -97,12 +156,18 @@ type CliOptions = GatewayBenchRuntimeOptions & {
   runs: number;
   timeoutMs: number;
   warmup: number;
+  fixtureRoot?: string;
+  seedOnly: boolean;
+  agentDatabaseMib: number;
+  agentGateDelayMs: number;
+  startAt?: number;
 };
 
 const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
+const TEAM_BOOT_AUTH_TOKEN = "synthetic-startup-benchmark-token";
 const INCIDENT_COMBINED_HEALTHZ_P95_MAX_MS = 30_000;
 const INCIDENT_COMBINED_READYZ_P95_MAX_MS = 60_000;
 const BOOLEAN_FLAGS = new Set([
@@ -111,6 +176,7 @@ const BOOLEAN_FLAGS = new Set([
   "--json",
   "--installed-child",
   "--installed-cpu-diagnostic",
+  "--seed-only",
 ]);
 const VALUE_FLAGS = new Set([
   "--case",
@@ -124,6 +190,13 @@ const VALUE_FLAGS = new Set([
   "--runs",
   "--timeout-ms",
   "--warmup",
+  "--fixture-root",
+  "--agent-database-mib",
+  "--agent-gate-delay-ms",
+  "--start-at",
+  "--bundled-plugin-fixture",
+  "--publication-git-delay-ms",
+  "--publication-api-delay-ms",
 ]);
 
 const BASE_CONFIG = BASE_GATEWAY_BENCH_CONFIG;
@@ -164,8 +237,46 @@ function preparedRuntimeConfig(): Record<string, unknown> {
 
 const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   {
+    id: "teamBoot",
+    name: "gateway, 44 startup plugins, eight agents and 10000 sessions",
+    agentTopology: "incident-scale",
+    pluginActivationOnStartup: true,
+    pluginCount: 44,
+    runByDefault: false,
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+    config: {
+      ...BASE_CONFIG,
+      gateway: { ...BASE_CONFIG.gateway, auth: { mode: "token", token: TEAM_BOOT_AUTH_TOKEN } },
+      plugins: {
+        ...BASE_CONFIG.plugins,
+        entries: { ...BASE_CONFIG.plugins.entries, "memory-core": { enabled: false } },
+      },
+      cron: { enabled: false },
+    },
+  },
+  {
+    id: "slowAgentDatabase",
+    name: "gateway, one checking agent and four ready agents",
+    runByDefault: false,
+    config: {
+      ...BASE_CONFIG,
+      gateway: { ...BASE_CONFIG.gateway, auth: { mode: "token", token: TEAM_BOOT_AUTH_TOKEN } },
+      plugins: { enabled: false },
+      cron: { enabled: false },
+    },
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
+  },
+  {
     id: "default",
     name: "gateway default",
+    config: BASE_CONFIG,
+  },
+  {
+    id: "pluginMetadataMaintenance",
+    name: "gateway through post-ready plugin metadata refresh",
+    runByDefault: false,
+    completionTracePhase: "startup.maintenance.plugin-registry",
+    env: { OPENCLAW_SKIP_CHANNELS: "1" },
     config: BASE_CONFIG,
   },
   {
@@ -347,9 +458,80 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       throw new CliArgumentError("--installed-cohort requires --output");
     }
   }
+  let cases = installedCohort ? [] : resolveCases(flags.get("--case") ?? []);
+  if (flags.has("--publication-git-delay-ms")) {
+    if (cases.length !== 1 || cases[0]?.id !== "teamBoot" || process.platform === "win32") {
+      throw new CliArgumentError("--publication-git-delay-ms requires --case teamBoot on POSIX");
+    }
+    const publicationGitDelayMs = parsePositiveInt(
+      flags.get("--publication-git-delay-ms")?.[0],
+      10_000,
+      "--publication-git-delay-ms",
+    );
+    if (publicationGitDelayMs > 30_000) {
+      throw new CliArgumentError("--publication-git-delay-ms must not exceed 30000");
+    }
+    cases = [{ ...cases[0], publicationGitDelayMs }];
+  }
+  if (flags.has("--publication-api-delay-ms")) {
+    if (
+      cases.length !== 1 ||
+      cases[0]?.id !== "teamBoot" ||
+      process.platform === "win32" ||
+      flags.has("--publication-git-delay-ms")
+    ) {
+      throw new CliArgumentError(
+        "--publication-api-delay-ms requires --case teamBoot on POSIX without --publication-git-delay-ms",
+      );
+    }
+    const publicationApiDelayMs = parsePositiveInt(
+      flags.get("--publication-api-delay-ms")?.[0],
+      500,
+      "--publication-api-delay-ms",
+    );
+    if (publicationApiDelayMs < 200 || publicationApiDelayMs > 800) {
+      throw new CliArgumentError("--publication-api-delay-ms must be between 200 and 800");
+    }
+    cases = [{ ...cases[0], publicationApiDelayMs }];
+  }
+  const bundledPluginFixturePath = flags.get("--bundled-plugin-fixture")?.[0];
+  if (bundledPluginFixturePath !== undefined) {
+    if (cases.length !== 1 || cases[0]?.id !== "teamBoot") {
+      throw new CliArgumentError("--bundled-plugin-fixture requires --case teamBoot only");
+    }
+    const value: unknown = JSON.parse(readFileSync(bundledPluginFixturePath, "utf8"));
+    if (
+      !isRecord(value) ||
+      Object.keys(value).some((key) => !["plugins", "models", "tools", "channels"].includes(key))
+    ) {
+      throw new CliArgumentError(
+        "--bundled-plugin-fixture may configure only plugins, models, tools, and channels",
+      );
+    }
+    const validated = validateConfigObjectRaw(value);
+    if (!validated.ok) {
+      throw new CliArgumentError(
+        `--bundled-plugin-fixture has invalid config: ${validated.issues.map((issue) => issue.path).join(", ")}`,
+      );
+    }
+    const bundledPluginIds = validated.config.plugins?.allow ?? [];
+    if (
+      bundledPluginIds.length === 0 ||
+      bundledPluginIds.length > cases[0].pluginCount! ||
+      bundledPluginIds.some((id) => !id.trim()) ||
+      new Set(bundledPluginIds).size !== bundledPluginIds.length ||
+      validated.config.plugins?.load !== undefined
+    ) {
+      throw new CliArgumentError(
+        "--bundled-plugin-fixture requires 1–44 unique plugins.allow IDs and no plugins.load paths",
+      );
+    }
+    const { plugins, models, tools, channels } = validated.config;
+    cases = [{ ...cases[0], bundledPluginFixture: { plugins, models, tools, channels } }];
+  }
   return {
     ...parseGatewayBenchRuntimeOptions(flags),
-    cases: installedCohort ? [] : resolveCases(flags.get("--case") ?? []),
+    cases,
     cpuProfDir: flags.get("--cpu-prof-dir")?.[0],
     entry: resolveGatewayBenchEntry(flags.get("--entry")?.[0], DEFAULT_ENTRY),
     heapProfDir: flags.get("--heap-prof-dir")?.[0],
@@ -361,6 +543,21 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     runs: parsePositiveInt(flags.get("--runs")?.[0], DEFAULT_RUNS, "--runs"),
     timeoutMs: parsePositiveInt(flags.get("--timeout-ms")?.[0], DEFAULT_TIMEOUT_MS, "--timeout-ms"),
     warmup: parseNonNegativeInt(flags.get("--warmup")?.[0], DEFAULT_WARMUP, "--warmup"),
+    fixtureRoot: flags.get("--fixture-root")?.[0],
+    seedOnly: flags.has("--seed-only"),
+    agentDatabaseMib: parseNonNegativeInt(
+      flags.get("--agent-database-mib")?.[0],
+      512,
+      "--agent-database-mib",
+    ),
+    agentGateDelayMs: parseNonNegativeInt(
+      flags.get("--agent-gate-delay-ms")?.[0],
+      10_000,
+      "--agent-gate-delay-ms",
+    ),
+    startAt: flags.has("--start-at")
+      ? parsePositiveInt(flags.get("--start-at")?.[0], 0, "--start-at")
+      : undefined,
   };
 }
 
@@ -380,12 +577,20 @@ Options:
   --warmup <n>         Warmup runs per case (default: ${DEFAULT_WARMUP})
   --timeout-ms <ms>    Per-run timeout (default: ${DEFAULT_TIMEOUT_MS})
   --cpu-prof-dir <dir> Write one V8 CPU profile per run
-  --heap-prof-dir <dir> Write one V8 heap profile per run
+  --heap-prof-dir <dir> Sample main-thread allocations through /readyz, including collected objects
   --installed-cohort <path> Measure one fresh installed startup and eight retained-state restarts
   --installed-cpu-diagnostic Profile one established startup after an unprofiled fresh prime; requires --installed-cohort
   --output <path>      Write machine-readable JSON to a file
   --json               Emit machine-readable JSON
   --help, -h           Show this text
+  --fixture-root <path> Prepared teamBoot or slowAgentDatabase fixture (requires --runs 1 --warmup 0)
+  --seed-only         Create a new --fixture-root without launching a Gateway
+  --bundled-plugin-fixture <path> Synthetic plugins/models/tools/channels config for teamBoot
+  --publication-git-delay-ms <n> Seed one pending teamBoot publication with a slow local Git read (1–30000)
+  --publication-api-delay-ms <n> Recover four historical publications through delayed mock GitHub reads (200–800)
+  --agent-database-mib <n> Synthetic slow-agent cache payload (default: 512)
+  --agent-gate-delay-ms <n> Benchmark-only delay before the real integrity scan (default: 10000)
+  --start-at <epoch-ms> Synchronize prepared fixture startup with a concurrent comparison
 
 Case ids:
   ${GATEWAY_CASES.map((benchCase) => `${benchCase.id} (${benchCase.name})`).join("\n  ")}
@@ -401,10 +606,20 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
   return {
     id: benchCase.id,
     name: benchCase.name,
+    ...(benchCase.id === "teamBoot"
+      ? {
+          expectedPluginCount: benchCase.pluginCount ?? 44,
+          bundledPluginIds: benchCase.bundledPluginFixture?.plugins?.allow ?? [],
+          publicationGitDelayMs: benchCase.publicationGitDelayMs,
+          publicationApiDelayMs: benchCase.publicationApiDelayMs,
+        }
+      : {}),
     samples,
     summary: {
       completionMs: summarize((sample) => sample.completionMs),
       firstOutputMs: summarize((sample) => sample.firstOutputMs),
+      firstConnectMs: summarize((sample) => sample.firstSessionRpc.connectMs),
+      firstSessionRpcMs: summarize((sample) => sample.firstSessionRpc.ms),
       cpuCoreRatio: summarize((sample) => sample.cpuCoreRatio),
       cpuMs: summarize((sample) => sample.cpuMs),
       gatewayReadyLogMs: summarize((sample) => sample.gatewayReadyLogMs),
@@ -412,6 +627,7 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
       httpListenLogMs: summarize((sample) => sample.httpListenLogMs),
       maxRssMb: summarize((sample) => sample.maxRssMb),
       readyzMs: summarize((sample) => sample.readyz.ms),
+      shutdownMs: summarize((sample) => sample.shutdownMs),
       startupTrace,
     },
   };
@@ -428,6 +644,9 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
       if (sample.readyz.status !== 200 || sample.readyz.ms == null) {
         missing.push("/readyz");
       }
+      if (sample.firstSessionRpc.ms == null) {
+        missing.push("sessions.list");
+      }
       if (sample.completionMs == null) {
         missing.push("completion");
       }
@@ -437,6 +656,38 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
       if (sample.maxRssMb == null) {
         missing.push("rss");
       }
+      if (
+        result.publicationGitDelayMs !== undefined &&
+        (!sample.publicationRecovery ||
+          sample.publicationRecovery.delayMs !== result.publicationGitDelayMs ||
+          sample.publicationRecovery.releasedAtMs - sample.publicationRecovery.startedAtMs <
+            result.publicationGitDelayMs)
+      ) {
+        missing.push("pending publication reached and completed its delayed Git read");
+      }
+      if (
+        result.publicationApiDelayMs !== undefined &&
+        (sample.publicationApi?.receipts.length !== 4 ||
+          sample.publicationApi.receipts.some(
+            (row) => row.status !== "published" || !row.pull_request_url,
+          ) ||
+          sample.publicationApi.calls.filter((call) => call.endpoint.endsWith("/pulls")).length !==
+            4)
+      ) {
+        missing.push(
+          "four historical publications confirmed through mock GitHub and durable receipts",
+        );
+      }
+      if (result.id === "slowAgentDatabase") {
+        if (
+          SLOW_DATABASE_AGENT_IDS.some((agentId) => sample.agentRecoveryMs?.[agentId] === undefined)
+        ) {
+          missing.push("per-agent database admission");
+        }
+        if (sample.integrityGateMs?.["gate-passed"] === undefined) {
+          missing.push("full integrity scan");
+        }
+      }
       if (missing.length > 0) {
         failures.push({
           id: result.id,
@@ -445,6 +696,45 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
         });
         return;
       }
+      if (result.expectedPluginCount !== undefined) {
+        const inventory = /http server listening \((\d+) plugins?: ([^;)]+)/u.exec(
+          sample.httpListenLogLine ?? "",
+        );
+        const loadedIds = new Set(inventory?.[2]?.split(", ") ?? []);
+        const missingBundled = result.bundledPluginIds?.filter((id) => !loadedIds.has(id)) ?? [];
+        if (
+          Number(inventory?.[1]) !== result.expectedPluginCount ||
+          loadedIds.size !== result.expectedPluginCount ||
+          missingBundled.length > 0
+        ) {
+          failures.push({
+            id: result.id,
+            reason: `plugin inventory mismatch: expected ${result.expectedPluginCount}, observed ${inventory?.[1] ?? "unreported"}; missing bundled: ${missingBundled.join(", ") || "none"}`,
+            sampleIndex: index + 1,
+          });
+        }
+      }
+      if (result.id === "slowAgentDatabase") {
+        const gatePassed = sample.integrityGateMs!["gate-passed"]!;
+        for (const agentId of SLOW_DATABASE_AGENT_IDS) {
+          const admitted = sample.agentRecoveryMs![agentId]!;
+          const slow = agentId === "bench-slow";
+          if (slow ? admitted <= gatePassed : admitted >= gatePassed) {
+            failures.push({
+              id: result.id,
+              reason: `${agentId} database read completed at ${admitted.toFixed(1)}ms; must complete ${slow ? "after" : "before"} integrity gate passed at ${gatePassed.toFixed(1)}ms`,
+              sampleIndex: index + 1,
+            });
+          }
+        }
+        if (sample.agentDatabaseAdmissionErrors !== 0) {
+          failures.push({
+            id: result.id,
+            reason: `database admission errors: ${sample.agentDatabaseAdmissionErrors ?? "missing count"}`,
+            sampleIndex: index + 1,
+          });
+        }
+      }
       if (sample.exitedBeforeTeardown === true) {
         failures.push({
           id: result.id,
@@ -452,6 +742,15 @@ function collectResultFailures(results: CaseResult[]): BenchmarkFailure[] {
             sample.signal == null
               ? `child exited ${sample.exitCode ?? "before teardown"}`
               : `child exited by ${sample.signal}`,
+          sampleIndex: index + 1,
+        });
+      } else if (
+        result.id === "teamBoot" &&
+        (sample.shutdownForced || sample.exitCode !== 0 || sample.signal !== null)
+      ) {
+        failures.push({
+          id: result.id,
+          reason: `unclean shutdown (exitCode=${sample.exitCode}, signal=${sample.signal}, forced=${sample.shutdownForced})`,
           sampleIndex: index + 1,
         });
       }
@@ -481,7 +780,7 @@ function printBenchmarkFailures(failures: BenchmarkFailure[]): void {
     return;
   }
   console.error(
-    `[gateway-startup-bench] failed: ${failures.length} sample(s) did not produce ready probes or process metrics`,
+    `[gateway-startup-bench] failed: ${failures.length} sample(s) did not satisfy startup or lifecycle checks`,
   );
   for (const failure of failures.slice(0, 8)) {
     console.error(
@@ -715,10 +1014,14 @@ async function withGatewayBenchRoot<T>(run: (root: string) => Promise<T>): Promi
 }
 
 function writeConfig(root: string, benchCase: GatewayBenchCase): string {
+  const fixture = benchCase.bundledPluginFixture;
+  const bundledPluginIds = fixture?.plugins?.allow ?? [];
   const hasCatalogFixture =
     benchCase.providerCatalogStallMs !== undefined ||
     benchCase.providerStaticCatalogStallMs !== undefined;
-  const pluginCount = hasCatalogFixture ? 1 : benchCase.pluginCount;
+  const pluginCount = hasCatalogFixture
+    ? 1
+    : (benchCase.pluginCount ?? 0) - bundledPluginIds.length;
   const pluginFixtures = pluginCount
     ? writePluginFixtures(root, {
         activationOnStartup: hasCatalogFixture ? true : benchCase.pluginActivationOnStartup,
@@ -728,8 +1031,689 @@ function writeConfig(root: string, benchCase: GatewayBenchCase): string {
         providerStaticCatalogStallMs: benchCase.providerStaticCatalogStallMs,
       })
     : null;
-  const agentList = buildBenchAgentList(root, benchCase.agentTopology);
-  return writeGatewayBenchConfig(root, benchCase.config, { agentList, pluginFixtures });
+  const agentList =
+    benchCase.id === "slowAgentDatabase"
+      ? SLOW_DATABASE_AGENT_IDS.map((id) => ({ id, workspace: path.join(root, "workspace", id) }))
+      : buildBenchAgentList(root, benchCase.agentTopology);
+  const plugins = benchCase.config.plugins as OpenClawConfig["plugins"];
+  const config = fixture
+    ? {
+        ...benchCase.config,
+        ...fixture,
+        plugins: {
+          ...plugins,
+          ...fixture.plugins,
+          entries: {
+            ...plugins?.entries,
+            ...fixture.plugins?.entries,
+            ...Object.fromEntries(
+              bundledPluginIds.map((id) => [
+                id,
+                { ...fixture.plugins?.entries?.[id], enabled: true },
+              ]),
+            ),
+          },
+        },
+      }
+    : benchCase.config;
+  return writeGatewayBenchConfig(root, config, { agentList, pluginFixtures });
+}
+
+const SLOW_DATABASE_AGENT_IDS = [
+  "bench-fast-01",
+  "bench-fast-02",
+  "bench-fast-03",
+  "bench-fast-04",
+  "bench-slow",
+] as const;
+
+async function seedTeamBootPublication(
+  root: string,
+  delayMs: number,
+  agentId: string,
+  api = false,
+  index = 0,
+) {
+  const [
+    { resolveExecutablePath },
+    { insertRegistryWorktreeInDatabase },
+    { resolveRepositoryIdentity },
+    stateDb,
+    agentDb,
+    { writeSessionEntry },
+    {
+      insertGitHubPublicationRequest,
+      claimGitHubPublicationExecutionInDatabase,
+      createGitHubPublicationExecutionStoreInDatabase,
+    },
+    { digestGitHubPublicationRequest },
+  ] = await Promise.all([
+    import("../src/infra/executable-path.js"),
+    import("../src/agents/worktrees/registry-run-end.worker.js"),
+    import("../src/agents/worktrees/repository-paths.js"),
+    import("../src/state/openclaw-state-db.js"),
+    import("../src/state/openclaw-agent-db.js"),
+    import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
+    import("../src/gateway/github-publication-store.worker.js"),
+    import("../src/gateway/github-publication-receipt.js"),
+  ]);
+  const gitPath = resolveExecutablePath("git");
+  if (!gitPath) {
+    throw new Error("The pending-publication fixture requires Git");
+  }
+  const suffix = api ? `-${index}` : "";
+  const repoRoot = path.join(root, `publication-repository${suffix}`);
+  const worktreePath = path.join(root, `publication-worktree${suffix}`);
+  const branch = `bench-publication${suffix}`;
+  const git = (...args: string[]) => execFileSync(gitPath, args, { stdio: "pipe" });
+  git("init", "--initial-branch=main", repoRoot);
+  git(
+    "-C",
+    repoRoot,
+    "-c",
+    "user.name=Startup Benchmark",
+    "-c",
+    "user.email=startup-benchmark@example.invalid",
+    "-c",
+    "commit.gpgSign=false",
+    "commit",
+    "--allow-empty",
+    "--message",
+    "test: seed synthetic publication workspace",
+  );
+  git("-C", repoRoot, "worktree", "add", "-b", branch, worktreePath);
+  if (api) {
+    git("-C", repoRoot, "remote", "add", "origin", "https://github.com/synthetic/startup.git");
+  }
+  const repository = await resolveRepositoryIdentity(repoRoot);
+  const sessionKey = `agent:${agentId}:bench-${index}`;
+  const sessionId = `team-boot-${agentId}-${index}`;
+  const requestId = `startup-publication${suffix}`;
+  const sourceHeadCommit = git("-C", worktreePath, "rev-parse", "HEAD").toString().trim();
+  const workspaceTree = git("-C", worktreePath, "rev-parse", "HEAD^{tree}").toString().trim();
+  if (api) {
+    git(
+      "-C",
+      worktreePath,
+      "-c",
+      "user.name=Startup Benchmark",
+      "-c",
+      "user.email=startup-benchmark@example.invalid",
+      "-c",
+      "commit.gpgSign=false",
+      "commit",
+      "--allow-empty",
+      "--message",
+      `test: synthetic published commit\n\nOpenClaw-Publication: ${requestId}`,
+    );
+  }
+  const headCommit = git("-C", worktreePath, "rev-parse", "HEAD").toString().trim();
+  const now = api ? Date.now() : Date.parse("2026-10-19T00:00:00Z");
+  const worktree = {
+    id: `startup-publication-worktree${suffix}`,
+    name: "Synthetic publication workspace",
+    path: worktreePath,
+    repoRoot: repository.repoRoot,
+    repoFingerprint: repository.fingerprint,
+    branch,
+    baseRef: "main",
+    ownerKind: "session" as const,
+    ownerId: sessionKey,
+    createdAt: now,
+    lastActiveAt: now,
+  };
+  agentDb.runOpenClawAgentWriteTransaction(
+    (database) => {
+      writeSessionEntry(database, sessionKey, {
+        sessionId,
+        updatedAt: now,
+        label: `Synthetic startup session ${index}`,
+        visibility: "shared",
+        worktree: { id: worktree.id, branch, repoRoot: worktree.repoRoot },
+        spawnedCwd: worktreePath,
+      });
+    },
+    { agentId },
+  );
+  stateDb.runOpenClawStateWriteTransaction((database) => {
+    const { db } = database;
+    insertRegistryWorktreeInDatabase(db, { record: worktree, provisionedPaths: [] });
+    const request = { sessionKey, agentId, idempotencyKey: requestId, draft: false };
+    insertGitHubPublicationRequest(db, {
+      request,
+      requestId,
+      requestDigest: digestGitHubPublicationRequest({ ...request, sessionId }),
+      sessionId,
+      lifecycleRevision: null,
+      requester: { version: 1, actor: { kind: "system" }, scopes: ["operator.admin"], grant: null },
+      now,
+      worktree,
+      identity: {
+        source: api ? "system-detected" : "system-configured",
+        ...(api ? {} : { profileId: "startup-fixture" }),
+        account: { accountId: 1, login: "startup-fixture", avatarUrl: null },
+      },
+      ...(api
+        ? { snapshot: { sourceHeadCommit, sourceIndexTree: workspaceTree, workspaceTree } }
+        : {}),
+      assertCurrent() {},
+    });
+    if (api) {
+      const instance = "synthetic-retired-gateway";
+      const row = claimGitHubPublicationExecutionInDatabase(database, requestId, instance);
+      createGitHubPublicationExecutionStoreInDatabase(database, instance).updatePublishingFacts({
+        row,
+        repository: "synthetic/startup",
+        branch,
+        baseBranch: "main",
+        sourceHeadCommit,
+        workspaceTree,
+        headCommit,
+      });
+    }
+    // Historical custody permits observation of recorded effects, never a new publication.
+    // The Git-only fixture has no effects and refuses before any GitHub operation.
+    db.prepare(
+      "UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id IN ('startup-publication', 'startup-publication-0', 'startup-publication-1', 'startup-publication-2', 'startup-publication-3')",
+    ).run();
+  });
+  if (api) {
+    return { requestId, branch, sourceHeadCommit, workspaceTree, headCommit };
+  }
+  const bin = path.join(root, "publication-bin");
+  mkdirSync(bin);
+  writeFileSync(path.join(bin, "package.json"), '{"type":"commonjs"}\n');
+  writeFileSync(
+    path.join(bin, "git"),
+    `#!${process.execPath}
+const { spawn } = require("node:child_process");
+const { writeFileSync } = require("node:fs");
+const { setTimeout } = require("node:timers/promises");
+(async () => {
+  const args = process.argv.slice(2);
+  let startedAtMs;
+  if (process.cwd() === ${JSON.stringify(worktreePath)} &&
+      JSON.stringify(args) === JSON.stringify(["config", "--local", "--includes", "--bool", "--get", "extensions.worktreeConfig"])) {
+    startedAtMs = Date.now();
+    writeFileSync(${JSON.stringify(path.join(root, "publication-git-started.json"))}, JSON.stringify({ startedAtMs, delayMs: ${delayMs} }), { flag: "wx" });
+    await setTimeout(${delayMs});
+  }
+  const child = spawn(${JSON.stringify(gitPath)}, args, { stdio: "inherit" });
+  child.on("error", (error) => { console.error(error); process.exitCode = 1; });
+  child.on("exit", (code, signal) => {
+    if (startedAtMs !== undefined && !signal && (code === 0 || code === 1)) {
+      writeFileSync(${JSON.stringify(path.join(root, "publication-git-released.json"))}, JSON.stringify({ startedAtMs, releasedAtMs: Date.now(), delayMs: ${delayMs} }));
+    }
+    if (signal) process.kill(process.pid, signal); else process.exitCode = code ?? 1;
+  });
+})().catch((error) => { console.error(error); process.exitCode = 1; });
+`,
+    { mode: 0o755 },
+  );
+  return undefined;
+}
+
+function writePublicationApiFixture(
+  root: string,
+  delayMs: number,
+  receipts: Awaited<ReturnType<typeof seedTeamBootPublication>>[],
+) {
+  const bin = path.join(root, "publication-bin");
+  mkdirSync(bin);
+  writeFileSync(path.join(bin, "package.json"), '{"type":"commonjs"}\n');
+  const calls = path.join(root, "publication-api-calls.jsonl");
+  writeFileSync(
+    path.join(root, "publication-api-preload.mjs"),
+    `import { appendFileSync } from "node:fs";
+import { setTimeout } from "node:timers/promises";
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const url = new URL(input instanceof Request ? input.url : input);
+  if (url.hostname !== "api.github.com") return originalFetch(input, init);
+  if (url.href !== "https://api.github.com/user" || init?.method !== "GET" || init?.headers?.Authorization !== "Bearer synthetic-startup-publication-token") throw new Error("Unexpected mock GitHub fetch");
+  const startedAtMs = Date.now();
+  await setTimeout(${delayMs});
+  appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ endpoint: "/user", startedAtMs, releasedAtMs: Date.now() }) + "\\n");
+  return new Response(JSON.stringify({ id: 1, login: "startup-fixture", avatar_url: null }), { status: 200, headers: { "x-oauth-scopes": "repo" } });
+};
+`,
+  );
+  writeFileSync(
+    path.join(bin, "gh"),
+    `#!${process.execPath}
+const { appendFileSync } = require("node:fs");
+const { setTimeout } = require("node:timers/promises");
+const receipts = ${JSON.stringify(receipts)};
+(async () => {
+  const args = process.argv.slice(2);
+  const methodIndex = args.indexOf("--method");
+  if (args[0] !== "api" || args[1] !== "--hostname" || args[2] !== "github.com" || args.includes("--input") || (methodIndex !== -1 && args[methodIndex + 1] !== "GET")) throw new Error("Unexpected mock GitHub command");
+  const endpoint = args.find((arg) => arg.startsWith("repos/"));
+  let result;
+  if (endpoint === "repos/synthetic/startup") {
+    result = { fork: false, default_branch: "main", parent: { name: null, default_branch: null, owner: { login: null } } };
+  } else if (endpoint?.startsWith("repos/synthetic/startup/git/commits/")) {
+    const receipt = receipts.find((row) => endpoint.endsWith("/" + row.headCommit));
+    if (!receipt) throw new Error("Unknown mock GitHub commit");
+    result = { sha: receipt.headCommit, tree: { sha: receipt.workspaceTree }, parents: [{ sha: receipt.sourceHeadCommit }], message: "test: synthetic published commit\\n\\nOpenClaw-Publication: " + receipt.requestId };
+  } else if (endpoint === "repos/synthetic/startup/pulls") {
+    const receipt = receipts.find((row) => args.includes("head=synthetic:" + row.branch));
+    if (!receipt) throw new Error("Unknown mock GitHub branch");
+    result = [{ url: "https://github.com/synthetic/startup/pull/" + (receipts.indexOf(receipt) + 1), userId: 1, state: "open", body: "<!-- openclaw-publication:" + receipt.requestId + " -->", headSha: receipt.headCommit, headRef: receipt.branch, baseRef: "main" }];
+  } else throw new Error("Unexpected mock GitHub endpoint: " + endpoint);
+  const startedAtMs = Date.now();
+  await setTimeout(${delayMs});
+  appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ endpoint, startedAtMs, releasedAtMs: Date.now() }) + "\\n");
+  process.stdout.write(JSON.stringify(result));
+})().catch((error) => { console.error(error.message); process.exitCode = 1; });
+`,
+    { mode: 0o755 },
+  );
+}
+
+async function inspectPublicationApiFixture(
+  root: string,
+): Promise<NonNullable<GatewaySample["publicationApi"]>> {
+  const env = createGatewayBenchEnv(root, path.join(root, "openclaw.json"), {});
+  const stateDb = await import("../src/state/openclaw-state-db.js");
+  const previousEnv = process.env;
+  process.env = env;
+  try {
+    const database = stateDb.openOpenClawStateDatabase({ env });
+    const { listSharedGitHubPublicationsInDatabase } =
+      await import("../src/gateway/github-publication-store.worker.js");
+    const receipts = listSharedGitHubPublicationsInDatabase(database.db, {}).map(
+      ({ request_id, status, pull_request_url }) => ({ request_id, status, pull_request_url }),
+    );
+    const callsPath = path.join(root, "publication-api-calls.jsonl");
+    const calls = existsSync(callsPath)
+      ? readFileSync(callsPath, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line))
+      : [];
+    return { calls, receipts };
+  } finally {
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    process.env = previousEnv;
+  }
+}
+
+async function seedTeamBootFixture(root: string, benchCase: GatewayBenchCase): Promise<void> {
+  mkdirSync(root);
+  const configPath = writeConfig(root, benchCase);
+  const env = createGatewayBenchEnv(root, configPath, { caseEnv: benchCase.env });
+  const previousEnv = process.env;
+  process.env = { ...env };
+  try {
+    const [agentDb, stateDb, { writeSessionEntry }, { writeConfigMachineStateAsync }] =
+      await Promise.all([
+        import("../src/state/openclaw-agent-db.js"),
+        import("../src/state/openclaw-state-db.js"),
+        import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
+        import("../src/state/config-machine-state-async.js"),
+      ]);
+    const now = Date.parse("2026-10-19T00:00:00Z");
+    const agents = buildBenchAgentList(root, benchCase.agentTopology)!;
+    const databasePaths: string[] = [];
+    let statePath = "";
+    try {
+      for (const { id: agentId, workspace } of agents) {
+        mkdirSync(workspace, { recursive: true });
+        const database = agentDb.openOpenClawAgentDatabase({ agentId, env });
+        agentDb.runOpenClawAgentWriteTransaction(
+          (writable) => {
+            for (let index = 0; index < 1250; index++) {
+              writeSessionEntry(writable, `agent:${agentId}:bench-${index}`, {
+                sessionId: `team-boot-${agentId}-${index}`,
+                updatedAt: now - index,
+                label: `Synthetic startup session ${index}`,
+                visibility: "shared",
+              });
+            }
+          },
+          { agentId, env },
+        );
+        database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        databasePaths.push(database.path);
+      }
+      const state = stateDb.openOpenClawStateDatabase({ env });
+      statePath = state.path;
+      if (benchCase.publicationGitDelayMs !== undefined) {
+        await seedTeamBootPublication(root, benchCase.publicationGitDelayMs, agents[0]!.id);
+      }
+      if (benchCase.publicationApiDelayMs !== undefined) {
+        const receipts = [];
+        for (let index = 0; index < 4; index++) {
+          receipts.push(
+            await seedTeamBootPublication(
+              root,
+              benchCase.publicationApiDelayMs,
+              agents[0]!.id,
+              true,
+              index,
+            ),
+          );
+        }
+        writePublicationApiFixture(root, benchCase.publicationApiDelayMs, receipts);
+      }
+      // An inert machine-state namespace adds real, incompressible pages without
+      // making startup parse 128 MiB of synthetic records or changing the schema.
+      const cipher = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16));
+      for (let index = 0; index < 128; index++) {
+        if (index % 8 === 0 && process.platform === "linux") {
+          const dirtyKb = Number(
+            /^Dirty:\s+(\d+) kB$/mu.exec(readFileSync("/proc/meminfo", "utf8"))?.[1],
+          );
+          if (!Number.isFinite(dirtyKb) || dirtyKb >= 2 * 1024 * 1024) {
+            throw new Error(
+              "Fixture generation stopped: Linux Dirty must remain below 2 GiB; retry with a new root after writes settle.",
+            );
+          }
+        }
+        const payload = cipher.update(Buffer.alloc(768 * 1024)).toString("base64");
+        await writeConfigMachineStateAsync(`startup-benchmark.payload.${index}`, payload, { env });
+        if (index % 8 === 7) {
+          state.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+          await delay(100);
+        }
+      }
+    } finally {
+      await agentDb.closeOpenClawAgentDatabasesAsync();
+      await stateDb.closeOpenClawStateDatabaseAsync();
+    }
+    writeBenchmarkJson(
+      {
+        pluginCount: 44,
+        bundledPluginFixture: benchCase.bundledPluginFixture ?? {},
+        publicationGitDelayMs: benchCase.publicationGitDelayMs,
+        publicationApiDelayMs: benchCase.publicationApiDelayMs,
+        externalPluginCount: 44 - (benchCase.bundledPluginFixture?.plugins?.allow?.length ?? 0),
+        agentCount: agents.length,
+        sessionCount: agents.length * 1250,
+        stateDatabaseBytes: statSync(statePath).size,
+        agentDatabaseBytes: databasePaths.map((databasePath) => statSync(databasePath).size),
+        workerEnvironments: "default local startup; no provisioned remote workers",
+      },
+      path.join(root, "team-boot-fixture.json"),
+    );
+  } finally {
+    process.env = previousEnv;
+  }
+}
+
+async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: number): Promise<void> {
+  mkdirSync(root);
+  const benchCase = GATEWAY_CASES.find((entry) => entry.id === "slowAgentDatabase")!;
+  const configPath = writeConfig(root, benchCase);
+  const env = createGatewayBenchEnv(root, configPath, { caseEnv: benchCase.env });
+  const previousEnv = process.env;
+  process.env = { ...env };
+  try {
+    const [agentDb, { writeSessionEntry }] = await Promise.all([
+      import("../src/state/openclaw-agent-db.js"),
+      import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
+    ]);
+    const now = Date.now() - 60_000;
+    const databases: Array<{ agentId: string; path: string }> = [];
+    let slowPath = "";
+    try {
+      for (const agentId of SLOW_DATABASE_AGENT_IDS) {
+        const database = agentDb.openOpenClawAgentDatabase({ agentId, env });
+        agentDb.runOpenClawAgentWriteTransaction(
+          (writable) => {
+            writeSessionEntry(writable, `agent:${agentId}:bench-0`, {
+              sessionId: `slow-db-bench-${agentId}`,
+              label: "Synthetic startup session 0",
+              updatedAt: now,
+            });
+          },
+          { agentId, env },
+        );
+        if (agentId === "bench-slow") {
+          slowPath = database.path;
+          // An unused canonical cache scope adds real pages without loading payloads at boot.
+          const payload = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16)).update(
+            Buffer.alloc(1024 * 1024),
+          );
+          const insert = database.db.prepare(
+            "INSERT INTO cache_entries(scope, key, blob, updated_at) VALUES ('startup-benchmark', ?, ?, ?)",
+          );
+          for (let index = 0; index < mib; index++) {
+            insert.run(String(index), payload, now);
+            if (index % 16 === 15) {
+              database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+            }
+          }
+        }
+        database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+        databases.push({ agentId, path: database.path });
+      }
+    } finally {
+      await agentDb.closeOpenClawAgentDatabasesAsync();
+    }
+    // Exclusive offline fixture custody: the next owner must perform its real full scan.
+    for (const database of databases) {
+      rmSync(`${database.path}.seal`, { force: true });
+    }
+    writeFileSync(
+      path.join(root, "slow-agent-fixture.json"),
+      JSON.stringify(
+        {
+          databases: databases.map(({ agentId, path: databasePath }) => ({
+            agentId,
+            bytes: statSync(databasePath).size,
+          })),
+          gateDelayMs,
+          readyAgentGateDelayMs: Math.min(6_000, gateDelayMs),
+        },
+        null,
+        2,
+      ),
+    );
+    writeFileSync(
+      path.join(root, "slow-agent-preload.mjs"),
+      `
+import { DatabaseSync } from 'node:sqlite';
+const slowPath = ${JSON.stringify(slowPath)};
+const databasePaths = new Set(${JSON.stringify(databases.map((database) => database.path))});
+const original = DatabaseSync.prototype.prepare;
+DatabaseSync.prototype.prepare = function(sql) {
+  if (databasePaths.has(this.location()) && /^PRAGMA integrity_check(?:\\(\\d+\\))?;?$/i.test(sql.trim())) {
+    const slow = this.location() === slowPath;
+    if (slow) console.log('[slow-agent-bench] gate-start');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, slow ? ${gateDelayMs} : ${Math.min(6_000, gateDelayMs)});
+    const statement = original.call(this, sql);
+    const all = statement.all;
+    statement.all = function(...args) {
+      const rows = all.apply(this, args);
+      if (slow && rows.length === 1 && rows[0].integrity_check === 'ok') {
+        console.log('[slow-agent-bench] gate-passed');
+      }
+      return rows;
+    };
+    return statement;
+  }
+  return original.call(this, sql);
+};
+`,
+    );
+  } finally {
+    process.env = previousEnv;
+  }
+}
+
+async function waitForFirstSessionRpc(params: {
+  port: number;
+  startAt: number;
+  deadlineAt: number;
+  isDone: () => boolean;
+  requireSeededSession: boolean;
+  readyAgentId?: string;
+  agentId?: string;
+  authToken?: string;
+}): Promise<GatewaySample["firstSessionRpc"]> {
+  let attempts = 0;
+  let lastError: string | null = null;
+  let connectMs: number | null = null;
+  const method = params.agentId ? "chat.history" : "sessions.list";
+  const sessionKey = `agent:${params.agentId ?? "incident-agent-01"}:bench-0`;
+  while (performance.now() < params.deadlineAt && !params.isDone()) {
+    attempts++;
+    const remaining = () => Math.max(1, params.deadlineAt - performance.now());
+    const client = createGatewayWsClient({
+      url: `ws://127.0.0.1:${params.port}`,
+      openTimeoutMs: remaining(),
+      handshakeTimeoutMs: remaining(),
+    });
+    try {
+      await client.waitOpen();
+      const connected = await client.request(
+        "connect",
+        {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: "gateway-client",
+            displayName: "startup-benchmark",
+            version: "1.0.0",
+            platform: process.platform,
+            mode: "backend",
+          },
+          role: "operator",
+          ...(params.authToken ? { auth: { token: params.authToken } } : {}),
+          scopes: ["operator.read"],
+          caps: [],
+        },
+        remaining(),
+      );
+      if (!connected.ok) {
+        throw new Error(`connect: ${JSON.stringify(connected.error)}`);
+      }
+      connectMs ??= performance.now() - params.startAt;
+      const response = await client.request(
+        method,
+        params.agentId
+          ? { sessionKey, agentId: params.agentId, limit: 1 }
+          : {
+              limit: params.readyAgentId ? 100 : 1,
+              ...(params.requireSeededSession
+                ? { agentId: "incident-agent-01", label: "Synthetic startup session 0" }
+                : {}),
+            },
+        remaining(),
+      );
+      if (!response.ok) {
+        throw new Error(`${method}: ${JSON.stringify(response.error)}`);
+      }
+      if (params.agentId) {
+        // Keyed history reads use the selected agent's DB worker, unlike the shared list projection.
+        if (
+          !isRecord(response.payload) ||
+          response.payload.sessionKey !== sessionKey ||
+          response.payload.sessionId !== `slow-db-bench-${params.agentId}` ||
+          !Array.isArray(response.payload.messages)
+        ) {
+          throw new Error("chat.history has not returned the seeded session");
+        }
+      } else {
+        if (
+          !response.payload ||
+          typeof response.payload !== "object" ||
+          !("sessions" in response.payload) ||
+          !Array.isArray(response.payload.sessions)
+        ) {
+          throw new Error("sessions.list returned no sessions array");
+        }
+        if (
+          params.requireSeededSession &&
+          !response.payload.sessions.some(
+            (session: unknown) =>
+              session !== null &&
+              typeof session === "object" &&
+              "key" in session &&
+              session.key === sessionKey,
+          )
+        ) {
+          throw new Error("sessions.list has not returned the seeded session");
+        }
+        if (
+          params.readyAgentId &&
+          !response.payload.sessions.some(
+            (session: unknown) =>
+              isRecord(session) &&
+              typeof session.key === "string" &&
+              session.key.startsWith(`agent:${params.readyAgentId}:`),
+          )
+        ) {
+          throw new Error("sessions.list has not returned a ready agent's session");
+        }
+      }
+      return { ms: performance.now() - params.startAt, connectMs, attempts, lastError };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    } finally {
+      if (client.ws.readyState !== client.ws.CLOSED) {
+        const closed = new Promise<void>((resolve) => {
+          client.ws.once("close", () => resolve());
+        });
+        const timer = setTimeout(() => client.ws.terminate(), 1_000);
+        try {
+          client.close();
+          await closed;
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+    }
+    await delay(25);
+  }
+  return { ms: null, connectMs, attempts, lastError };
+}
+
+async function captureStartupHeapProfile(
+  child: ChildProcess,
+  directory: string,
+  timeoutMs: number,
+): Promise<string> {
+  const outputPath = path.resolve(directory, `gateway-startup-${child.pid}.heapprofile`);
+  return await new Promise<string>((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.off("message", onMessage);
+      child.off("exit", onExit);
+      child.off("error", onError);
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onExit = () => onError(new Error("Gateway exited before startup heap capture completed"));
+    const onMessage = (message: unknown) => {
+      if (!isRecord(message) || message.type !== "openclaw-startup-heap:captured") {
+        return;
+      }
+      if (typeof message.error === "string") {
+        onError(new Error(message.error));
+      } else if (message.outputPath === outputPath) {
+        cleanup();
+        resolve(outputPath);
+      }
+    };
+    const timer = setTimeout(
+      () => onError(new Error("Gateway startup heap capture timed out")),
+      timeoutMs,
+    );
+    child.on("message", onMessage);
+    child.once("exit", onExit);
+    child.once("error", onError);
+    child.send({ type: "openclaw-startup-heap:capture", outputPath }, (error) => {
+      if (error) {
+        onError(error);
+      }
+    });
+  });
 }
 
 async function runGatewaySample(
@@ -740,21 +1724,77 @@ async function runGatewaySample(
     heapProfDir?: string;
     sampleIndex: number;
     timeoutMs: number;
+    fixtureRoot?: string;
+    startAt?: number;
   },
 ): Promise<GatewaySample> {
-  return await withGatewayBenchRoot(async (root) => {
-    const port = await getFreePort();
+  const withRoot = options.fixtureRoot
+    ? async <T>(run: (root: string) => Promise<T>) => run(path.resolve(options.fixtureRoot!))
+    : withGatewayBenchRoot;
+  return await withRoot(async (root) => {
+    const slowAgent = options.benchCase.id === "slowAgentDatabase";
+    const preload = slowAgent ? path.join(root, "slow-agent-preload.mjs") : undefined;
+    let port = 0;
+    for (let attempt = 0; port < 40000 && attempt < 32; attempt++) {
+      port = await getFreePort();
+    }
+    if (port < 40000) {
+      throw new CliArgumentError(
+        "could not allocate a benchmark port >= 40000 after 32 attempts; ensure the host's ephemeral port range includes ports >= 40000",
+      );
+    }
     const configPath = writeConfig(root, options.benchCase);
+    if (options.benchCase.id === "teamBoot") {
+      copyFileSync(configPath, `${configPath}.bak`);
+    }
     const env = createGatewayBenchEnv(root, configPath, { caseEnv: options.benchCase.env });
+    const publicationMarker =
+      options.benchCase.publicationGitDelayMs !== undefined
+        ? path.join(root, "publication-git-released.json")
+        : undefined;
+    if (publicationMarker) {
+      if (existsSync(path.join(root, "publication-git-started.json"))) {
+        throw new CliArgumentError(
+          "The pending-publication fixture has already run; seed a new root",
+        );
+      }
+      env.PATH = `${path.join(root, "publication-bin")}${path.delimiter}${env.PATH ?? ""}`;
+      // Keep startup PATH hardening from moving the real Git ahead of the fixture wrapper.
+      env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
+    }
+    if (options.benchCase.publicationApiDelayMs !== undefined) {
+      if (existsSync(path.join(root, "publication-api-calls.jsonl"))) {
+        throw new CliArgumentError("The publication API fixture has already run; seed a new root");
+      }
+      env.PATH = `${path.join(root, "publication-bin")}${path.delimiter}${env.PATH ?? ""}`;
+      env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
+      env.GH_TOKEN = "synthetic-startup-publication-token";
+      env.NODE_OPTIONS = `--import=${path.join(root, "publication-api-preload.mjs")}`;
+    }
+    if (preload) {
+      env.NODE_OPTIONS = `${env.NODE_OPTIONS ?? ""} --import=${preload}`.trim();
+    }
+    const agentRecoveryMs: Record<string, number> = {};
+    const integrityGateMs: Record<string, number> = {};
+    let agentDatabaseAdmissionErrors = 0;
     if (options.benchCase.incidentFixture) {
       await writeIncidentFixture(root, { kind: options.benchCase.incidentFixture });
       if (fixtureIncludesPackagedPlugins(options.benchCase.incidentFixture)) {
         assertIncidentPackagedPluginInventory();
       }
     }
+    if (options.startAt !== undefined) {
+      const remaining = options.startAt - Date.now();
+      if (remaining < 0) {
+        throw new CliArgumentError("--start-at deadline has already passed");
+      }
+      await delay(remaining);
+    }
+    const hostLoadBefore = loadavg();
     const startAt = performance.now();
     const deadlineAt = startAt + options.timeoutMs;
     const startupTrace: Record<string, number> = {};
+    const startupTraceLines: string[] = [];
     const output: string[] = [];
     const outputBuffers: Record<"stderr" | "stdout", string> = { stderr: "", stdout: "" };
     let firstOutputMs: number | null = null;
@@ -762,31 +1802,34 @@ async function runGatewaySample(
     let gatewayReadyLogMs: number | null = null;
     let httpListenLogLine: string | null = null;
     let httpListenLogMs: number | null = null;
-    let maxRssMb: number | null = null;
     let childExited = false;
-    let child: ChildProcessWithoutNullStreams | undefined;
-    let rssTimer: ReturnType<typeof setInterval> | undefined;
+    let heapProfilePath: string | undefined;
+    let child: ChildProcess | undefined;
+    let rssSampler: ReturnType<typeof startGatewayRssSampling> | undefined;
 
     try {
       const nodeOptions = [
-        ...(options.cpuProfDir
+        ...(options.heapProfDir
           ? [
-              "--cpu-prof",
-              "--cpu-prof-dir",
-              options.cpuProfDir,
-              "--cpu-prof-name",
-              `openclaw-gateway-${options.benchCase.id}-${options.sampleIndex}-${Date.now()}.cpuprofile`,
+              "--import",
+              fileURLToPath(new URL("./lib/gateway-startup-heap-profile.mjs", import.meta.url)),
             ]
           : []),
-        ...(options.heapProfDir ? ["--heap-prof", "--heap-prof-dir", options.heapProfDir] : []),
+        ...(preload ? ["--import", preload] : []),
+        ...gatewayBenchCpuProfileArgs(options.cpuProfDir),
       ];
-      const childArgs = buildGatewayBenchChildArgs(options.entry, port, nodeOptions);
+      const childArgs = buildGatewayBenchChildArgs(
+        options.entry,
+        port,
+        nodeOptions,
+        options.benchCase.id === "teamBoot" || slowAgent ? "token" : "none",
+      );
       const command = buildGatewayBenchCommand(childArgs, options);
       child = spawn(command.command, command.args, {
         cwd: process.cwd(),
         detached: process.platform !== "win32",
         env,
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe", ...(options.heapProfDir ? ["ipc" as const] : [])],
       });
       try {
         await once(child, "spawn");
@@ -795,21 +1838,25 @@ async function runGatewaySample(
         throw error;
       }
       const startedChild = child;
+      // Node's IPC spawn overload does not retain the three configured pipe types.
+      assert(startedChild.stdout && startedChild.stderr, "Gateway output pipes are required");
       const cpuStartMs = readProcessTreeCpuMs(startedChild.pid);
-      const sampleRss = () => {
-        const rssMb = readProcessRssMb(startedChild.pid);
-        if (rssMb != null) {
-          maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
-        }
-      };
-      sampleRss();
-      rssTimer = setInterval(sampleRss, 100);
-      rssTimer.unref?.();
+      rssSampler = startGatewayRssSampling(startedChild);
       startedChild.once("exit", () => {
         childExited = true;
       });
 
       const onLine = (line: string, nowMs: number) => {
+        if (options.benchCase.publicationApiDelayMs !== undefined) {
+          appendFileSync(path.join(root, "publication-gateway.log"), `${line}\n`);
+        }
+        if (line.includes("AgentDatabaseAdmissionError")) {
+          agentDatabaseAdmissionErrors++;
+        }
+        const gate = /\[slow-agent-bench\] (gate-start|gate-passed)/u.exec(line);
+        if (gate) {
+          integrityGateMs[gate[1]!] ??= nowMs;
+        }
         const readyLogKind = classifyGatewayReadyLog(line);
         if (readyLogKind === "http-listen" && httpListenLogMs == null) {
           httpListenLogMs = nowMs;
@@ -819,7 +1866,9 @@ async function runGatewaySample(
           gatewayReadyLogMs = nowMs;
           gatewayReadyLogLine = line;
         }
-        collectTraceLine(line, "startup trace", startupTrace);
+        if (collectTraceLine(line, "startup trace", startupTrace)) {
+          startupTraceLines.push(line);
+        }
       };
       const onChunk = (stream: "stderr" | "stdout", chunk: Buffer) => {
         if (firstOutputMs == null) {
@@ -848,49 +1897,155 @@ async function runGatewaySample(
           port,
           startAt,
         });
-      const [healthz, readyz] = await Promise.all([probe("/healthz"), probe("/readyz")]);
-      const completionMs = options.benchCase.completionTracePhase
-        ? await waitForStartupTracePhase({
-            deadlineAt,
-            isDone: () => childExited,
-            phase: options.benchCase.completionTracePhase,
-            startupTrace,
-          })
-        : performance.now() - startAt;
+      const healthzProbe = probe("/healthz");
+      const [healthz, readyz, firstSessionRpc] = await Promise.all([
+        healthzProbe,
+        probe("/readyz").then(async (readiness) => {
+          if (readiness.status === 200 && options.heapProfDir) {
+            heapProfilePath = await captureStartupHeapProfile(
+              startedChild,
+              options.heapProfDir,
+              Math.max(1, deadlineAt - performance.now()),
+            );
+          }
+          return readiness;
+        }),
+        healthzProbe.then((health) =>
+          health.status === 200
+            ? waitForFirstSessionRpc({
+                port,
+                startAt,
+                deadlineAt,
+                isDone: () => childExited,
+                requireSeededSession: options.benchCase.id === "teamBoot",
+                ...(slowAgent ? { readyAgentId: SLOW_DATABASE_AGENT_IDS[0] } : {}),
+                ...(options.benchCase.id === "teamBoot" || slowAgent
+                  ? { authToken: TEAM_BOOT_AUTH_TOKEN }
+                  : {}),
+              })
+            : { ms: null, connectMs: null, attempts: 0, lastError: "Gateway never became healthy" },
+        ),
+        healthzProbe.then(async (health) => {
+          if (!slowAgent || health.status !== 200) {
+            return;
+          }
+          await Promise.all(
+            SLOW_DATABASE_AGENT_IDS.map(async (agentId) => {
+              const observation = await waitForFirstSessionRpc({
+                port,
+                startAt,
+                deadlineAt,
+                isDone: () => childExited,
+                requireSeededSession: true,
+                agentId,
+                authToken: TEAM_BOOT_AUTH_TOKEN,
+              });
+              if (observation.ms !== null) {
+                agentRecoveryMs[agentId] = observation.ms;
+              }
+            }),
+          );
+        }),
+      ]);
+      // Keep the recovered request alive through its real subprocess boundary even
+      // when readyz and the first RPC complete before this optional work finishes.
+      if (publicationMarker) {
+        while (!existsSync(publicationMarker)) {
+          if (childExited || performance.now() >= deadlineAt) {
+            break;
+          }
+          await delay(25);
+        }
+      }
+      if (options.benchCase.publicationApiDelayMs !== undefined) {
+        await waitForStartupTracePhase({
+          deadlineAt,
+          isDone: () => childExited,
+          phase: "sidecars.worker-environments.publications",
+          startupTrace,
+        });
+      }
+      // Compare CPU/RSS after the same optional startup work, even when publication
+      // recovery overlaps that work on only one side of the comparison.
+      const postReadyCompletion =
+        publicationMarker || options.benchCase.publicationApiDelayMs !== undefined
+          ? await Promise.all(
+              ["post-ready.startup-maintenance", "post-ready.gateway-data.plugins"].map((phase) =>
+                waitForStartupTracePhase({
+                  deadlineAt,
+                  isDone: () => childExited,
+                  phase,
+                  startupTrace,
+                }),
+              ),
+            )
+          : [];
+      const completionMs = postReadyCompletion.includes(null)
+        ? null
+        : options.benchCase.completionTracePhase
+          ? await waitForStartupTracePhase({
+              deadlineAt,
+              isDone: () => childExited,
+              phase: options.benchCase.completionTracePhase,
+              startupTrace,
+            })
+          : performance.now() - startAt;
       const completedAt = performance.now();
       const cpuEndMs = readProcessTreeCpuMs(startedChild.pid);
       const cpuMs =
         cpuStartMs == null || cpuEndMs == null ? null : Math.max(0, cpuEndMs - cpuStartMs);
       const cpuCoreRatio = cpuMs == null ? null : cpuMs / Math.max(1, completedAt - startAt);
-      const exit = await stopChild(startedChild);
-      sampleRss();
-      child = undefined;
-      flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt, {
-        flushPartial: true,
+      const shutdownStartedAt = performance.now();
+      let shutdownForced = false;
+      const exit = await stopChild(startedChild, {
+        ...(options.benchCase.id === "teamBoot" ? { teardownGraceMs: 30_000 } : {}),
+        onForceKill: () => {
+          shutdownForced = true;
+        },
       });
+      const shutdownMs = performance.now() - shutdownStartedAt;
+      const maxRssMb = rssSampler.sample();
+      child = undefined;
+      flushOutputLineBuffers(outputBuffers, onLine, performance.now() - startAt);
 
       return {
+        ...(publicationMarker && existsSync(publicationMarker)
+          ? {
+              publicationRecovery: JSON.parse(
+                readFileSync(publicationMarker, "utf8"),
+              ) as NonNullable<GatewaySample["publicationRecovery"]>,
+            }
+          : {}),
+        ...(options.benchCase.publicationApiDelayMs !== undefined
+          ? { publicationApi: await inspectPublicationApiFixture(root) }
+          : {}),
+        ...(slowAgent ? { agentRecoveryMs, integrityGateMs, agentDatabaseAdmissionErrors } : {}),
         completionMs,
         cpuCoreRatio,
         cpuMs,
         exitedBeforeTeardown: exit.exitedBeforeTeardown,
         exitCode: exit.exitCode,
         firstOutputMs,
+        firstSessionRpc,
         gatewayReadyLogLine,
         gatewayReadyLogMs,
         healthz,
+        ...(heapProfilePath ? { heapProfilePath } : {}),
         httpListenLogLine,
         httpListenLogMs,
+        hostLoadBefore,
+        hostLoadAfter: loadavg(),
         maxRssMb,
         outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
         readyz,
+        shutdownForced,
+        shutdownMs,
         signal: exit.signal,
         startupTrace,
+        startupTraceLines,
       };
     } finally {
-      if (rssTimer) {
-        clearInterval(rssTimer);
-      }
+      rssSampler?.stop();
       if (child) {
         await stopChild(child).catch(() => undefined);
       }
@@ -907,32 +2062,29 @@ async function runCase(
     runs: number;
     timeoutMs: number;
     warmup: number;
+    fixtureRoot?: string;
+    startAt?: number;
   },
 ): Promise<CaseResult> {
   const samples: GatewaySample[] = [];
   const total = options.runs + options.warmup;
   for (let index = 0; index < total; index += 1) {
     const sample = await runGatewaySample({
-      benchCase: options.benchCase,
-      cpuProfDir: options.cpuProfDir,
-      entry: options.entry,
-      gatewayRuntime: options.gatewayRuntime,
-      gatewayCpus: options.gatewayCpus,
-      heapProfDir: options.heapProfDir,
+      ...options,
       sampleIndex: index + 1,
-      timeoutMs: options.timeoutMs,
     });
     if (index >= options.warmup) {
       samples.push(sample);
       const heapUsedMb = sample.startupTrace["memory.ready.heapUsedMb"] ?? null;
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: completion=${formatMs(sample.completionMs)} healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} httpListen=${formatMs(sample.httpListenLogMs)} gatewayReady=${formatMs(sample.gatewayReadyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)} heap=${formatMb(heapUsedMb)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: completion=${formatMs(sample.completionMs)} healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} sessionsRpc=${formatMs(sample.firstSessionRpc.ms)} httpListen=${formatMs(sample.httpListenLogMs)} gatewayReady=${formatMs(sample.gatewayReadyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)} heap=${formatMb(heapUsedMb)}`,
       );
       if (
         sample.outputTail &&
         (sample.completionMs == null ||
           sample.healthz.status !== 200 ||
-          sample.readyz.status !== 200)
+          sample.readyz.status !== 200 ||
+          sample.firstSessionRpc.ms === null)
       ) {
         console.error(
           `[gateway-startup-bench] ${options.benchCase.id} output tail:\n${sample.outputTail}`,
@@ -958,6 +2110,8 @@ function printResult(result: CaseResult): void {
   console.log(`  http listen:  ${formatStats(result.summary.httpListenLogMs)}`);
   console.log(`  gateway ready: ${formatStats(result.summary.gatewayReadyLogMs)}`);
   console.log(`  /readyz:      ${formatStats(result.summary.readyzMs)}`);
+  console.log(`  sessions RPC: ${formatStats(result.summary.firstSessionRpcMs)}`);
+  console.log(`  shutdown:     ${formatStats(result.summary.shutdownMs)}`);
   console.log(`  max RSS:      ${formatStats(result.summary.maxRssMb, formatMb)}`);
   console.log(
     `  ready memory: rss=${formatStats(result.summary.startupTrace["memory.ready.rssMb"], formatMb)} heap=${formatStats(result.summary.startupTrace["memory.ready.heapUsedMb"], formatMb)} external=${formatStats(result.summary.startupTrace["memory.ready.externalMb"], formatMb)}`,
@@ -985,6 +2139,65 @@ async function main() {
   }
 
   const options = parseOptions(argv);
+  const slowAgent = options.cases.length === 1 && options.cases[0]?.id === "slowAgentDatabase";
+  const teamBoot = options.cases.length === 1 && options.cases[0]?.id === "teamBoot";
+  const fixtureFile = teamBoot ? "team-boot-fixture.json" : "slow-agent-fixture.json";
+  const needsPreparedFixture = options.cases.some(
+    ({ id }) => id === "slowAgentDatabase" || id === "teamBoot",
+  );
+  if (options.fixtureRoot || options.seedOnly || needsPreparedFixture) {
+    if (
+      (!slowAgent && !teamBoot) ||
+      !options.fixtureRoot ||
+      (!options.seedOnly && (options.runs !== 1 || options.warmup !== 0))
+    ) {
+      throw new CliArgumentError(
+        "teamBoot and slowAgentDatabase require --fixture-root and either --seed-only or --runs 1 --warmup 0",
+      );
+    }
+    if (options.seedOnly) {
+      if (teamBoot) {
+        await seedTeamBootFixture(path.resolve(options.fixtureRoot), options.cases[0]!);
+        return;
+      }
+      await seedSlowAgentFixture(
+        path.resolve(options.fixtureRoot),
+        options.agentDatabaseMib,
+        options.agentGateDelayMs,
+      );
+      return;
+    }
+    if (!existsSync(path.join(options.fixtureRoot, fixtureFile))) {
+      throw new CliArgumentError("--fixture-root must first be prepared with --seed-only");
+    }
+    if (teamBoot) {
+      const fixture = JSON.parse(
+        readFileSync(path.join(options.fixtureRoot, "team-boot-fixture.json"), "utf8"),
+      ) as {
+        bundledPluginFixture?: OpenClawConfig;
+        publicationGitDelayMs?: number;
+        publicationApiDelayMs?: number;
+      };
+      if (
+        JSON.stringify(fixture.bundledPluginFixture ?? {}) !==
+        JSON.stringify(options.cases[0]?.bundledPluginFixture ?? {})
+      ) {
+        throw new CliArgumentError("--bundled-plugin-fixture must match the prepared fixture");
+      }
+      if (fixture.publicationApiDelayMs !== options.cases[0]?.publicationApiDelayMs) {
+        throw new CliArgumentError("--publication-api-delay-ms must match the prepared fixture");
+      }
+      if (fixture.publicationGitDelayMs !== options.cases[0]?.publicationGitDelayMs) {
+        throw new CliArgumentError("--publication-git-delay-ms must match the prepared fixture");
+      }
+    }
+  }
+  if (
+    options.startAt !== undefined &&
+    (options.cases.length !== 1 || options.runs !== 1 || options.warmup !== 0)
+  ) {
+    throw new CliArgumentError("--start-at requires one case with --runs 1 --warmup 0");
+  }
   if (options.installedCohort) {
     const { runInstalledGatewayBenchmark } = await import("./lib/gateway-bench-installed.ts");
     process.exitCode = await runInstalledGatewayBenchmark({
@@ -1004,19 +2217,7 @@ async function main() {
   }
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
-    results.push(
-      await runCase({
-        benchCase,
-        cpuProfDir: options.cpuProfDir,
-        entry: options.entry,
-        gatewayRuntime: options.gatewayRuntime,
-        gatewayCpus: options.gatewayCpus,
-        heapProfDir: options.heapProfDir,
-        runs: options.runs,
-        timeoutMs: options.timeoutMs,
-        warmup: options.warmup,
-      }),
-    );
+    results.push(await runCase({ ...options, benchCase }));
   }
 
   const payload = {
@@ -1024,11 +2225,15 @@ async function main() {
     gatewayRuntime: options.gatewayRuntime,
     gatewayCpus: options.gatewayCpus,
     generatedAt: new Date().toISOString(),
+    ...(teamBoot
+      ? {
+          fixture: JSON.parse(readFileSync(path.join(options.fixtureRoot!, fixtureFile), "utf8")),
+        }
+      : {}),
     results,
   };
   if (options.output) {
-    mkdirSync(path.dirname(options.output), { recursive: true });
-    writeFileSync(options.output, `${JSON.stringify(payload, null, 2)}\n`);
+    writeBenchmarkJson(payload, options.output);
   }
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));
@@ -1056,7 +2261,7 @@ export const testing = {
   writeConfig,
 };
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
   main().catch((err: unknown) => {
     if (err instanceof CliArgumentError) {
       console.error(err.message);

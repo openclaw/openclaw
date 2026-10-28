@@ -5,8 +5,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { installGatewayDaemonNonInteractive } from "./daemon-install.js";
 
-const readDaemonRuntimePinForInstall = vi.hoisted(() => vi.fn());
-vi.mock("../../../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall }));
+const readDaemonRuntimePinForInstall = vi.hoisted(() =>
+  vi.fn<typeof import("../../../daemon/runtime-pin-state.js").readDaemonRuntimePinForInstall>(),
+);
+// mock-isolation: Service-planning fixtures replace pin admission without opening stores or native locks.
+vi.mock("../../../daemon/runtime-pin-state.js", () => ({
+  readDaemonRuntimePinForInstall,
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T): Promise<T> =>
+    read(),
+}));
 
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const gatewayInstallErrorHint = vi.hoisted(() => vi.fn(() => "hint"));
@@ -196,7 +203,7 @@ describe("installGatewayDaemonNonInteractive", () => {
     "carries installed pin intent through setup (explicit=%s)",
     async (daemonRuntime) => {
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      const pin = { runtime: "bun", path: "/opt/pinned/bun" };
+      const pin = { runtime: "bun", path: "/opt/pinned/bun" } as const;
       const expected = { revision: "installed-pin", stored: true, pin };
       const existingCommand = {
         programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],

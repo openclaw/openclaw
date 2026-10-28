@@ -8,6 +8,7 @@ import {
   createAsyncLock,
   readDurableJsonFile,
   readJsonFile,
+  tryReadJsonObjectSync,
   writeJsonAtomic,
   writeTextAtomic,
 } from "./json-files.js";
@@ -22,6 +23,24 @@ afterEach(() => {
 });
 
 describe("json file helpers", () => {
+  it.each([
+    { content: '{"ok":true}', expected: { ok: true } },
+    { content: "[]", expected: null },
+    { content: '"text"', expected: null },
+    { content: "1", expected: null },
+    { content: "null", expected: null },
+    { content: "{not-json}", expected: null },
+    { content: undefined, expected: null },
+  ])("reads only JSON objects synchronously from $content", async ({ content, expected }) => {
+    await withTestDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "object.json");
+      if (content !== undefined) {
+        await fsPromises.writeFile(filePath, content);
+      }
+      expect(tryReadJsonObjectSync(filePath)).toEqual(expected);
+    });
+  });
+
   it.each([
     {
       name: "reads valid json",

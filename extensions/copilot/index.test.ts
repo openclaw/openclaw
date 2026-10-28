@@ -17,7 +17,8 @@ vi.mock("./harness.js", async (importOriginal) => {
   };
 });
 
-import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
+import { createCopilotAgentHarness } from "./harness.js";
+import { makeSessionStoreMock } from "./harness.test-support.js";
 import plugin from "./index.js";
 import { createCopilotClientPool } from "./src/runtime.js";
 
@@ -33,14 +34,7 @@ function registerWithPluginConfig(
 ) {
   const registerAgentHarness =
     vi.fn<(harness: ReturnType<typeof createCopilotAgentHarness>) => void>();
-  const entries = new Map<string, CopilotSessionBinding>();
-  const sessionStore = {
-    register: vi.fn(async (key: string, value: CopilotSessionBinding) => {
-      entries.set(key, value);
-    }),
-    lookup: vi.fn(async (key: string) => entries.get(key)),
-    delete: vi.fn(async (key: string) => entries.delete(key)),
-  };
+  const { entries, store: sessionStore } = makeSessionStoreMock();
   const openKeyedStore = vi.fn(() => sessionStore);
   plugin.register(
     createTestPluginApi({

@@ -97,8 +97,3 @@ The method is optional for existing SDK implementations; automatic one-shot
 recovery treats a missing method as uncertain cleanup. A native facade that owns
 no transport may resolve immediately when its enclosing runtime separately owns
 and verifies the process lifetime.
-
-Harnesses that forward embedded attempt params should pass
-`skillWorkshopProposalOnly` through. Proposal-only skill-workshop runs are
-deliberately narrow single-tool runs, and the runtime keeps them on the raw
-tool surface instead of engaging code mode or a tool-search catalog.

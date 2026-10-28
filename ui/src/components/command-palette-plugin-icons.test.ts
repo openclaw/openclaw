@@ -1,85 +1,87 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { flush } from "solid-js";
+import { expect, it, vi } from "vitest";
 import {
-  createContext,
-  createGateway,
-  enterQuery,
   findPaletteOption,
-  mountPalette,
+  mountSearch,
+  paletteInput,
+  registerCommandPaletteTestHooks,
+  searchPalette,
+  setInputValue,
+  settlePalette,
 } from "./command-palette.test-support.ts";
-import "./command-palette.ts";
+import "./command-palette.tsx";
 
-describe("CommandPalette plugin icons", () => {
-  let restoreDialogPolyfill: () => void;
-  let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
+registerCommandPaletteTestHooks();
 
-  beforeEach(() => {
-    vi.useFakeTimers();
-    restoreDialogPolyfill = installDialogPolyfill();
-    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
-    Object.defineProperty(Element.prototype, "scrollIntoView", {
-      configurable: true,
-      value: vi.fn(),
-    });
+it("loads eligible visible icons and reloads retained rows without retrying failures", async () => {
+  const fetchIcon = vi.fn(
+    async () => new Response("icon", { headers: { "content-type": "image/png" } }),
+  );
+  vi.stubGlobal("fetch", fetchIcon);
+  let iconRevision = 0;
+  const revokeObjectURL = vi.fn();
+  class IconURL extends URL {
+    static override createObjectURL = vi.fn(() => `blob:workboard-${++iconRevision}`);
+    static override revokeObjectURL = revokeObjectURL;
+  }
+  vi.stubGlobal("URL", IconURL);
+  let hasIcon = true;
+  const { gateway, emit, palette } = await mountSearch({
+    methods: ["plugins.list"],
+    request: async (method) =>
+      method === "plugins.list"
+        ? {
+            plugins: [
+              { id: "workboard", name: "Workboard", installed: true, hasIcon },
+              { id: "other", name: "Other", installed: true, hasIcon: true },
+            ],
+          }
+        : Promise.reject(new Error(`Unexpected method: ${method}`)),
   });
-
-  afterEach(() => {
-    document.body.replaceChildren();
-    restoreDialogPolyfill();
-    if (scrollIntoViewDescriptor) {
-      Object.defineProperty(Element.prototype, "scrollIntoView", scrollIntoViewDescriptor);
-    } else {
-      delete (Element.prototype as Partial<Element>).scrollIntoView;
-    }
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  it("renders the proxied icon for a visible plugin search result", async () => {
-    const fetchIcon = vi.fn(
-      async () => new Response("icon", { headers: { "content-type": "image/png" } }),
-    );
-    vi.stubGlobal("fetch", fetchIcon);
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = vi.fn(() => "blob:workboard");
-        static override revokeObjectURL = vi.fn();
-      },
-    );
-    const { gateway } = createGateway(true, {
-      methods: ["plugins.list"],
-      request: async (method) => {
-        if (method === "plugins.list") {
-          return {
-            plugins: [{ id: "workboard", name: "Workboard", installed: true, hasIcon: true }],
-          };
-        }
-        throw new Error(`Unexpected method: ${method}`);
-      },
+  gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+  const workboard = () => findPaletteOption(palette, "Workboard");
+  const waitForIcon = (revision: number) =>
+    vi.waitFor(() => {
+      expect(workboard()?.querySelector("img")?.src).toBe(`blob:workboard-${revision}`);
+      expect(fetchIcon).toHaveBeenCalledTimes(revision);
     });
-    gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
-    const { palette } = await mountPalette(createContext(gateway, async () => null));
-    await enterQuery(palette, "workboard");
-    await vi.advanceTimersByTimeAsync(200);
-    await palette.updateComplete;
-    await vi.waitFor(() => {
-      expect(findPaletteOption(palette, "Workboard")?.querySelector("img")?.src).toBe(
-        "blob:workboard",
-      );
-    });
-    const icon = findPaletteOption(palette, "Workboard")?.querySelector(
-      ".cmd-palette__plugin-icon",
-    );
-    expect(icon?.classList.contains("skeleton")).toBe(true);
-    icon?.querySelector("img")?.dispatchEvent(new Event("load"));
-    expect(icon?.classList.contains("skeleton")).toBe(false);
-    expect(fetchIcon).toHaveBeenCalledWith(
-      expect.stringContaining("/__openclaw__/plugin-icon/workboard"),
-      expect.objectContaining({ method: "GET" }),
-    );
-  });
+  await searchPalette(palette, "workboard");
+  await waitForIcon(1);
+  const icon = workboard()?.querySelector(".cmd-palette__plugin-icon");
+  expect(icon?.classList.contains("skeleton")).toBe(true);
+  icon?.querySelector("img")?.dispatchEvent(new Event("load"));
+  flush();
+  expect(icon?.classList.contains("skeleton")).toBe(false);
+  expect(fetchIcon).toHaveBeenCalledWith(
+    expect.stringContaining("/__openclaw__/plugin-icon/workboard"),
+    expect.objectContaining({ method: "GET" }),
+  );
+  const initialRow = workboard();
+  const input = paletteInput(palette);
+  setInputValue(input, "Draft a plan for the next release including all testing steps.");
+  await palette.updateComplete;
+  expect(workboard()).toBe(initialRow);
+  expect(initialRow?.closest("[inert]")).not.toBeNull();
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:workboard-1");
+  setInputValue(input, "workboard");
+  await vi.advanceTimersByTimeAsync(200);
+  await waitForIcon(2);
+
+  const row = workboard();
+  row?.querySelector("img")?.dispatchEvent(new Event("error"));
+  flush();
+  for (const available of [true, false]) {
+    hasIcon = available;
+    emit("cron");
+    await settlePalette(palette, 0);
+    expect(row?.querySelector("img")).toBeNull();
+    expect(fetchIcon).toHaveBeenCalledTimes(2);
+  }
+  hasIcon = true;
+  emit("cron");
+  await vi.advanceTimersByTimeAsync(0);
+  await waitForIcon(3);
+  expect(workboard()).toBe(row);
 });

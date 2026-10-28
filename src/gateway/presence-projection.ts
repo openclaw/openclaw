@@ -1,47 +1,66 @@
-import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
-import { captureIncognitoSessionTopology } from "../config/sessions/session-incognito-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
-import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-scopes.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { READ_SCOPE } from "./operator-scopes.js";
 import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import { isGatewayAdmin, prepareProjectedSessionSharing } from "./session-sharing.js";
+import { prepareProjectedSessionSharing, isGatewayAdmin } from "./session-sharing.js";
 
 /** Roster objects are immutable for one publication; authority is checked for every recipient. */
 export function createPresenceRecipientProjection(params: {
   cfg: OpenClawConfig;
   presence: SystemPresence[];
-  projection?: SessionRowProjection;
+  projection?: Pick<
+    SessionRowProjection,
+    "getPolicyConfig" | "sharingRevision" | "sharingTargetState" | "hasMembership"
+  >;
 }): (client: GatewayClient | null) => SystemPresence[] {
   const keys = [...new Set(params.presence.flatMap((row) => row.watchedSessions ?? []))];
-  const topology = captureIncognitoSessionTopology();
+  const memory = getSessionActorStorageBinding({});
+  const memoryOwners = new Map<string, ReturnType<typeof captureSessionActorStorageOwner>>();
+  for (const key of keys) {
+    if (!isIncognitoSessionKey(key)) {
+      continue;
+    }
+    const agentId = resolveSessionEventAgentScope(
+      params.cfg,
+      key,
+      parseAgentSessionKey(key)?.agentId,
+    )?.[1];
+    if (agentId && !memoryOwners.has(agentId)) {
+      memoryOwners.set(
+        agentId,
+        captureSessionActorStorageOwner(
+          { agentId, sessionKey: key, sessionActor: memory },
+          { assertCurrent() {}, authorize() {} },
+        ),
+      );
+    }
+  }
   const views = new Map<string, SystemPresence[]>();
+  const audiences = new Map<string, SystemPresence[]>();
+  const hasMemoryWatches = keys.some(isIncognitoSessionKey);
   let routingConfig: OpenClawConfig | undefined;
   let watches: Array<{ sessionKey: string; key: string; agentId?: string }> = [];
   let revision: object | undefined;
   const targets = new Map<string, ReturnType<SessionRowProjection["sharingTarget"]>>();
   const resolveTarget = (sessionKey: string, key: string, agentId: string) => {
     if (isIncognitoSessionKey(key)) {
-      if (topology) {
-        topology.assertCurrent();
-        const actor = topology.entries.find((candidate) => candidate.agentId === agentId);
-        const entry = actor?.facts.readSharing(key)?.entry;
-        return entry ? { canonicalKey: key, entry } : undefined;
-      }
-      const database = getOpenIncognitoAgentDatabase(
-        agentId,
-        resolveIncognitoOpenClawAgentSqlitePath({ agentId }),
-      );
-      const entry = database && readCommittedIncognitoSessionSharing(database.db, key)?.entry;
+      memory?.actor.assertReadable();
+      const captured = memoryOwners.get(agentId);
+      const entry = captured?.owner?.readSession(key, captured.authority)?.entry;
       return entry ? { canonicalKey: key, entry } : undefined;
     }
     if (!targets.has(sessionKey)) {
-      targets.set(sessionKey, params.projection?.sharingTarget({ key, agentId }) ?? null);
+      const state = params.projection?.sharingTargetState({ key, agentId });
+      targets.set(sessionKey, state?.status === "ready" ? state.target : null);
     }
     return targets.get(sessionKey);
   };
@@ -49,7 +68,7 @@ export function createPresenceRecipientProjection(params: {
     if (
       !client?.connect ||
       (client.connect.role ?? "operator") !== "operator" ||
-      !authorizeOperatorScopesForRequiredScope(READ_SCOPE, client.connect.scopes ?? []).allowed
+      !operatorScopeSatisfied(READ_SCOPE, client.connect.scopes ?? [])
     ) {
       return [];
     }
@@ -67,18 +86,28 @@ export function createPresenceRecipientProjection(params: {
         };
       });
       targets.clear();
+      audiences.clear();
     }
     const currentRevision = params.projection?.sharingRevision;
     if (revision !== currentRevision || currentRevision === undefined) {
       revision = currentRevision;
       targets.clear();
+      audiences.clear();
     }
     const canReadSessions = isGatewayAdmin(client) || !isGatewayClientProfilePending(client);
-    const { entryFilter } = prepareProjectedSessionSharing({
+    const sharing = prepareProjectedSessionSharing({
       cfg,
       client,
-      isMember: () => false,
+      isMember: (target, identityId) =>
+        params.projection?.hasMembership(target.storePath, target.storeKey, identityId) ?? false,
     });
+    // Memory actors have independent lifetimes; their watches must stay live.
+    const audience =
+      currentRevision && !hasMemoryWatches ? sharing.getCacheKey(currentRevision) : undefined;
+    const cached = audience === undefined ? undefined : audiences.get(audience);
+    if (cached) {
+      return cached;
+    }
     const visible = new Set<string>();
     const indexes: number[] = [];
     if (canReadSessions) {
@@ -87,7 +116,12 @@ export function createPresenceRecipientProjection(params: {
           continue;
         }
         const target = resolveTarget(sessionKey, key, agentId);
-        if (target && (entryFilter?.(target.canonicalKey, target.entry) ?? true)) {
+        const canRead =
+          target &&
+          ("storePath" in target
+            ? sharing.canReadTarget(target)
+            : (sharing.entryFilter?.(target.canonicalKey, target.entry) ?? true));
+        if (canRead) {
           visible.add(sessionKey);
           indexes.push(index);
         }
@@ -105,6 +139,9 @@ export function createPresenceRecipientProjection(params: {
         return watchedSessions.length ? { ...person, watchedSessions } : person;
       });
       views.set(signature, view);
+    }
+    if (audience !== undefined) {
+      audiences.set(audience, view);
     }
     return view;
   };

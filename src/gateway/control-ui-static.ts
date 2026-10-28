@@ -1,4 +1,3 @@
-// Control UI static-response policy: MIME types, caching, and encoding.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -13,6 +12,10 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { ControlUiRootAsset } from "./control-ui-file.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { matchesHttpIfModifiedSince } from "./http-conditional.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
@@ -39,6 +42,7 @@ const CONTROL_UI_CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".jpeg": "image/jpeg",
   ".gif": "image/gif",
   ".webp": "image/webp",
+  ".mp4": "video/mp4",
   ".ico": "image/x-icon",
   ".txt": "text/plain; charset=utf-8",
   ".wasm": "application/wasm",
@@ -76,19 +80,23 @@ type ControlUiRepresentation = {
   encoding?: ControlUiContentEncoding;
 };
 
-export function resolveControlUiRepresentation(params: {
+export function resolveControlUiAssetEncodings(params: {
   req: IncomingMessage;
-  asset: ControlUiRootAsset;
   contentPath: string;
   precompressed: boolean;
-}): ControlUiRepresentation | null {
-  const { req, asset, precompressed } = params;
-  const encodings = resolveHttpContentEncodings(
-    req.headers?.["accept-encoding"],
-    precompressed && isControlUiCompressibleAsset(params.contentPath)
+}): ControlUiRepresentationEncoding[] {
+  return resolveHttpContentEncodings(
+    params.req.headers?.["accept-encoding"],
+    params.precompressed && isControlUiCompressibleAsset(params.contentPath)
       ? CONTROL_UI_DYNAMIC_ENCODINGS
       : new Set<ControlUiContentEncoding>(),
   );
+}
+
+export function resolveControlUiRepresentation(
+  asset: ControlUiRootAsset,
+  encodings: readonly ControlUiRepresentationEncoding[],
+): ControlUiRepresentation | null {
   // A missing sidecar changes availability, not this request's encoding preferences.
   for (const selected of encodings) {
     if (selected === "identity") {
@@ -235,6 +243,7 @@ export async function sendControlUiHtmlBody(
   req: IncomingMessage,
   res: ServerResponse,
   body: string,
+  isCurrent?: () => boolean,
 ) {
   const encoding = resolveControlUiHtmlEncoding(req);
   if (encoding === "not-acceptable") {
@@ -242,5 +251,19 @@ export async function sendControlUiHtmlBody(
     return;
   }
   setControlUiEncodingHeaders(res, ".html", encoding);
-  res.end(encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding));
+  const encoded =
+    encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding);
+  const ingress = getRemoteControlUiIngressContext(req);
+  if (ingress) {
+    assertRemoteControlUiIngressCurrent(ingress);
+  }
+  if (isCurrent && !isCurrent()) {
+    res.removeHeader("Content-Encoding");
+    res.setHeader("Cache-Control", "no-store");
+    res.removeHeader("Content-Security-Policy");
+    res.removeHeader("X-OpenClaw-Session-Entry");
+    respondPlainText(res, 403, "Session access changed. Reload the conversation or log in again.");
+    return;
+  }
+  res.end(encoded);
 }

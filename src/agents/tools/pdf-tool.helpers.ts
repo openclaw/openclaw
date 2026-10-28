@@ -9,11 +9,10 @@ import {
 } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AssistantMessage, Context } from "../../llm/types.js";
+import type { Context } from "../../llm/types.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import type { PdfExtractedContent } from "../../media/pdf-extract.js";
 import { wrapExternalContent } from "../../security/external-content.js";
-import { extractEmbeddedAssistantText } from "../embedded-agent-utils.js";
 
 type PdfModelConfig = Exclude<AgentModelConfig, string>;
 
@@ -79,29 +78,6 @@ export function parsePageRange(
   return { pages, truncated: false };
 }
 
-export function coercePdfAssistantText(params: {
-  message: AssistantMessage;
-  provider: string;
-  model: string;
-}): string {
-  const label = `${params.provider}/${params.model}`;
-  const errorMessage = params.message.errorMessage?.trim();
-  if (
-    params.message.stopReason === "error" ||
-    params.message.stopReason === "aborted" ||
-    errorMessage
-  ) {
-    throw new Error(
-      errorMessage ? `PDF model failed (${label}): ${errorMessage}` : `PDF model failed (${label})`,
-    );
-  }
-  const text = extractEmbeddedAssistantText(params.message).trim();
-  if (text) {
-    return text;
-  }
-  throw new Error(`PDF model returned no text (${label}).`);
-}
-
 export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
   const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.pdfModel);
   const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.pdfModel);
@@ -115,12 +91,8 @@ export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
   return modelConfig;
 }
 
-export function resolvePdfToolMaxTokens(
-  modelMaxTokens: number | undefined,
-  requestedMaxTokens = 4096,
-) {
-  const modelLimit = asPositiveFiniteNumber(modelMaxTokens);
-  return modelLimit === undefined ? requestedMaxTokens : Math.min(requestedMaxTokens, modelLimit);
+export function resolvePdfToolMaxTokens(modelMaxTokens: number | undefined) {
+  return Math.min(4096, asPositiveFiniteNumber(modelMaxTokens) ?? 4096);
 }
 
 const CODEX_PDF_INSTRUCTIONS =

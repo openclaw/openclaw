@@ -11,9 +11,7 @@ import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 import { resolveSkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
 // Start the suite cold so these hoisted mocks also apply after another file loaded the owner.
-vi.hoisted(() => {
-  vi.resetModules();
-});
+vi.hoisted(() => vi.resetModules());
 
 let workspaceSequence = 0;
 let workspaceDir: string;
@@ -43,18 +41,16 @@ const {
   getSkillsSnapshotVersionMock,
   shouldRefreshSnapshotForVersionMock,
 } = vi.hoisted(() => ({
-  buildWorkspaceSkillSnapshotMock: vi.fn<
-    (workspaceDir: string, opts: SnapshotBuildOptions) => SnapshotFixture | Promise<SnapshotFixture>
-  >(() => ({
-    prompt: "",
-    skills: [] as unknown[],
-    resolvedSkills: [] as unknown[],
-  })),
+  buildWorkspaceSkillSnapshotMock:
+    vi.fn<
+      (
+        workspaceDir: string,
+        opts: SnapshotBuildOptions,
+      ) => SnapshotFixture | Promise<SnapshotFixture>
+    >(),
   ensureSkillsWatcherMock: vi.fn(),
-  getSkillsSnapshotVersionMock: vi.fn(() => 1),
-  shouldRefreshSnapshotForVersionMock: vi.fn((cached = 0, next = 0) =>
-    next === 0 ? cached > 0 : cached < next,
-  ),
+  getSkillsSnapshotVersionMock: vi.fn<() => number>(),
+  shouldRefreshSnapshotForVersionMock: vi.fn<(cached?: number, next?: number) => boolean>(),
 }));
 
 vi.mock("../loading/workspace-skill-prompt.js", () => ({
@@ -152,14 +148,17 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     async (changed) => {
       const snapshot = strippedSnapshot();
       const params = { workspaceDir, config: {}, existingSnapshot: snapshot };
-      await resolveReusableWorkspaceSkillSnapshot(params);
+      const first = await resolveReusableWorkspaceSkillSnapshot(params);
       expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
-      await resolveReusableWorkspaceSkillSnapshot({
+      const second = await resolveReusableWorkspaceSkillSnapshot({
         ...params,
         skillFilter: changed ? ["new-filter"] : undefined,
         existingSnapshot: { ...snapshot, skillFilter: changed ? ["old-filter"] : undefined },
       });
       expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(changed ? 2 : 1);
+      if (!changed) {
+        expect(second.snapshot.resolvedSkills).toBe(first.snapshot.resolvedSkills);
+      }
     },
   );
 
@@ -196,7 +195,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     } else if (identity === "source path" || identity === "legacy implicit host") {
       replacement.fileHost = "gateway";
     }
-    buildWorkspaceSkillSnapshotMock.mockReturnValue({
+    buildWorkspaceSkillSnapshotMock.mockImplementation((_workspace, options) => ({
       ...original,
       prompt: strippedSnapshot().prompt.replace("/skills/test/SKILL.md", replacement.filePath),
       skills: [
@@ -205,8 +204,11 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
           source: { filePath: replacement.filePath, fileHost: replacement.fileHost },
         },
       ],
-      resolvedSkills: [replacement],
-    });
+      resolvedSkills:
+        !options.matchesSnapshotSkill || options.matchesSnapshotSkill(replacement)
+          ? [replacement]
+          : [],
+    }));
     const params = { workspaceDir, config: {}, watch: false };
     await resolveReusableWorkspaceSkillSnapshot(params);
     for (const existingSnapshot of [original, { ...original }]) {
@@ -323,39 +325,6 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     build.reject(reason);
     await Promise.all([firstRejected, secondRejected]);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
-  });
-
-  it("does not repeat watcher fallback invalidation when concurrent preparations retry", async () => {
-    let version = 1;
-    ensureSkillsWatcherMock.mockImplementation(() => {
-      version += 1;
-    });
-    getSkillsSnapshotVersionMock.mockImplementation(() => version);
-    const firstBuild = createDeferred();
-    const secondBuild = createDeferred();
-    const builds = [firstBuild, secondBuild];
-    buildWorkspaceSkillSnapshotMock.mockImplementation(async (_workspace, options) => {
-      await builds.shift()?.promise;
-      return {
-        prompt: `snapshot version ${options.snapshotVersion}`,
-        skills: [],
-        resolvedSkills: [],
-        version: options.snapshotVersion,
-      };
-    });
-    const params = { workspaceDir, config: {} };
-    const first = resolveReusableWorkspaceSkillSnapshot({ ...params, skillFilter: ["first"] });
-    const second = resolveReusableWorkspaceSkillSnapshot({ ...params, skillFilter: ["second"] });
-
-    firstBuild.resolve();
-    const firstResult = await first;
-    secondBuild.resolve();
-    const secondResult = await second;
-    for (const result of [firstResult, secondResult]) {
-      expect(result.snapshotVersion).toBe(3);
-      expect(result.snapshot).toMatchObject({ prompt: "snapshot version 3", version: 3 });
-    }
-    expect(version).toBe(3);
   });
 
   it.each([

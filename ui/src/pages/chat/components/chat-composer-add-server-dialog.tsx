@@ -1,0 +1,80 @@
+import { Show } from "solid-js";
+import type { McpServerForm } from "../../../components/mcp-server-form.ts";
+import { McpServersForm } from "../../../components/mcp-servers-form.tsx";
+import { SettingsSegmented } from "../../../components/solid/settings-ui.tsx";
+import { registerChatComposerMenuEnglish } from "../../../i18n/locales/en-chat-composer-menu.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatComposerMenuEnglish);
+
+export function ComposerAddServerDialog(props: {
+  open: boolean;
+  busy: boolean;
+  scope: "session" | "everywhere";
+  scopeBlockedReason: string | null;
+  submitBlockedReason: string | null;
+  error: string | null;
+  onScopeChange: (scope: "session" | "everywhere") => void;
+  onCancel: () => void;
+  onSubmit: (form: McpServerForm) => void;
+}) {
+  let nameInput!: HTMLInputElement;
+  return (
+    <Show when={props.open}>
+      <openclaw-modal-dialog
+        prop:initialFocus={() => nameInput}
+        label={t("chat.composer.menu.addMcpServerTitle")}
+        description={t("chat.composer.menu.addMcpServerDescription")}
+        onModal-cancel={(event) => {
+          if (props.busy) {
+            event.preventDefault();
+          } else {
+            props.onCancel();
+          }
+        }}
+      >
+        <div class="exec-approval-card mcp-server-dialog">
+          <div class="exec-approval-header">
+            <div>
+              <div class="exec-approval-title">{t("chat.composer.menu.addMcpServerTitle")}</div>
+              <div class="exec-approval-sub">{t("chat.composer.menu.addMcpServerDescription")}</div>
+            </div>
+          </div>
+          <div class="mcp-server-dialog__scope">
+            <span>{t("chat.composer.menu.scopeLabel")}</span>
+            <SettingsSegmented
+              value={props.scope}
+              options={[
+                { value: "session", label: t("chat.composer.menu.scopeSession") },
+                { value: "everywhere", label: t("chat.composer.menu.scopeEverywhere") },
+              ]}
+              ariaLabel={t("chat.composer.menu.scopeLabel")}
+              disabled={props.busy || props.scopeBlockedReason !== null}
+              onChange={props.onScopeChange}
+            />
+            <span class="mcp-server-dialog__scope-hint">
+              {t(
+                props.scope === "session"
+                  ? "chat.composer.menu.scopeSessionHint"
+                  : "chat.composer.menu.scopeEverywhereHint",
+              )}
+            </span>
+          </div>
+          <McpServersForm
+            onNameRef={(element) => {
+              nameInput = element;
+            }}
+            busy={props.busy}
+            disabled={props.submitBlockedReason !== null}
+            blockedReason={props.submitBlockedReason}
+            autofocus
+            presentation="modal"
+            error={props.error}
+            onSubmit={props.onSubmit}
+            onCancel={props.onCancel}
+          />
+        </div>
+      </openclaw-modal-dialog>
+    </Show>
+  );
+}

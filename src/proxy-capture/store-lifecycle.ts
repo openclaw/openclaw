@@ -1,6 +1,7 @@
+import { collectSynchronousErrors } from "../infra/error-graph-internal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerListener } from "../shared/listeners.js";
-import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
+import type { AsyncDebugProxyCaptureWriter } from "./store.types.js";
 
 // Capture sessions must settle while their exact store is still writable.
 // This registry avoids a runtime/store import cycle and never acquires a store.
@@ -26,20 +27,13 @@ export function finalizeCaptureStore(store: object): void {
   closed.add(store);
   const callbacks = finalizers.get(store);
   finalizers.delete(store);
-  const errors: unknown[] = [];
-  for (const finalize of callbacks ?? []) {
-    try {
-      finalize();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
+  const errors = collectSynchronousErrors(callbacks ?? [], (finalize) => finalize());
   if (errors.length) {
     throw new AggregateError(errors, "Capture store finalization failed.");
   }
 }
 
-type AsyncFinalizer = (store: AsyncDebugProxyCaptureStore) => Promise<void>;
+type AsyncFinalizer = (store: AsyncDebugProxyCaptureWriter) => Promise<void>;
 const asyncFinalizers = new WeakMap<object, Set<AsyncFinalizer>>();
 const asyncFinalizations = new WeakMap<object, Promise<void>>();
 
@@ -60,8 +54,8 @@ export function registerAsyncCaptureStoreFinalizer(
 }
 
 export function finalizeCaptureStoreAsync(
-  store: AsyncDebugProxyCaptureStore,
-  finalizingStore: AsyncDebugProxyCaptureStore,
+  store: AsyncDebugProxyCaptureWriter,
+  finalizingStore: AsyncDebugProxyCaptureWriter,
 ): Promise<void> {
   const existing = asyncFinalizations.get(store);
   if (existing) {
@@ -77,14 +71,9 @@ export function finalizeCaptureStoreAsync(
   finalizers.delete(store);
   asyncFinalizers.delete(store);
   const pending: Promise<void>[] = [];
-  const errors: unknown[] = [];
-  for (const finalize of callbacks) {
-    try {
-      pending.push(Promise.resolve(finalize(finalizingStore)));
-    } catch (error) {
-      errors.push(error);
-    }
-  }
+  const errors = collectSynchronousErrors(callbacks, (finalize) => {
+    pending.push(Promise.resolve(finalize(finalizingStore)));
+  });
   void Promise.allSettled(pending).then((results) => {
     for (const result of results) {
       if (result.status === "rejected") {

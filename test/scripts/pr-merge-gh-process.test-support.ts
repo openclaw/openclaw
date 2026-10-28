@@ -53,8 +53,13 @@ const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { syncBuiltinESMExports } = require("node:module");
-const nativeExecFileSync = childProcess.execFileSync;
-function resolvesToFixture(file, options) {
+const { execFileSync: nativeExecFileSync, spawn: nativeSpawn } = childProcess;
+const { EventEmitter } = require("node:events");
+const { PassThrough } = require("node:stream");
+function resolvesToFixture(file, args, options) {
+  if (typeof file !== "string" || !Array.isArray(args) ||
+      options.timeout !== undefined || options.signal !== undefined ||
+      (options.cwd !== undefined && path.resolve(options.cwd) !== process.cwd())) return false;
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   if (file.includes("/")) return path.resolve(cwd, file) === env.FIXTURE_GH_BIN;
@@ -66,23 +71,21 @@ function resolvesToFixture(file, options) {
   }
   return false;
 }
+function runFixture(args, options, input) {
+  const env = options.env ?? process.env;
+  return require(env.FIXTURE_GH)("direct", args, { env, input });
+}
 childProcess.execFileSync = function(file, args, options = {}) {
   // Other child boundaries, working directories and stream shapes remain native.
-  if (typeof file !== "string" || !Array.isArray(args) || typeof options !== "object" ||
-      options.timeout !== undefined || options.signal !== undefined ||
-      (options.cwd !== undefined && path.resolve(options.cwd) !== process.cwd()) ||
+  if (typeof options !== "object" || !resolvesToFixture(file, args, options) ||
       (options.stdio !== undefined && (!Array.isArray(options.stdio) ||
-        options.stdio[1] !== "pipe" || options.stdio[2] !== "pipe")) ||
-      !resolvesToFixture(file, options)) return nativeExecFileSync(file, args, options);
-  const env = options.env ?? process.env;
+        options.stdio[1] !== "pipe" || options.stdio[2] !== "pipe"))) return nativeExecFileSync(file, args, options);
   const stdin = options.stdio?.[0];
   if (stdin !== undefined && !["pipe", "ignore", "inherit", 0].includes(stdin)) {
     return nativeExecFileSync(file, args, options);
   }
-  const result = require(env.FIXTURE_GH)("direct", args, {
-    env,
-    input: options.input ?? (stdin === "inherit" || stdin === 0 ? undefined : Buffer.alloc(0)),
-  });
+  const result = runFixture(args, options,
+    options.input ?? (stdin === "inherit" || stdin === 0 ? undefined : Buffer.alloc(0)));
   const encode = (value) => options.encoding && options.encoding !== "buffer"
     ? Buffer.from(value).toString(options.encoding) : Buffer.from(value);
   const stdout = encode(result.stdout), stderr = encode(result.stderr);
@@ -92,6 +95,19 @@ childProcess.execFileSync = function(file, args, options = {}) {
     });
   }
   return stdout;
+};
+childProcess.spawn = function(file, args, options = {}) {
+  if (!resolvesToFixture(file, args, options)) return nativeSpawn(file, args, options);
+  const child = new EventEmitter();
+  for (const stream of ["stdout", "stderr", "stdin"]) child[stream] = new PassThrough();
+  child.kill = () => false;
+  // Microtasks serialize requests against the fixture's single JSON state.
+  queueMicrotask(() => {
+    const result = runFixture(args, options, Buffer.alloc(0));
+    for (const stream of ["stdout", "stderr"]) child[stream].end(result[stream]);
+    child.emit("close", result.status, null);
+  });
+  return child;
 };
 syncBuiltinESMExports();
 `,

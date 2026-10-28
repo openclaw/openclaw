@@ -13,7 +13,7 @@ import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { readUserProfileAliases } from "../state/user-profile-list.js";
+import { readResidentUserProfileAliases } from "../state/user-profile-list.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   authorizeCurrentOperatorRoleScopes,
@@ -54,7 +54,6 @@ export type PreparedQuestionSession = {
   assertCurrent: () => void;
   canAccess: (
     client: GatewayClient | null,
-    access: "read" | "mutate",
     narrow: boolean,
     binding?: QuestionSessionAccess,
   ) => boolean;
@@ -75,7 +74,7 @@ function prepareQuestionSharing(
   return prepareSessionSharing(
     { cfg, client },
     {
-      aliases: identity ? readUserProfileAliases(identity.id) : new Set(),
+      aliases: identity ? readResidentUserProfileAliases(identity.id) : new Set(),
       sessionCap: operatorSessionCap(client, cfg),
       isMember,
     },
@@ -87,7 +86,7 @@ export async function withPreparedQuestionSessions<T>(
   options: GatewayRequestHandlerOptions,
   questions: readonly QuestionTarget[],
   consume: (prepared: readonly (PreparedQuestionSession | undefined)[]) => T,
-  operation: { assertCurrent: () => void; includeMembers?: boolean },
+  operation: { assertCurrent: () => void },
 ): Promise<T> {
   const signal = getAsyncWorkSignal();
   const callerRead = readGatewayRequestMutationAuthority(options).questionCallerRead;
@@ -102,7 +101,7 @@ export async function withPreparedQuestionSessions<T>(
         agentId: string;
         storePath: string;
         sessionKeys: string[];
-        includeMembers: boolean;
+        includeMembers: true;
         includeAuthorization: true;
         snapshotFields: readonly [];
       }
@@ -127,7 +126,8 @@ export async function withPreparedQuestionSessions<T>(
         agentId,
         storePath,
         sessionKeys: [],
-        includeMembers: operation.includeMembers ?? false,
+        // Reads and event recipients need the same membership facts as answers.
+        includeMembers: true as const,
         includeAuthorization: true as const,
         snapshotFields: [] as const,
       };
@@ -250,7 +250,7 @@ export async function withPreparedQuestionSessions<T>(
               target,
               read,
               assertCurrent,
-              canAccess: (client, _access, narrow, binding = selection.binding) => {
+              canAccess: (client, narrow, binding = selection.binding) => {
                 try {
                   if (narrow && binding) {
                     binding.assertCurrent(preparedSession);
@@ -283,9 +283,7 @@ export async function withPreparedQuestionSessions<T>(
                       })
                     );
                   }
-                  return (
-                    sharingFor(client).entryFilter?.(target.canonicalKey, target.entry) ?? true
-                  );
+                  return sharingFor(client).canReadTarget(target);
                 } catch {
                   return false;
                 }
@@ -346,7 +344,7 @@ export async function withQuestionSessionAccess<T>(
     access: QuestionSessionAccess | undefined,
     prepared: PreparedQuestionSession | undefined,
   ) => T,
-  operation: { assertCurrent: () => void; includeMembers?: boolean },
+  operation: { assertCurrent: () => void },
 ): Promise<T> {
   operation.assertCurrent();
   const producer = resolveGatewayOperatorRoleActor(options.client);
@@ -466,7 +464,6 @@ export async function withQuestionSessionAccess<T>(
           operation.assertCurrent();
           source?.authority.assertCurrent();
         },
-        includeMembers: operation.includeMembers,
       },
     );
   } finally {
@@ -480,7 +477,6 @@ function canAccessSessionQuestion(
   observation: QuestionObservation | null,
   prepared: PreparedQuestionSession | undefined,
   client: GatewayClient | null,
-  access: "read" | "mutate",
 ): boolean {
   try {
     if (
@@ -491,7 +487,7 @@ function canAccessSessionQuestion(
     ) {
       return false;
     }
-    const allowed = prepared.canAccess(client, access, true, observation.sessionAccess);
+    const allowed = prepared.canAccess(client, true, observation.sessionAccess);
     if (!allowed) {
       // A worker may have just proved the original binding invalid. Settle that
       // exact entry now; neither a transient read failure nor a successor is cancellation.
@@ -520,6 +516,7 @@ export function prepareQuestionAuthorization(
   const narrow = usesOwnRunQuestionAccess(options.client);
   return {
     target:
+      observation?.authorizeClient ||
       narrow ||
       (!isGatewayAdmin(options.client) &&
         hasOperatorBoundary(options.client, options.context.getRuntimeConfig()))
@@ -543,6 +540,14 @@ export function prepareQuestionAuthorization(
       if (!observation?.isCurrent()) {
         return questionNotFound(id);
       }
+      if (observation.authorizeClient) {
+        authority.assertCurrent();
+        return observation.authorizeClient(options.client, prepared?.target) &&
+          (prepared?.canAccess(options.client, false) ||
+            (!prepared?.target && isGatewayAdmin(options.client)))
+          ? null
+          : questionNotFound(id);
+      }
       if (narrow) {
         authority.assertCurrent();
         const current = resolveGatewayOperatorRoleActor(options.client);
@@ -550,7 +555,7 @@ export function prepareQuestionAuthorization(
           actor?.kind !== "operator" ||
           current?.kind !== "operator" ||
           current.profileId !== actor.profileId ||
-          !canAccessSessionQuestion(observation, prepared, options.client, access)
+          !canAccessSessionQuestion(observation, prepared, options.client)
         ) {
           return questionNotFound(id);
         }
@@ -563,7 +568,7 @@ export function prepareQuestionAuthorization(
       ) {
         return null;
       }
-      if (!prepared?.canAccess(options.client, "read", false)) {
+      if (!prepared?.canAccess(options.client, false)) {
         return questionNotFound(id);
       }
       return access === "mutate" ? prepared.authorizeMutation(options.client) : null;
@@ -603,7 +608,7 @@ export async function prepareQuestionCommitAuthority(
     | ReturnType<
         NonNullable<
           ReturnType<typeof readGatewayRequestMutationAuthority>["questionCallerRead"]
-        >["retainNative"]
+        >["retainCurrent"]
       >
     | undefined;
   const assertCurrent = () => {
@@ -631,7 +636,7 @@ export async function prepareQuestionCommitAuthority(
         hasOperatorBoundary(options.client, currentCfg) &&
         observation.record.sessionKey &&
         (!current?.target ||
-          sharing.entryFilter?.(current.target.storeKey, current.target.entry) === false ||
+          !sharing.canReadTarget(current.target) ||
           sharing.authorizeTarget(current.target))) ||
       accessRevision !== readGatewayAccessRevision()
     ) {
@@ -642,7 +647,7 @@ export async function prepareQuestionCommitAuthority(
     }
   };
   try {
-    callerCommit = readGatewayRequestMutationAuthority(options).questionCallerRead?.retainNative();
+    callerCommit = readGatewayRequestMutationAuthority(options).questionCallerRead?.retainCurrent();
     assertCurrent();
     return {
       assertCurrent,
@@ -682,8 +687,11 @@ export function questionBroadcastOptions(params: {
       if (!isCurrent()) {
         return false;
       }
-      if (usesOwnRunQuestionAccess(client)) {
-        return canAccessSessionQuestion(observation, prepared, client, "read");
+      if (observation?.authorizeClient && !observation.authorizeClient(client, prepared?.target)) {
+        return false;
+      }
+      if (usesOwnRunQuestionAccess(client) && !observation?.authorizeClient) {
+        return canAccessSessionQuestion(observation, prepared, client);
       }
       if (prepared) {
         return prepared.canReceive(client);

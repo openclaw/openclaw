@@ -51,7 +51,7 @@ export async function readCodexWorkspaceSessionMeta(
     cached.sessionsRoot === sessionsRoot &&
     (!rolloutPath || cached.rolloutPath === rolloutPath)
   ) {
-    return structuredClone(cached.metadata);
+    return cached.metadata;
   }
   if (!rolloutPath) {
     // The original imported-target materializer may bind before native storage
@@ -69,5 +69,5 @@ export async function readCodexWorkspaceSessionMeta(
   state.sessionMetadata.delete(threadId);
   state.sessionMetadata.set(threadId, { sessionsRoot, rolloutPath, metadata });
   pruneMapToMaxSize(state.sessionMetadata, maxCachedSessions);
-  return structuredClone(metadata);
+  return metadata;
 }

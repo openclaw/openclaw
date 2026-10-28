@@ -59,6 +59,7 @@
         "baseUrl": "https://api.moonshot.ai/v1",
         "api": "openai-completions",
         "defaultModel": "kimi-k3",
+        "family": "moonshot",
         "models": [
           {
             "id": "kimi-k3",
@@ -83,7 +84,7 @@
               "input": 3,
               "output": 15,
               "cacheRead": 0.3,
-              "cacheWrite": 0
+              "cacheWrite": 3
             },
             "compat": {
               "supportsReasoningEffort": true,
@@ -188,8 +189,8 @@
       "help": "Kimi base URL override."
     },
     "webSearch.model": {
-      "label": "Kimi Search Model",
-      "help": "Kimi model override."
+      "label": "Kimi Search Model (Deprecated)",
+      "help": "Deprecated and ignored. Kimi web search uses the search endpoint without a chat model; this key can be removed."
     }
   },
   "contracts": {
@@ -241,7 +242,8 @@
             "type": "string"
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "description": "Deprecated and ignored. Kimi web search uses the search endpoint without a chat model."
           }
         }
       }

@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
   BOARD_WIDGET_SNAPSHOT_COLUMNS,
@@ -11,7 +11,7 @@ import {
   type SelectedBoardWidgetSnapshotRow,
 } from "./sqlite-board-codec.js";
 
-function createBoardReadQueries(database: DatabaseSync) {
+function createBoardReadQueries(database: EngineConnection) {
   const db =
     getNodeSqliteKysely<Pick<DB, "board_tabs" | "board_widgets" | "session_nodes">>(database);
   return {

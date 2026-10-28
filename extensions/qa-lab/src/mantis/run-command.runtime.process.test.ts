@@ -1,38 +1,65 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, expect, it } from "vitest";
+import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { removeMantisWorktree } from "./run-cleanup.runtime.js";
-import { defaultMantisCommandRunner, MantisCommandCleanupError } from "./run-command.runtime.js";
+import {
+  defaultMantisCommandRunner,
+  MantisCommandCleanupError,
+  type MantisCommandRunner,
+} from "./run-command.runtime.js";
 import { captureMantisDirectoryOwnership } from "./run-directory.runtime.js";
-import { runMantisBeforeAfter } from "./run.runtime.js";
+import { runMantisBeforeAfter, type MantisBeforeAfterOptions } from "./run.runtime.js";
 import { successfulCommandResult } from "./run.test-support.js";
 
-const roots: string[] = [];
-afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+const roots = useAutoCleanupTempDirTracker(afterEach);
+let repoRoot: string;
+let removals: number[];
+const outputDir = ".artifacts/run";
+const worktrees = () => fs.readdir(path.join(repoRoot, `${outputDir}.worktrees`));
+const readError = () => fs.readFile(path.join(repoRoot, outputDir, "error.txt"), "utf8");
+beforeEach(async () => {
+  repoRoot = await fs.realpath(roots.make("mantis-command-owner-"));
+  removals = [];
 });
+function runFixture(
+  qa: () => ReturnType<MantisCommandRunner>,
+  options: MantisBeforeAfterOptions = {},
+) {
+  return runMantisBeforeAfter({
+    repoRoot,
+    outputDir,
+    skipBuild: true,
+    skipInstall: true,
+    ...options,
+    commandRunner: async (_command, args, execution) => {
+      if (execution.stage === "qa") {
+        return qa();
+      }
+      if (args[1] === "remove") {
+        removals.push(execution.timeoutMs);
+        await fs.rm(execution.cwd, { recursive: true, force: true });
+      }
+      return successfulCommandResult();
+    },
+  });
+}
 
 it.skipIf(process.platform === "win32")(
   "settles successful command descendants before returning ownership to worktree cleanup",
   async () => {
-    const cwd = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "mantis-command-owner-")),
-    );
-    roots.push(cwd);
-    const pidFile = path.join(cwd, "descendant.pid");
+    const pidFile = path.join(repoRoot, "descendant.pid");
     const childScript = `
-      const fs = require("node:fs");
-      fs.writeFileSync(process.argv[1], String(process.pid));
+      require("node:fs").writeFileSync(process.argv[1], String(process.pid));
       process.on("SIGTERM", () => {});
       setInterval(() => {}, 1000);
     `;
     const parentScript = `
       const fs = require("node:fs");
       const { spawn } = require("node:child_process");
-      const child = spawn(process.execPath, ["-e", process.argv[1], process.argv[2]], { stdio: "ignore" });
-      child.unref();
+      spawn(process.execPath, ["-e", process.argv[1], process.argv[2]], { stdio: "ignore" }).unref();
       const ready = setInterval(() => {
         if (fs.existsSync(process.argv[2])) {
           clearInterval(ready);
@@ -44,33 +71,24 @@ it.skipIf(process.platform === "win32")(
       const result = await defaultMantisCommandRunner(
         process.execPath,
         ["-e", parentScript, childScript, pidFile],
-        { cwd, env: process.env, stage: "qa", timeoutMs: 5000 },
+        { cwd: repoRoot, env: process.env, stage: "qa", timeoutMs: 5000 },
       );
       descendantPid = Number(await fs.readFile(pidFile, "utf8"));
       expect(result.code).toBe(0);
-      let running = true;
-      try {
-        const stat = await fs.readFile(`/proc/${descendantPid}/stat`, "utf8");
-        running = !stat.slice(stat.lastIndexOf(")") + 2).startsWith("Z");
-      } catch (error) {
-        if (process.platform !== "linux") {
-          try {
-            process.kill(descendantPid, 0);
-          } catch {
-            running = false;
-          }
-        } else if (
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          error.code === "ENOENT"
-        ) {
-          running = false;
-        } else {
-          throw error;
-        }
+      if (process.platform === "linux") {
+        const state = await fs.readFile(`/proc/${descendantPid}/stat`, "utf8").then(
+          (stat) => stat.slice(stat.lastIndexOf(")") + 2),
+          (error: unknown) => {
+            if (!hasNodeErrorCode(error, "ENOENT")) {
+              throw error;
+            }
+            return "Z";
+          },
+        );
+        expect(state).toMatch(/^Z/u);
+      } else {
+        expect(() => process.kill(Number(descendantPid), 0)).toThrow();
       }
-      expect(running).toBe(false);
     } finally {
       descendantPid ??= Number(await fs.readFile(pidFile, "utf8").catch(() => "0"));
       if (Number.isInteger(descendantPid) && descendantPid > 0) {
@@ -88,47 +106,23 @@ it.skipIf(process.platform === "win32")(
 it.each(["returned", "thrown", "typed"])(
   "retains the worktree when command cleanup is %s as uncertain",
   async (mode) => {
-    const repoRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "mantis-uncertain-owner-")),
-    );
-    roots.push(repoRoot);
-    const removals: string[] = [];
-    const result = successfulCommandResult();
-    const run = runMantisBeforeAfter({
-      repoRoot,
-      outputDir: ".artifacts/uncertain",
-      skipBuild: true,
-      skipInstall: true,
-      commandRunner: async (_command, args, execution) => {
-        if (execution.stage === "qa") {
-          if (mode === "typed") {
-            throw new MantisCommandCleanupError("unsupported ownership", undefined);
-          }
-          if (mode === "thrown") {
-            throw Object.assign(new Error("command output failed"), { cleanup: "uncertain" });
-          }
-          return { ...result, cleanup: "uncertain" as const };
-        }
-        if (args[1] === "remove") {
-          removals.push(execution.cwd);
-          await fs.rm(execution.cwd, { recursive: true, force: true });
-        }
-        return result;
-      },
+    const run = runFixture(async () => {
+      if (mode === "typed") {
+        throw new MantisCommandCleanupError("unsupported ownership", undefined);
+      }
+      if (mode === "thrown") {
+        throw Object.assign(new Error("command output failed"), { cleanup: "uncertain" });
+      }
+      return { ...successfulCommandResult(), cleanup: "uncertain" };
     });
     await expect(run).rejects.toBeInstanceOf(Error);
     expect(removals).toEqual([]);
-    const retained = await fs.readdir(path.join(repoRoot, ".artifacts/uncertain.worktrees"));
-    expect(retained).toEqual([expect.stringMatching(/^baseline-/u)]);
-    await expect(
-      fs.readFile(path.join(repoRoot, ".artifacts/uncertain/error.txt"), "utf8"),
-    ).resolves.toContain("Mantis preserved");
+    expect(await worktrees()).toEqual([expect.stringMatching(/^baseline-/u)]);
+    await expect(readError()).resolves.toContain("Mantis preserved");
   },
 );
 
 it("retains uncertain Git removal without starting another verification command", async () => {
-  const repoRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "mantis-git-owner-")));
-  roots.push(repoRoot);
   const worktreeDir = path.join(repoRoot, "worktree");
   await fs.mkdir(worktreeDir);
   const ownership = await captureMantisDirectoryOwnership({ directoryPath: worktreeDir, repoRoot });
@@ -161,46 +155,28 @@ it("retains uncertain Git removal without starting another verification command"
 it.each([false, true])(
   "charges interrupt settlement against cleanup budget (exhausted: %s)",
   async (exhausted) => {
-    const repoRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "mantis-interrupt-budget-")),
-    );
-    roots.push(repoRoot);
     const controller = new AbortController();
-    const cleanupTimeouts: number[] = [];
-    const run = runMantisBeforeAfter({
-      repoRoot,
-      outputDir: ".artifacts/budget",
-      skipBuild: true,
-      skipInstall: true,
-      signal: controller.signal,
-      commandTimeouts: { "worktree-cleanup": 200 },
-      commandRunner: async (_command, args, execution) => {
-        if (execution.stage === "qa") {
-          controller.abort(new Error("interrupted fixture"));
-          await sleep(exhausted ? 240 : 80);
-          throw controller.signal.reason;
-        }
-        if (args[1] === "remove") {
-          cleanupTimeouts.push(execution.timeoutMs);
-          await fs.rm(execution.cwd, { recursive: true, force: true });
-        }
-        return successfulCommandResult();
+    const run = runFixture(
+      async () => {
+        controller.abort(new Error("interrupted fixture"));
+        await sleep(exhausted ? 240 : 80);
+        throw controller.signal.reason;
       },
-    });
+      {
+        signal: controller.signal,
+        commandTimeouts: { "worktree-cleanup": 200 },
+      },
+    );
     await expect(run).rejects.toBeInstanceOf(Error);
     if (exhausted) {
-      expect(cleanupTimeouts).toEqual([]);
-      expect(await fs.readdir(path.join(repoRoot, ".artifacts/budget.worktrees"))).toEqual([
-        expect.stringMatching(/^baseline-/u),
-      ]);
-      await expect(
-        fs.readFile(path.join(repoRoot, ".artifacts/budget/error.txt"), "utf8"),
-      ).resolves.toContain("interrupt cleanup budget exhausted");
+      expect(removals).toEqual([]);
+      expect(await worktrees()).toEqual([expect.stringMatching(/^baseline-/u)]);
+      await expect(readError()).resolves.toContain("interrupt cleanup budget exhausted");
     } else {
-      expect(cleanupTimeouts).toHaveLength(1);
-      expect(cleanupTimeouts[0]).toBeGreaterThan(0);
-      expect(cleanupTimeouts[0]).toBeLessThan(150);
-      expect(await fs.readdir(path.join(repoRoot, ".artifacts/budget.worktrees"))).toEqual([]);
+      expect(removals).toHaveLength(1);
+      expect(removals[0]).toBeGreaterThan(0);
+      expect(removals[0]).toBeLessThan(150);
+      expect(await worktrees()).toEqual([]);
     }
   },
 );

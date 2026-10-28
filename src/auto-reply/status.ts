@@ -1,4 +1,3 @@
-/** Auto-reply status/help message builders for commands, status, and tool inventory output. */
 import { describeToolForVerbose } from "../agents/tool-description-summary.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy-shared.js";
 import type {
@@ -33,12 +32,11 @@ export function buildToolsMessage(
   const groups = result.groups.filter((group) => group.tools.length > 0);
 
   if (groups.length === 0) {
-    const lines = [
+    return [
       "No tools are available for this agent right now.",
       "",
       `Profile: ${result.profile}`,
-    ];
-    return lines.join("\n");
+    ].join("\n");
   }
 
   const verbose = options?.verbose === true;

@@ -160,7 +160,7 @@ export function createQaGatewayChildLogAccess(output: {
 
 function formatQaGatewayChildFailure(failure: QaChildFailure) {
   return failure.source === "process"
-    ? `gateway failed to spawn: ${formatErrorMessage(failure.error)}`
+    ? `gateway child process failed: ${formatErrorMessage(failure.error)}`
     : `gateway child ${failure.source} stream failed: ${formatErrorMessage(failure.error)}`;
 }
 
@@ -182,19 +182,30 @@ export function throwQaGatewayChildFailure(
 export function monitorQaGatewayChildFailure(
   child: ChildProcess,
   output: { push(source: QaGatewayChildLogSource, chunk: Buffer): void },
+  shouldReportExit?: () => boolean,
 ) {
   let childFailure: QaChildFailure | null = null;
-  monitorQaChildFailure(child, (failure) => {
+  const report = (failure: QaChildFailure) => {
+    if (childFailure) {
+      return;
+    }
     childFailure = failure;
-    const description =
-      failure.source === "process"
-        ? `gateway child process error: ${formatErrorMessage(failure.error)}`
-        : formatQaGatewayChildFailure(failure);
-    output.push("internal", Buffer.from(`[qa-lab] ${description}\n`));
+    output.push("internal", Buffer.from(`[qa-lab] ${formatQaGatewayChildFailure(failure)}\n`));
     if (failure.source !== "process" && !hasQaGatewayChildExited(child)) {
       // A broken parent-side pipe means QA can no longer observe the Gateway.
       // Stop the detached process tree so the existing lifecycle reports the failure.
       signalQaGatewayChildProcessTree(child, "SIGTERM");
+    }
+  };
+  monitorQaChildFailure(child, report);
+  child.once("exit", (exitCode, signal) => {
+    if (shouldReportExit?.() !== false) {
+      report({
+        source: "process",
+        error: new Error(
+          `gateway child exited unexpectedly (exitCode=${exitCode}, signal=${signal})`,
+        ),
+      });
     }
   });
   return () => childFailure;

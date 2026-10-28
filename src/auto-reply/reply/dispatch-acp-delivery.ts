@@ -3,13 +3,17 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
+  combineNonStreamingReplyParts,
+  trimTextPreservingCode,
+} from "../../shared/text/trim-code-text.js";
+import {
   buildCaptionedFinalTextFallback,
   cleanDeferredFinalText,
-  isCaptionedFinalTextPayload,
   mergeDeferredFinalText,
 } from "../../tts/captioned-final.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
@@ -17,6 +21,7 @@ import { shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
 import {
   copyReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
   isReplyPayloadTtsSupplement,
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -33,10 +38,10 @@ import {
   getAcpBlockTranscriptText,
   joinAcpBlockText,
   maybeApplyAcpTts,
-  prepareAcpDeliveryPayload,
   recoverAcpBlockText,
   shouldTreatDeliveredTextAsVisible,
 } from "./dispatch-acp-payload.js";
+import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 import {
   resolveRoutedReplyDeliveryOutcome,
   shouldRetryReplyDispatch,
@@ -44,6 +49,7 @@ import {
 import {
   attachReplyDispatchUndeliveredFallback,
   captureReplyDispatchDeliveryOutcome,
+  prepareReplyPayloadForDispatcher,
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
@@ -54,7 +60,7 @@ import {
 } from "./reply-threading.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 
-const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
+const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.js"));
 const channelPluginRuntimeLoader = createLazyImportLoader(
   () => import("../../channels/plugins/index.js"),
 );
@@ -113,8 +119,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
     deliveredFinalTtsMedia: false,
     deliveredVisibleText: false,
     failedVisibleTextDelivery: false,
-    queuedUntrackedVisibleTextDeliveries: 0,
-    settledUntrackedVisibleText: false,
+    untrackedVisibleText: "none",
     routedCounts: {
       tool: 0,
       block: 0,
@@ -141,10 +146,10 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
       return;
     }
     hasPendingDirectBlockReplyDelivery = false;
-    if (state.settledUntrackedVisibleText || state.queuedUntrackedVisibleTextDeliveries === 0) {
+    if (state.untrackedVisibleText !== "pending") {
       return;
     }
-    state.settledUntrackedVisibleText = true;
+    state.untrackedVisibleText = "settled";
     const receipt = await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
     if (!receipt) {
       return;
@@ -247,15 +252,15 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
       const messaging = routed
         ? (await channelPluginRuntimeLoader.load()).getChannelPlugin(routedChannel)?.messaging
         : undefined;
-      const prepared = prepareAcpDeliveryPayload({
-        cfg: params.cfg,
-        dispatcher: params.dispatcher,
-        kind,
-        payload,
-        routed,
-        ...(messaging ? { messaging } : {}),
-        accountId: resolvedAccountId,
-      });
+      const prepared = routed
+        ? normalizeReplyPayloadOutcome(payload, {
+            transformReplyPayload: createChannelReplyTransform({
+              messaging,
+              cfg: params.cfg,
+              accountId: resolvedAccountId,
+            }),
+          })
+        : prepareReplyPayloadForDispatcher(params.dispatcher, kind, payload);
       if (prepared.kind === "suppress") {
         if (prepared.reason === "channel_transform") {
           state.suppressionReason = prepared.reason;
@@ -385,15 +390,21 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
             })
           : appliedTtsPayload;
       const hasFinalTtsMedia = sendKind === "final" && isReplyPayloadTtsSupplement(ttsPayload);
+      const resolveVisibleText = (channel: string | undefined) =>
+        shouldTreatDeliveredTextAsVisible({ channel, kind: sendKind, text: ttsPayload.text });
       const isAnswerBearingFinal =
         sendKind === "final" &&
-        (isCaptionedFinalTextPayload(outgoingPayload) ||
+        (isReplyPayloadTerminalContent(outgoingPayload) ||
           (hasFinalTtsMedia && Boolean(ttsPayload.text?.trim())));
 
-      const recordPendingDelivery = (tracksVisibleText: boolean) => {
+      const recordVisibleBlock = (tracksVisibleText: boolean, confirmed: boolean) => {
+        state.deliveredVisibleText ||= tracksVisibleText && confirmed;
         if (deliveredBlock && tracksVisibleText) {
           deliveredBlock.needsFinalDelivery = false;
         }
+      };
+      const recordPendingDelivery = (tracksVisibleText: boolean) => {
+        recordVisibleBlock(tracksVisibleText, false);
         // Coverage belongs to this payload. Hidden text and independent final audio
         // remain deliverable, and commentary never stands in for an answer.
         const pendingAnswer =
@@ -422,11 +433,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         if (deliveredBlock) {
           deliveredBlock.delivered = sendKind === "final" ? "final" : "block";
         }
-        if (
-          (rawFinalText || hasFinalTtsMedia) &&
-          transcriptSource &&
-          transcriptSource.kind !== "final"
-        ) {
+        if ((rawFinalText || hasFinalTtsMedia) && transcriptSource?.kind === "blocks") {
           for (const block of finalBlocks) {
             block.delivered = "final";
           }
@@ -436,12 +443,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
             : transcriptFinalText;
         }
         recordFinalReply();
-        if (tracksVisibleText) {
-          state.deliveredVisibleText = true;
-          if (deliveredBlock) {
-            deliveredBlock.needsFinalDelivery = false;
-          }
-        }
+        recordVisibleBlock(tracksVisibleText, true);
       };
 
       if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
@@ -453,11 +455,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
           }
         }
 
-        const tracksVisibleText = await shouldTreatDeliveredTextAsVisible({
-          channel: routedChannel,
-          kind: sendKind,
-          text: ttsPayload.text,
-        });
+        const tracksVisibleText = await resolveVisibleText(routedChannel);
         const { routeReply } = await routeReplyRuntimeLoader.load();
         const threadId =
           params.originatingThreadId ??
@@ -567,11 +565,7 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
         await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
       }
 
-      const tracksVisibleText = await shouldTreatDeliveredTextAsVisible({
-        channel: directChannel,
-        kind: sendKind,
-        text: ttsPayload.text,
-      });
+      const tracksVisibleText = await resolveVisibleText(directChannel);
       const transcriptOutcome =
         sendKind !== "tool" ? captureReplyDispatchDeliveryOutcome(ttsPayload) : undefined;
       if (hasFinalTtsMedia && ttsPayload.text?.trim()) {
@@ -629,10 +623,9 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
       } else if (delivered) {
         recordFinalReply();
         if (tracksVisibleText) {
-          state.queuedUntrackedVisibleTextDeliveries += 1;
-          state.settledUntrackedVisibleText = false;
+          state.untrackedVisibleText = "pending";
         }
-      } else if (!delivered && tracksVisibleText) {
+      } else if (tracksVisibleText) {
         state.failedVisibleTextDelivery = true;
       }
       if (sendKind === "block" && delivered) {
@@ -687,6 +680,11 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
       }
     },
     getAccumulatedVisibleBlockText: () => joinAcpBlockText(state.blockTexts),
+    // Live chat previews use the same paragraph join as the final webchat message.
+    getVisibleBlockDisplayText: () =>
+      combineNonStreamingReplyParts(
+        state.blockTexts.map((block) => trimTextPreservingCode(block.payload.text ?? "")),
+      ),
     recoverBlockText: async (options?: { onlyUndelivered?: boolean }) => {
       if (!params.suppressBlockUserDelivery) {
         await settleDirectVisibleText();
@@ -715,16 +713,15 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
     hasPendingAnswerDelivery: () => state.pendingAnswerDelivery,
     hasPendingFinalTtsMedia: () => state.pendingFinalTtsMedia,
-    hasDeliveredAnswerFinalToUser: () => state.deliveredAnswerFinalToUser,
     hasDeliveredFinalTtsMedia: () => state.deliveredFinalTtsMedia,
     hasDeliveredVisibleText: () => state.deliveredVisibleText,
     hasFailedVisibleTextDelivery: () => state.failedVisibleTextDelivery,
     getDeliverySuppressionReason: () => state.suppressionReason,
-    getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => {
       counts.tool += state.routedCounts.tool;
       counts.block += state.routedCounts.block;
       counts.final += state.routedCounts.final;
+      return counts;
     },
   };
 }

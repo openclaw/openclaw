@@ -2,7 +2,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,
-  createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -36,7 +36,7 @@ type WhatsAppFinalPayload = {
   text: string;
 };
 
-export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   ApprovalReactionPendingContent,
   PreparedWhatsAppApprovalTarget,
   PendingWhatsAppApprovalEntry,

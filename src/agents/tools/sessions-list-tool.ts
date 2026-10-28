@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionTitle, prepareSessionTitleRead } from "../../gateway/session-utils-core.js";
 import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
+import { largestFittingValue } from "../../shared/largest-fitting-value.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { requesterProfileSchema, stringEnum } from "../schema/typebox.js";
 import {
@@ -53,7 +54,7 @@ import {
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
-  user: requesterProfileSchema(),
+  user: requesterProfileSchema({ defaultToTurnOwner: true }),
   kinds: Type.Optional(Type.Array(stringEnum(SESSION_LIST_KINDS))),
   limit: SessionsListParamsSchema.properties.limit,
   offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
@@ -173,8 +174,7 @@ export function createSessionsListTool(opts?: {
       const limit = readPositiveIntegerParam(params, "limit");
       const initialOffset = readNonNegativeIntegerParam(params, "offset") ?? 0;
       const activeMinutes = readPositiveIntegerParam(params, "activeMinutes");
-      const messageLimitRaw = readNonNegativeIntegerParam(params, "messageLimit") ?? 0;
-      const messageLimit = Math.min(messageLimitRaw, 20);
+      const messageLimit = Math.min(readNonNegativeIntegerParam(params, "messageLimit") ?? 0, 20);
       const label = readToolStringParam(params, "label");
       const agentId = readToolStringParam(params, "agentId");
       const search = readToolStringParam(params, "search");
@@ -246,8 +246,6 @@ export function createSessionsListTool(opts?: {
       const outputLimit = Math.min(limit ?? 100, 200);
       let offset = initialOffset;
       let nextOffset: number | undefined;
-      let hasMore = false;
-      let truncationReason: "scan-limit" | "byte-limit" | undefined;
       for (let pageIndex = 0; sessions.length < outputLimit; pageIndex += 1) {
         const page = await gatewayCall<{
           sessions?: GatewaySessionListRow[];
@@ -340,6 +338,7 @@ export function createSessionsListTool(opts?: {
                 : undefined,
             spawnedBy: readStringValue(entry.spawnedBy),
             parentSessionKey: readStringValue(entry.parentSessionKey),
+            childOwnerSessionKeys: entry.childOwnerSessionKeys,
           });
           const kind = classifySessionListKind(entry);
           if (
@@ -350,8 +349,10 @@ export function createSessionsListTool(opts?: {
           ) {
             sessions.push({ entry, agentId: resolvedAgentId, offset: offset + index });
             if (sessions.length === outputLimit) {
-              hasMore = index + 1 < pageSessions.length || page?.hasMore === true;
-              nextOffset = hasMore ? offset + index + 1 : undefined;
+              nextOffset =
+                index + 1 < pageSessions.length || page?.hasMore === true
+                  ? offset + index + 1
+                  : undefined;
               break;
             }
           }
@@ -360,15 +361,12 @@ export function createSessionsListTool(opts?: {
           break;
         }
         if (pageNextOffset === undefined) {
-          hasMore = false;
           nextOffset = undefined;
           break;
         }
-        hasMore = true;
         nextOffset = pageNextOffset;
         // Continue in a later tool call instead of throwing away a sparse partial page.
         if (pageIndex + 1 >= SESSIONS_LIST_MAX_SCAN_PAGES) {
-          truncationReason = "scan-limit";
           break;
         }
         offset = pageNextOffset;
@@ -386,9 +384,7 @@ export function createSessionsListTool(opts?: {
         source: GatewaySessionListRow;
         row: SessionListRow;
         titleEntry: SessionEntry;
-        sessionId: string;
         sessionKey: string;
-        agentId: string;
       }> = [];
 
       for (const { entry, agentId: resolvedAgentId } of sessions) {
@@ -401,11 +397,9 @@ export function createSessionsListTool(opts?: {
         });
 
         const entryChannel = readStringValue(entry.channel);
-        const entryOrigin = entry.origin;
-        const originChannel = readStringValue(entryOrigin?.provider);
-        const deliveryContext = entry.deliveryContext;
-        const deliveryChannel = readStringValue(deliveryContext?.channel);
-        const lastChannel = deliveryChannel ?? readStringValue(entry.lastChannel);
+        const originChannel = readStringValue(entry.origin?.provider);
+        const lastChannel =
+          readStringValue(entry.deliveryContext?.channel) ?? readStringValue(entry.lastChannel);
         const derivedChannel = deriveChannel({
           key,
           kind,
@@ -451,6 +445,7 @@ export function createSessionsListTool(opts?: {
           channel: derivedChannel,
           archived: entry.archived === true,
           pinned: entry.pinned === true,
+          sidebarRoot: entry.sidebarRoot === true,
           ...(rowLabel ? { label: rowLabel } : {}),
           ...(entry.createdActor
             ? { createdActor: projectInventoryActor(entry.createdActor) }
@@ -509,11 +504,9 @@ export function createSessionsListTool(opts?: {
               displayName: row.displayName,
               label: row.label,
               subject: readStringValue((entry as { subject?: unknown }).subject),
-              updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
+              updatedAt: row.updatedAt ?? 0,
             },
-            sessionId,
             sessionKey: resolveInternalSessionKey({ key, alias }),
-            agentId: resolvedAgentId,
           });
         }
         if (messageLimit > 0) {
@@ -551,13 +544,13 @@ export function createSessionsListTool(opts?: {
                   ...(signal ? { signal } : {}),
                   params: {
                     key: target.sessionKey,
-                    agentId: target.agentId,
+                    agentId: target.row.agentId,
                     includeDerivedTitles,
                     includeLastMessage,
                   },
                 })
               : undefined;
-          if (described && described.session?.sessionId !== target.sessionId) {
+          if (described && described.session?.sessionId !== target.titleEntry.sessionId) {
             unavailableRows.add(target.row);
             return;
           }
@@ -623,7 +616,7 @@ export function createSessionsListTool(opts?: {
         const resultFor = (count: number) => ({
           count,
           sessions: retainedRows.slice(0, count),
-          hasMore: count < retainedRows.length || hasMore,
+          hasMore: count < retainedRows.length || nextOffset !== undefined,
           ...(count < retainedRows.length
             ? { nextOffset: retained[count]?.offset }
             : nextOffset !== undefined
@@ -633,8 +626,8 @@ export function createSessionsListTool(opts?: {
           ...(enrichmentOmitted ? { enrichmentOmitted: true } : {}),
           ...(count < retainedRows.length
             ? { truncationReason: "byte-limit" as const }
-            : truncationReason
-              ? { truncationReason }
+            : sessions.length < outputLimit && nextOffset !== undefined
+              ? { truncationReason: "scan-limit" as const }
               : {}),
           ...(opts?.sessionLinkBase
             ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
@@ -659,17 +652,7 @@ export function createSessionsListTool(opts?: {
         }
         let count = retainedRows.length;
         if (!fits(count)) {
-          let lower = 0;
-          let upper = count;
-          while (lower < upper) {
-            const middle = Math.ceil((lower + upper) / 2);
-            if (fits(middle)) {
-              lower = middle;
-            } else {
-              upper = middle - 1;
-            }
-          }
-          count = lower;
+          count = largestFittingValue(0, count, fits);
           if (count === 0) {
             throw new Error(
               "Session metadata exceeds the 64 KiB result budget even without previews; use a narrower inventory query",

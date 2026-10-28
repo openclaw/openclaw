@@ -1,8 +1,8 @@
 /**
  * Public parameter types for subscribing to embedded-agent sessions.
  */
-import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
+import type { AssistantMessage } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { EmbeddedRunAttemptInternalParams } from "./embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
@@ -25,6 +25,7 @@ export type SubscribeEmbeddedAgentSessionParams = Pick<
   | "shouldEmitToolResult"
   | "shouldEmitToolOutput"
   | "sourceReplyDeliveryMode"
+  | "messageToolFinalByDefault"
   | "onToolResult"
   | "onAgentToolResult"
   | "observeToolTerminal"
@@ -63,14 +64,16 @@ export type SubscribeEmbeddedAgentSessionParams = Pick<
   /** Reports source delivery observed through bridged tool lifecycle events. */
   onDeliveredMessageToolOnlySourceReply?: () => void;
   /** Assistant fragment usage before queued delivery; fragments may be intermediate. */
-  onModelUsage?: (usage: NormalizedUsage | undefined) => void;
+  onModelUsage?: (
+    usage: NormalizedUsage | undefined,
+    identity?: Pick<AssistantMessage, "responseId" | "turnId">,
+  ) => void;
   onExecutionPhase?: (info: {
     phase: "tool_execution_started";
     tool?: string;
     toolCallId?: string;
     source?: string;
   }) => void;
-  onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   /** "finishing" defers both success and error terminal ownership to the caller. */
   terminalLifecyclePhase?: "end" | "finishing";
   /** Read immediately before terminal lifecycle emission. */

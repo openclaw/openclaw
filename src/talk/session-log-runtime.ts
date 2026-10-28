@@ -1,4 +1,3 @@
-// Talk session log runtime persists voice session transcripts and metadata.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { RealtimeVoiceBridgeEvent, RealtimeVoiceRole } from "./provider-types.js";
 

@@ -4,12 +4,17 @@ title: "Prompt caching"
 read_when:
   - You want to reduce prompt token costs with cache retention
   - You need per-agent cache behavior in multi-agent setups
-  - You are tuning heartbeat and cache-ttl pruning together
+  - You are tuning automation cadence and cache-ttl pruning together
 ---
 
 Prompt caching lets a model provider reuse an unchanged prompt prefix (system/developer instructions, tool definitions, other stable context) across turns instead of reprocessing it every request. This cuts token cost and latency on long-running sessions with repeated context.
 
 OpenClaw normalizes provider usage into `cacheRead` and `cacheWrite` wherever the upstream API exposes those counters. Usage summaries (`/status` and similar) fall back to the last transcript usage entry when the live session snapshot lacks cache counters; a nonzero live value always wins over the fallback.
+
+OpenAI-compatible routes accept both nested `prompt_tokens_details.cached_tokens`
+and top-level `cached_tokens` counters, including the forms documented by Together
+and StepFun. When a provider omits cache counters, its cache hit rate is unknown;
+the absence of telemetry does not mean the provider processed every token again.
 
 Provider references:
 
@@ -34,6 +39,117 @@ the session and keep both stable. Start a new session for a planned change.
 Invalidating reuse means the next request misses that cached state; it does not
 necessarily delete the provider's older cache entry before its normal expiry.
 
+## Stable tools between turns
+
+Computer definitions capture the capabilities and target scope present when the
+session's tool surface is established, using the provider-specific guidance and
+action schema. The session checkpoint retains those description and schema bytes
+across later discovery and reconnects. Selecting or refreshing a desktop reports
+its current capabilities in a tool result; it never rewrites that definition.
+An unavailable action returns a structured refusal naming the currently available
+actions. Current observation references and authorization still govern execution.
+Provider configuration changes invalidate the tool pin; device readiness does not.
+The existing route and history-boundary refresh contracts remain in effect.
+
+The `sessions_yield` description does not change with sibling tool availability.
+Per-turn prompt-hook tool restrictions gate execution while retaining the session's
+provider definitions. Genuine config, skill, and tool refreshes still apply; the
+tool set is not permanently frozen to the first request.
+
+Within an embedded run, bounded transcript reloads retain the admitted history
+boundary even when its compaction summary falls outside the loaded window.
+Actual compaction or reset starts a new prompt series. Permission changes still
+apply immediately through execution gates and in-history instruction updates;
+they do not require replacing the earlier system prompt.
+
+CLI continuations retain the conversation's recorded presentation capabilities,
+including Control UI formatting, without borrowing its delivery route or authority.
+Scheduled turns inside an existing conversation retain its full automations
+definition; job-scoped execution still rejects actions outside the current job.
+
+Restart and scheduled-turn orphan recovery use the same bounded model-history
+selection as session startup. Transcript-only metadata does not replace that
+history with a shorter navigation window or remove its earlier provider inputs.
+
+Client-capability tool listing uses the session's recorded operator declaration.
+Internal wake and restart-recovery turns retain the same tool definitions and
+Code Mode catalog, including `screen`, without borrowing execution authority.
+The next operator declaration updates that session fact; current-turn execution
+gates and the live requesting-browser check still enforce calls.
+
+GitHub tool listing follows the session's Gateway publication capability and
+workspace support, not the current turn's operator or GitHub identity. Operator,
+channel, scheduled, heartbeat, and senderless wake turns retain the same
+`github_publish` definition and catalog while those facts are unchanged. The
+Gateway checks current identity, target access, and full operator write authority
+for privileged PR actions when called. Listing an action does not grant it.
+
+The `message` description and schema use the session's channel, bound account,
+and configured bindings, not the current turn's source. CLI, restart recovery, and subagent
+announcement turns in the same conversation keep identical definitions,
+including turns without a current-prompt reaction grant. Scheduled sessions retain
+their creator's account scope; sessions without a bound account use the configured default.
+Code Mode keeps its `exec` and `wait` schemas stable when the enabled catalog
+changes. Its current callable index and capability guidance follow the stable
+prompt prefix; supported in-history prompt updates append changes to the
+conversation. Reaction
+execution still requires the current prompt's live authority; an advertised
+action does not grant permission to execute it.
+
+Isolated settled-turn finalization uses a separate cache key scoped to the run.
+Its tool-free prompt and full transcript differ from the conversation request,
+so it does not replace the conversation's cache or history-diagnostic baseline.
+
+Inter-session messages steered into an active turn carry their source envelope
+on the first model request. Reopening the session replays the same envelope,
+including for subagent completion deliveries, instead of adding it to earlier
+message text on the next run.
+
+Live embedded turns carry watched-group membership and titles beside the current
+turn instead of rebuilding the system suffix. Routes that retain runtime context
+replay earlier snapshots unchanged. The watch registry and existing read-access
+gates still determine what the model may see; a watch never grants send access.
+
+Embedded turns also carry producer-marked conversation and delivery instructions
+beside the current turn. Subagent role, rules, output format, restrictions, and
+conditional spawning rules remain in the system prompt on launch and follow-up.
+The task message carries the actual completion mode, depth, requester, and label.
+Unmarked spawn-profile and attachment additions keep their existing system placement.
+Configured instructions outside the marked conversation section remain in the
+system prompt. Skill, tool, memory, and configuration refreshes retain their
+existing update behavior.
+
+Returned `sessions_send` results carry their success, truncation, and failure
+guidance beside the receiving turn, including recovered deliveries. These
+instructions keep their wording without changing the earlier system prefix.
+Unrelated caller-supplied system instructions retain their existing placement.
+
+## Keep replayed tool results stable
+
+OpenClaw applies the same tool-result text cap before the first model request
+and when persisting the result. Subsequent turns therefore replay the same
+bounded text instead of introducing a different truncation notice. Tool text
+is preserved without secret masking. Large batches can exceed
+the aggregate result budget when reducing them would rewrite already-sent
+history; session pruning and compaction remain the owners of intentional
+history changes.
+
+OpenAI Chat Completions also preserves valid native tool-call IDs during replay
+and disambiguates repeated IDs deterministically. Changing result text or IDs
+between turns can invalidate an otherwise reusable provider prefix. Stable
+request inputs support cache reuse; actual hits still depend on the provider.
+
+Responses replay derives synthetic assistant message IDs from recorded source-turn
+identity when available. Retiring earlier history therefore preserves the IDs of
+retained failed-turn markers. Error diagnostics remain transcript metadata and do
+not enter the provider request.
+
+OpenAI requests use the session ID and the authoritative transcript's reset and
+compaction boundary count as their cache key unless the caller supplies an
+explicit key. Operator, WebChat, private subagent completion, requester-settle,
+and recovery turns share this session-boundary identity. The current client and
+reply delivery route do not select a different cache key.
+
 ## Primary knobs
 
 ### Worker turns
@@ -45,7 +161,7 @@ The Gateway retains these facts with the admitted turn, rather than accepting a
 worker-provided cache key or deriving one from trimmed replay history.
 
 Delivered worker skills use stable session-scoped, content-addressed paths and a
-deterministic catalog order. Unchanged skills therefore keep the system prompt
+fixed catalog order. Unchanged skills therefore keep the system prompt
 prefix stable between turns. Skill refreshes still deliver current verified bytes;
 a content change intentionally changes that skill's path. Worker and local prompts
 remain different in scope: workers load bounded workspace `AGENTS.md` and the
@@ -95,26 +211,43 @@ agents:
 
 See [Session pruning](/concepts/session-pruning) for full behavior.
 
-### Heartbeat keep-warm
+<a id="heartbeat-keep-warm" />
 
-Heartbeat can keep cache windows warm and reduce repeated cache writes after idle gaps. Configurable globally (`agents.defaults.heartbeat`) or per agent (`agents.entries.*.heartbeat`).
+### Scheduled cache reuse
 
-```yaml
-agents:
-  defaults:
-    heartbeat:
-      every: "55m"
+An ordinary agent-turn automation that uses the same persistent session can keep
+eligible cache prefixes warm between useful checks. An isolated job starts a new
+session each time, so it does not keep another conversation's history warm.
+For an existing persistent-session check using one-hour cache retention, adjust
+its stored schedule rather than adding heartbeat config:
+
+```bash
+openclaw automations edit <job-id> --every 55m
 ```
+
+Each run still costs tokens, and active hours or idle-only admission can delay
+it beyond the cache window. Choose a cadence for useful work and compare total
+usage; a periodic request does not guarantee a cache hit. See
+[Automations](/automation/cron-jobs) and
+[Heartbeat migration](/gateway/heartbeat).
 
 ## Provider behavior
 
 ### Anthropic (direct API and Vertex AI)
 
 - When caching is enabled and the route supports tool cache control, the tool prefix is checkpointed separately from the system prompt.
+- Up to two conversation checkpoints cover recent user messages or tool results. Keeping the previous checkpoint reachable avoids a cache miss when a new turn adds more than the provider's 20-block lookup window. Transient runtime context keeps an earlier stable checkpoint.
 - `cacheRetention` is supported for `anthropic` and `anthropic-vertex` providers, and for Claude models on `amazon-bedrock` and custom `anthropic-messages`-compatible endpoints when `cacheRetention` is set explicitly.
 - When unset, OpenClaw seeds `cacheRetention: "short"` for direct Anthropic (`anthropic` and `anthropic-vertex` providers only; other Anthropic-family routes require an explicit value).
 - Native Anthropic Messages responses expose `cache_read_input_tokens` and `cache_creation_input_tokens`, mapped to `cacheRead` and `cacheWrite`.
 - `cacheRetention: "short"` maps to the default 5-minute ephemeral cache. `cacheRetention: "long"` requests the 1-hour TTL (`cache_control: { type: "ephemeral", ttl: "1h" }`) when set explicitly. An implicit/env-driven long retention (`OPENCLAW_CACHE_RETENTION=long` with no explicit `cacheRetention`) only upgrades to the 1-hour TTL on `api.anthropic.com` or Vertex AI (`aiplatform.googleapis.com` / `*-aiplatform.googleapis.com`) hosts; other hosts keep the 5-minute cache.
+
+Keep `short` for requests less than five minutes apart. Choose `long` for sessions
+with longer gaps: cache writes cost twice the ordinary input rate instead of
+1.25 times for the five-minute cache, while reads normally cost 0.1 times the
+input rate. The TTL starts when the request begins, so generation time counts
+toward expiry. Neither TTL can reuse a prefix whose instructions, tools, images,
+or earlier messages changed, and each model has a minimum cacheable token count.
 
 Source: `packages/ai/src/transports/anthropic-payload-policy.ts` (`resolveAnthropicEphemeralCacheControl`, `isLongTtlEligibleEndpoint`).
 
@@ -156,19 +289,66 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 ### OpenAI (direct API)
 
 - Prompt caching is automatic on supported recent models; OpenClaw does not inject block-level cache markers.
-- OpenClaw sends `prompt_cache_key` to keep cache routing stable across turns. Responses and Chat Completions requests to direct `api.openai.com` hosts get this automatically when a session or explicit cache key is available; `compat.supportsPromptCacheKey: false` disables it. OpenAI-compatible proxies (oMLX, llama.cpp, custom endpoints) need `compat.supportsPromptCacheKey: true` in model config to opt in - this is never auto-detected for a proxy.
+- OpenClaw sends a stable `prompt_cache_key` across turns. On models before GPT-5.6 this helps cache routing; on GPT-5.6 and later it separates cache accounting, while OpenAI handles routing automatically. Responses and Chat Completions requests to direct `api.openai.com` hosts get this automatically when a session or explicit cache key is available; `compat.supportsPromptCacheKey: false` disables it. OpenAI-compatible proxies (oMLX, llama.cpp, custom endpoints) need `compat.supportsPromptCacheKey: true` in model config to opt in - this is never auto-detected for a proxy.
 - `cacheRetention: "long"` requests `prompt_cache_options: { ttl: "30m" }` for GPT-5.6 and later on both APIs. Earlier native models receive `prompt_cache_retention: "24h"` only for OpenAI's documented extended-retention models: GPT-5.5 / GPT-5.5 Pro, GPT-5.4, GPT-5.2, GPT-5.1 / Codex / Codex Max / Codex Mini / Chat Latest, GPT-5 / Codex, and GPT-4.1 (including dated snapshots). Other earlier native models receive no lifetime field. See [OpenAI cache lifetime](https://developers.openai.com/api/docs/guides/prompt-caching#cache-lifetime).
 - Lifetime fields require both cache-key support and `compat.supportsLongCacheRetention` (true by default; Together AI and Cloudflare profiles disable it). Opted-in proxies use the same GPT-5.6+ TTL mapping and otherwise receive `"24h"`; disable long-retention support if the proxy rejects lifetime fields.
 - `cacheRetention: "short"` sends the key without lifetime fields, leaving the provider's default lifetime in effect. `cacheRetention: "none"` suppresses the key and both lifetime fields; it does not disable OpenAI's automatic prompt caching.
 - Native ChatGPT-backed Responses routes keep the session cache key, honor `none`, and omit both OpenAI lifetime fields.
 - Cache hits surface via `usage.prompt_tokens_details.cached_tokens` (Chat Completions) or `input_tokens_details.cached_tokens` (Responses API), mapped to `cacheRead`.
-- Responses API payloads can also expose `input_tokens_details.cache_write_tokens`, mapped to `cacheWrite` and priced at the model's cache-write rate; Responses payloads that omit the field keep `cacheWrite` at `0`. OpenAI's Chat Completions API does not document or emit a `cache_write_tokens` counter, but OpenClaw still reads `prompt_tokens_details.cache_write_tokens` there for OpenRouter-compatible and DeepSeek-style proxies that report a separate write count.
+- Responses API payloads can also expose `input_tokens_details.cache_write_tokens`, mapped to `cacheWrite` and priced at the model's cache-write rate; Responses payloads that omit the field keep `cacheWrite` at `0`. Chat Completions payloads that include `prompt_tokens_details.cache_write_tokens` also populate `cacheWrite`; availability depends on the model and route.
 - Captured consecutive Responses request bodies retained byte-identical history prefixes, so history rewriting did not explain the observed shortfall. Provider breakpoint placement can affect reported `cacheRead`: OpenAI documents message-end breakpoints for GPT-5.6 and later on the Platform API, while the ChatGPT-backed Responses route was observed to report hits in 1,024-token steps. See [OpenAI live expectations](#openai-live-expectations) below.
-- On Responses routes the whole system prompt, including the volatile suffix below the cache boundary, is sent as `instructions`. A suffix change (date rollover, timezone, elevated level, watched sessions, model identity, Project Memory facts) re-caches from the changed point on the next request; the stable prefix and tools are not split into a separate cached block the way Anthropic checkpoints are. Cache observations report this as a `systemPromptSuffix` change.
+- On native OpenAI Responses routes the system prompt is pinned for the session and sent unchanged as `instructions`. Later changes to its sections (skills, workspace memory, temporal context, config-driven sections) arrive as instruction messages after the current user turn, so the cached `instructions` prefix and earlier history stay byte-identical. Changing the route or selected personal profile, resetting, or compacting starts a new series and re-caches from the start; see [Context](/concepts/context#how-openclaw-builds-the-system-prompt). Routes without a pinned series still send the whole rendered prompt as `instructions`, where a suffix change re-caches from the changed point and cache observations report it as a `systemPromptSuffix` change.
+
+### OpenAI 12-hour cache lifetime
+
+Set `params.promptCacheTtl` to `"12h"` (or `"30m"`) for GPT-5.6 and later
+on the OpenAI Responses API. This is a request-level default for cache
+breakpoints, mapped to `prompt_cache_options.ttl`; it does not change caching
+mode or add explicit breakpoints. Prefer a per-model setting:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-6.1-sol": {
+          agentRuntime: { id: "openclaw" },
+          params: { promptCacheTtl: "12h" },
+        },
+      },
+    },
+  },
+}
+```
+
+The same parameter can be set in `agents.defaults.params` or
+`agents.entries.<id>.params` using the normal [merge order](#primary-knobs).
+Omitting it preserves existing behavior. An explicit value overrides the
+lifetime requested by `cacheRetention: "long"` for these Responses models;
+`cacheRetention: "none"` suppresses the lifetime field. Older models, Chat
+Completions, and the ChatGPT/Codex backend do not receive this new setting.
+Compatible Responses endpoints must explicitly opt into prompt-cache key
+support and must not disable long retention.
+
+According to [OpenAI's cache lifetime guide](https://developers.openai.com/api/docs/guides/prompt-caching#cache-lifetime),
+30-minute writes cost **1.25×** ordinary input and 12-hour writes cost **2.5×**.
+These are total write rates, not additive fees. Reads use the same cached-input
+rate with either lifetime; consult [OpenAI pricing](https://developers.openai.com/api/docs/pricing)
+for model, tier, and context-length rates. The lifetime is a **minimum**, not a
+deletion deadline or a guarantee of cache hits; unchanged prefixes, eligible
+breakpoints, and routing still matter. It does not change OpenAI's maximum
+data-retention policy. This is separate from older models' `prompt_cache_retention`
+(`in_memory` / `24h`).
+
+When OpenAI reports `input_tokens_details.cache_write_tokens_details`, cost
+estimates price its `ttl_30m_tokens` and `ttl_12h_tokens` separately, including
+breakpoint overrides of the request default. Compatible endpoints without a
+coherent breakdown retain an estimate based on the requested lifetime.
 
 ### Amazon Bedrock
 
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`, plus AWS system inference profile prefixes `us.`/`eu.`/`global.anthropic.claude*`) support explicit `cacheRetention` pass-through.
+- One-hour retention is requested only for Claude model generations documented by AWS as supporting it, including Haiku 5.5. Older cache-capable models keep five-minute checkpoints when `cacheRetention: "long"` is selected, without sending an unsupported TTL field. Application inference profiles use the supported window of their resolved backing models.
 - The stable system prefix is checkpointed separately from dynamic runtime additions. Conversation checkpoints advance through retained history, including tool results; transient runtime-context carriers remain outside the cached prefix. Bedrock Mantle's Anthropic Messages transport also preserves the separate stable system boundary.
 - Nova Micro, Lite, Pro, Premier (`amazon.nova-{micro,lite,pro,premier}-v1:0`), and Nova 2 Lite (`amazon.nova-2-lite-v1:0`) support explicit checkpoints in `system` and `messages`, including their AWS geographic inference profiles and foundation-model ARNs. Both `short` and `long` use Nova's five-minute TTL; `none` disables explicit checkpoints. OpenClaw does not add tool checkpoints for Nova.
 - Other non-Claude Bedrock models remain at `cacheRetention: "none"`.
@@ -189,11 +369,13 @@ Live AWS acceptance proof remains a gap until a maintainer with Bedrock access r
 
 ### OpenRouter
 
-For `openrouter/anthropic/*` model refs, both Chat Completions builders apply the [shared marker layout](#chat-completions-cache-markers), but only when the request still targets a verified OpenRouter route (`openrouter` on its default endpoint, or any provider/base URL that resolves to `openrouter.ai`). Repointing the model at an arbitrary OpenAI-compatible proxy URL stops automatic marker injection. `cacheRetention: "long"` requests `ttl: "1h"` on these verified routes; `"none"` disables markers. See [OpenRouter prompt caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
+For `openrouter/anthropic/*` model refs, including `openrouter/~anthropic/*-latest` aliases, both Chat Completions builders apply the [shared marker layout](#chat-completions-cache-markers), but only when the request still targets a verified OpenRouter route (`openrouter` on its default endpoint, or any provider/base URL that resolves to `openrouter.ai`). Repointing the model at an arbitrary OpenAI-compatible proxy URL stops automatic marker injection. `cacheRetention: "long"` requests `ttl: "1h"` on these verified routes; `"none"` disables markers. See [OpenRouter prompt caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
 
-`contextPruning.mode: "cache-ttl"` is allowed for `openrouter/anthropic/*`, `openrouter/deepseek/*`, `openrouter/moonshot/*`, `openrouter/moonshotai/*`, and `openrouter/zai/*` model refs, because these routes handle provider-side prompt caching without needing OpenClaw's injected markers.
+For `openrouter/google/gemini*` refs (including `~google/` aliases and `:variant` suffixes), both builders send one `cache_control: { type: "ephemeral" }` breakpoint on the stable system/developer prefix. Gemini uses only the last breakpoint, so tools and conversation history are not marked: a later marker would supersede the stable-prefix boundary and include the volatile system suffix. Without a split boundary, the complete system prompt is marked. The same verified-route restriction applies; direct Google routes are unchanged. `"none"` disables markers; `"short"` and `"long"` use the provider's default cache window without a TTL override. Gemini's model-specific minimum cacheable size still applies.
 
-Source: `extensions/openrouter/index.ts` (`OPENROUTER_CACHE_TTL_MODEL_PREFIXES`).
+`contextPruning.mode: "cache-ttl"` is allowed for `openrouter/anthropic/*`, `openrouter/deepseek/*`, `openrouter/moonshot/*`, `openrouter/moonshotai/*`, `openrouter/x-ai/*`, `openrouter/zai/*`, `openrouter/google/gemini-2.5*`, and `openrouter/google/gemini-3*` model refs. Older Gemini models and other `google/*` models (for example Gemma) remain excluded from cache-TTL pruning eligibility.
+
+Source: `extensions/openrouter/index.ts` (`OPENROUTER_CACHE_TTL_MODEL_FAMILY`).
 
 DeepSeek cache construction on OpenRouter is best-effort and can take a few seconds; an immediate follow-up request may still show `cached_tokens: 0`. Verify with a repeated same-prefix request after a short delay, using `usage.prompt_tokens_details.cached_tokens` as the cache-hit signal.
 
@@ -203,6 +385,7 @@ DeepSeek cache construction on OpenRouter is best-effort and can take a few seco
 - Eligible model families: `gemini-2.5*` and `gemini-3*` (excludes Live/preview variants outside that prefix match, for example `gemini-live-2.5-flash-preview`).
 - When `cacheRetention` is set on an eligible model, OpenClaw automatically creates, reuses, and refreshes a `cachedContents` resource containing the stable system prefix above the cache boundary plus tools and tool configuration - no manual cached-content handle needed. TTL is `300s` for `cacheRetention: "short"` and `3600s` for `"long"`.
 - The volatile system suffix travels first inside the current turn's hidden runtime-context carrier, before other runtime facts. This carrier is transient, so suffix changes reuse the same resource without accumulating history. Stable-prefix or tool changes create a new resource. If creation fails or the prompt has no cache boundary, the complete system prompt stays inline.
+- Automatic resources also belong to the effective request credentials and headers. Changing credentials, project headers, or other request-header overrides creates a new resource. Cached inference uses the same credentials as resource creation; OAuth token refreshes conservatively rebuild the resource. Reissued secret placeholders for the same credential preserve its identity.
 - You can still pass a pre-existing Gemini cached-content handle through as `params.cachedContent` (or legacy `params.cached_content`); an explicit handle skips the automatic cache-management path entirely.
 - This is separate from Anthropic/OpenAI prompt-prefix caching: OpenClaw manages a provider-native `cachedContents` resource for Gemini instead of injecting inline cache markers.
 
@@ -225,7 +408,10 @@ If a provider does not support any of the above cache modes, `cacheRetention` ha
 ## Chat Completions cache markers
 
 OpenAI-compatible routes with `compat.cacheControlFormat: "anthropic"` share one
-marker policy across the managed transport, SDK builder, and provider wrappers:
+marker policy across the managed transport, SDK builder, and provider wrappers.
+
+OpenRouter Gemini uses only the stable system checkpoint described above; other
+routes use the following layout.
 
 - The last tool definition is marked when the route supports tool markers; tools remain sorted by name.
 - The stable system/developer block is marked, with the volatile suffix in a separate unmarked block.
@@ -242,7 +428,7 @@ With `compat.requiresStringContent: true`, managed requests keep message content
 as strings and omit message-block markers, including through provider wrappers.
 The tool-definition marker remains where supported.
 
-Detected defaults request `ttl: "1h"` only on verified OpenRouter routes. For a
+Detected defaults request `ttl: "1h"` only for Anthropic models on verified OpenRouter routes. For a
 custom endpoint that supports one-hour Anthropic caching, explicitly set
 `compat.cacheControlFormat: "anthropic"`, `compat.supportsLongCacheRetention: true`,
 and `cacheRetention: "long"` to send that TTL. Omitting the capability override
@@ -275,7 +461,11 @@ separate transient carrier; they do not become permanent first-message context.
 
 - Active exec sessions, subagent state, and media-generation progress travel in compact Runtime Context carriers after the current user message, so changes do not rewrite the system prompt ahead of conversation history. Project Memory facts, channel-specific ACP hints, delegation/orchestration mode, and the current elevated level stay below the system-prompt cache boundary; static recall, safety, and capability guidance stay above it.
 - Delivery instructions live after the system-prompt cache boundary. Native Codex carries the current delivery and target policy in late turn context, so alternating delivery modes does not rebuild its static prompt or message tool catalog when the available capabilities remain unchanged. Actual capability changes still update the catalog.
-- Bundled MCP tool catalogs are sorted deterministically (by server name, then tool name) before tool registration, so `listTools()` order changes do not churn the tools block and bust prompt-cache prefixes.
+- Subagent completion turns reuse the session's generic conversation metadata, direct/group guidance, and configured owner list (`commands.ownerAllowFrom`), so native Ollama does not lose the tools-and-history prefix just because the turn arrived through an announcement. Channel formatting follows the resolved delivery account and is omitted for turns without channel delivery. Custom channel-supplied group instructions, changed delivery policy, and explicit lightweight bootstrap contexts can still produce different prompts.
+- User-message metadata stays intact when an active turn becomes history, including conversation context and reply targets. Timestamping uses the message's recorded time so subsequent requests replay the same text.
+- Inline and historical images use the same three-field model-facing part. Image inclusion decisions are memoized for the 1,000 most recently used sessions in the Gateway process without persisting image bytes. An omitted image stays omitted if its source becomes readable later; resend it in a new turn to retry. Gateway restarts and session eviction recompute decisions once, and an included source that disappears or changes can still cause a cache miss. Sandbox validation warnings report a reason and path class without exposing the path.
+- Prompt-hook prepend/append context and model-prompt replacements are captured on their original user transcript record before dispatch. Later requests and reopened sessions replay those bytes while user-visible history keeps the original text. Legacy rows without a recorded projection retain their previous replay behavior; see [stored projection compatibility](/reference/database-schemas/layout#user-turn-model-prompt-projections).
+- Bundled MCP tool catalogs are sorted by server name, then tool name before tool registration, so `listTools()` order changes do not churn the tools block and bust prompt-cache prefixes.
 - Message-tool action enums are sorted after policy filtering, keeping identical capabilities stable across channel discovery order changes.
 - Native Ollama requests sort tools by name so discovery order changes do not churn the tools prefix.
 - Legacy sessions with persisted image blocks keep the **3 most recent completed turns** intact (counting all completed turns, not just image-bearing ones). Older already-processed image blocks are replaced with a text marker so image-heavy follow-ups do not keep re-sending large stale payloads.
@@ -298,8 +488,6 @@ agents:
   list:
     - id: "research"
       default: true
-      heartbeat:
-        every: "55m"
     - id: "alerts"
       params:
         cacheRetention: "none"
@@ -309,11 +497,19 @@ agents:
 
 - Set baseline `cacheRetention: "short"`.
 - Enable `contextPruning.mode: "cache-ttl"`.
-- Keep heartbeat below your TTL only for agents that benefit from warm caches.
+- Keep a useful persistent-session automation’s cadence below the cache TTL only when the measured savings outweigh the extra turns.
 
 ## Live regression tests
 
 OpenClaw runs one combined live cache regression gate covering repeated prefixes, tool turns, image turns, MCP-style tool transcripts, and an Anthropic no-cache control.
+
+Full Release Validation's `live-cache` suite also checks serialized transport
+prefixes and real agent turns across instruction refresh, prompt hooks, and
+persisted-session reopen. Offline coverage includes authenticated Gateway chat
+around a spawned child's private completion and an in-process server stop/start, without
+restarting the OS process. See
+[Prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage)
+for the exact boundaries, commands, and estimated cost.
 
 - `src/agents/live-cache-regression.live.test.ts`
 - `src/agents/test-helpers/live-cache-regression-runner.ts`
@@ -387,9 +583,30 @@ diagnostics:
 
 ### What to inspect
 
-Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per completed foreground model request alongside its stable system-prefix, volatile-suffix, and tools fingerprints, and flag cache-read drops from the previous request, including reported zero reads; billing totals remain separate. A flagged drop lists the tracked changes since the last request (`model`, `cacheRetention`, `transport`, `streamStrategy`, `systemPrompt`, `systemPromptSuffix`, `tools`, `aggregateToolResultTruncation`). Trace results require cache tracing (`diagnostics.cacheTrace.enabled` or `OPENCLAW_CACHE_TRACE=1`) and identify each request within its attempt.
+Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per completed foreground model request alongside its stable system-prefix, volatile-suffix, and tools fingerprints, and flag cache-read drops from the previous request, including reported zero reads; billing totals remain separate. A flagged drop lists the tracked changes since the last request (`model`, `cacheRetention`, `transport`, `streamStrategy`, `systemPrompt`, `systemPromptSuffix`, `tools`, `aggregateToolResultTruncation`). `systemPrompt` and `systemPromptSuffix` changes identify built-in sections such as `Skills` or `Runtime` by name, other headings by bounded section positions, and text before the first heading as `Other`. Reported suffix drops also name changed facts, such as `Runtime.model`, `Session routing.hidden delegation`, or `Tooling.tool list order`; arbitrary context uses line positions. Changed tool descriptions use tool positions (or the built-in `computer` name) and line or capability-clause labels. These fact details never print values, arbitrary headings, custom tool names, descriptions, or fact digests. Fact comparison and hashing run only when a drop is reported. The tracker privately retains at most 32,768 UTF-16 code units of suffix text and 16,384 code units of tool descriptions per request snapshot, alongside its existing digests. Unchanged suffixes share the retained text; oversized sources report that fact detail is unavailable. These before-images follow the current/last-measured snapshot lifecycle and the existing 512-tracker bound and session cleanup. Trace snapshots contain digests, never these before-images; section and fact change lists are capped. Trace results require cache tracing (`diagnostics.cacheTrace.enabled` or `OPENCLAW_CACHE_TRACE=1`) and identify each request within its attempt.
 
-OpenClaw also checks that each converted request history extends the previous request in the same session. An undeclared edit, removal, or reorder records `historyRewrite` and warns once for the session. Set `OPENCLAW_PROMPT_CACHE_ASSERT=1` to throw at the first differing message during development or tests. Compaction, pruning, transient runtime-context removal, and image cleanup declare their rewrites as `compaction`, `pruning`, `runtimeContextCarrier`, and `imageCleanup`; model, transport, or retention changes start a new history series. Content-block fingerprints reuse hashes only while every primitive property still matches; unchanged large text and image data are not hashed again. Nested block values and message envelopes are checked on every observation, so in-place edits are detected even when wrappers or content arrays are reused. String-content hashes live with the bounded history baseline. Provider-owned tool schema declarations are fingerprinted once per object identity.
+When an adapter marks cache telemetry unavailable, observations omit its cache
+read/write counts and preserve the last measured comparison baseline. A later
+reported zero still counts as a measured miss. This distinction applies to local
+engines with optional cache metrics as well as compatible cloud APIs.
+
+On routes that pin the system prompt, the `[prompt-cache] cache read dropped`
+warning includes `systemPromptSeries=pinned` when the saved series was reused,
+or `systemPromptSeries=restarted:<reason>` when the attempt restarted it.
+Reasons are `new` (no saved series), `history` (compaction or a history rewrite),
+`model-change` (a model-change entry after the checkpoint), or `route:<part>`.
+The route part names the first changed element: `provider`, `model`, `api`,
+`baseUrl`, `inHistorySystemUpdates`, or `personalProfile`. Only these reason
+tokens are reported, never profile IDs, route-key contents, or prompt text.
+Routes without a system-prompt series omit the field.
+
+The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. Session reset, deletion, shutdown, and completion of a detached Skill Workshop review release the retired session's diagnostic fingerprints; active sessions keep their cross-turn baselines. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
+
+For encoded provider requests, `providerPrefix` compares the serialized instructions, tools, and up to 512 input items. It names the first changed item, with bounded protocol fields for the first 32 items, such as `message:3.encrypted_content`, plus changed request parameters such as `parameters:prompt_cache_key`. Values and unknown field names are never logged. `order` means object key order changed without a tracked field-value change; it is wire evidence, not proof that the provider rendered different tokens. Beyond the item limit, a tail digest can detect changes but cannot locate the first differing item.
+
+A `continuation:` prefix means either request used `previous_response_id`. Its `wire-input` items are deltas, so differences between them do not establish rewritten conversation history. Compare the separate `historyRewrite` signal and the changed request parameters before attributing a cache miss. A matching full-history wire prefix also does not guarantee a hit: OpenAI must find an available matching cache boundary.
+
+OpenClaw also checks that each converted request history extends the previous request in the same session. An undeclared edit, removal, or reorder records `historyRewrite` and warns once for the session. Internal `__openclaw` envelope metadata, such as persisted Code Mode checkpoints, and the persisted `display` visibility flag are excluded from history fingerprints because they are not sent in provider messages. The diagnostic names bounded changed fields (such as `timestamp`, `toolCallId`, or `content[0]`) without logging their values; fields outside the diagnostic limit are grouped. Set `OPENCLAW_PROMPT_CACHE_ASSERT=1` to throw at the first differing message during development or tests. Compaction, pruning, and transient runtime-context removal declare their rewrites as `compaction`, `pruning`, and `runtimeContextCarrier`; model, transport, or retention changes start a new history series. Image blocks and attachment references remain in retained history instead of being replaced by age-based cleanup markers. Content-block fingerprints reuse hashes only while every primitive property still matches; unchanged large text and image data are not hashed again. Sealed transcript publications, including deeply frozen messages shared during hydration, reuse whole message fingerprints; new sealed messages are prepared by the shared prompt worker before dispatch. Newly appended messages also reuse block fingerprints when their content array is transcript-owned and deeply frozen, while their mutable envelope remains checked. Unchanged envelope revisions reuse the complete fingerprint when the content is immutable; replacing content or changing envelope fields invalidates that reuse. Sealed record fingerprints retain only packed diagnostic hashes and field layouts; primitive revision tracking is released when a record becomes immutable. Request projections of deeply frozen transcript messages reuse immutable wrappers, including tool-result detail removal, custom-message conversion, image blocking, and runtime-context policy. Projection caches use weak source identities and separate policy inputs. Mutable SDK messages and mutable replacement content remain checked on every observation, so in-place edits are still detected. String-content hashes live with the bounded history baseline. Published tool schemas reuse their owner’s fingerprint across descriptor generations; other provider-owned declarations are fingerprinted once per object identity.
 
 - Cache trace events are JSONL with staged snapshots like `session:loaded`, `prompt:before`, `stream:context`, and `session:after`.
 - Per-turn cache token impact is visible in normal usage surfaces: `cacheRead` and `cacheWrite` show up in `/usage tokens`, `/status`, session usage summaries, and custom `messages.usageTemplate` layouts.
@@ -402,6 +619,7 @@ OpenClaw also checks that each converted request history extends the previous re
 - **High `cacheWrite` on most turns**: check for volatile system-prompt inputs; verify the model/provider supports your cache settings.
 - **High `cacheWrite` on Anthropic**: often means the cache breakpoint is landing on content that changes every request. A volatile system-suffix change can preserve the stable system-prefix checkpoint while invalidating later conversation checkpoints; cache observations report `systemPromptSuffix` for that change.
 - **Low OpenAI `cacheRead`**: verify the stable prefix is at the front, the repeated prefix is at least 1024 tokens, and the same `prompt_cache_key` is reused for turns that should share a cache. A volatile system-suffix change can cause a one-turn drop that recovers on the next request; enable cache tracing and look for `systemPromptSuffix` in the `[prompt-cache]` warning. A small or stepwise shortfall can reflect provider granularity, but does not rule out prompt changes or cache availability.
+  The warning's `requests` field pairs the last measured cache hit with the dropping request. For encoded HTTP requests, it includes cache-key presence and hash, continuation-ID presence, exact request bytes, a SHA-256 hash of the first 4096 bytes (or the whole request if smaller), model and route hashes, and the number of encoded attempts within that model call. Available response metadata includes HTTP status, numeric `openai-processing-ms`, and hashes of allowlisted request-ID, model, account, and region headers. Raw keys, IDs, headers, and prompt content are never included. Missing fields mean the transport did not supply that evidence; retries across model calls and unobserved transport retries are not counted.
 - **No effect from `cacheRetention`**: confirm the model key matches `agents.defaults.models["provider/model"]`.
 - **Bedrock Nova requests without cache hits**: set `cacheRetention` explicitly to `short` or `long`, verify that the model is one of the supported variants above, and check that the prefix meets AWS's token limits; `long` still uses a five-minute TTL.
 

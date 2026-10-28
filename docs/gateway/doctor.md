@@ -13,6 +13,23 @@ sidebarTitle: "Doctor"
 This page is an index. Doctor is documented on seven pages, one per reader job.
 Open the page that matches your task.
 
+## Database store diagnostics
+
+Doctor reports configured and observed engines separately for each discovered
+physical store, including agent databases, Matrix roots, and fixed-local safety
+and credential stores. Absent optional stores are informational and do not require
+their plugin's database port API. Unknown schema, connectivity, ownership, or backup facts
+stay unknown with an actionable next step. Read the
+[PostgreSQL Doctor guide](/gateway/postgresql#read-the-doctor-and-status-store-report)
+for field definitions, output examples, and recovery instructions. For example,
+`observed=sqlite (mismatch); schema=26, expected=26, pending=0` means the schema
+is current but the configured PostgreSQL engine has not been applied by a port.
+An older readable state or agent schema still reports its version and pending
+migrations when port validation refuses it. An inaccessible store remains in the
+report as unknown and names the permission repair; it is not reported as absent.
+JSON includes every inspected store in `databaseStores`, independent of the finding severity filter. Store findings also carry the same observations in `details`; inspecting them
+does not migrate data.
+
 ## Doctor pages
 
 | Page                                                                          | Read it when                                                                                                  |

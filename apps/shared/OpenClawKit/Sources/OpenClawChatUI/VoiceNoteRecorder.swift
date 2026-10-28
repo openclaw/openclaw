@@ -308,33 +308,11 @@ public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCaptur
 
     public func requestPermission() async -> Bool {
         #if os(iOS)
-        switch AVAudioApplication.shared.recordPermission {
-        case .granted:
-            return true
-        case .denied:
-            return false
-        case .undetermined:
-            return await withCheckedContinuation { continuation in
-                AVAudioApplication.requestRecordPermission { granted in
-                    continuation.resume(returning: granted)
-                }
-            }
-        @unknown default:
-            return false
-        }
+        await AVAudioApplication.requestRecordPermission()
         #elseif os(macOS)
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            return true
-        case .denied, .restricted:
-            return false
-        case .notDetermined:
-            return await AVCaptureDevice.requestAccess(for: .audio)
-        @unknown default:
-            return false
-        }
+        await AVCaptureDevice.requestAccess(for: .audio)
         #else
-        return false
+        false
         #endif
     }
 

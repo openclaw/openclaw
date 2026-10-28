@@ -47,7 +47,6 @@ export async function queryBuzzRoomMemberships(params: {
         }
       },
       result: () => {},
-      checkAbortAfterSubscribe: true,
     });
   }
   return memberships;

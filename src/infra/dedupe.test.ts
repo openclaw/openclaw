@@ -1,6 +1,24 @@
 // Covers process-local dedupe cache behavior.
 import { describe, expect, it } from "vitest";
-import { createDedupeCache } from "./dedupe.js";
+import { createDedupeCache, rememberBoundedKey } from "./dedupe.js";
+
+it("evicts warning keys in FIFO order without touching duplicates", () => {
+  const keys = new Set<string>();
+  expect(rememberBoundedKey(keys, "first", 2)).toBe(true);
+  expect(rememberBoundedKey(keys, "second", 2)).toBe(true);
+  expect(rememberBoundedKey(keys, "first", 2)).toBe(false);
+  expect(rememberBoundedKey(keys, "third", 2)).toBe(true);
+  expect([...keys]).toEqual(["second", "third"]);
+});
+
+it("deduplicates and evicts an explicit empty warning key", () => {
+  const keys = new Set<string>();
+  expect(rememberBoundedKey(keys, "", 2)).toBe(true);
+  expect(rememberBoundedKey(keys, "", 2)).toBe(false);
+  expect(rememberBoundedKey(keys, "second", 2)).toBe(true);
+  expect(rememberBoundedKey(keys, "third", 2)).toBe(true);
+  expect([...keys]).toEqual(["second", "third"]);
+});
 
 describe("createDedupeCache", () => {
   it("ignores blank cache keys", () => {

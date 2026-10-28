@@ -1,4 +1,4 @@
-export { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
+export { buildMinimaxProvider } from "./provider-catalog.js";
 export {
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,

@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { retryGatewayWorkerStartupRecovery } from "./server-worker-startup-recovery.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/workspace-reconcile.js";
@@ -7,6 +8,7 @@ import { recoverWorkerWorkspaceReconciliation } from "./worker-environments/work
 const workerPlacementLog = createSubsystemLogger("gateway/worker-placement");
 
 export async function recoverGatewayWorkerPlacementWorkspaces(params: {
+  isStopping?: () => boolean;
   placements: WorkerSessionPlacementStore;
   resolveWorkspace: (identity: {
     sessionId: string;
@@ -14,11 +16,21 @@ export async function recoverGatewayWorkerPlacementWorkspaces(params: {
     agentId: string;
   }) => Promise<WorkerSessionWorkspace>;
 }): Promise<void> {
-  const orphanedJournals = await params.placements.pruneOrphanedWorkspaceReconciliations();
+  if (params.isStopping?.()) {
+    return;
+  }
+  const orphanedJournals = await retryGatewayWorkerStartupRecovery({
+    operation: "placementJournals.prune",
+    run: () => params.placements.pruneOrphanedWorkspaceReconciliations(),
+    warn: (message) => workerPlacementLog.warn(message),
+  });
   for (const owner of orphanedJournals) {
     workerPlacementLog.warn(`discarded orphaned cloud workspace journal for ${owner.sessionId}`);
   }
   for (const owner of await params.placements.listWorkspaceReconciliationOwners()) {
+    if (params.isStopping?.()) {
+      return;
+    }
     try {
       const placement = await params.placements.getWorkspaceReconciliationPlacement(owner);
       if (!placement) {
@@ -37,6 +49,9 @@ export async function recoverGatewayWorkerPlacementWorkspaces(params: {
       const journal = await params.placements.loadWorkspaceReconciliation(owner);
       if (!journal) {
         continue;
+      }
+      if (params.isStopping?.()) {
+        return;
       }
       // Recover before placement/environment reconciliation can reclaim the
       // owner; otherwise a crashed partial apply loses its final repair path.

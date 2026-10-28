@@ -9,4 +9,15 @@
 # custom-type constant no longer counts as an OPENCLAW_* name.
 # Cleanup since the last restore (OAuth sidecar retirement #163186, browser deslop #163709) removed names net of additions.
 # OPENCLAW_NODE_EXEC_FALLBACK was removed by the core subsystem cleanup (#164153).
-464
+# Codex computer-use derives the same environment keys from option names instead of repeating literals.
+# OPENCLAW_UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS (#168350) is the owner-approved updater-to-Doctor post-activation handoff.
+# GitHub Enterprise session proof (#173668) adds OPENCLAW_FACTORY_GITHUB_PROOF, OPENCLAW_FACTORY_ACTOR_ID, and OPENCLAW_FACTORY_SESSION_KEY.
+# OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER (#173711) and OPENCLAW_UPDATE_DOCTOR_HISTORICAL_SCANS (#177933) are Doctor/update process handoffs.
+# Diagnostic codes OPENCLAW_SESSION_WATCHDOG (#176915), OPENCLAW_PACKAGE_PERMISSIONS_REPAIRED (#175423), and OPENCLAW_PLUGIN_NPM_ROOTS_FALLBACK (#176121) match the counted pattern.
+# The agent FTS schema list constant no longer counts as an OPENCLAW_* name.
+# OPENCLAW_DISABLE_CRON_HOST_EXECUTION (#177855) controls Gateway-local automation host execution.
+# OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS (#177855) controls Gateway-local terminals.
+# OPENCLAW_DEVICE_NAME_PREFIX was removed with unread Matrix device-health projections (#178345).
+# Retiring A2UI removes its four renderer build environment names.
+# OPENCLAW_CONFIG_READONLY_NOTICE (#187015) lets the deployment explain where to edit Gateway configuration.
+458

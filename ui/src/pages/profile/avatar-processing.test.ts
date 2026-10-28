@@ -74,7 +74,7 @@ describe("profile avatar processing", () => {
     );
 
     expect(drawImage).toHaveBeenCalledWith(expect.any(StubImage), 256, 0, 512, 512, 0, 0, 512, 512);
-    expect(result).toEqual({ mime: "image/png", avatarBase64: "AQID", byteLength: 3 });
+    expect(result).toEqual({ mime: "image/png", avatarBase64: "AQID" });
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:avatar");
   });
 });

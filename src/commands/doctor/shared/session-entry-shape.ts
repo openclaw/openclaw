@@ -1,36 +1,63 @@
-import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { validateSessionId } from "../../../config/sessions/paths.js";
+import { admitCanonicalSessionEntry } from "../../../config/sessions/session-entry-json.js";
+import {
+  SESSION_ENTRY_NUMERIC_FIELDS,
+  type SessionEntryNumericSnapshot,
+} from "../../../config/sessions/session-entry-numeric-snapshot.js";
 import {
   hasLegacySessionProviderState,
   LEGACY_SESSION_ENTRY_STATE_FIELDS,
   LEGACY_SESSION_PROVIDER_FIELDS,
 } from "../../../config/sessions/session-entry-state-format.js";
 import {
-  normalizePendingFinalDelivery,
+  normalizeCount,
   normalizeFallbackNotice,
   normalizeMemoryFlush,
-  projectCanonicalSessionEntryShape,
+  normalizeOptionalTimestamp,
+  normalizePendingFinalDelivery,
 } from "../../../config/sessions/store-entry-shape.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 
-function normalizeOptionalTimestamp(value: unknown): number | undefined {
-  return value === undefined ? undefined : (asNonNegativeFiniteNumber(value) ?? 0);
-}
+export type SessionEntryStateRepair = {
+  entry: Record<string, unknown>;
+  numericChanges?: SessionEntryNumericSnapshot;
+};
 
-function normalizeCount(value: unknown): number | undefined {
-  const number = asNonNegativeFiniteNumber(value);
-  return number === undefined ? undefined : Math.floor(number);
+/** Retire file-era activity metadata without reconstructing an execution. */
+export function migrateLegacySessionRunOutcome(
+  value: Record<string, unknown>,
+  updatedAt: unknown = value.updatedAt,
+): Record<string, unknown> {
+  if (value.status !== "running" && value.status !== "queued") {
+    return value;
+  }
+  return {
+    ...value,
+    status: "killed",
+    abortedLastRun: true,
+    endedAt: asNonNegativeFiniteNumber(value.endedAt) ?? asNonNegativeFiniteNumber(updatedAt) ?? 0,
+    activeWriterRunId: undefined,
+    lifecycleRunId: undefined,
+    lastRunError: undefined,
+    suppressErrorNotice: true,
+  };
 }
 
 /** Doctor preserves July routing and scalar-state contracts before removing their old keys. */
 export function migrateLegacySessionEntryState(
   value: Record<string, unknown>,
   updatedAt: unknown = value.updatedAt,
-): Record<string, unknown> {
+): SessionEntryStateRepair {
   const next = { ...value };
+  const numericChanges: SessionEntryNumericSnapshot = {};
   if (hasLegacySessionProviderState(value)) {
     for (const [legacy, current] of LEGACY_SESSION_PROVIDER_FIELDS) {
       if (typeof value[current] !== "string" && typeof value[legacy] === "string") {
@@ -87,7 +114,24 @@ export function migrateLegacySessionEntryState(
       next.memoryFlush = { kind: "succeeded", compactionCount };
     }
   }
-  return next;
+  for (const field of SESSION_ENTRY_NUMERIC_FIELDS) {
+    const candidate = next[field];
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const number =
+      field === "spawnDepth"
+        ? parseStrictNonNegativeInteger(candidate)
+        : parseStrictFiniteNumber(candidate);
+    if (number !== undefined) {
+      next[field] = number;
+      numericChanges[field] = number;
+    }
+  }
+  return {
+    entry: migrateLegacySessionRunOutcome(next, updatedAt),
+    numericChanges,
+  };
 }
 
 // Persisted stores may contain old or malformed ids; reject path-like ids before use.
@@ -120,7 +164,9 @@ export function normalizePersistedSessionEntryShape(
   }
 
   const modelSelectionLocked = value.modelSelectionLocked === true;
-  let next = projectCanonicalSessionEntryShape(migrateLegacySessionEntryState(value));
+  let next = admitCanonicalSessionEntry(
+    migrateLegacySessionEntryState(value, value.updatedAt).entry,
+  );
   if (value.sessionId !== undefined) {
     if (!isSafeSessionId(value.sessionId)) {
       return undefined;

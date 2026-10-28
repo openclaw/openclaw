@@ -8,6 +8,22 @@ import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
+function formatHealthDiagnosticText(text: string): string {
+  // Mask complete values before splitting; terminal cleanup can join secret fragments.
+  const redacted = redactToolPayloadText(text);
+  return redactToolPayloadText(
+    redacted
+      .split(/\r?\n|[\u2028\u2029]/u)
+      .map(sanitizeTerminalText)
+      .join("\n"),
+  );
+}
+
+export function formatHealthDiagnosticNote(text: string): string {
+  // The note renderer collapses whitespace, which can reconstruct a registered secret.
+  return redactToolPayloadText(formatHealthDiagnosticText(text).replace(/[^\S\n]+/gu, " "));
+}
+
 export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
   const quarantined = summary.contextEngines?.quarantined ?? [];
   if (quarantined.length === 0) {
@@ -28,7 +44,8 @@ export function formatGatewayClosedDiagnostic(err: unknown): string | undefined 
   if (!isGatewayTransportError(err) || err.kind !== "closed" || err.code === undefined) {
     return undefined;
   }
-  return `Gateway connect failed: ${sanitizeTerminalText(err.message.split("\n", 1)[0] ?? "")}`;
+  const message = formatHealthDiagnosticNote(err.message).split("\n", 1)[0] ?? "";
+  return redactToolPayloadText(`Gateway connect failed: ${message}`);
 }
 
 const formatKv = (line: string, rich: boolean) => {
@@ -52,12 +69,12 @@ const formatKv = (line: string, rich: boolean) => {
 export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } = {}): string {
   const rich = opts.rich ?? isRich();
   const raw = String(err);
-  const message = err instanceof Error ? err.message : raw;
 
   if (!rich) {
-    return `Health check failed: ${raw}`;
+    return redactToolPayloadText(`Health check failed: ${formatHealthDiagnosticText(raw)}`);
   }
 
+  const message = formatHealthDiagnosticText(err instanceof Error ? err.message : raw);
   const lines = message
     .split("\n")
     .map((l) => l.trimEnd())
@@ -76,7 +93,7 @@ export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } 
   for (const line of detailLines) {
     out.push(`  ${formatKv(line, rich)}`);
   }
-  return out.join("\n");
+  return redactToolPayloadText(out.join("\n"));
 }
 
 const formatProbeLine = (
@@ -86,6 +103,10 @@ const formatProbeLine = (
   const record = asNullableRecord(probe);
   if (!record) {
     return null;
+  }
+  if (record.timedOut === true) {
+    const error = typeof record.error === "string" ? record.error : "health collection timed out";
+    return `warning - ${sanitizeTerminalText(error)}`;
   }
   const ok = typeof record.ok === "boolean" ? record.ok : undefined;
   if (ok === undefined) {
@@ -98,19 +119,13 @@ const formatProbeLine = (
   }
 
   const elapsedMs = typeof record.elapsedMs === "number" ? record.elapsedMs : null;
-  const bot = asNullableRecord(record.bot);
-  const botUsername = bot && typeof bot.username === "string" ? bot.username : null;
   const webhook = asNullableRecord(record.webhook);
   const webhookUrl = webhook && typeof webhook.url === "string" ? webhook.url : null;
   const usernames = new Set<string>();
-  if (botUsername) {
-    usernames.add(botUsername);
-  }
-  for (const account of accounts ?? []) {
-    const accountProbe = asNullableRecord(account.probe);
-    const accountBot = accountProbe ? asNullableRecord(accountProbe.bot) : null;
-    if (accountBot && typeof accountBot.username === "string" && accountBot.username) {
-      usernames.add(accountBot.username);
+  for (const candidate of [probe, ...(accounts ?? []).map((account) => account.probe)]) {
+    const bot = asNullableRecord(asNullableRecord(candidate)?.bot);
+    if (bot && typeof bot.username === "string" && bot.username) {
+      usernames.add(bot.username);
     }
   }
 
@@ -239,9 +254,11 @@ export const formatHealthChannelLines = (
       continue;
     }
 
-    const failedSummary = activeSummaries.find(
-      (account) => asNullableRecord(account.probe)?.ok === false,
-    );
+    const failedSummary =
+      activeSummaries.find((account) => {
+        const probe = asNullableRecord(account.probe);
+        return probe?.ok === false && probe.timedOut !== true;
+      }) ?? activeSummaries.find((account) => asNullableRecord(account.probe)?.timedOut === true);
     if (failedSummary) {
       const failureLine = formatProbeLine(failedSummary.probe);
       if (failureLine) {

@@ -1,7 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { logVerbose } from "../globals.js";
 import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import type {
@@ -54,7 +53,6 @@ function hasEntryCredential(
   });
 }
 
-/** Reports whether a web_fetch provider has usable credentials. */
 export function isWebFetchProviderConfigured(params: {
   provider: Pick<
     PluginWebFetchProviderEntry,
@@ -69,7 +67,6 @@ export function isWebFetchProviderConfigured(params: {
   return hasEntryCredential(params.provider, params.config);
 }
 
-/** Lists web_fetch providers available to runtime selection. */
 export function listWebFetchProviders(params?: {
   config?: OpenClawConfig;
 }): PluginWebFetchProviderEntry[] {
@@ -78,81 +75,69 @@ export function listWebFetchProviders(params?: {
   });
 }
 
-/** Auto-detects a web_fetch provider after explicit selections have been resolved. */
-function resolveAutoWebFetchProviderId(params: {
-  configuredProviderId: string;
-  config?: OpenClawConfig;
-  providers: PluginWebFetchProviderEntry[];
-}): string {
-  for (const provider of params.providers) {
-    const requiresCredential = providerRequiresCredential(provider);
-    if (
-      !hasEntryCredential(
-        requiresCredential ? provider : { ...provider, requiresCredential: true },
-        params.config,
-      )
-    ) {
-      continue;
-    }
-    const source = requiresCredential
-      ? `"${provider.id}" from available API keys`
-      : `keyless provider "${provider.id}"`;
-    logVerbose(
-      `web_fetch: ${params.configuredProviderId ? `invalid configured provider "${params.configuredProviderId}", ` : ""}auto-detected ${source}`,
-    );
-    return provider.id;
-  }
-
-  return "";
-}
-
-function resolveWebFetchProvidersForOptions(
-  options?: ResolveWebFetchDefinitionParams,
-): PluginWebFetchProviderEntry[] {
-  const config = options?.config;
-  const cacheKey = config
-    ? JSON.stringify([
-        getActivePluginRegistryVersion(),
-        options?.sandboxed === true,
-        options?.preferRuntimeProviders === true,
-      ])
-    : "";
-  const configFingerprint = config ? resolveRuntimeConfigCacheKey(config) : "";
-  const cached = config ? webFetchProviderCache.get(config) : undefined;
-  if (cached?.cacheKey === cacheKey && cached.configFingerprint === configFingerprint) {
-    return cached.providers;
-  }
-  const providers = sortPluginEntriesForAutoDetect(
-    options?.sandboxed
-      ? resolvePluginWebFetchProviders({
-          config: options?.config,
-          sandboxed: true,
-        })
-      : options?.preferRuntimeProviders
-        ? resolveRuntimeWebFetchProviders({
-            config: options?.config,
-          })
-        : resolvePluginWebFetchProviders({
-            config: options?.config,
-          }),
-  );
-  if (config && providers.length > 0) {
-    webFetchProviderCache.set(config, { cacheKey, configFingerprint, providers });
-  }
-  return providers;
-}
-
-/** Resolves the executable web_fetch provider tool definition. */
 export function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
 ): WebFetchDefinitionResolution {
+  /** Auto-detects a web_fetch provider after explicit selections have been resolved. */
+  function resolveAutoWebFetchProviderId(): string {
+    const config = options?.config;
+    for (const provider of providers) {
+      const requiresCredential = providerRequiresCredential(provider);
+      if (
+        !hasEntryCredential(
+          requiresCredential ? provider : { ...provider, requiresCredential: true },
+          config,
+        )
+      ) {
+        continue;
+      }
+      return provider.id;
+    }
+
+    return "";
+  }
+
+  function resolveWebFetchProvidersForOptions(): PluginWebFetchProviderEntry[] {
+    const config = options?.config;
+    const cacheKey = config
+      ? JSON.stringify([
+          getActivePluginRegistryVersion(),
+          options?.sandboxed === true,
+          options?.preferRuntimeProviders === true,
+        ])
+      : "";
+    const configFingerprint = config ? resolveRuntimeConfigCacheKey(config) : "";
+    const cached = config ? webFetchProviderCache.get(config) : undefined;
+    if (cached?.cacheKey === cacheKey && cached.configFingerprint === configFingerprint) {
+      return cached.providers;
+    }
+    const entries = sortPluginEntriesForAutoDetect(
+      options?.sandboxed
+        ? resolvePluginWebFetchProviders({
+            config: options?.config,
+            sandboxed: true,
+          })
+        : options?.preferRuntimeProviders
+          ? resolveRuntimeWebFetchProviders({
+              config: options?.config,
+            })
+          : resolvePluginWebFetchProviders({
+              config: options?.config,
+            }),
+    );
+    if (config && entries.length > 0) {
+      webFetchProviderCache.set(config, { cacheKey, configFingerprint, providers: entries });
+    }
+    return entries;
+  }
+
   const fetch = resolveWebProviderConfig(options?.config, "fetch") as WebFetchConfig;
   if (fetch?.enabled === false) {
     return null;
   }
   const runtimeWebFetch =
     options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadataFromState()?.fetch;
-  const providers = resolveWebFetchProvidersForOptions(options);
+  const providers = resolveWebFetchProvidersForOptions();
   if (providers.length === 0) {
     return null;
   }
@@ -163,7 +148,7 @@ export function resolveWebFetchDefinition(
       ? providers.find((entry) => entry.id === configuredProviderId)?.id
       : undefined) ??
     runtimeWebFetch?.selectedProvider ??
-    resolveAutoWebFetchProviderId({ config: options?.config, configuredProviderId, providers });
+    resolveAutoWebFetchProviderId();
   const provider = providers.find((entry) => entry.id === providerId);
   if (!provider) {
     return null;

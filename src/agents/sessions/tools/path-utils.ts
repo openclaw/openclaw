@@ -53,9 +53,23 @@ export function resolveToCwd(filePath: string, cwd: string): string {
   return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
 }
 
+/** Expand shell drive aliases before native Windows containment checks or I/O. */
+export function normalizeLocalWindowsDrivePath(filePath: string): string {
+  if (process.platform !== "win32") {
+    return filePath;
+  }
+  // Preserve dot segments so the existing containment owner can inspect the path.
+  return filePath.replace(
+    /^(@?)\/(?:(?:cygdrive|mnt)\/)?([a-z])(?:\/|$)(.*)$/i,
+    (_match, reference: string, drive: string, suffix: string) =>
+      `${reference}${drive.toUpperCase()}:\\${suffix.replaceAll("/", "\\")}`,
+  );
+}
+
 /** Resolve local file paths using the filesystem that owns literal @ names. */
 export function resolveLocalPathToCwd(filePath: string, cwd: string): string {
-  return resolveToCwd(preserveAtPrefixedRelativePath(filePath, cwd), cwd);
+  const localPath = normalizeLocalWindowsDrivePath(filePath);
+  return resolveToCwd(preserveAtPrefixedRelativePath(localPath, cwd), cwd);
 }
 
 function collectReadPathVariants(filePath: string, includeNfd: boolean): string[] {

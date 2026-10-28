@@ -15,14 +15,17 @@ import type {
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { readGatewayServiceState, type GatewayService } from "../daemon/service.js";
 import { isSystemdUnitActive, type SystemdUnitScope } from "../daemon/systemd.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { reportGatewayServiceFailure } from "./doctor-service-audit.js";
 
 export type DoctorGatewayInstallationMaintenance = {
   managerUid?: number;
   assertCurrent: () => void;
   assertReadCurrent: () => void;
+  beforeMutation?: () => Promise<void>;
 };
 
 type GatewayServiceInstallationRepair = {
@@ -58,6 +61,7 @@ export async function installDoctorGatewayService(
       | { kind: "definition" | "installation"; root: string };
     args: GatewayServiceInstallArgs;
     runtime: RuntimeEnv;
+    onFinding?: (finding: HealthFinding) => void;
   },
 ): Promise<void> {
   try {
@@ -76,7 +80,12 @@ export async function installDoctorGatewayService(
             );
           }
         }
-        await params.service.install({ ...params.args, assertCurrent, definitionTransaction });
+        await params.service.install({
+          ...params.args,
+          assertCurrent,
+          definitionTransaction,
+          beforeMutation: params.maintenance?.beforeMutation ?? params.args.beforeMutation,
+        });
       };
       if (params.repair.kind !== "installation" && params.repair.root) {
         const { reconcileGatewayServiceDefinition } =
@@ -94,13 +103,29 @@ export async function installDoctorGatewayService(
       }
     };
     if (params.repair.kind === "installation") {
-      await repairGatewayServiceInstallation({
+      const repair = {
         service: params.service,
         command: params.command,
         activeRoot: params.repair.root,
         maintenance: params.maintenance,
         env: params.args.env,
-        install,
+      };
+      await withGatewayServiceOperationLock(repair.env, async (assertNative) => {
+        const assertCurrent = () => {
+          assertNative();
+          repair.maintenance?.assertCurrent();
+        };
+        await assertGatewayServiceInstallationRepairAllowed(repair);
+        assertCurrent();
+        await install(assertCurrent);
+        // Standalone Windows reinstall can leave the old process alive after /Run.
+        if (process.platform === "win32" && !repair.maintenance) {
+          await repair.service.restart({
+            env: repair.env,
+            stdout: process.stdout,
+            assertCurrent,
+          });
+        }
       });
       note(
         "Gateway service installation reconciled with the active CLI.",
@@ -113,7 +138,11 @@ export async function installDoctorGatewayService(
     if (err instanceof GatewayServiceAuthorityError || hasCommandProcessCleanupError(err)) {
       throw err;
     }
-    params.runtime.error(`Gateway service update failed: ${String(err)}`);
+    reportGatewayServiceFailure(
+      `Gateway service update failed: ${String(err)}`,
+      params.runtime,
+      params.onFinding,
+    );
   }
 }
 
@@ -164,28 +193,6 @@ export async function assertGatewayServiceInstallationRepairAllowed(
       `Gateway service installation is controlled by another owner; automatic installation repair was skipped. Inspect it with \`${formatCliCommand("openclaw gateway status --deep", state.env)}\`.`,
     );
   }
-}
-
-async function repairGatewayServiceInstallation(
-  params: GatewayServiceInstallationRepair & {
-    env: NodeJS.ProcessEnv;
-    install: (assertCurrent: () => void) => Promise<void>;
-  },
-): Promise<void> {
-  await withGatewayServiceOperationLock(params.env, async (assertNative) => {
-    const assertCurrent = () => {
-      assertNative();
-      params.maintenance?.assertCurrent();
-    };
-    await assertGatewayServiceInstallationRepairAllowed(params);
-    assertCurrent();
-    await params.install(assertCurrent);
-    // Maintenance already stopped the old task. A standalone reinstall can leave
-    // an existing Scheduled Task process alive after /Run accepts its new script.
-    if (process.platform === "win32" && !params.maintenance) {
-      await params.service.restart({ env: params.env, stdout: process.stdout, assertCurrent });
-    }
-  });
 }
 
 const EXECSTART_REPAIR_CODES = new Set<string>([

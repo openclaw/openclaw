@@ -44,7 +44,7 @@ gh pr diff 55 --repo owner/repo
 gh pr create --repo owner/repo --title "feat: title" --body-file /tmp/pr.md
 ```
 
-When creating or refreshing a PR body, append this final footer only when the Runtime line supplies `sessionUrl=<exact-url>`. Replace `<sessionUrl>` with that URL verbatim; do not construct or modify it. Omit the footer when `sessionUrl` is absent. Preserve any publication marker before exactly one footer, and keep the footer final:
+When creating or refreshing a PR body, append this final footer only when the Runtime line supplies `sessionUrl=<exact-url>`. Replace `<sessionUrl>` with that URL verbatim; do not construct or modify it. `sessionUrl` is supplied only for an explicitly public session. Omit the footer when it is absent; never substitute a private chat URL or enable sharing to obtain one. Preserve any publication marker before exactly one footer, and keep the footer final:
 
 ```text
 ---

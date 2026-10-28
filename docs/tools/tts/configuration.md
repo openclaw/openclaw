@@ -12,7 +12,7 @@ read_when:
 
 TTS config lives under `tts` in `~/.openclaw/openclaw.json`. Pick a
 preset and adapt the provider block. The `speakerVoice`/`speakerVoiceId`
-fields shown below are canonical; each provider's own `voice`/`voiceId`/
+fields shown below are the current names; each provider's own `voice`/`voiceId`/
 `voiceName` field names still work as legacy aliases.
 
 OpenRouter and DeepInfra use the first nonblank value from `speakerVoice`,
@@ -67,7 +67,7 @@ or blank, it keeps the base TTS voice.
     providers: {
       "fish-audio": {
         apiKey: "${FISH_API_KEY}",
-        model: "s2.1-pro",
+        model: "s2.1-pro", // Or "drama-3" for expressive voice direction.
         speakerVoiceId: "802e3bc2b27e49c2995d23ef70e6ac89",
         latency: "balanced",
       },

@@ -4,7 +4,9 @@ import type { PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString,
+  readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 
 const APP_SERVER_BINDING_DATA_VERSION = 2;
 const CLI_BINDING_DATA_VERSION = 1;
@@ -26,6 +28,7 @@ type CodexAppServerConversationSource = {
   sessionId: string;
   threadId: string;
   sessionKey?: string;
+  storePath?: string;
 };
 
 type CodexAppServerConversationStart = {
@@ -59,8 +62,6 @@ export function createCodexConversationBindingData(params: {
 }): CodexAppServerConversationBindingData {
   const agentId = params.agentId?.trim();
   const agentDir = params.agentDir?.trim();
-  const source = readConversationSource(params.source);
-  const start = readConversationStart(params.start);
   return {
     kind: "codex-app-server-session",
     version: APP_SERVER_BINDING_DATA_VERSION,
@@ -68,8 +69,8 @@ export function createCodexConversationBindingData(params: {
     workspaceDir: params.workspaceDir,
     ...(agentId ? { agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
-    ...(source ? { source } : {}),
-    ...(start ? { start } : {}),
+    ...(params.source ? { source: params.source } : {}),
+    ...(params.start ? { start: params.start } : {}),
   };
 }
 
@@ -102,20 +103,16 @@ export function readCodexConversationBindingDataRecord(
   data: Record<string, unknown>,
 ): CodexConversationBindingData | undefined {
   if (data.kind === "codex-cli-node-session") {
-    if (
-      data.version !== CLI_BINDING_DATA_VERSION ||
-      typeof data.nodeId !== "string" ||
-      !data.nodeId.trim() ||
-      typeof data.sessionId !== "string" ||
-      !data.sessionId.trim()
-    ) {
+    const nodeId = normalizeOptionalString(data.nodeId);
+    const sessionId = normalizeOptionalString(data.sessionId);
+    if (data.version !== CLI_BINDING_DATA_VERSION || !nodeId || !sessionId) {
       return undefined;
     }
     return {
       kind: "codex-cli-node-session",
       version: CLI_BINDING_DATA_VERSION,
-      nodeId: data.nodeId.trim(),
-      sessionId: data.sessionId.trim(),
+      nodeId,
+      sessionId,
       agentId: normalizeOptionalString(data.agentId),
       cwd: normalizeOptionalString(data.cwd),
     };
@@ -136,30 +133,27 @@ export function readCodexConversationBindingDataRecord(
   }
   const start = readConversationStart(readRecord(data.start));
   const source = readConversationSource(readRecord(data.source));
-  const legacyBinding = data.version === 1;
   return {
     kind: "codex-app-server-session",
     version: APP_SERVER_BINDING_DATA_VERSION,
     bindingId,
-    workspaceDir:
-      typeof data.workspaceDir === "string" && data.workspaceDir.trim()
-        ? data.workspaceDir
-        : process.cwd(),
+    workspaceDir: readNonBlankString(data.workspaceDir) ?? process.cwd(),
     agentId: normalizeOptionalString(data.agentId),
     agentDir: normalizeOptionalString(data.agentDir),
     ...(source ? { source } : {}),
     ...(start ? { start } : {}),
-    ...(legacyBinding ? { legacyBinding: true } : {}),
+    ...(data.version === 1 ? { legacyBinding: true } : {}),
   };
 }
 
 function readConversationSource(
-  value: CodexAppServerConversationSource | Record<string, unknown> | undefined,
+  value: Record<string, unknown> | undefined,
 ): CodexAppServerConversationSource | undefined {
   const agentId = normalizeOptionalString(value?.agentId);
   const sessionId = normalizeOptionalString(value?.sessionId);
   const threadId = normalizeOptionalString(value?.threadId);
   const sessionKey = normalizeOptionalString(value?.sessionKey);
+  const storePath = normalizeOptionalString(value?.storePath);
   if (!agentId || !sessionId || !threadId) {
     return undefined;
   }
@@ -168,6 +162,7 @@ function readConversationSource(
     sessionId,
     threadId,
     ...(sessionKey ? { sessionKey } : {}),
+    ...(storePath ? { storePath } : {}),
   };
 }
 
@@ -176,14 +171,13 @@ export function legacyCodexConversationBindingId(sessionFile: string): string {
   return `legacy-${createHash("sha256").update(sessionFile).digest("base64url")}`;
 }
 
-export function resolveCodexDefaultWorkspaceDir(pluginConfig: unknown): string {
-  const appServer = readRecord(readRecord(pluginConfig)?.appServer);
-  const configured = normalizeOptionalString(appServer?.defaultWorkspaceDir);
+export function resolveCodexDefaultWorkspaceDir(pluginConfig?: CodexPluginConfig): string {
+  const configured = normalizeOptionalString(pluginConfig?.appServer?.defaultWorkspaceDir);
   return configured ?? process.cwd();
 }
 
 function readConversationStart(
-  value: CodexAppServerConversationStart | Record<string, unknown> | undefined,
+  value: Record<string, unknown> | undefined,
 ): CodexAppServerConversationStart | undefined {
   const read = (key: keyof CodexAppServerConversationStart) =>
     normalizeOptionalString(value?.[key]);

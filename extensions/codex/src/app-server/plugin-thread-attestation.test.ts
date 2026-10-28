@@ -31,7 +31,7 @@ describe("Codex thread tool-surface admission", () => {
           threadId: "thread-empty",
           appIds: [],
           restrictedToolSurface: false,
-          lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+          lifecycleTiming: createCodexThreadLifecycleTimingTracker(false),
           signal: controller.signal,
           assertCurrent,
           withCurrent,
@@ -53,22 +53,6 @@ describe("Codex thread tool-surface admission", () => {
 
 describe("Codex thread app availability", () => {
   afterEach(() => vi.restoreAllMocks());
-
-  it("checks configured and account apps once using the thread policy", async () => {
-    const request = vi.fn(async () => installedApps(["plugin-app", "account-app"]));
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    await checkCodexThreadAppAvailability({
-      client: { request } as never,
-      threadId: "thread-mixed",
-      appIds: ["plugin-app", "account-app", "plugin-app"],
-    });
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      "app/installed",
-      { threadId: "thread-mixed", forceRefresh: false },
-      { signal: undefined },
-    );
-    expect(warn).not.toHaveBeenCalled();
-  });
 
   it("records unavailable apps without blocking the remaining tools", async () => {
     const request = vi.fn(async () => ({

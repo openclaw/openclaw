@@ -9,10 +9,6 @@
 .session-progress-card--composer {
   flex: 1 1 100%;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent-subtle) 42%, var(--panel-strong));
-  animation: fade-in 0.2s var(--ease-out);
 }
 
 .session-progress-card--board {
@@ -38,13 +34,34 @@
   gap: var(--space-2);
 }
 
+.session-progress-card__runtime,
+.session-progress-card__refresh-status {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.session-progress-card__runtime {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-weight: 500;
+}
+
+.session-progress-card__runtime[data-error="true"] {
+  color: var(--danger);
+}
+
+.session-progress-card--board > .session-progress-card__runtime {
+  margin-bottom: var(--space-2);
+}
+
 .session-progress-card__summary {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   align-items: center;
-  gap: 7px;
   min-width: 0;
-  padding: 7px 9px;
   color: var(--text);
   cursor: var(--cursor-action);
   list-style: none;
@@ -55,23 +72,10 @@
   display: none;
 }
 
-.session-progress-card__chevron {
-  display: inline-flex;
+.session-progress-card__options svg,
+.session-progress-card__refresh svg {
   width: 14px;
   height: 14px;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-}
-
-.session-progress-card__chevron svg {
-  width: 14px;
-  height: 14px;
-}
-
-.session-progress-card__summary:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
-  outline-offset: -2px;
 }
 
 .session-progress-card__current-marker,
@@ -108,18 +112,12 @@
 .session-progress-card__step-marker > .session-run-spinner {
   width: var(--session-progress-marker-size);
   height: var(--session-progress-marker-size);
-  border-color: color-mix(in srgb, var(--session-progress-neutral) 28%, transparent);
-  border-top-color: var(--session-progress-neutral);
+  border-color: color-mix(in srgb, var(--text) 28%, transparent);
+  border-top-color: var(--text);
 }
 
 .session-progress-card__current {
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--control-ui-text-sm);
   font-weight: 500;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .session-progress-card__summary-controls {
@@ -128,7 +126,7 @@
   gap: 2px;
 }
 
-.session-progress-card__refresh {
+.session-progress-card__options {
   display: inline-grid;
   width: var(--chat-stack-trailing-control-size, 24px);
   height: var(--chat-stack-trailing-control-size, 24px);
@@ -141,44 +139,32 @@
   touch-action: manipulation;
 }
 
-.session-progress-card__refresh:hover:not(:disabled) {
+.session-progress-card__options:hover:not(:disabled) {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
-.session-progress-card__refresh:focus-visible {
+.session-progress-card__options:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
-.session-progress-card__refresh svg {
-  width: 14px;
-  height: 14px;
-}
-
+.session-progress-card__options[data-state="pending"] svg,
 .session-progress-card__refresh[data-state="pending"] svg {
   animation: btn-spinner-spin 1.2s linear infinite;
 }
 
-.session-progress-card__refresh[data-state="updated"] {
+.session-progress-card__options[data-state="updated"] {
   color: var(--ok);
 }
 
-.session-progress-card__refresh:is([data-state="failed"], [data-state="timeout"]) {
+.session-progress-card__options:is([data-state="failed"], [data-state="timeout"]),
+.session-progress-card__refresh-status:is([data-state="failed"], [data-state="timeout"]) {
   color: var(--warn);
 }
 
 .session-progress-card__refresh-status {
-  grid-column: 1 / -1;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
   font-weight: 400;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
-.session-progress-card__refresh-status:is([data-state="failed"], [data-state="timeout"]) {
-  color: var(--warn);
 }
 
 /* Keep live announcements accessible; the button carries the visible feedback. */
@@ -191,22 +177,17 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .session-progress-card__options[data-state="pending"] svg,
   .session-progress-card__refresh[data-state="pending"] svg {
     animation: none;
   }
 }
 
-.session-progress-card__dismiss,
-.session-progress-card__clear-saved {
+.session-progress-card__dismiss {
   width: 22px;
   min-width: 22px;
   height: 22px;
   min-height: 22px;
-}
-
-.session-progress-card--composer .session-progress-card__body {
-  padding: 7px 9px 8px;
-  border-top: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
 }
 
 .session-progress-card__markdown.sidebar-markdown {
@@ -278,10 +259,17 @@
 }
 
 .session-progress-card__current-marker,
-.session-progress-card__step--in_progress .session-progress-card__step-marker,
-.session-progress-card__step--pending .session-progress-card__step-marker,
-.session-progress-card__step--paused .session-progress-card__step-marker {
+.session-progress-card__step-marker:not([data-status="completed"]) {
   color: var(--session-progress-neutral);
+}
+
+.session-progress-card__step-marker[data-status="pending"] {
+  opacity: 0.9;
+
+  /* The 20-unit circle plus its 1.5-unit stroke fills 21.5 of the 24-unit viewBox. */
+  svg {
+    scale: calc(24 / 21.5);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

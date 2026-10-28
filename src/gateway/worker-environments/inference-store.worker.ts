@@ -1,7 +1,5 @@
-import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type {
-  WorkerOperationContext,
+  WorkerWriteOperationContext,
   WorkerOperationHandlers,
 } from "../../state/worker-operation-registry.js";
 import { createWorkerInferenceStoreKernel } from "./inference-store.kernel.js";
@@ -15,22 +13,18 @@ function operation<Input, Output>(
 ) {
   return (
     input: { input: Input; nowMs: number; retention: Partial<WorkerInferenceRetentionPolicy> },
-    { open }: WorkerOperationContext,
+    { writeAdmitted }: WorkerWriteOperationContext,
   ) =>
-    runOpenClawStateWriteTransaction(
+    writeAdmitted(
       ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const store = createWorkerInferenceStoreKernel({
           db,
           now: () => input.nowMs,
           retention: input.retention,
         });
-        const result = select(store)(input.input);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        return result;
+        return select(store)(input.input);
       },
-      { database: open() },
-      { operationLabel: type },
+      { operationLabel: type, transactionEnvironment: "process" },
     );
 }
 
@@ -45,4 +39,4 @@ export const workerInferenceOperations = {
     "workerInference.recoverPending",
     (store) => store.recoverPending,
   ),
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

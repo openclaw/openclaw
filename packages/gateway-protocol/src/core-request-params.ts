@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 import type * as AgentSchema from "./schema/agent.js";
-import type { BackupStatusParams } from "./schema/backup.js";
+import type { AgentsAvatarGenerateParams } from "./schema/agents-models-skills.js";
+import type { BackupRecordOutcomeParams, BackupStatusParams } from "./schema/backup.js";
 import type * as BoardSchema from "./schema/board.js";
 import type { CanvasDocumentPreviewParams, CanvasDocumentViewParams } from "./schema/canvas.js";
 import type { CatalogBrowseParams, CatalogSearchKeywordsParams } from "./schema/catalog.js";
@@ -11,6 +12,7 @@ import type {
   EnvironmentsSessionStatusParams,
   EnvironmentsSessionDestroyParams,
   EnvironmentsSessionExecParams,
+  EnvironmentsAdoptSuggestedProfileParams,
 } from "./schema/environments.js";
 import type * as HumanMentionsSchema from "./schema/human-mentions.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
@@ -18,21 +20,29 @@ import type * as PortalSchema from "./schema/portals.js";
 import type { PresenceActivityParams, PresenceQueryParams } from "./schema/presence.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
 import type { StorageLocationsListParams, StorageLocationsProbeParams } from "./schema/storage.js";
+import type * as TemplateDraftSchema from "./schema/template-drafts.js";
 import type {
   ThemesListParams,
   ThemesGetParams,
   ThemesSetParams,
   ThemesImportParams,
 } from "./schema/themes.js";
-import type { UiCommandParams } from "./schema/ui-command.js";
+import type { UiCommandParams, UiCommandReportParams } from "./schema/ui-command.js";
 import type { UpdateRunsGetParams, UpdateRunsListParams } from "./schema/update-runs.js";
 import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "agents.avatar.generate": AgentsAvatarGenerateParams;
+  "templates.drafts.create": TemplateDraftSchema.TemplatesDraftsCreateParams;
+  "templates.drafts.read": TemplateDraftSchema.TemplatesDraftsReadParams;
+  "templates.drafts.save": TemplateDraftSchema.TemplatesDraftsSaveParams;
+  "templates.drafts.review": TemplateDraftSchema.TemplatesDraftsReviewParams;
+  "templates.drafts.publish": TemplateDraftSchema.TemplatesDraftsPublishParams;
   "catalog.browse": CatalogBrowseParams;
   "catalog.searchKeywords": CatalogSearchKeywordsParams;
   "backup.status": BackupStatusParams;
+  "backup.recordOutcome": BackupRecordOutcomeParams;
   "storage.locations.list": StorageLocationsListParams;
   "storage.locations.probe": StorageLocationsProbeParams;
   "presence.activity": PresenceActivityParams;
@@ -55,6 +65,7 @@ export type GatewayCoreRequestParams = {
   "environments.session.status": EnvironmentsSessionStatusParams;
   "environments.session.destroy": EnvironmentsSessionDestroyParams;
   "environments.session.exec": EnvironmentsSessionExecParams;
+  "environments.adoptSuggestedProfile": EnvironmentsAdoptSuggestedProfileParams;
   "conversations.list": AgentSchema.ConversationListParams;
   "conversations.send": AgentSchema.ConversationSendParams;
   "conversations.turn": AgentSchema.ConversationTurnParams;
@@ -70,6 +81,7 @@ export type GatewayCoreRequestParams = {
   "portal.session.list": Static<typeof PortalSchema.SessionPortalListParamsSchema>;
   "portal.session.open": Static<typeof PortalSchema.SessionPortalOpenParamsSchema>;
   "sessions.github.publish": GitHubSchema.SessionGitHubPublishParams;
+  "sessions.github.action": GitHubSchema.SessionGitHubActionParams;
   "sessions.github.options": Static<typeof GitHubSchema.SessionGitHubOptionsParamsSchema>;
   "sessions.github.status": Static<typeof GitHubSchema.SessionGitHubStatusParamsSchema>;
   "sessions.github.confirm": GitHubSchema.SessionGitHubConfirmParams;
@@ -98,6 +110,7 @@ export type GatewayCoreRequestParams = {
   "users.github.disconnect": Static<typeof UsersSchema.UsersGitHubDisconnectParamsSchema>;
   "users.mentionable": HumanMentionsSchema.UsersMentionableParams;
   "ui.command": UiCommandParams;
+  "ui.command.result": UiCommandReportParams;
   "themes.list": ThemesListParams;
   "themes.get": ThemesGetParams;
   "themes.set": ThemesSetParams;

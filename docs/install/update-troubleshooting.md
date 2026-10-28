@@ -12,18 +12,19 @@ available, and use of your own account/tokens, then asks before launching
 [triage](/cli/triage). Only an affirmative Yes proceeds. Enter, `n`, cancellation,
 or no answer within 30 seconds skips the launch and preserves diagnostics and
 a manual recovery command. Use `openclaw triage --agent codex` to choose another
-agent. With `--yes`, `--json`, or no interactive terminal, eligible failures can
-start one owned automatic repair; other failures retain diagnostics and handoff
-commands. See [automatic recovery](/cli/triage#automatic-failure-handoff). The original update failure and exit status remain authoritative;
+agent. With `--yes`, `--json`, or no interactive terminal, updates save diagnostics
+and never start a repair agent. The output prints the explicit opt-in command
+`openclaw triage --run --update-result <path>`. Managed handoffs and foreground
+Gateway startup failures also collect diagnostics only. See
+[unattended failure diagnostics](/cli/triage#automatic-failure-handoff). The original update failure and exit status remain authoritative;
 diagnostics do not turn a failed update into a successful one.
 
 If the update health check emits a complete lint report but does not exit before
 its deadline, the failure identifies that completion separately from process
 termination. An exited child whose output pipes remain open is reported
 separately. Without a complete lint report, a deadline does not establish that
-the checks finished. When automatic repair cannot find a usable inference route
-before starting a repair turn, it is recorded as skipped; the original update
-check remains the reported failure.
+the checks finished. Diagnostic collection does not require inference;
+the original update check remains the reported failure.
 
 In the Control UI, a failed attempt opens **Ask OpenClaw** with its recorded
 details and asks it to investigate before retrying. A lost connection or
@@ -45,6 +46,15 @@ outcome resolves when the expected version or revision arrives, or when the
 same attempt reports its final failure or cancellation. A newer recorded attempt
 can also replace it. Intentional cancellations, already-current installs, and
 updates still in progress do not start triage.
+
+When a managed-service update cannot hand off to its helper, the saved attempt
+includes a bounded failure kind and a next step: runtime or spawn failure,
+permission or service refusal, ownership refusal, payload/control-channel
+failure, timeout, early helper exit, or preparation failure. If the failure
+happens before ownership transfer, the recovery outcome records that the Gateway
+kept serving. A transfer error alone does not establish whether the helper
+accepted ownership; check `openclaw update status` and
+`openclaw gateway status --deep` before retrying.
 
 For a final failed attempt, **Report update failure** is separate from **Retry**
 and **Ask OpenClaw**. It previews a bounded report containing the OpenClaw
@@ -98,10 +108,25 @@ the CLI fallback on the Gateway host.
 
 ## Doctor cannot enter maintenance during finalization
 
+When a state lease is lost during Doctor or plugin finalization, update history
+and the failure report retain a `lease loss` reason when the database can identify
+it: `expired`, `replaced`, or `missing`. Expiry diagnostics include the recorded
+deadline, time since expiry, and age of the last heartbeat. A delayed native renewal
+timer also reports its measured lateness; a large delay can indicate event-loop
+starvation, but does not establish its cause. Replacement owners are redacted.
+These diagnostics do not change lease duration or ownership checks. If state cannot
+be inspected safely, the original generic lease-loss error is preserved.
+
 `finalize:doctor` can report `Doctor could not enter maintenance` when a Gateway
 still owns the selected state directory. A starting Gateway and a healthy serving
 Gateway retain that ownership for their entire process lifetime; waiting for
-readiness does not release the lock.
+readiness does not release the lock. A non-Gateway holder, such as a CLI
+command or embedded agent run, gets time to finish first (up to 20 minutes by
+default, less on a host whose Doctor runs slowly); Doctor prints its PID and
+progress while it waits. The same applies to a process that only has an agent
+database open ("An agent database is in use"). An idle CLI process
+closes an unused agent database about 30 seconds after its last use; one started
+from an older release can keep it open for up to 30 minutes, so stop it first.
 
 Maintenance admission refusals finish the update with a recorded warning when
 no data is at risk, including contention from an unknown or non-serving holder.
@@ -127,6 +152,14 @@ them. Preserve those facts when reporting the problem; task definitions and raw
 native output are excluded.
 
 ## Node and global install permissions
+
+If package recovery reports `nlink=2` (or another value above 1), let updater
+workers finish, then run `openclaw doctor --fix` from the affected installation.
+Doctor can reclaim an abandoned updater runtime, including one retained in an
+npm prefix's `lib/` directory, and release its extra journal link. Then retry
+the update. Do not weaken recovery permissions or delete the activation journal;
+if Doctor reports a live owner or cannot identify the runtime, follow that
+diagnostic before retrying.
 
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
 version satisfying both the candidate's full engine range and the updater's
@@ -160,7 +193,7 @@ prefix in the shell. An unrelated installation at that shell prefix does not
 block an update to the original installation. pnpm global installations retain
 their pnpm owner and do not use this npm destination check.
 
-The actual destination must be empty, or its canonical package path must match
+The actual destination must be empty, or its resolved package path must match
 the running installation or selected managed service, with any existing launcher
 pointing inside that package. An inaccessible or unreadable destination stops the
 update before staging; an unknown destination is never treated as empty. Restore
@@ -241,6 +274,92 @@ procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
 once, then restart the named system unit; subsequent updates can use the fixed
 updater.
 
+## Debug logging blocks the update handoff
+
+With console logging at `debug`, a foreground update can fail with
+`managed-service-handoff-failed`; the old Gateway keeps serving, with no data loss.
+The installed updater's handoff helper writes a debug log line to its readiness
+channel before `READY`, so the handoff is rejected before the new version runs.
+
+Affected **installed** versions:
+
+- Stable: **2026.9.6–2026.9.9** and **2026.10.1–2026.10.5**.
+- Extended-stable: **2026.9.33**.
+- Prereleases: **2026.10.1-beta.1–2**, **2026.10.5-beta.1–4**, and
+  **2026.10.10-beta.1–2**.
+
+For this update, set `logging.consoleLevel` to `"info"` and remove any
+`OPENCLAW_LOG_LEVEL=debug` override from the Gateway and update command's
+environment. File logging can stay at `logging.level: "debug"`. Run
+`openclaw update`, then restore your logging settings. See
+[logging configuration](/logging#configuring-logging).
+
+Version **2026.9.5** and versions containing
+[#177563](https://github.com/openclaw/openclaw/pull/177563) are not affected.
+Updating to a fixed version still needs this workaround when the installed
+updater is affected.
+
+## Extended-stable 2026.9.33 to development builds
+
+Direct updates from **2026.9.33** and **2026.9.34** are supported when the target
+contains the fingerprint repair in [#184547](https://github.com/openclaw/openclaw/pull/184547)
+and artifact-preserving Doctor inspection, starting with the first release
+containing both changes. The installed updater does
+not need the repair. Candidate Doctor verifies the older physical database
+fingerprints, attributes migrations using committed content, and returns receipts
+in the older updater's format. Changed data, intervening commits, replaced files,
+and tampered backups still refuse automatic restoration.
+
+Older targets can fail activation with
+`SQLite migration source changed after update capture` because the updater and
+candidate use different fingerprint formats. This error alone does not establish
+that another process changed the database. The failed update preserves current
+databases and recovery snapshots, but may leave the Gateway stopped with the
+candidate package installed.
+
+Before updating, create a
+[verified backup](/install/updating#before-updating-create-a-verified-backup),
+then stop other OpenClaw processes using the same state. For a target containing
+the repair, update directly. If the target predates the repair, use the verified
+intermediate path through **2026.10.5**:
+
+```bash
+openclaw update --channel stable --tag 2026.10.5
+openclaw --version
+openclaw gateway stop
+openclaw update --channel dev
+openclaw gateway start
+```
+
+Continue to the development update only after the first update completes and
+`openclaw --version` reports `2026.10.5`. Keep the same service account, profile,
+and state/configuration paths throughout. Set console logging to `info` for both
+updates as described [above](#debug-logging-blocks-the-update-handoff).
+The older updater can report that automatic database restoration is unavailable
+during the intermediate update; retain your verified backup.
+
+Stop other OpenClaw processes using the same state before the development update.
+For a foreground Gateway, use its original terminal or supervisor to stop and
+restart it. Custom state/configuration paths can make the updater skip service
+management; follow that warning. Doctor reporting `An agent database is in use`
+means maintenance was deferred, even if an earlier step completed.
+
+If the direct update has already failed, preserve its snapshots and candidate.
+Run `openclaw update repair` and follow its process-ownership instructions before
+starting another update. Once the named old updater processes have exited, use
+the installed candidate to finish maintenance:
+
+```bash
+openclaw doctor --fix
+openclaw update repair
+openclaw gateway start
+openclaw gateway status --deep
+```
+
+Do not delete update records, change schema markers, or discard recovery files
+to bypass the refusal. The fingerprint incompatibility needs support across
+migration and rollback receipts; ignoring the mismatch would lose that protection.
+
 ## Candidate migration rehearsal timeouts
 
 Current updaters give snapshot preparation and each candidate check separate
@@ -264,12 +383,10 @@ inference route” after a rehearsal timeout. This comes from a broad error hand
 while preparing automatic repair, not from an inference check performed by the
 rehearsal. Inspect the original failed step and elapsed time. Current updaters
 retain the `candidate-checks-timeout` reason and do not run inference repair for
-that failure. If the installed updater cannot finish, preserve a
-[verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
-and use the installation owner's
+that failure. If the installed updater cannot finish, use the installation
+owner's
 [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
-with an exact compatible target, then run the target's `openclaw doctor --fix`
-before starting its Gateway.
+with an exact compatible target.
 
 ## Published 2026.9.4 on large agent fleets
 
@@ -311,8 +428,7 @@ Keep the same service account, profile, package manager, and installation prefix
 Have that installation's owner stop the Gateway and other writers before manual
 replacement. When the installed updater cannot complete, use the
 [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
-with an exact target compatible with the retained state, then run the target's
-`openclaw doctor --fix` before starting its Gateway. If the retained binary
+with an exact target compatible with the retained state. If the retained binary
 cannot read the current state, follow
 [backup recovery](/install/updating/rollback-and-recovery#downgrade); changing
 schema markers or deleting lease rows does not reverse migrations.
@@ -441,6 +557,17 @@ running in the installed updater. Version 2026.9.6 admits retained `import.meta`
 syntax. Current snapshot inventory also records unparseable entries as named
 plugin warnings instead of aborting the snapshot.
 
+### Snapshot cleanup could not be confirmed
+
+An update can stop with `Update snapshot cleanup could not be confirmed` (reason
+`candidate-snapshot-failed`) when plugin work started for the candidate snapshot
+does not finish in time. The installed updater runs this step, so retrying the
+same update repeats it, and `openclaw update repair` cannot finish a snapshot
+that never completed. Install the target once with the
+[manual npm, pnpm, or bun procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun).
+Include `openclaw update
+status --json` (with the nested `cause`) when you report it.
+
 ### Large model-catalog temporary directories
 
 Older releases can retain several complete plugin copies inside
@@ -514,16 +641,15 @@ Windows host-wide legacy capture cleanup remains report-only.
   under `logs/support/` in the state directory. Two causes belong to the
   published 2026.9.3 and 2026.9.4 updaters, and a later release cannot rescue
   the updater already installed: on macOS, `Package rollback launcher backup
-changed` when the updater's umask differs from the installed launcher's
+  changed` when the updater's umask differs from the installed launcher's
   permissions, and on busy hosts or slow disks a 30-second baseline package
   fingerprint timeout reported as a changed package tree. Retrying with the
-  same installed updater repeats them. Install the target once with the
-  [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
-  run `openclaw doctor --fix`, and restart the Gateway. This manual install
-  bypasses the installed updater once. No published release contains both fixes
-  yet: `openclaw update` runs through a repaired updater only after installing a
-  release later than 2026.9.4 that contains [#145282](https://github.com/openclaw/openclaw/pull/145282)
-  and [#144758](https://github.com/openclaw/openclaw/pull/144758).
+  same installed updater can repeat them. Install the target once with the
+  [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun).
+  This manual install bypasses the installed updater once. Releases 2026.9.5 and later contain both
+  fixes ([#145282](https://github.com/openclaw/openclaw/pull/145282) and
+  [#144758](https://github.com/openclaw/openclaw/pull/144758)), so later
+  `openclaw update` runs use the repaired updater.
   Other causes show the package manager's error:
   `EACCES`, `EPERM`, or a prefix mismatch mean the global prefix is custom or
   not writable by the invoking user; fix ownership and permissions, then retry.
@@ -544,8 +670,8 @@ changed` when the updater's umask differs from the installed launcher's
   when updating from 2026.9.4: the installed updater shares that deadline across
   the snapshot and candidate checks, even with a larger `--timeout`. The elapsed
   failure duration is not Gateway startup time alone. Use the same
-  [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
-  then run `openclaw doctor --fix` and restart the Gateway. See
+  [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun).
+  See
   [#144858](https://github.com/openclaw/openclaw/issues/144858) and
   [#154381](https://github.com/openclaw/openclaw/issues/154381).
 - `Plugin dependency <name> is unresolvable inside the temporary update copy`:

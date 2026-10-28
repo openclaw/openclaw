@@ -1,17 +1,21 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionFactory,
+} from "../infra/sqlite-worker-operation-admission.js";
 import {
   getSqliteWorkerActorIdentity,
   runSqliteWorkerStoreOperation,
 } from "../infra/sqlite-worker-store.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import {
+  getExistingOpenClawStateSchemaPath,
+  isExistingOpenClawStateSchema,
+} from "./openclaw-state-db-schema-policy.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
-import type {
-  OpeningAdmission,
-  Store,
-  StoreOperations,
-} from "./openclaw-state-worker-store.types.js";
+import type { OpenClawStateWorkerOperations } from "./openclaw-state-worker-contract.js";
+import type { Store } from "./openclaw-state-worker-store.types.js";
 
 /** A live alias cannot authorize a worker still bound to a vanished opening path. */
 export function assertOpenClawStateWorkerActorPath(
@@ -43,12 +47,23 @@ export function runWithOpenClawStateWorkerStore<T>(
   operation: (scope: Pick<Store, "execute">) => Promise<T>,
   assertCurrent?: (commandType?: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
+  signal?: AbortSignal,
 ): Promise<T> {
   const { admission } = context;
   const actor = getSqliteWorkerActorIdentity(store);
-  return runSqliteWorkerStoreOperation<StoreOperations, T>(
+  return runSqliteWorkerStoreOperation<OpenClawStateWorkerOperations, T>(
     store,
-    operation,
+    (scope) =>
+      operation(
+        signal
+          ? {
+              execute: (command, options) =>
+                scope.execute(command, {
+                  signal: options?.signal ? AbortSignal.any([signal, options.signal]) : signal,
+                }),
+            }
+          : scope,
+      ),
     context,
     (commandType) => {
       admission.assertCurrent();
@@ -59,34 +74,55 @@ export function runWithOpenClawStateWorkerStore<T>(
   );
 }
 
-/** Only native opening owns the caller scope; a cached actor must not retain it. */
-export function captureOpenClawStateWorkerOpeningGuard(
-  context: OpenClawStateWorkerContext,
-  assertCurrent?: () => void,
-) {
+export function assertOpenClawStateWorkerSchemaContext(context: OpenClawStateWorkerContext): void {
+  isExistingOpenClawStateSchema(context.admission.databasePath);
+  if (getExistingOpenClawStateSchemaPath() !== context.existingSchemaPath) {
+    throw new Error("Shared-state worker schema context does not match its caller");
+  }
+}
+
+/** Native opening retains its physical admission, not an individual command's authority. */
+export function captureOpenClawStateWorkerOpeningGuard(context: OpenClawStateWorkerContext) {
   const databaseAdmission = context.admission;
-  const admission: OpeningAdmission = {
-    assertCurrent,
-  };
-  let captured: (() => void) | undefined = AsyncLocalStorage.bind(() => {
-    databaseAdmission.assertCurrent();
-    try {
-      admission.assertCurrent?.();
-    } catch (error) {
-      admission.refusal = { error };
-      throw error;
+  const identity = databaseAdmission.identity;
+  let captured: (() => void) | undefined = AsyncLocalStorage.bind(() =>
+    databaseAdmission.assertCurrent(),
+  );
+  const assertCurrent = () => {
+    if (!captured) {
+      throw new Error("Shared-state worker opening admission is closed");
     }
-  });
+    captured();
+  };
   return {
-    admission,
-    assertCurrent: () => {
-      if (!captured) {
-        throw new Error("Shared-state worker opening admission is closed");
-      }
-      captured();
+    assertCurrent,
+    createAdmission: (): ReturnType<SqliteWorkerAdmissionFactory> => {
+      let granted = false;
+      return {
+        nativeLocations: [databaseAdmission.databasePath],
+        databaseIdentity: {
+          databasePath: databaseAdmission.databasePath,
+          key: identity.key,
+          birthtime: identity.birthtime,
+        },
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          if (granted || request.stage !== "open") {
+            throw new Error("Shared-state worker open admission requested out of order");
+          }
+          assertCurrent();
+          if (!grant()) {
+            throw new Error("Shared-state worker open admission expired");
+          }
+          granted = true;
+        }),
+      };
     },
-    releaseContext() {
-      captured = undefined;
+    async run<T>(open: () => Promise<T>): Promise<T> {
+      try {
+        return await open();
+      } finally {
+        captured = undefined;
+      }
     },
   };
 }

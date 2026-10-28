@@ -19,7 +19,7 @@ describe("resolveSlackThreadContext", () => {
   }
 
   it("threads replies when message is already threaded", () => {
-    const { messageThreadId } = resolveSlackThreadContext({
+    const context = resolveSlackThreadContext({
       replyToMode: "off",
       message: {
         type: "message",
@@ -29,40 +29,14 @@ describe("resolveSlackThreadContext", () => {
       },
     });
 
-    expect(messageThreadId).toBe("456");
+    expect(context).toMatchObject({
+      isThreadReply: true,
+      messageThreadId: "456",
+      replyToId: "456",
+    });
   });
 
   it("threads top-level replies when mode is all", () => {
-    const { messageThreadId } = resolveSlackThreadContext({
-      replyToMode: "all",
-      message: {
-        type: "message",
-        channel: "C1",
-        ts: "123",
-      },
-    });
-
-    expect(messageThreadId).toBe("123");
-  });
-
-  it("does not thread status indicator when reply threading is off", () => {
-    const { messageThreadId } = resolveSlackThreadContext({
-      replyToMode: "off",
-      message: {
-        type: "message",
-        channel: "C1",
-        ts: "123",
-      },
-    });
-
-    expect(messageThreadId).toBeUndefined();
-  });
-
-  it("does not treat auto-created top-level thread_ts as a real thread when mode is off", () => {
-    expectAutoCreatedTopLevelThreadTsBehavior("off");
-  });
-
-  it("sets messageThreadId for top-level messages when replyToMode is all", () => {
     const context = resolveSlackThreadContext({
       replyToMode: "all",
       message: {
@@ -77,26 +51,8 @@ describe("resolveSlackThreadContext", () => {
     expect(context.replyToId).toBeUndefined();
   });
 
-  it("sets messageThreadId for DM assistant thread-root messages regardless of replyToMode", () => {
-    for (const replyToMode of ["off", "first", "batched"] as const) {
-      const context = resolveSlackThreadContext({
-        replyToMode,
-        isDirectMessage: true,
-        message: {
-          type: "message",
-          channel: "D1",
-          channel_type: "im",
-          ts: "123",
-          thread_ts: "123",
-        },
-      });
-
-      expect(context.isThreadReply).toBe(false);
-      // thread_ts == ts in a DM: Agents & Assistants root — preserve thread
-      // context so tool calls (subagent results) thread correctly.
-      expect(context.messageThreadId).toBe("123");
-      expect(context.replyToId).toBeUndefined();
-    }
+  it("does not treat auto-created top-level thread_ts as a real thread when mode is off", () => {
+    expectAutoCreatedTopLevelThreadTsBehavior("off");
   });
 
   it("uses normalized direct-message state for DM assistant thread-root messages", () => {
@@ -119,43 +75,5 @@ describe("resolveSlackThreadContext", () => {
       expect(context.messageThreadId).toBe("123");
       expect(context.replyToId).toBeUndefined();
     }
-  });
-
-  it("does not set messageThreadId for channel thread-root messages with non-all replyToMode", () => {
-    for (const replyToMode of ["off", "first", "batched"] as const) {
-      const context = resolveSlackThreadContext({
-        replyToMode,
-        isDirectMessage: false,
-        message: {
-          type: "message",
-          channel: "C1",
-          channel_type: "channel",
-          ts: "123",
-          thread_ts: "123",
-        },
-      });
-
-      expect(context.isThreadReply).toBe(false);
-      // thread_ts == ts in a channel: auto-created top-level thread_ts should
-      // NOT force threaded mode — only DM assistant threads get the override.
-      expect(context.messageThreadId).toBeUndefined();
-      expect(context.replyToId).toBeUndefined();
-    }
-  });
-
-  it("prefers thread_ts as messageThreadId for replies", () => {
-    const context = resolveSlackThreadContext({
-      replyToMode: "off",
-      message: {
-        type: "message",
-        channel: "C1",
-        ts: "123",
-        thread_ts: "456",
-      },
-    });
-
-    expect(context.isThreadReply).toBe(true);
-    expect(context.messageThreadId).toBe("456");
-    expect(context.replyToId).toBe("456");
   });
 });

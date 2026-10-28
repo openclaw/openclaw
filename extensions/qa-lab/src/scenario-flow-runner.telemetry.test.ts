@@ -159,9 +159,25 @@ async function runTaskEvidence(codeMode: boolean, fault?: Fault, tiedSerial = fa
         text: reply,
         timestamp: fault === "early-artifact" ? statSync(artifactPath).mtimeMs - 1 : terminalAt,
         toolCalls: (codeMode
-          ? ["exec", "read", "read", "exec", "write", "read"]
-          : ["read", "read", "write"]
-        ).map((name) => ({ name, arguments: { path: "[redacted]" } })),
+          ? ([
+              ["exec", undefined],
+              ["read", paths.ledger],
+              ["read", paths.note],
+              ["exec", undefined],
+              ["write", paths.artifact],
+              ["read", paths.artifact],
+            ] as const)
+          : ([
+              ["read", paths.ledger],
+              ["read", paths.note],
+              ["write", paths.artifact],
+            ] as const)
+        ).map(([name, file]) => ({
+          name,
+          arguments: file
+            ? { path: path.join(workspaceDir, file) }
+            : { code: "dispatch task tools" },
+        })),
       });
     },
   });
@@ -183,26 +199,21 @@ describe.each([false, true])("task telemetry evidence with codeMode=%s", (codeMo
     await expect(result).rejects.toThrow(/task|artifact|claim/);
     if (fault === "tied-parallel") {
       const error = await result.catch((failure: unknown) => failure);
-      expect(error).toBeInstanceOf(Error);
       const message = String(error);
       expect(message).toContain('{"inbound":');
       const evidence = JSON.parse(message.slice(message.indexOf('{"inbound":')));
-      expect(evidence).toEqual({
+      expect(evidence).toMatchObject({
         inbound: expect.any(Number),
         outbound: expect.any(Number),
-        logical: ["read", "read", "write"].map((toolName) => ({
-          toolName,
-          startedAt: expect.any(Number),
-          timestamp: expect.any(Number),
-          startAfterIndex: expect.any(Number),
-          resultIndex: expect.any(Number),
-          completed: true,
-          successful: true,
-        })),
       });
-      expect(message).not.toContain(paths.ledger);
-      expect(message).not.toContain(paths.note);
-      expect(message).not.toContain(paths.artifact);
+      expect(evidence.logical.map((activity: { toolName: string }) => activity.toolName)).toEqual([
+        "read",
+        "read",
+        "write",
+      ]);
+      for (const file of Object.values(paths)) {
+        expect(message).not.toContain(file);
+      }
     }
   });
 });

@@ -23,6 +23,7 @@ import {
   resolveSlackAccountDmPolicy,
   mergeSlackAccountConfig,
 } from "../accounts.js";
+import { setSlackChannelPolicyBindings } from "../channel-policy-state.js";
 import { formatSlackError } from "../errors.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
@@ -168,6 +169,11 @@ function resolveStableSlackUserIdEntry(raw: string): string | undefined {
 }
 
 async function resolveWorkspacePolicy(ctx: SlackRuntimePolicyContext, resolveToken: string) {
+  const channelBindings = new Map<string, string>();
+  if (ctx.installationIdentity.kind !== "workspace") {
+    // Only workspace installs resolve channel names; drop bindings from an earlier identity.
+    setSlackChannelPolicyBindings(ctx.accountId, channelBindings);
+  }
   if (ctx.installationIdentity.kind === "enterprise") {
     assertEnterpriseSlackPolicyConfig({
       config: mergeSlackAccountConfig(ctx.cfg, ctx.accountId),
@@ -205,6 +211,7 @@ async function resolveWorkspacePolicy(ctx: SlackRuntimePolicyContext, resolveTok
           }
           const existing = nextChannels[entry.id] ?? {};
           nextChannels[entry.id] = { ...source, ...existing };
+          channelBindings.set(entry.input, entry.id);
         }
         channelsConfig = nextChannels;
         ctx.channelsConfig = nextChannels;
@@ -215,7 +222,11 @@ async function resolveWorkspacePolicy(ctx: SlackRuntimePolicyContext, resolveTok
     }
   }
 
-  const dmEntries = new Set(normalizeStringEntries(allowFrom).filter((entry) => entry !== "*"));
+  if (ctx.isRuntimePolicyCurrent()) {
+    setSlackChannelPolicyBindings(ctx.accountId, channelBindings);
+  }
+
+  const dmEntries = new Set(allowFrom.filter((entry) => entry !== "*"));
   const userEntries = new Set(dmEntries);
   for (const channel of Object.values(channelsConfig ?? {})) {
     addAllowlistUserEntriesFromConfigEntry(userEntries, channel);
@@ -236,7 +247,7 @@ async function resolveWorkspacePolicy(ctx: SlackRuntimePolicyContext, resolveTok
     resolved.filter((entry) => dmEntries.has(entry.input)),
     { formatResolved: formatSlackUserResolved },
   );
-  ctx.allowFrom = normalizeStringEntries(mergeAllowlist({ existing: allowFrom, additions }));
+  ctx.allowFrom = mergeAllowlist({ existing: allowFrom, additions });
   const { resolvedMap, mapping, unresolved } = buildAllowlistResolutionSummary(resolved, {
     formatResolved: formatSlackUserResolved,
   });

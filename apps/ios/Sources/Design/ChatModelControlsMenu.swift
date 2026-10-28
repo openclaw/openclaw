@@ -17,7 +17,7 @@ struct ChatActionSystemRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: self.systemImage)
-                .foregroundStyle(OpenClawBrand.accentForeground)
+                .foregroundStyle(OpenClawBrand.accent)
                 .frame(width: ChatActionMenuMetric.iconWidth, alignment: .leading)
                 .accessibilityHidden(true)
             Text(self.title)
@@ -27,7 +27,7 @@ struct ChatActionSystemRow: View {
             if self.isSelected {
                 Image(systemName: "checkmark")
                     .font(OpenClawType.body)
-                    .foregroundStyle(OpenClawBrand.accentForeground)
+                    .foregroundStyle(OpenClawBrand.accent)
                     .accessibilityIdentifier("chat-menu-selection-checkmark")
             }
         }
@@ -78,7 +78,7 @@ private struct ChatActionResetButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(OpenClawBrand.accentForeground)
+        .foregroundStyle(OpenClawBrand.accent)
         .accessibilityLabel(String(localized: "Use default"))
         .accessibilityIdentifier(self.accessibilityIdentifier)
     }
@@ -352,7 +352,7 @@ struct ChatModelControlsMenuItems: View {
                         }),
                     in: 0...Double(options.count - 1),
                     step: 1)
-                    .tint(OpenClawBrand.accentForeground)
+                    .tint(OpenClawBrand.accent)
                     .disabled(self.viewModel.isUpdatingSessionSettings)
                     .accessibilityIdentifier("chat-thinking-slider")
                     .accessibilityLabel(String(localized: "Thinking level"))
@@ -401,7 +401,7 @@ struct ChatModelControlsMenuItems: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Image(systemName: "bolt.fill")
-                    .foregroundStyle(OpenClawBrand.accentForeground)
+                    .foregroundStyle(OpenClawBrand.accent)
                     .frame(width: ChatActionMenuMetric.iconWidth, alignment: .leading)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
@@ -439,7 +439,7 @@ struct ChatModelControlsMenuItems: View {
                             self.viewModel.selectFastMode(
                                 ChatFastModeControlPresentation.selectionID(isOn: !isOn))
                         })
-                        .tint(OpenClawBrand.accentForeground)
+                        .tint(OpenClawBrand.accent)
                         .disabled(self.viewModel.isUpdatingSessionSettings)
                         .accessibilityIdentifier("chat-fast-mode-toggle")
                         .disabled(!self.viewModel.selectedModelSupportsFastMode)
@@ -462,7 +462,7 @@ struct ChatModelControlsMenuItems: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Image(systemName: "text.alignleft")
-                    .foregroundStyle(OpenClawBrand.accentForeground)
+                    .foregroundStyle(OpenClawBrand.accent)
                     .frame(width: ChatActionMenuMetric.iconWidth, alignment: .leading)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
@@ -557,7 +557,7 @@ struct ChatModelControlsMenuItems: View {
                     Spacer(minLength: 12)
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(OpenClawType.caption)
-                        .foregroundStyle(OpenClawBrand.accentForeground)
+                        .foregroundStyle(OpenClawBrand.accent)
                         .accessibilityHidden(true)
                 }
                 .frame(maxWidth: .infinity, minHeight: ChatActionMenuMetric.rowHeight, alignment: .leading)
@@ -618,7 +618,7 @@ struct ChatModelControlsMenuItems: View {
                 if isSelected {
                     Image(systemName: "checkmark")
                         .font(OpenClawType.body)
-                        .foregroundStyle(OpenClawBrand.accentForeground)
+                        .foregroundStyle(OpenClawBrand.accent)
                         .accessibilityIdentifier("chat-menu-selection-checkmark")
                 }
             }

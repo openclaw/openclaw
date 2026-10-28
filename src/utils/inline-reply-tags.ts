@@ -3,13 +3,6 @@ import {
   skipWhitespace,
 } from "../../packages/tool-call-repair/src/grammar.js";
 
-export type InlineReplyTag = {
-  start: number;
-  end: number;
-  id?: string;
-  complete: boolean;
-};
-
 const REPLY_HEAD = /\[\[\s*(reply_to_current|reply_to\s*:)/iy;
 
 function isWhitespace(character: string): boolean {
@@ -17,9 +10,15 @@ function isWhitespace(character: string): boolean {
 }
 
 /** Reads increasing marker offsets without rescanning nested candidates' shared suffixes. */
-export function createInlineReplyTagReader(
-  text: string,
-): (start: number, allowLeadingMalformed?: boolean) => InlineReplyTag | null {
+export function createInlineReplyTagReader(text: string): (
+  start: number,
+  allowLeadingMalformed?: boolean,
+) => {
+  start: number;
+  end: number;
+  id?: string;
+  complete: boolean;
+} | null {
   let close = -1;
   let contentEnd = -1;
   let lineFeed = -1;

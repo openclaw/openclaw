@@ -1,5 +1,3 @@
-// Gateway startup logging helpers.
-// Produces the compact ready banner with resolved model and safety state.
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import chalk from "chalk";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -58,8 +56,8 @@ export async function logGatewayStartup(params: {
     `http server listening (${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`,
   );
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
-  params.log.warn(
-    "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; legacy direct writers remain supported.",
+  params.log.info(
+    "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
   );
   const sqliteLibrary = ensureSqliteLibrarySelected();
   params.log.info(
@@ -93,13 +91,52 @@ export async function logGatewayStartup(params: {
     params.log.info("gateway: running in Nix mode (config managed externally)");
   }
 
-  for (const warning of await collectConfiguredChannelStartupWarnings({
-    cfg: params.cfg,
-    activationSourceConfig: params.activationSourceConfig,
-    ambientEnvTriggers: params.ambientEnvTriggers,
-    env: params.env,
-    manifestRecords: params.manifestRecords,
-  })) {
+  const { cfg, activationSourceConfig, ambientEnvTriggers, env, manifestRecords } = params;
+  const [blockerModule, presencePolicyModule] = await Promise.all([
+    import("../commands/doctor/shared/channel-plugin-blockers.js"),
+    import("../plugins/channel-presence-policy.js"),
+  ]);
+  const hits = blockerModule.scanConfiguredChannelPluginBlockers(cfg, env, activationSourceConfig, {
+    manifestRecords,
+    ambientEnvTriggers,
+  });
+  const blockerWarnings = blockerModule
+    .collectConfiguredChannelPluginBlockerWarnings(hits)
+    .map((warning) => `configured channel warning: ${warning.replace(/^[-]\s*/u, "")}`);
+  const missingOwnerWarnings = presencePolicyModule
+    .resolveConfiguredChannelPresencePolicy({
+      config: cfg,
+      activationSourceConfig,
+      env,
+      includePersistedAuthState: false,
+      ambientEnvTriggers,
+      manifestRecords,
+    })
+    .filter((entry) => !entry.effective && entry.blockedReasons.includes("no-channel-owner"))
+    .map((entry) => {
+      const channelId = sanitizeForLog(entry.channelId);
+      const reasons = normalizeSortedUniqueStringEntries(entry.blockedReasons).join(", ");
+      return (
+        `configured channel warning: channels.${channelId} is configured but no channel plugin ` +
+        `is installed or loadable (${reasons}). Run \`openclaw doctor --fix\` or install the ` +
+        "channel plugin before relying on this channel."
+      );
+    });
+  const suppressedAmbientChannelIds =
+    ambientEnvTriggers === "suppress"
+      ? presencePolicyModule.listAmbientOnlyConfiguredChannelIds({
+          config: cfg,
+          activationSourceConfig,
+          env,
+          includePersistedAuthState: false,
+          manifestRecords,
+        })
+      : [];
+  const suppressionWarning =
+    suppressedAmbientChannelIds.length > 0
+      ? [formatSuppressedAmbientChannelsStartupWarning(suppressedAmbientChannelIds)]
+      : [];
+  for (const warning of [...suppressionWarning, ...blockerWarnings, ...missingOwnerWarnings]) {
     params.log.warn(warning);
   }
 
@@ -117,7 +154,7 @@ export async function logGatewayStartup(params: {
 }
 
 /** Format the startup model line from the model ref already selected by the caller. */
-export function formatAgentModelStartupLogLine(params: {
+function formatAgentModelStartupLogLine(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
@@ -130,7 +167,7 @@ export function formatAgentModelStartupLogLine(params: {
   };
 }
 
-export function formatAgentModelStartupDetails(params: {
+function formatAgentModelStartupDetails(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
@@ -151,14 +188,13 @@ export function formatAgentModelStartupDetails(params: {
     ) {
       thinking = "off";
     } else {
-      const resolvedThinking = resolveThinkingDefault({
+      thinking = resolveThinkingDefault({
         cfg: params.cfg,
         agentId: soleAgentId,
         provider: params.provider,
         model: params.model,
         catalog: configuredCatalog,
       });
-      thinking = resolvedThinking === "off" ? "medium" : resolvedThinking;
     }
   }
   const fast = resolveFastModeState({
@@ -171,57 +207,6 @@ export function formatAgentModelStartupDetails(params: {
   return `thinking=${thinking}, fast=${formatFastModeValue(fast.mode)}`;
 }
 
-async function collectConfiguredChannelStartupWarnings(params: {
-  cfg: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
-  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-  env: NodeJS.ProcessEnv;
-  manifestRecords: readonly PluginManifestRecord[];
-}): Promise<string[]> {
-  const [blockerModule, presencePolicyModule] = await Promise.all([
-    import("../commands/doctor/shared/channel-plugin-blockers.js"),
-    import("../plugins/channel-presence-policy.js"),
-  ]);
-  const hits = blockerModule.scanConfiguredChannelPluginBlockers(
-    params.cfg,
-    params.env,
-    params.activationSourceConfig,
-    {
-      manifestRecords: params.manifestRecords,
-      ambientEnvTriggers: params.ambientEnvTriggers,
-    },
-  );
-  const blockerWarnings = blockerModule
-    .collectConfiguredChannelPluginBlockerWarnings(hits)
-    .map((warning) => `configured channel warning: ${warning.replace(/^[-]\s*/u, "")}`);
-  const missingOwnerWarnings = presencePolicyModule
-    .resolveConfiguredChannelPresencePolicy({
-      config: params.cfg,
-      activationSourceConfig: params.activationSourceConfig,
-      env: params.env,
-      includePersistedAuthState: false,
-      ambientEnvTriggers: params.ambientEnvTriggers,
-      manifestRecords: params.manifestRecords,
-    })
-    .filter((entry) => !entry.effective && entry.blockedReasons.includes("no-channel-owner"))
-    .map(formatConfiguredChannelMissingOwnerStartupWarning);
-  const suppressedAmbientChannelIds =
-    params.ambientEnvTriggers === "suppress"
-      ? presencePolicyModule.listAmbientOnlyConfiguredChannelIds({
-          config: params.cfg,
-          activationSourceConfig: params.activationSourceConfig,
-          env: params.env,
-          includePersistedAuthState: false,
-          manifestRecords: params.manifestRecords,
-        })
-      : [];
-  const suppressionWarning =
-    suppressedAmbientChannelIds.length > 0
-      ? [formatSuppressedAmbientChannelsStartupWarning(suppressedAmbientChannelIds)]
-      : [];
-  return [...suppressionWarning, ...blockerWarnings, ...missingOwnerWarnings];
-}
-
 function formatSuppressedAmbientChannelsStartupWarning(channelIds: readonly string[]): string {
   const safeChannelIds = normalizeSortedUniqueStringEntries(channelIds).map((channelId) =>
     sanitizeForLog(channelId),
@@ -231,19 +216,6 @@ function formatSuppressedAmbientChannelsStartupWarning(channelIds: readonly stri
     `${safeChannelIds.length === 1 ? "channel" : "channels"}: ${safeChannelIds.join(", ")}. ` +
     "Configure channels.<id> (openclaw channels add <id>) to enable the channel, or pass " +
     "--ambient-channels to allow ambient env credentials."
-  );
-}
-
-function formatConfiguredChannelMissingOwnerStartupWarning(entry: {
-  channelId: string;
-  blockedReasons: readonly string[];
-}): string {
-  const channelId = sanitizeForLog(entry.channelId);
-  const reasons = normalizeSortedUniqueStringEntries(entry.blockedReasons).join(", ");
-  return (
-    `configured channel warning: channels.${channelId} is configured but no channel plugin ` +
-    `is installed or loadable (${reasons}). Run \`openclaw doctor --fix\` or install the ` +
-    "channel plugin before relying on this channel."
   );
 }
 

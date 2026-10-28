@@ -18,13 +18,9 @@ export function clearActiveProgressLine(): void {
   activeStream.write("\r\x1b[2K");
 }
 
-/** Unregister the active progress line, optionally only for a matching stream. */
-export function unregisterActiveProgressLine(stream?: NodeJS.WriteStream): void {
-  if (!activeStream) {
-    return;
+/** Unregister the active progress line for a matching stream. */
+export function unregisterActiveProgressLine(stream: NodeJS.WriteStream): void {
+  if (activeStream === stream) {
+    activeStream = null;
   }
-  if (stream && activeStream !== stream) {
-    return;
-  }
-  activeStream = null;
 }

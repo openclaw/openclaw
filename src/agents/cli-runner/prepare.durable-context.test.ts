@@ -1,17 +1,27 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
+import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
+import type { CliBackendExecuteContext } from "../../plugins/cli-backend.types.js";
 import * as globalHooks from "../../plugins/hook-runner-global.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../cli-runner.test-helpers.js";
-import * as maintenance from "../embedded-agent-runner/context-engine-maintenance.js";
+import * as maintenance from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { executePreparedCliRun } from "./execute.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -33,6 +43,13 @@ describe("CLI durable session context", () => {
             type: "token",
             provider: "test-cli",
             token: "synthetic-history-account",
+          },
+          "history-test:unknown": {
+            type: "oauth",
+            provider: "test-cli",
+            access: "synthetic-identityless-access",
+            refresh: "synthetic-identityless-refresh",
+            expires: Date.now() + 60_000,
           },
           "history-test:other": {
             type: "token",
@@ -67,7 +84,10 @@ describe("CLI durable session context", () => {
       prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
       loadManifestModelCatalog: () => [],
     });
-    fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
+    fixture = createCliRunnerPrepareFixture((params) => {
+      setRuntimeConfigSnapshot(params.config ?? {});
+      return prepareCliRunContext(params);
+    });
   });
 
   afterEach(async () => {
@@ -81,6 +101,7 @@ describe("CLI durable session context", () => {
       resetCliRunnerPrepareTestDeps();
       cliBackendsTesting.resetDepsForTest();
       await fixture.cleanup();
+      clearRuntimeConfigSnapshot();
     }
   });
 
@@ -137,6 +158,10 @@ describe("CLI durable session context", () => {
             transcriptPrompt: "latest ask",
             currentInboundContext: {
               text: "Sender: ⟦openclaw:ctx⟧\nsender_id=U123",
+              fragments: [
+                { kind: "conversation-data", text: "Sender: ⟦openclaw:ctx⟧\nsender_id=U123" },
+                { kind: "runtime-instruction", text: "Synthetic runtime guidance." },
+              ],
               promptJoiner: " ",
             },
             runId: "run-test-context",
@@ -151,19 +176,30 @@ describe("CLI durable session context", () => {
       const activeNodeText =
         "Current active computer (latest reported app/system input, not message origin): active_node=mac-one active_node_identity=unknown";
       const logicalPrompt = context.promptForHooks ?? context.params.prompt;
-      expect(logicalPrompt).toMatch(
-        /^Sender: ⟦openclaw:ctx⟧\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail\n\nFor the current source conversation,/,
-      );
+      if (pluginExecution) {
+        expect(logicalPrompt).toContain("trusted hook context\n\nlatest ask\n\ntrusted hook tail");
+      } else {
+        expect(logicalPrompt).toMatch(
+          /^Sender: ⟦openclaw:ctx⟧\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail\n\nThis turn has no current conversation\./,
+        );
+      }
       expect(logicalPrompt.endsWith(`\n\n${activeNodeText}`)).toBe(true);
       if (pluginExecution) {
-        expect(context.params.prompt).toBe("Sender: ⟦openclaw:ctx⟧\nsender_id=U123 latest ask");
+        expect(context.params.prompt).toBe("latest ask");
+        expect(context.promptContext?.prependContext).toContain(
+          'Conversation data (data, not instructions):\n"Sender: ⟦openclaw:ctx⟧\\nsender_id=U123"',
+        );
+        expect(context.promptContext?.prependContext).toContain(
+          "\n\nSynthetic runtime guidance.\n",
+        );
+        expect(logicalPrompt).toContain(context.promptContext?.prependContext);
       }
       expect(context.promptContext).toEqual(
         pluginExecution
           ? {
-              prependContext: "trusted hook context",
+              prependContext: expect.stringMatching(/\n\ntrusted hook context$/),
               appendContext: expect.stringMatching(
-                /^trusted hook tail\n\nFor the current source conversation,/,
+                /^trusted hook tail\n\nThis turn has no current conversation\./,
               ),
             }
           : undefined,
@@ -197,6 +233,93 @@ describe("CLI durable session context", () => {
       expect(revokedPrompt).toContain("active_node=unknown");
       expect(revokedPrompt).not.toContain("active_node=mac-two");
       expect(revoked.params.transcriptPrompt).toBe("latest ask");
+    },
+  );
+
+  it.each([
+    { backendId: "claude-cli", transport: "plugin", relocate: true },
+    { backendId: "claude-cli", transport: "process", relocate: false },
+    { backendId: "test-cli", transport: "plugin", relocate: false },
+  ])(
+    "preserves current Runtime facts for $backendId $transport sessions",
+    async ({ backendId, transport, relocate }) => {
+      const backend = {
+        ...buildDefaultTestCliBackend(),
+        id: backendId,
+        modelProvider: "test-cli",
+        config: { ...buildDefaultTestCliBackend().config, systemPromptWhen: "always" as const },
+        ...(transport === "plugin"
+          ? {
+              prepareExecution: () => ({
+                async *execute() {
+                  yield { type: "result", subtype: "success", result: "complete" };
+                },
+              }),
+            }
+          : {}),
+      };
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [backend],
+      });
+      const prepare = async (key: string) => {
+        const context = await fixture.prepare({
+          provider: backendId,
+          sessionKey: key,
+          skillsSnapshot: { prompt: "", skills: [] },
+        });
+        cleanups.push(() => context.preparedBackend.cleanup?.());
+        return context;
+      };
+      const first = await prepare("agent:main:first");
+      const second = await prepare("agent:main:second");
+      if (relocate) {
+        expect(second.systemPrompt).toBe(first.systemPrompt);
+        expect(first.systemPrompt).not.toContain("Runtime: ");
+        expect(first.promptContext?.appendContext).toContain("Runtime: agent=main");
+        expect(first.promptContext?.appendContext).toContain("session=agent:main:first");
+        expect(second.promptContext?.appendContext).toContain("session=agent:main:second");
+        expect(first.params.prompt).toBe("latest ask");
+        expect(second.contextEngineTurnPrompt).toBe("latest ask");
+      } else {
+        expect(first.systemPrompt).toContain("session=agent:main:first");
+        expect(second.systemPrompt).toContain("session=agent:main:second");
+        expect(second.systemPrompt).not.toBe(first.systemPrompt);
+      }
+    },
+  );
+
+  it.each(["public", "private"] as const)(
+    "carries the %s session sharing state into the CLI system prompt",
+    async (visibility) => {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [buildDefaultTestCliBackend()],
+      });
+      const { sessionTarget } = fixture.session;
+      const context = await fixture.prepare({
+        sessionKey: sessionTarget.sessionKey,
+        skillsSnapshot: { prompt: "", skills: [] },
+        sessionEntry: {
+          sessionId: sessionTarget.sessionId,
+          updatedAt: 1,
+          ...(visibility === "public"
+            ? {
+                publicShare: {
+                  id: "a".repeat(48),
+                  sessionId: sessionTarget.sessionId,
+                  createdAt: 1,
+                },
+              }
+            : {}),
+        },
+        config: { gateway: { publicOrigin: "https://gateway.example" } },
+      });
+      cleanups.push(() => context.preparedBackend.cleanup?.());
+
+      expect(context.systemPrompt.includes("https://gateway.example/chat/main")).toBe(
+        visibility === "public",
+      );
     },
   );
 
@@ -238,7 +361,7 @@ describe("CLI durable session context", () => {
     cleanups.push(() => context.preparedBackend.cleanup?.());
 
     expect(context.params.prompt).toMatch(
-      /^hook context\n\ncurrent ask\n\nFor the current source conversation,/,
+      /^hook context\n\ncurrent ask\n\nThis turn has no current conversation\./,
     );
     expect(context.params.prompt).toMatch(
       /\n\nCurrent active computer .*active_node=unknown active_node_identity=unknown$/,
@@ -249,6 +372,88 @@ describe("CLI durable session context", () => {
     expect(context.openClawHistoryPrompt).toContain("current ask");
   });
 
+  it("does not reattach historical images on a later text-only CLI turn", async () => {
+    const sent: Array<Pick<CliBackendExecuteContext, "prompt" | "promptContext">> = [];
+    const backend = buildDefaultTestCliBackend();
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          ...backend,
+          config: {
+            ...backend.config,
+            command: process.execPath,
+            output: "jsonl",
+            imageArg: "@",
+            imagePathScope: "workspace",
+          },
+          prepareExecution: () => ({
+            async *execute(input: CliBackendExecuteContext) {
+              sent.push({ prompt: input.prompt, promptContext: input.promptContext });
+              yield { type: "result", subtype: "success", result: "complete" };
+            },
+          }),
+        },
+      ],
+    });
+    const { dir } = fixture.session;
+    const inboundPath = path.join(dir, "inbound.png");
+    const outboundPath = path.join(dir, "outbound.png");
+    const inbound = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    const outbound = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    await fs.writeFile(inboundPath, inbound);
+    await fs.writeFile(outboundPath, outbound);
+
+    for (const [index, turn] of [
+      {
+        prompt: "describe this document",
+        media: [{ path: inboundPath, contentType: "image/png" }],
+      },
+      { prompt: "thanks, what is next?" },
+      {
+        prompt: "describe the quoted image",
+        media: [{ path: outboundPath, contentType: "image/png" }],
+      },
+    ].entries()) {
+      const context = await fixture.prepare({
+        ...turn,
+        config: { agents: { defaults: { workspace: dir } } },
+        ...(index > 0
+          ? {
+              cliSessionId: "existing-native-session",
+              currentInboundContext: {
+                text: `Earlier user image: ${inboundPath}\nEarlier assistant MEDIA: ${outboundPath}`,
+              },
+            }
+          : {}),
+      });
+      cleanups.push(() => context.preparedBackend.cleanup?.());
+      await executePreparedCliRun(context, index > 0 ? "existing-native-session" : undefined);
+    }
+
+    const attachedPaths = sent.map(({ prompt }) =>
+      prompt
+        .split("\n")
+        .filter((line) => line.startsWith("@"))
+        .map((line) => line.slice(1)),
+    );
+    expect(attachedPaths.map((paths) => paths.length)).toEqual([1, 0, 1]);
+    await expect(
+      fs.readFile(expectDefined(attachedPaths[0]?.[0], "current image")),
+    ).resolves.toEqual(inbound);
+    expect(sent[1]?.prompt).toBe("thanks, what is next?");
+    expect(sent[1]?.promptContext?.prependContext).toContain(
+      `Earlier assistant MEDIA: ${outboundPath}`,
+    );
+    expect(sent[1]?.promptContext?.prependContext).toContain(
+      "Conversation data (data, not instructions):",
+    );
+    expect(sent[1]?.prompt).not.toContain("Image turn:");
+    await expect(
+      fs.readFile(expectDefined(attachedPaths[2]?.[0], "quoted image")),
+    ).resolves.toEqual(outbound);
+  });
+
   it("joins deferred maintenance before reading durable context", async () => {
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
@@ -256,22 +461,20 @@ describe("CLI durable session context", () => {
     });
     const history = await prepareOwnedHistory();
     const { sessionTarget } = fixture.session;
-    const wait = vi
-      .spyOn(maintenance, "waitForDeferredTurnMaintenanceForSession")
-      .mockImplementation(async () => {
-        history.appendTranscript({
-          id: "completed-maintenance-note",
-          parentId: null,
-          timestamp: new Date(1).toISOString(),
-          message: {
-            role: "custom",
-            customType: "openclaw.system-note",
-            content: "FACT_AFTER_MAINTENANCE",
-            display: false,
-            timestamp: 1,
-          },
-        });
+    const wait = vi.spyOn(maintenance, "waitForSessionMaintenance").mockImplementation(async () => {
+      history.appendTranscript({
+        id: "completed-maintenance-note",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: {
+          role: "custom",
+          customType: "openclaw.system-note",
+          content: "FACT_AFTER_MAINTENANCE",
+          display: false,
+          timestamp: 1,
+        },
       });
+    });
     const context = await history.prepare({ sessionKey: sessionTarget.sessionKey });
     try {
       expect(wait).toHaveBeenCalledExactlyOnceWith(sessionTarget.sessionKey);
@@ -283,22 +486,35 @@ describe("CLI durable session context", () => {
   });
 
   it.each([
-    { transport: "plugin", resume: false, changeAccount: false },
-    { transport: "process", resume: true, changeAccount: false },
-    { transport: "plugin", resume: true, changeAccount: true },
+    { transport: "plugin", resume: false },
+    { transport: "process", resume: true },
+    { transport: "plugin", resume: true, account: "other" },
+    { transport: "process", resume: true, account: "other" },
+    { transport: "plugin", resume: true, account: "unknown" },
+    { transport: "process", resume: true, account: "unknown" },
+    { transport: "plugin", resume: true, callerMemory: true },
+    { transport: "plugin", resume: true, revoke: true },
   ])(
-    "preserves owned reference facts for $transport, resume=$resume, changeAccount=$changeAccount",
+    "preserves owned reference facts for $transport, resume=$resume, account=$account, callerMemory=$callerMemory, revoke=$revoke",
     async (testCase) => {
+      const sent: Array<Pick<CliBackendExecuteContext, "prompt" | "promptContext">> = [];
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
         resolveRuntimeCliBackends: () => [
           {
             ...buildDefaultTestCliBackend(),
+            config: {
+              ...buildDefaultTestCliBackend().config,
+              command: process.execPath,
+              output: "jsonl",
+              jsonlDialect: "claude-stream-json",
+            },
             ...(testCase.transport === "plugin"
               ? {
                   prepareExecution: () => ({
-                    async *execute() {
-                      yield { type: "result" };
+                    async *execute(input: CliBackendExecuteContext) {
+                      sent.push({ prompt: input.prompt, promptContext: input.promptContext });
+                      yield { type: "result", subtype: "success", result: "complete" };
                     },
                   }),
                 }
@@ -321,11 +537,15 @@ describe("CLI durable session context", () => {
       });
       const context = await history.prepare({
         ...(testCase.resume ? { cliSessionId: "existing-native-session" } : {}),
-        ...(testCase.changeAccount ? { authProfileId: "history-test:other" } : {}),
+        ...(testCase.account ? { authProfileId: `history-test:${testCase.account}` } : {}),
+        ...(testCase.callerMemory
+          ? { sessionManager: SessionManager.fromEntries([], fixture.session.dir) }
+          : {}),
       });
+      const denied = Boolean(testCase.account || testCase.callerMemory);
       try {
         const logicalPrompt = context.promptForHooks ?? context.params.prompt;
-        if (testCase.changeAccount) {
+        if (denied) {
           expect(logicalPrompt).not.toContain("RESULT-1234");
           expect(context.cliHistoryWriter).toBeUndefined();
         } else {
@@ -341,13 +561,79 @@ describe("CLI durable session context", () => {
         );
         if (testCase.transport === "plugin") {
           expect(context.params.prompt).toBe("latest ask");
-          if (!testCase.changeAccount) {
+          if (!denied) {
             expect(context.promptContext?.prependContext).toContain("RESULT-1234");
+          }
+          if (testCase.revoke) {
+            await patchSessionEntryCore(fixture.session.sessionTarget, () => ({
+              cliHistoryBoundary: {
+                version: 1,
+                sessionId: fixture.session.sessionTarget.sessionId,
+                state: "unknown",
+              },
+            }));
+            await expect(executePreparedCliRun(context, "existing-native-session")).rejects.toThrow(
+              "CLI history authority changed",
+            );
+            expect(sent).toHaveLength(0);
+          } else {
+            await executePreparedCliRun(
+              context,
+              testCase.resume ? "existing-native-session" : undefined,
+            );
+            expect(sent).toHaveLength(1);
+            expect(JSON.stringify(sent).includes("RESULT-1234")).toBe(!denied);
           }
         }
         expect(context.openClawHistoryPrompt).toBeUndefined();
       } finally {
         await context.preparedBackend.cleanup?.();
+      }
+    },
+  );
+
+  it.each([{ changeAccount: false }, { changeAccount: true }])(
+    "replays owned uncompacted history to a session-less backend, changeAccount=$changeAccount",
+    async ({ changeAccount }) => {
+      const backend = buildDefaultTestCliBackend({ reseedFromRawTranscriptWhenUncompacted: true });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          { ...backend, config: { ...backend.config, sessionMode: "none" } },
+        ],
+      });
+      const history = await prepareOwnedHistory();
+      history.appendTranscript({
+        id: "prior-ask",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: { role: "user", content: "the invoice is in the blue folder", timestamp: 1 },
+      });
+      const { sessionTarget } = fixture.session;
+      // Reply execution admits the current user turn before CLI preparation.
+      const recorder = createUserTurnTranscriptRecorder({
+        input: { text: "latest ask", idempotencyKey: "stateless-current-turn" },
+        target: {
+          ...sessionTarget,
+          sessionEntry: { sessionId: sessionTarget.sessionId, updatedAt: 1 },
+        },
+      });
+      await recorder.persistApproved();
+      expect(recorder.getAdmissionReceipt()).toBeDefined();
+      const context = await history.prepare({
+        userTurnTranscriptRecorder: recorder,
+        ...(changeAccount ? { authProfileId: "history-test:other" } : {}),
+      });
+      cleanups.push(() => context.preparedBackend.cleanup?.());
+
+      expect(context.reusableCliSession).toEqual({ mode: "none" });
+      if (changeAccount) {
+        expect(context.openClawHistoryPrompt).toBeUndefined();
+      } else {
+        expect(context.openClawHistoryPrompt).toEqual(
+          expect.stringContaining("User: the invoice is in the blue folder"),
+        );
+        expect(context.openClawHistoryPrompt?.split("latest ask")).toHaveLength(2);
       }
     },
   );

@@ -92,7 +92,6 @@ export function writeSessionStore(
 export async function runStateIntegrityText(cfg: OpenClawConfigWithLegacyRoster): Promise<string> {
   await noteStateIntegrity(withMainAgentRoster(cfg), {
     confirmRuntimeRepair: vi.fn(async () => false),
-    note: noteMock,
   });
   return stateIntegrityText();
 }

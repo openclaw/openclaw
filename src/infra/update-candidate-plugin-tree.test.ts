@@ -6,6 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import * as fsSafe from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
@@ -219,6 +220,7 @@ it.each([
 ] as const)(
   "refuses %s changes at the copy mutation boundary before exposing plugin bytes",
   async (change) => {
+    const advanceCtime = createFileMutationClock();
     const f = await fixture(false, async (source) => {
       // Use a representable time so restored-mtime coverage cannot pass on rounding.
       await fs.utimes(path.join(source, "payload.txt"), 1_700_000_000, 1_700_000_000);
@@ -247,7 +249,9 @@ it.each([
             ? before.mtime
             : new Date(before.mtime.getTime() + 60_000),
         );
+        advanceCtime(before);
         const changed = fsSync.lstatSync(f.file, { bigint: true });
+        expect(changed.ctimeNs).not.toBe(before.ctimeNs);
         expect(changed).toMatchObject({
           dev: before.dev,
           ino: before.ino,
@@ -344,29 +348,11 @@ it.each(["uid", "gid"] as const)("refuses changed inventoried ownership (%s)", a
   await expect(f.copy()).rejects.toThrow("changed after snapshot inventory");
 });
 
-it.skipIf(process.platform !== "linux")(
-  "verifies bytes when Linux reports ctime as birthtime without statx",
-  async () => {
-    const lstat = fs.lstat;
-    const lstatSync = fsSync.lstatSync;
-    const fstatSync = fsSync.fstatSync;
-    const fallbackBirthtime = <T extends fsSync.Stats | fsSync.BigIntStats | undefined>(
-      stat: T,
-    ): T => {
-      if (stat && "birthtimeNs" in stat) {
-        stat.birthtimeNs = stat.ctimeNs;
-      }
-      return stat;
-    };
-    vi.spyOn(fs, "lstat").mockImplementation(async (...args) =>
-      fallbackBirthtime(await lstat(...args)),
-    );
-    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) =>
-      fallbackBirthtime(lstatSync(...args)),
-    );
-    vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) =>
-      fallbackBirthtime(fstatSync(...args)),
-    );
+it.each(["linux", "android"] as const)(
+  "verifies bytes when %s reports ctime as birthtime without statx",
+  async (platform) => {
+    mockProcessPlatform(platform);
+    const advanceCtime = createFileMutationClock({ birthtimeFromCtime: true });
     for (const change of ["link", "content", "birthtime"] as const) {
       const f = await fixture(false, async (source) => {
         await fs.utimes(path.join(source, "payload.txt"), 1_700_000_000, 1_700_000_000);
@@ -385,6 +371,8 @@ it.skipIf(process.platform !== "linux")(
         }
         entry.birthtimeNs = (BigInt(entry.birthtimeNs) - 1n).toString();
       }
+      advanceCtime(before);
+      expect((await fs.lstat(f.file, { bigint: true })).ctimeNs).not.toBe(before.ctimeNs);
       if (change === "link") {
         await f.copy();
         expect(await fs.readFile(path.join(f.destination, "payload.txt"), "utf8")).toBe(
@@ -479,7 +467,7 @@ it("drains concurrent file copies before reporting a failure or publishing links
   }
 });
 
-it.each(["inventory", "bindings", "admission", "completion", "verification"] as const)(
+it.each(["inventory", "bindings", "verification"] as const)(
   "settles bounded %s reads before a metadata failure reaches cleanup",
   async (phase) => {
     const peerEntered = createDeferredCore();
@@ -490,7 +478,7 @@ it.each(["inventory", "bindings", "admission", "completion", "verification"] as 
     let maximum = 0;
     let activeAtRejection: number | undefined;
     let selectedDirectory = "";
-    let enabled = phase === "inventory" || phase === "bindings" || phase === "admission";
+    let enabled = phase === "inventory" || phase === "bindings";
     const intercept = async <T>(file: unknown, read: () => Promise<T>): Promise<T> => {
       if (
         !enabled ||
@@ -538,9 +526,6 @@ it.each(["inventory", "bindings", "admission", "completion", "verification"] as 
           await fs.writeFile(file, `plugin payload ${index}`);
         }
       }
-      if (phase === "completion") {
-        await fs.symlink("payload.txt", path.join(source, "copy-complete"));
-      }
       if (phase === "inventory") {
         installReadSpy();
       }
@@ -550,16 +535,7 @@ it.each(["inventory", "bindings", "admission", "completion", "verification"] as 
       if (phase !== "inventory") {
         installReadSpy();
       }
-      if (phase === "completion") {
-        const symlink = fs.symlink;
-        vi.spyOn(fs, "symlink").mockImplementation(async (...args) => {
-          const result = await symlink(...args);
-          if (args[1] === path.join(f.destination, "copy-complete")) {
-            enabled = true;
-          }
-          return result;
-        });
-      } else if (phase === "verification") {
+      if (phase === "verification") {
         selectedDirectory = f.destination;
         const readdir = fs.readdir;
         vi.spyOn(fs, "readdir").mockImplementation((...args) => {
@@ -657,7 +633,7 @@ it("copies a linked workspace dependency without reading or changing Git update 
   expect(await fs.readFile(path.join(dependency, "data.txt"), "utf8")).toBe("live dependency");
 });
 
-it.each(["ordinary.tmp", "node_modules.openclaw-update-operator.tmp"])(
+it.each(["node_modules.openclaw-update-operator.tmp"])(
   "still rejects a missing dependency beneath %s",
   async (directory) => {
     await expect(

@@ -1,5 +1,5 @@
 import {
-  createChannelApprovalNativeRuntimeAdapter,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   type ChannelApprovalCapabilityHandlerContext,
   type ExpiredApprovalView,
   type PendingApprovalView,
@@ -206,7 +206,7 @@ function buildFinalPayload(
   };
 }
 
-export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   ReturnType<typeof buildPendingPayload>,
   PreparedGoogleChatTarget,
   GoogleChatPendingEntry,

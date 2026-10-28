@@ -1,4 +1,3 @@
-// QA Lab mock provider tool planning and memory fixtures.
 import { createHash } from "node:crypto";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readQaNativeWorkspaceBehaviorFromPrompt } from "../../native-workspace-behavior.js";
@@ -34,11 +33,10 @@ export function buildWhatsAppAgentActionArgs(prompt: string): Record<string, unk
 }
 
 function normalizePromptPathCandidate(candidate: string) {
-  const trimmed = candidate.trim().replace(/^`+|`+$/g, "");
-  if (!trimmed) {
-    return null;
-  }
-  const normalized = trimmed.replace(/^\.\//, "");
+  const normalized = candidate
+    .trim()
+    .replace(/^`+|`+$/g, "")
+    .replace(/^\.\//, "");
   if (
     normalized.includes("/") ||
     /\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)$/i.test(normalized)
@@ -58,15 +56,15 @@ export function readTargetFromPrompt(prompt: string) {
     }
   }
 
-  const repoScoped = /\b(?:repo\/[^\s`",)]+|QA_[A-Z_]+\.md)\b/.exec(prompt)?.[0]?.trim();
+  const repoScoped = /\b(?:repo\/[^\s`",)]+|QA_[A-Z_]+\.md)\b/.exec(prompt)?.[0];
   if (repoScoped) {
     return repoScoped;
   }
 
   const loosePath =
-    /\b[A-Za-z0-9_][A-Za-z0-9._@!:-]*\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)\b/i
-      .exec(prompt)?.[0]
-      ?.trim();
+    /\b[A-Za-z0-9_][A-Za-z0-9._@!:-]*\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)\b/i.exec(
+      prompt,
+    )?.[0];
   if (loosePath) {
     return loosePath;
   }
@@ -182,7 +180,7 @@ export function extractActiveMemorySummary(text: string) {
 export function extractToolSearchTarget(text: string): string | null {
   // Tool descriptions also contain target= arguments; only the QA marker selects a tool.
   const match = /\btool search qa (?:check|failure)\s+target=([A-Za-z0-9_.:-]+)\b/i.exec(text);
-  return match?.[1]?.trim() || null;
+  return match?.[1] ?? null;
 }
 
 export function toolSearchOutputHasCandidate(output: unknown, targetTool: string): boolean {
@@ -363,10 +361,10 @@ export function isSnackRecallPrompt(text: string) {
 }
 
 export function extractSnackPreference(text: string) {
-  const normalized = text.replace(/\s+/g, " ").trim();
+  const normalized = text.replace(/\s+/g, " ");
   const match =
     /(lemon pepper wings(?:\s+with\s+blue cheese)?|blue cheese(?:\s+with\s+lemon pepper wings)?)/i.exec(
       normalized,
     );
-  return match?.[0]?.trim() ?? null;
+  return match?.[0] ?? null;
 }

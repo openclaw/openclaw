@@ -19,8 +19,6 @@ vi.mock("./audio-worker-thread.js", async () => {
 });
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
 import { DiscordRealtimePlayer } from "./realtime-player.js";
-import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
-import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import type { VoiceSessionEntry } from "./session.js";
 import { DiscordVoiceConversationQueue } from "./voice-conversation-input.js";
 
@@ -28,18 +26,18 @@ export function createRealtimePlaybackFixture(
   onTalkEvent?: (event: TalkEvent) => void,
   options: { outputAudioMode?: "response" | "continuous"; bargeIn?: boolean } = {},
 ) {
-  const voiceSdk = loadDiscordVoiceSdk();
+  const voiceSdk = sdkRuntime.loadDiscordVoiceSdk();
+  const noop = () => {};
+  const connectionOptions = {
+    guildId: "guild",
+    channelId: "voice",
+    group: "playback-integration",
+    selfDeaf: true,
+    selfMute: false,
+  };
+  const adapterCreator = () => ({ sendPayload: () => true, destroy: noop });
   // A signalling-only connection supplies the session shape without opening Discord sockets.
-  const connection = new voiceSdk.VoiceConnection(
-    {
-      guildId: "guild",
-      channelId: "voice",
-      group: "playback-integration",
-      selfDeaf: true,
-      selfMute: false,
-    },
-    { adapterCreator: () => ({ sendPayload: () => true, destroy: () => {} }) },
-  );
+  const connection = new voiceSdk.VoiceConnection(connectionOptions, { adapterCreator });
   const sdkOverride = vi.spyOn(sdkRuntime, "loadDiscordVoiceSdk").mockReturnValue({
     ...voiceSdk,
     createAudioPlayer: () =>
@@ -47,21 +45,16 @@ export function createRealtimePlaybackFixture(
         behaviors: { noSubscriber: voiceSdk.NoSubscriberBehavior.Play, maxMissedFrames: 100 },
       }),
     joinVoiceChannel: () => connection,
-    entersState: voiceSdk.entersState,
   });
   const audio = new DiscordAudioTransport(
     {
-      guildId: "guild",
-      channelId: "voice",
-      group: "playback-integration",
-      selfDeaf: true,
-      selfMute: false,
+      ...connectionOptions,
       connectTimeoutMs: 30_000,
       reconnectGraceMs: 15_000,
       captureSilenceGraceMs: 2_000,
       realtime: true,
     },
-    () => ({ sendPayload: () => true, destroy: () => {} }),
+    adapterCreator,
   );
   const player = getDiscordAudioTestWorker(audio)["player"];
   sdkOverride.mockRestore();
@@ -72,7 +65,6 @@ export function createRealtimePlaybackFixture(
     sessionLifecycle: { status: "active" },
     guildId: "guild",
     channelId: "voice",
-    sessionChannelId: "voice",
     voiceSessionKey: "agent:main:discord:voice",
     route: {
       agentId: "main",
@@ -90,8 +82,12 @@ export function createRealtimePlaybackFixture(
     audioInputBudget: { enabled: false },
     ttsStreamFallbackWarned: false,
     capture: new Map(),
-    realtimeLifecycle: { status: "inactive", generation: 0 },
-    receiveRecovery: createVoiceReceiveRecoveryState(),
+    realtimeLifecycle: { status: "inactive" },
+    receiveRecovery: {
+      decryptFailureCount: 0,
+      lastDecryptFailureAt: 0,
+      decryptRecoveryInFlight: false,
+    },
     stop: vi.fn(),
   };
   const roomPlayer = new DiscordRealtimePlayer(audio);
@@ -118,10 +114,12 @@ export function createRealtimePlaybackFixture(
       },
     });
     const cancel = vi.spyOn(harness, "handleBargeIn");
-    const onTerminalError = vi.fn();
-    const stopTerminally = vi.fn();
-    const sendUserMessage = vi.fn();
-    const acknowledgeMark = vi.fn();
+    const mocks = {
+      onTerminalError: vi.fn(),
+      stopTerminally: vi.fn(),
+      sendUserMessage: vi.fn(),
+      acknowledgeMark: vi.fn(),
+    };
     const playback = new DiscordRealtimePlayback({
       bridge: () => bridge,
       bridgeReady: () => true,
@@ -129,13 +127,12 @@ export function createRealtimePlaybackFixture(
       entry,
       player: roomPlayer,
       harness,
-      markProviderGenerationObserved: () => {},
-      mode: "agent-proxy",
-      onTerminalError,
+      markProviderGenerationObserved: noop,
+      onTerminalError: mocks.onTerminalError,
       providerId: () => "openai",
       realtimeConfig: () =>
         options.bargeIn === undefined ? undefined : { bargeIn: options.bargeIn },
-      stopTerminally,
+      stopTerminally: mocks.stopTerminally,
       stopped: () => closed,
       wakeNameRequired: () => false,
     });
@@ -149,12 +146,12 @@ export function createRealtimePlaybackFixture(
           return {
             outputAudioMode: options.outputAudioMode,
             connect: async () => {},
-            close: () => {},
-            sendAudio: () => {},
-            sendUserMessage,
-            setMediaTimestamp: () => {},
-            acknowledgeMark,
-            submitToolResult: () => {},
+            close: noop,
+            sendAudio: noop,
+            sendUserMessage: mocks.sendUserMessage,
+            setMediaTimestamp: noop,
+            acknowledgeMark: mocks.acknowledgeMark,
+            submitToolResult: noop,
             isConnected: () => true,
             ...(interruption === "unsupported"
               ? {}
@@ -182,10 +179,7 @@ export function createRealtimePlaybackFixture(
       harness,
       callbacks,
       cancel,
-      onTerminalError,
-      stopTerminally,
-      sendUserMessage,
-      acknowledgeMark,
+      ...mocks,
       close(this: void, preserveUnplayedSpeech = false) {
         closed = true;
         playback.close(preserveUnplayedSpeech);
@@ -216,9 +210,7 @@ export function createRealtimePlaybackFixture(
     onPlayerError,
     close() {
       roomPlayer.close();
-      for (const lane of lanes) {
-        lane.close();
-      }
+      lanes.forEach((lane) => lane.close());
       void audio.stop();
       player.off("error", onPlayerError);
       stop.mockRestore();

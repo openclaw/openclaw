@@ -32,8 +32,15 @@ type DiscordThreadBindingLookupRecord = {
 
 export type DiscordThreadBindingLookup = {
   listBySessionKey: (targetSessionKey: string) => DiscordThreadBindingLookupRecord[];
+  getByThreadId?: (
+    threadId: string,
+  ) => { webhookId?: string; metadata?: Record<string, unknown> } | undefined;
   touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
+
+function formatDiscordReplyContext(target: string, sessionKey?: string): string {
+  return `target=${target}${sessionKey ? ` session=${sessionKey}` : ""}`;
+}
 
 export function formatDiscordReplyDeliveryFailure(params: {
   kind: string;
@@ -41,12 +48,7 @@ export function formatDiscordReplyDeliveryFailure(params: {
   target: string;
   sessionKey?: string;
 }) {
-  const context = [
-    `target=${params.target}`,
-    params.sessionKey ? `session=${params.sessionKey}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const context = formatDiscordReplyContext(params.target, params.sessionKey);
   return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
 }
 
@@ -58,12 +60,7 @@ export function formatDiscordReplySkip(params: {
   target: string;
   sessionKey?: string;
 }) {
-  const context = [
-    `target=${params.target}`,
-    params.sessionKey ? `session=${params.sessionKey}` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const context = formatDiscordReplyContext(params.target, params.sessionKey);
   return `discord ${params.kind} reply skipped (${params.reason}): ${context}`;
 }
 
@@ -95,7 +92,7 @@ function resolveBindingIdentity(
     return undefined;
   }
   const baseLabel = binding.label?.trim() || binding.agentId;
-  const displayName = `🤖 ${baseLabel}`.trim() || "🤖 agent";
+  const displayName = `🤖 ${baseLabel}`.trim();
   const identity: OutboundIdentity = {
     name: truncateUtf16Safe(displayName, 80),
   };

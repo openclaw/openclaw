@@ -1,7 +1,9 @@
 import { hmac } from "@noble/hashes/hmac.js";
 import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { ApplicationContext } from "../../app/context.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { activationTimeoutForKind, type ModelSetupWizardRecovery } from "./state.ts";
 
@@ -23,10 +25,10 @@ export function subscribeFirstRunActivationCleared(
     }
   };
   receiptClearedListeners.add(listener);
-  window.addEventListener("storage", onStorage);
+  const stopStorage = listen(window, "storage", { handleEvent: onStorage });
   return () => {
     receiptClearedListeners.delete(listener);
-    window.removeEventListener("storage", onStorage);
+    stopStorage();
   };
 }
 
@@ -87,9 +89,7 @@ function activationOwner(
     ];
     const encoder = new TextEncoder();
     const framed = values.map((value) => `${encoder.encode(value).length}:${value}`).join("|");
-    return Array.from(hmac(sha256, encoder.encode(identity.privateKey), encoder.encode(framed)))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    return bytesToHex(hmac(sha256, encoder.encode(identity.privateKey), encoder.encode(framed)));
   } catch {
     return null;
   }
@@ -215,33 +215,4 @@ export function clearFirstRunActivationReceipt(expected?: FirstRunActivationRece
   if (storage) {
     clearReceipt(storage, expected);
   }
-}
-
-export function resumeFirstRunActivation(
-  navigation: {
-    context: ActivationContext;
-    isStillDefaultLanding: () => boolean;
-    redirect: () => void;
-  },
-  ownerSnapshot: ActivationContext["gateway"]["snapshot"],
-  ownerRevision: number,
-  ownerAgentId: string | null,
-  isSettled: () => boolean,
-  settle: () => void,
-): void {
-  const { context } = navigation;
-  const snapshot = context.gateway.snapshot;
-  if (
-    !isSettled() &&
-    snapshot.phase === "connected" &&
-    snapshot.client === ownerSnapshot.client &&
-    snapshot.hello === ownerSnapshot.hello &&
-    context.gateway.connectionRevision === ownerRevision &&
-    (context.agentSelection.state.selectedId?.trim() || null) === ownerAgentId &&
-    navigation.isStillDefaultLanding() &&
-    readFirstRunActivationReceipt(context) !== null
-  ) {
-    navigation.redirect();
-  }
-  settle();
 }

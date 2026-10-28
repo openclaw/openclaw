@@ -2,8 +2,9 @@ import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
+import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
+import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import { collectOption } from "../program/helpers.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
@@ -61,7 +62,6 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
               : undefined;
           const {
             resolveCapabilityAgentOption,
-            parseOptionalPositiveInteger,
             parseOptionalTimeoutMs,
             requireProviderModelOverride,
             resolveLocalCapabilityAgent,
@@ -70,8 +70,13 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const model = opts.model as string | undefined;
           const count = parseOptionalPositiveInteger(opts.count, "--count");
           const size = opts.size as string | undefined;
-          const aspectRatio = opts.aspectRatio as string | undefined;
-          const resolution = opts.resolution as "1K" | "2K" | "4K" | undefined;
+          const aspectRatio = normalizeOptionalString(opts.aspectRatio);
+          const { parseAspectRatioValue } =
+            await import("../../media-generation/runtime-shared.js");
+          if (aspectRatio && !parseAspectRatioValue(aspectRatio)) {
+            throw new Error("--aspect-ratio must be a W:H ratio of positive numbers, like 16:9");
+          }
+          const resolution = normalizeImageGenerationResolution(opts.resolution);
           const outputFormat = parseImageOption(
             opts.outputFormat,
             IMAGE_OUTPUT_FORMATS,
@@ -304,25 +309,8 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
     imageCommand,
     "List image generation providers",
     async (cfg, agentId) => {
-      const { providerHasGenericConfig } = await import("./shared.js");
-      const { resolveModelRefOverride } = await import("../../shared/model-ref-override.js");
-      const { listRuntimeImageGenerationProviders } =
-        await import("../../image-generation/runtime.js");
-      const selectedProvider = resolveModelRefOverride(
-        resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.image),
-      ).provider;
-      return listRuntimeImageGenerationProviders({ config: cfg }).map((provider) => ({
-        available: true,
-        configured:
-          selectedProvider === provider.id ||
-          providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-        selected: selectedProvider === provider.id,
-        id: provider.id,
-        label: provider.label,
-        defaultModel: provider.defaultModel,
-        models: provider.models ?? [],
-        capabilities: provider.capabilities,
-      }));
+      const { listGenerationProviders } = await import("./media-providers.js");
+      return listGenerationProviders("image", cfg, agentId);
     },
     providerSummaryText,
   );

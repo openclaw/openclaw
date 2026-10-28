@@ -147,17 +147,18 @@ async function readIndicators(threadIds: string[]): Promise<Map<string, OpenCode
   }
   const indicators = new Map<string, OpenCodeIndicator>();
   for (const row of value) {
-    const seq = isRecord(row) && row.seq === null ? 0 : isRecord(row) ? row.seq : undefined;
+    const record = isRecord(row) ? row : undefined;
+    const seq = record?.seq === null ? 0 : record?.seq;
     if (
-      !isRecord(row) ||
-      typeof row.id !== "string" ||
-      !OPENCODE_SESSION_ID_PATTERN.test(row.id) ||
+      !record ||
+      typeof record.id !== "string" ||
+      !OPENCODE_SESSION_ID_PATTERN.test(record.id) ||
       !Number.isSafeInteger(seq) ||
       Number(seq) < 0
     ) {
       throw new Error("OpenCode returned invalid upstream indicators");
     }
-    indicators.set(row.id, { threadId: row.id, seq: Number(seq) });
+    indicators.set(record.id, { threadId: record.id, seq: Number(seq) });
   }
   return indicators;
 }
@@ -329,62 +330,6 @@ function latestBaselineHumanMessageId(messages: OpenCodeExportMessage[]): string
   return latest;
 }
 
-function classifyExport(params: {
-  probe: SessionUpstreamProbe;
-  marker: OpenCodeMarker;
-  seq: number;
-  messages: OpenCodeExportMessage[];
-}): SessionUpstreamActivity {
-  let humanTurns = 0;
-  let occurredAt: number | undefined;
-  let lastHumanMessageId = params.marker.lastHumanMessageId;
-  let latestExternalMessageId: string | undefined;
-  const earlierUserTexts: Array<string | undefined> = [];
-  for (const message of params.messages) {
-    const text = directHumanText(message);
-    const replay =
-      text !== undefined &&
-      earlierUserTexts.slice(-OPENCODE_REPLAY_LOOKBACK_USER_MESSAGES).includes(text);
-    const newerThanMarker =
-      params.marker.lastHumanMessageId === null || message.id > params.marker.lastHumanMessageId;
-    if (text !== undefined && message.createdAt !== undefined && newerThanMarker) {
-      // Consume complete user-shaped rows even when replay/self-echo filtering suppresses
-      // them, so a later own-text window cannot turn an old row into new activity.
-      lastHumanMessageId = latestMessageId(lastHumanMessageId, message.id);
-    }
-    if (
-      text !== undefined &&
-      !replay &&
-      message.createdAt !== undefined &&
-      newerThanMarker &&
-      isExternalUserText(params.probe, text)
-    ) {
-      humanTurns += 1;
-      occurredAt = Math.max(occurredAt ?? 0, message.createdAt);
-      latestExternalMessageId = message.id;
-    }
-    if (message.role === "user") {
-      earlierUserTexts.push(normalizedMessageText(message));
-      if (earlierUserTexts.length > OPENCODE_REPLAY_LOOKBACK_USER_MESSAGES) {
-        earlierUserTexts.shift();
-      }
-    }
-  }
-  const nextMarker = { seq: params.seq, lastHumanMessageId };
-  return {
-    kind: "activity",
-    sessionKey: params.probe.sessionKey,
-    humanTurns,
-    nextMarker,
-    ...(humanTurns > 0
-      ? {
-          occurredAt: occurredAt ?? Date.now(),
-          dedupeId: latestExternalMessageId ?? String(params.seq),
-        }
-      : {}),
-  };
-}
-
 export async function linkContinuedOpenCodeSession(
   sessionKey: string,
   threadId: string,
@@ -429,12 +374,56 @@ async function classifyChangedProbe(
       nextMarker: { seq: indicator.seq, lastHumanMessageId: marker.lastHumanMessageId },
     };
   }
-  return classifyExport({
-    probe,
-    marker,
-    seq: indicator.seq,
-    messages: readExportMessages(await exportOpenCodeSession(probe.threadId)),
-  });
+  const seq = indicator.seq;
+  const messages = readExportMessages(await exportOpenCodeSession(probe.threadId));
+  let humanTurns = 0;
+  let occurredAt: number | undefined;
+  let lastHumanMessageId = marker.lastHumanMessageId;
+  let latestExternalMessageId: string | undefined;
+  const earlierUserTexts: Array<string | undefined> = [];
+  for (const message of messages) {
+    const text = directHumanText(message);
+    const replay =
+      text !== undefined &&
+      earlierUserTexts.slice(-OPENCODE_REPLAY_LOOKBACK_USER_MESSAGES).includes(text);
+    const newerThanMarker =
+      marker.lastHumanMessageId === null || message.id > marker.lastHumanMessageId;
+    if (text !== undefined && message.createdAt !== undefined && newerThanMarker) {
+      // Consume complete user-shaped rows even when replay/self-echo filtering suppresses
+      // them, so a later own-text window cannot turn an old row into new activity.
+      lastHumanMessageId = latestMessageId(lastHumanMessageId, message.id);
+    }
+    if (
+      text !== undefined &&
+      !replay &&
+      message.createdAt !== undefined &&
+      newerThanMarker &&
+      isExternalUserText(probe, text)
+    ) {
+      humanTurns += 1;
+      occurredAt = Math.max(occurredAt ?? 0, message.createdAt);
+      latestExternalMessageId = message.id;
+    }
+    if (message.role === "user") {
+      earlierUserTexts.push(normalizedMessageText(message));
+      if (earlierUserTexts.length > OPENCODE_REPLAY_LOOKBACK_USER_MESSAGES) {
+        earlierUserTexts.shift();
+      }
+    }
+  }
+  const nextMarker = { seq, lastHumanMessageId };
+  return {
+    kind: "activity",
+    sessionKey: probe.sessionKey,
+    humanTurns,
+    nextMarker,
+    ...(humanTurns > 0
+      ? {
+          occurredAt: occurredAt ?? Date.now(),
+          dedupeId: latestExternalMessageId ?? String(seq),
+        }
+      : {}),
+  };
 }
 
 export async function checkOpenCodeUpstreamActivity(

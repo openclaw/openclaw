@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@openclaw/agent-core";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type { ConversationRecord } from "./conversation-registry.types.js";
 import type {
   SessionTranscriptBoundedActiveContext,
   SessionTranscriptContextVersion,
@@ -9,6 +10,11 @@ import type {
   SessionTranscriptRuntimeTarget,
   SessionBranchSummary,
 } from "./session-accessor.types.js";
+import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
+import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
+import type { InternalSessionEntry } from "./types.js";
+
+export type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 
 export type SessionTitleFields = {
   firstUserMessage: string | null;
@@ -20,14 +26,10 @@ export type SessionPreviewItem = {
   text: string;
 };
 
-export type SessionTranscriptWatermark = {
-  generation: string | null;
-  maxSeq: number | null;
-};
-
 export type SessionBranchSummarySnapshot = SessionTranscriptWatermark & {
   branches: SessionBranchSummary[];
   appendSafe?: boolean;
+  source?: { sessionId: string; databaseIdentity: string };
 };
 
 export type SessionBranchSummaryReadResult =
@@ -37,9 +39,14 @@ export type SessionBranchSummaryReadResult =
 export type SessionModelContextLimits = {
   maxBytes: number;
   maxEvents: number;
-  /** Detached model views may omit result bodies; evidence and fork readers remain strict. */
+  /** Model views may omit result bodies to retain earlier requests; evidence and forks stay strict. */
   toolResultOverflow?: "omit";
 };
+
+/** Compaction keeps the complete semantic window, independent of replay byte limits. */
+export type SessionTranscriptContextSelection =
+  | { maxBytes: number; maxEvents: number }
+  | { compaction: true };
 
 export type SessionTranscriptModelContext = {
   events: TranscriptEvent[];
@@ -49,6 +56,7 @@ export type SessionTranscriptModelContext = {
 export type SessionTranscriptReadSnapshot = {
   events: TranscriptEvent[];
   eventJson?: string[];
+  eventSeqs?: number[];
   version: SessionTranscriptContextVersion;
 };
 
@@ -58,9 +66,28 @@ export type SessionTranscriptContextSnapshot = {
   version?: SessionTranscriptContextVersion;
 };
 
+export type SessionCompactionPreparation = {
+  sessionTarget: SessionTranscriptRuntimeTarget;
+  /** Gateway lifecycle and accounting retain the originally selected key. */
+  entry: InternalSessionEntry | undefined;
+  runtimeEntry: InternalSessionEntry | undefined;
+  primaryConversation: ConversationRecord | undefined;
+};
+
 export type PreparedSessionTranscriptHydration =
-  | { kind: "full"; snapshot: SessionTranscriptReadSnapshot }
-  | { kind: "bounded"; snapshot: SessionTranscriptBoundedActiveContext };
+  | {
+      kind: "full";
+      snapshot: SessionTranscriptReadSnapshot;
+    }
+  | {
+      kind: "bounded";
+      snapshot: SessionTranscriptBoundedActiveContext;
+      transcript?: SessionTranscriptAnchorFacts;
+      /** Byte and sequence facts for the actor's bounded context residency. */
+      residentRows?: Array<{ rawSeq: number; serializedBytes: number }>;
+      /** Compaction reads its session facts in the same snapshot as its bounded view. */
+      compaction?: SessionCompactionPreparation;
+    };
 
 export type SessionPendingInputReceipt =
   | { runId: string; state: "pending"; cancelled?: true }
@@ -68,6 +95,7 @@ export type SessionPendingInputReceipt =
 
 export type SessionTranscriptEventMatch =
   | { kind: "latest" }
+  | { kind: "canvas-widget"; docId: string }
   | { kind: "visible-final"; runId: string }
   | {
       kind: "idempotency";

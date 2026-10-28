@@ -351,7 +351,7 @@ function buildAuditIndex(
   };
 }
 
-export function resolveRoute(
+function resolveRoute(
   route: string,
   { redirects, routes }: Pick<ReturnType<typeof buildAuditIndex>, "redirects" | "routes">,
 ) {

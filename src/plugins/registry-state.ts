@@ -1,4 +1,5 @@
 import type { UnifiedModelCatalogSource } from "@openclaw/model-catalog-core/model-catalog-types";
+import { floorPositiveFiniteNumber as normalizeHookTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import type { PluginDiagnostic } from "./manifest-types.js";
@@ -60,13 +61,6 @@ export function resolvePluginRegistrationCapabilities(
   };
 }
 
-function normalizeHookTimeoutMs(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
-
 export function resolveTypedHookTimeoutMs(params: {
   hookName: PluginHookName;
   opts?: { timeoutMs?: number };
@@ -108,7 +102,7 @@ export function createPluginRegistryState(registryParams: PluginRegistryParams) 
     if (!gate) {
       gate = createNativeSessionCatalogGate({
         pluginId: record.id,
-        getConfig: () => registryParams.runtime.config.current(),
+        getConfig: registryParams.runtime.config.current,
       });
       nativeCatalogGates.set(record, gate);
     }

@@ -1,5 +1,6 @@
 import type { StreamFn } from "../../packages/agent-core/src/types.js";
 import type { ProviderLocalServiceReconcileContext } from "../agents/provider-local-service-reconcile.js";
+import type { ModelCallUrgency } from "../agents/run-trigger.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type {
@@ -14,7 +15,19 @@ import type {
  * custom StreamFn (for example a native API transport that cannot be expressed
  * as a wrapper around `streamSimple`).
  */
-export type ProviderCreateStreamFnContext = ProviderNormalizeResolvedModelContext;
+export type ProviderCreateStreamFnContext = ProviderNormalizeResolvedModelContext & {
+  /**
+   * Optional host-owned, selected-credential capability. Resolve immediately before
+   * each physical request, including private continuation/recovery requests,
+   * and call the result's assertCurrent immediately before dispatch. Never cache
+   * its result or fall back to a captured bearer when it rejects.
+   * Absent on legacy hosts and calls without an owner-bound renewable credential.
+   */
+  requestAuth?: {
+    version: 1;
+    resolve(params: { signal?: AbortSignal }): Promise<{ apiKey: string; assertCurrent(): void }>;
+  };
+};
 
 /**
  * Provider-owned stream wrapper hook after OpenClaw applies its generic
@@ -24,6 +37,10 @@ export type ProviderCreateStreamFnContext = ProviderNormalizeResolvedModelContex
  * through the normal `shared model runtime` stream path.
  */
 export type ProviderWrapStreamFnContext = ProviderPrepareExtraParamsContext & {
+  /** Per-model params only, with agent-specific model params taking precedence. */
+  modelParams?: Record<string, unknown>;
+  /** Host-classified urgency; providers may translate it into native scheduling hints. */
+  modelCallUrgency?: ModelCallUrgency;
   /** Wire-format API before simple completion projects an internal transport alias. */
   sourceApi?: ProviderRuntimeModel["api"];
   streamFn?: StreamFn;

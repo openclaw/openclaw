@@ -5,7 +5,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds } from "../agents/agent-scope-config.js";
-import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
   discardLegacyRegistryWorktrees,
   rewriteRegistryWorktreePathsForMigration,
@@ -13,7 +12,7 @@ import {
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
-import { listReferencedLegacyOAuthSidecarPaths } from "../commands/doctor-auth-legacy-paths.js";
+import { resolveDoctorAgentMigrationTargets } from "../commands/doctor-relative-session-store-paths.js";
 import { createConfigRuntimeEnv } from "../config/config-env-vars.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
@@ -48,15 +47,14 @@ import {
 } from "../routing/session-key.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
+import { STATE_SCHEMA_MIGRATION_DESCRIPTIONS } from "../state/openclaw-state-db-contract.js";
 import { detectOpenClawStateDatabaseSchemaMigrations } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { listLegacyPairingStoreFiles } from "./pairing-files.js";
-import { isPathInside } from "./path-guards.js";
-import {
-  legacyAgentQuarantineNotices,
-  resolveLegacyStandaloneAgentDir,
-} from "./state-migrations.agent-dir-receipt.js";
+import { isPathInside, safeStatSync } from "./path-guards.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { legacyAgentQuarantineNotices } from "./state-migrations.agent-dir-receipt.js";
 import {
   detectLegacyApnsRegistrations,
   migrateLegacyApnsRegistrations,
@@ -70,7 +68,7 @@ import {
   detectLegacyCommitments,
   migrateLegacyCommitments,
 } from "./state-migrations.commitments.js";
-import { migrateLegacyConfigMachineState } from "./state-migrations.config-machine-state.js";
+import { createConfigMachineStateStep } from "./state-migrations.config-machine-state-step.js";
 import {
   detectLegacyDebugProxyCaptureSidecar,
   migrateLegacyDebugProxyCaptureSidecar,
@@ -89,7 +87,7 @@ import {
   detectLegacyExecApprovals,
   migrateLegacyExecApprovals,
 } from "./state-migrations.exec-approvals.js";
-import { migrationFileExists, readSessionStoreJson5 } from "./state-migrations.fs.js";
+import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 import {
   classifyLegacyOwnerFindings,
   hasCustomAgentDirOverride,
@@ -114,7 +112,6 @@ import {
   migrateLegacyMeetingTranscripts,
 } from "./state-migrations.meeting-transcripts.js";
 import {
-  createLegacyStateMigrationStepReceipt,
   formatStartupMigrationFailure,
   logStateMigrationResult,
   mergeNotices,
@@ -153,13 +150,14 @@ import {
   inspectOrphanSessionStoreEndpoints,
   uniqueMigrationEndpoints,
 } from "./state-migrations.prelude.js";
+import { resolveLegacyProfileMigrationExceptions } from "./state-migrations.profile-scope.js";
 import {
   detectLegacyRescuePending,
   discardLegacyRescuePending,
 } from "./state-migrations.rescue-pending.js";
 import { listRetiredDeliveryQueueFiles } from "./state-migrations.retired-delivery-files.js";
-import { assertNoRetiredStateFiles } from "./state-migrations.retired-files.js";
-import { assertNoRetiredRuntimeStateFiles } from "./state-migrations.retired-runtime-files.js";
+import { listExistingRetiredStateFiles } from "./state-migrations.retired-files.js";
+import { listRetiredRuntimeStateFiles } from "./state-migrations.retired-runtime-files.js";
 import {
   migrateLegacyConfigHealth,
   resolveLegacyConfigHealthPath,
@@ -173,16 +171,15 @@ import {
 } from "./state-migrations.session-store.js";
 import {
   detectSharedAuthStoreMigration,
+  resolveSharedAuthMigrationSources,
   migrateSharedAuthStore,
 } from "./state-migrations.shared-auth-store.js";
 import {
   autoMigrateLegacyStateDir,
   resolvePendingLegacyStateDirMigrationPaths,
 } from "./state-migrations.state-dir.js";
-import {
-  createStateSchemaMigrationStep,
-  describeStateSchemaMigration,
-} from "./state-migrations.state-schema.js";
+import { createStateSchemaMigrationStep } from "./state-migrations.state-schema.js";
+import { runLegacyStateMigrationSteps } from "./state-migrations.steps.js";
 import {
   detectLegacyTuiLastSessions,
   inspectLegacyTuiLastSessionRefusal,
@@ -233,8 +230,6 @@ export async function detectLegacyStateMigrations(params: {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
   const stateDir = resolveStateDir(env, homedir);
-  assertNoRetiredRuntimeStateFiles(stateDir, env, homedir);
-  assertNoRetiredStateFiles("JSON delivery queues", listRetiredDeliveryQueueFiles(stateDir));
   const oauthDir = resolveOAuthDir(
     createConfigRuntimeEnv(params.sourceConfigBeforeMigrations ?? params.cfg, env),
     stateDir,
@@ -296,7 +291,7 @@ export async function detectLegacyStateMigrations(params: {
   };
   const { preserveForeignMainAliases } = sessionStoreOwnership;
   const targetSessionParsed =
-    detectSessionFiles && migrationFileExists(sessionsTargetStorePath)
+    detectSessionFiles && safeStatSync(sessionsTargetStorePath)?.isFile()
       ? readSessionStoreJson5(sessionsTargetStorePath)
       : { store: {}, ok: true };
   const legacySessionSurfaces = detectSessionFiles
@@ -320,8 +315,13 @@ export async function detectLegacyStateMigrations(params: {
     : undefined;
   const rehearsalRoot = resolveUpdateRehearsalRoot(env);
   const seenAgentSources = new Set<string>();
+  const { standaloneAgent } = resolveLegacyProfileMigrationExceptions({
+    env,
+    homedir,
+    configuredAgentDir: migrationTarget?.dir,
+  });
   const legacyAgentInspections = [
-    { legacyDir: resolveLegacyStandaloneAgentDir(homedir), standalone: true },
+    ...(standaloneAgent ? [{ legacyDir: standaloneAgent, standalone: true }] : []),
     { legacyDir: path.join(stateDir, "agent"), standalone: false },
   ]
     .filter(({ legacyDir }) => {
@@ -365,7 +365,7 @@ export async function detectLegacyStateMigrations(params: {
   );
   const hasLegacyAgentDir = legacyAgentSources.length > 0;
   const pluginInstallIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
-  const hasPluginInstallIndex = migrationFileExists(pluginInstallIndexPath);
+  const hasPluginInstallIndex = safeStatSync(pluginInstallIndexPath)?.isFile() === true;
   const debugProxyCaptureSidecar = detectLegacyDebugProxyCaptureSidecar(stateDir, env);
   const stateSchemaMigrations = detectOpenClawStateDatabaseSchemaMigrations(
     { env: { ...env, OPENCLAW_STATE_DIR: stateDir } },
@@ -382,7 +382,7 @@ export async function detectLegacyStateMigrations(params: {
   const configHealth = {
     sourcePath: resolveLegacyConfigHealthPath(stateDir),
   };
-  const hasConfigHealth = migrationFileExists(configHealth.sourcePath);
+  const hasConfigHealth = safeStatSync(configHealth.sourcePath)?.isFile() === true;
   const detectDoctorOwnedState = <TDetection>(
     detect: (options: { stateDir: string; doctorOnlyStateMigrations?: boolean }) => TDetection,
   ): TDetection =>
@@ -400,6 +400,7 @@ export async function detectLegacyStateMigrations(params: {
   const sharedAuthStore = detectSharedAuthStoreMigration({
     stateDir,
     env,
+    config: params.sourceConfigBeforeMigrations ?? params.cfg,
     doctorOnlyStateMigrations:
       stateSchemaMigrations.length === 0 && params.doctorOnlyStateMigrations === true,
     artifactPreservingReadOnly: params.artifactPreservingReadOnly,
@@ -558,7 +559,9 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (stateSchemaMigrations.length > 0) {
     for (const migration of stateSchemaMigrations) {
-      preview.push(`- Shared SQLite schema: ${describeStateSchemaMigration(migration)}`);
+      preview.push(
+        `- Shared SQLite schema: ${STATE_SCHEMA_MIGRATION_DESCRIPTIONS[migration.kind]}`,
+      );
     }
     preview.push(
       "- Rerun doctor after shared SQLite schema repair to detect plugin state migrations",
@@ -598,10 +601,10 @@ export async function detectLegacyStateMigrations(params: {
     ],
     [apns.hasLegacy, "- APNs registrations: legacy JSON → shared SQLite state"],
     [deviceAuth.hasLegacy, "- Device auth tokens: legacy JSON → shared SQLite state"],
-    [deviceIdentity.hasLegacy, "- Primary device identity: legacy JSON → shared SQLite state"],
+    [deviceIdentity.hasLegacy, "- Client identities: legacy JSON → local SQLite credentials"],
     [
       deviceIdentity.hasInvalidCanonical && !deviceIdentity.hasLegacy,
-      "- Primary device identity: invalid SQLite row → new device identity",
+      "- Client device identities: invalid SQLite row → repaired device identity",
     ],
     [execApprovals.hasLegacy, execApprovals.preview],
     [mcpOauth.hasLegacy, "- MCP OAuth credentials: legacy JSON → shared SQLite state"],
@@ -790,44 +793,48 @@ function buildUnresolvedBlockedMigrationSteps(params: {
   });
 }
 
-function createPluginInstallIndexStep(params: {
+function createRetiredCoreStateStep(params: {
   stateDir: string;
   env: NodeJS.ProcessEnv;
-  hasLegacy: boolean;
+  mode: LegacyStateMigrationMode;
 }): LegacyStateMigrationStep {
-  const sourcePath = resolveLegacyInstalledPluginIndexStorePath(params);
-  const message = legacyInstalledPluginIndexUnsupportedMessage(sourcePath);
+  const paths = listExistingRetiredStateFiles([
+    ...listRetiredRuntimeStateFiles(params.stateDir, params.env),
+    ...listRetiredDeliveryQueueFiles(params.stateDir),
+    resolveLegacyInstalledPluginIndexStorePath(params),
+  ]);
   return {
-    id: "plugin-install-index",
+    id: "retired-core-state",
     phase: "shared",
-    source: [{ kind: "path", path: sourcePath }],
-    target: [],
-    requiredness: params.hasLegacy ? "required" : "not-required",
-    reversibility: "not-applicable",
-    ...(params.hasLegacy ? { refusal: { code: "unsupported-plugin-install-index", message } } : {}),
-    run: () => ({
-      changes: [],
-      warnings: migrationFileExists(sourcePath) ? [message] : [],
-    }),
-  };
-}
-
-function createConfigMachineStateStep(params: {
-  config: OpenClawConfig;
-  configPath: string;
-  configIncludedPaths: readonly string[];
-  stateDir: string;
-  env: NodeJS.ProcessEnv;
-}): LegacyStateMigrationStep {
-  const stateEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
-  return {
-    id: "config-machine-state",
-    phase: "shared",
-    source: createConfigMigrationSources(params.configPath, params.configIncludedPaths),
-    target: [{ kind: "sqlite", path: resolveOpenClawStateSqlitePath(stateEnv) }],
-    requiredness: "conditional",
+    source: paths.map((sourcePath) => ({ kind: "path", path: sourcePath })),
+    target: [
+      {
+        kind: "sqlite",
+        path: resolveOpenClawStateSqlitePath({
+          ...params.env,
+          OPENCLAW_STATE_DIR: params.stateDir,
+        }),
+      },
+    ],
+    requiredness: paths.length > 0 ? "required" : "not-required",
     reversibility: "checkpoint-required",
-    run: () => migrateLegacyConfigMachineState({ config: params.config, env: stateEnv }),
+    run: async () => {
+      if (params.mode !== "doctor") {
+        return {
+          changes: [],
+          warnings:
+            paths.length > 0
+              ? [
+                  "Retired state requires openclaw doctor --fix; original files were left unchanged.",
+                ]
+              : [],
+          warningDisposition: "recoverable",
+        };
+      }
+      const { repairRetiredDoctorState } =
+        await import("../commands/doctor-retired-state-repair.js");
+      return repairRetiredDoctorState({ ...params.env, OPENCLAW_STATE_DIR: params.stateDir });
+    },
   };
 }
 
@@ -988,6 +995,7 @@ function bindAgentDatabaseTargetsToStateRoot(
 
 type LegacyStateMigrationExecutionPlan = {
   mode: LegacyStateMigrationMode;
+  integrityCheck?: "quick" | "full";
   detected: LegacyStateDetection;
   config: OpenClawConfig;
   sessionConfig?: OpenClawConfig;
@@ -1022,7 +1030,6 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
     source: LegacyStateMigrationEndpoint[],
     required: boolean | PreparedLegacyStateMigrationStep["requiredness"],
     target?: LegacyStateMigrationEndpoint[],
-    reversibility?: PreparedLegacyStateMigrationStep["reversibility"],
   ];
   // Detection owns plugin session-store discovery. Carry the prepared owner set
   // into receipts and execution so planning cannot observe a different plugin load.
@@ -1085,69 +1092,20 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
       (isDoctor && detected.worktrees.hasLegacy) || detected.worktrees.pathRewrites.length > 0,
       [stateDatabase],
     ],
-    "shared-auth-store": [
-      detected.sharedAuthStore.sourcePath
-        ? [{ kind: "sqlite" as const, path: detected.sharedAuthStore.sourcePath }]
-        : [],
-      detected.sharedAuthStore.sourcePath ? "conditional" : false,
-    ],
-    "debug-proxy-capture": [
-      pathEndpoints(
-        detected.debugProxyCaptureSidecar.sourcePath,
-        detected.debugProxyCaptureSidecar.blobDir,
-      ),
-      detected.debugProxyCaptureSidecar.hasLegacy,
-    ],
     "delivery-queues": [[stateDatabase], "conditional"],
     "pairing-stores": [
       pathEndpoints(...detected.pairingStores.sourcePaths),
       detected.pairingStores.hasLegacy,
     ],
-    "config-health": [
-      pathEndpoints(detected.configHealth.sourcePath),
-      detected.configHealth.hasLegacy,
-    ],
-    "tui-last-session": [
-      pathEndpoints(detected.tuiLastSessions.sourcePath),
-      detected.tuiLastSessions.hasLegacy,
-    ],
-    commitments: [
-      pathEndpoints(detected.commitments?.sourcePath),
-      detected.commitments?.hasLegacy === true,
-    ],
-    "audit-logs": [
-      pathEndpoints(...detected.auditLogs.sources.map((source) => source.sourcePath)),
-      detected.auditLogs.hasLegacy,
-    ],
-    "managed-outgoing-images": [
-      pathEndpoints(detected.managedOutgoingImages.sourceDir),
-      detected.managedOutgoingImages.hasLegacy,
-    ],
-    "apns-registrations": [pathEndpoints(detected.apns.sourcePath), detected.apns.hasLegacy],
-    "device-auth": [pathEndpoints(detected.deviceAuth.sourcePath), detected.deviceAuth.hasLegacy],
     "device-identity": [
-      pathEndpoints(
-        detected.deviceIdentity.sourcePath,
-        detected.deviceIdentity.claimPath,
-        detected.deviceIdentity.nativeClaimPath,
+      detected.deviceIdentity.sources.flatMap((source) =>
+        pathEndpoints(source.sourcePath, source.claimPath, source.nativeClaimPath),
       ),
       detected.deviceIdentity.hasLegacy || detected.deviceIdentity.hasInvalidCanonical,
-    ],
-    "exec-approvals": [
-      [...pathEndpoints(detected.execApprovals.sourcePath), stateDatabase],
-      detected.execApprovals.hasLegacy,
-    ],
-    "mcp-oauth": [
-      pathEndpoints(detected.mcpOauth.sourceDir, ...detected.mcpOauth.sourcePaths),
-      detected.mcpOauth.hasLegacy,
     ],
     "meeting-transcripts": [
       [...pathEndpoints(detected.meetingTranscripts?.sourceDir), stateDatabase],
       detected.meetingTranscripts?.hasLegacy === true,
-    ],
-    "workspace-state": [
-      pathEndpoints(...detected.workspace.sources.map((source) => source.sourcePath)),
-      detected.workspace.hasLegacy,
     ],
     "skill-workshop": [
       [
@@ -1157,17 +1115,6 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
       ],
       "conditional",
       [stateDatabase, { kind: "owner", id: "core:skill-workshop" }],
-    ],
-    "web-push": [
-      pathEndpoints(detected.webPush.subscriptionsPath, detected.webPush.vapidKeysPath),
-      detected.webPush.hasLegacy,
-    ],
-    "node-host": [pathEndpoints(detected.nodeHost.sourcePath), detected.nodeHost.hasLegacy],
-    "rescue-pending": [
-      pathEndpoints(...detected.rescuePending.sourcePaths),
-      detected.rescuePending.hasLegacy,
-      [],
-      "checkpoint-required",
     ],
     "channel-pairing": [
       pathEndpoints(
@@ -1208,9 +1155,15 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
     id: StepId,
     phase: LegacyStateMigrationStep["phase"],
   ): PreparedLegacyStateMigrationStep => {
-    const [source, required, target = [stateDatabase], reversibility = "checkpoint-required"] =
-      stepSpecs[id];
-    return { id, phase, source, target, requiredness: requiredness(required), reversibility };
+    const [source, required, target = [stateDatabase]] = stepSpecs[id];
+    return {
+      id,
+      phase,
+      source,
+      target,
+      requiredness: requiredness(required),
+      reversibility: "checkpoint-required",
+    };
   };
   const sharedStep = (
     id: StepId,
@@ -1232,19 +1185,28 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
     run,
     collectNotices,
   });
-  const ownerStep = <TDetection>(
-    id: StepId,
+  const ownerStep = <TDetection extends { hasLegacy: boolean; sourcePath?: string }>(
+    id: (typeof unresolvedMigrationStepLayout)[number][0],
     detection: TDetection,
     migrate: (options: {
       detected: TDetection;
       env: NodeJS.ProcessEnv;
       stateDir: string;
     }) => MigrationMessages | Promise<MigrationMessages>,
-    phase: LegacyStateMigrationStep["phase"] = "final",
-    collectNotices = true,
+    options: Partial<
+      Pick<
+        LegacyStateMigrationStep,
+        "phase" | "source" | "target" | "requiredness" | "collectNotices"
+      >
+    > = {},
   ): LegacyStateMigrationStep => ({
-    ...descriptor(id, phase),
-    collectNotices,
+    id,
+    phase: options.phase ?? "final",
+    source: options.source ?? pathEndpoints(detection.sourcePath),
+    target: options.target ?? [stateDatabase],
+    requiredness: options.requiredness ?? (detection.hasLegacy ? "required" : "not-required"),
+    reversibility: "checkpoint-required",
+    collectNotices: options.collectNotices ?? true,
     run: () => migrate({ detected: detection, env, stateDir }),
   });
 
@@ -1278,19 +1240,39 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
   ];
 
   const sharedSteps: LegacyStateMigrationStep[] = [
-    ownerStep("shared-auth-store", detected.sharedAuthStore, migrateSharedAuthStore, "shared"),
+    ownerStep(
+      "shared-auth-store",
+      detected.sharedAuthStore,
+      (options) => migrateSharedAuthStore({ ...options, integrityCheck: params.integrityCheck }),
+      {
+        phase: "shared",
+        source: detected.sharedAuthStore.sourcePath
+          ? [{ kind: "sqlite", path: detected.sharedAuthStore.sourcePath }]
+          : [],
+        requiredness: detected.sharedAuthStore.sourcePath ? "conditional" : "not-required",
+      },
+    ),
     ownerStep(
       "debug-proxy-capture",
       detected.debugProxyCaptureSidecar,
       migrateLegacyDebugProxyCaptureSidecar,
-      "shared",
-      false,
+      {
+        phase: "shared",
+        collectNotices: false,
+        source: pathEndpoints(
+          detected.debugProxyCaptureSidecar.sourcePath,
+          detected.debugProxyCaptureSidecar.blobDir,
+        ),
+      },
     ),
-    ownerStep("config-health", detected.configHealth, migrateLegacyConfigHealth, "shared", false),
+    ownerStep("config-health", detected.configHealth, migrateLegacyConfigHealth, {
+      phase: "shared",
+      collectNotices: false,
+    }),
   ];
 
   const eagerStateSteps: LegacyStateMigrationStep[] = [
-    ownerStep("device-auth", detected.deviceAuth, migrateLegacyDeviceAuth, "shared"),
+    ownerStep("device-auth", detected.deviceAuth, migrateLegacyDeviceAuth, { phase: "shared" }),
     sharedStep(
       "device-identity",
       () =>
@@ -1336,29 +1318,36 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
         ...(detected.commitments
           ? [ownerStep("commitments", detected.commitments, migrateLegacyCommitments)]
           : []),
-        ownerStep("audit-logs", detected.auditLogs, migrateLegacyAuditLogs),
+        ownerStep("audit-logs", detected.auditLogs, migrateLegacyAuditLogs, {
+          source: pathEndpoints(...detected.auditLogs.sources.map((source) => source.sourcePath)),
+        }),
         ownerStep(
           "managed-outgoing-images",
           detected.managedOutgoingImages,
           migrateLegacyManagedOutgoingImages,
+          { source: pathEndpoints(detected.managedOutgoingImages.sourceDir) },
         ),
         ownerStep("apns-registrations", detected.apns, migrateLegacyApnsRegistrations),
-        ownerStep("exec-approvals", detected.execApprovals, migrateLegacyExecApprovals),
-        ownerStep("mcp-oauth", detected.mcpOauth, migrateLegacyMcpOAuthStores),
+        ownerStep("exec-approvals", detected.execApprovals, migrateLegacyExecApprovals, {
+          source: [...pathEndpoints(detected.execApprovals.sourcePath), stateDatabase],
+        }),
+        ownerStep("mcp-oauth", detected.mcpOauth, migrateLegacyMcpOAuthStores, {
+          source: pathEndpoints(detected.mcpOauth.sourceDir, ...detected.mcpOauth.sourcePaths),
+        }),
       ]
     : [];
 
   const doctorFinalSteps: LegacyStateMigrationStep[] = isDoctor
     ? [
-        ownerStep("web-push", detected.webPush, migrateLegacyWebPush),
+        ownerStep("web-push", detected.webPush, migrateLegacyWebPush, {
+          source: pathEndpoints(detected.webPush.subscriptionsPath, detected.webPush.vapidKeysPath),
+        }),
         ownerStep("node-host", detected.nodeHost, migrateLegacyNodeHostConfig),
-        ownerStep(
-          "rescue-pending",
-          detected.rescuePending,
-          discardLegacyRescuePending,
-          "final",
-          false,
-        ),
+        ownerStep("rescue-pending", detected.rescuePending, discardLegacyRescuePending, {
+          source: pathEndpoints(...detected.rescuePending.sourcePaths),
+          target: [],
+          collectNotices: false,
+        }),
       ]
     : [];
 
@@ -1368,33 +1357,33 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
         message: "Channel pairing account discovery is deferred to plugin validation.",
       }
     : undefined;
-  let unavailableWorkshopWorkspaces: ReadonlyMap<string, string> | undefined;
   const finalSteps: LegacyStateMigrationStep[] = [
     {
-      ...ownerStep("workspace-state", detected.workspace, async (options) => {
-        // Shared/agent schemas are ready here. Repair alias ownership before
-        // carried legacy files can be imported under the wrong workspace key.
-        if (isDoctor) {
-          await params.beforeWorkspaceStateMigration?.(params.sessionConfig ?? params.config);
-        }
-        const result = await migrateLegacyWorkspaceState(options);
-        unavailableWorkshopWorkspaces = result.unavailableWorkshopWorkspaces;
-        return result;
-      }),
+      ...ownerStep(
+        "workspace-state",
+        detected.workspace,
+        async (options) => {
+          // Shared/agent schemas are ready here. Repair alias ownership before
+          // carried legacy files can be imported under the wrong workspace key.
+          if (isDoctor) {
+            await params.beforeWorkspaceStateMigration?.(params.sessionConfig ?? params.config);
+          }
+          return await migrateLegacyWorkspaceState(options);
+        },
+        { source: pathEndpoints(...detected.workspace.sources.map((source) => source.sourcePath)) },
+      ),
       runWithoutFileDetection: isDoctor && params.beforeWorkspaceStateMigration !== undefined,
     },
     ...doctorFinalSteps,
     ...(isDoctor
       ? [
           {
-            // Workspace attestations must settle before Workshop relocation can retire them.
             ...finalStep("skill-workshop", async () => {
-              const { migrateLegacySkillWorkshopProposals } =
-                await import("../commands/doctor-skill-workshop-sqlite.js");
-              return migrateLegacySkillWorkshopProposals({
+              const { retireSkillWorkshopProposals } =
+                await import("../commands/doctor-skill-workshop-retire-proposals.js");
+              return retireSkillWorkshopProposals({
                 config: params.sessionConfig ?? params.config,
                 env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-                unavailableWorkspaceDirs: unavailableWorkshopWorkspaces,
               });
             }),
             runWithoutFileDetection: true,
@@ -1512,11 +1501,12 @@ function buildLegacyStateMigrationSteps(params: LegacyStateMigrationExecutionPla
         env,
         mode: params.mode,
         requiredness: detected.stateSchema.hasLegacy ? "required" : "conditional",
+        integrityCheck: params.integrityCheck,
       }),
-      createPluginInstallIndexStep({
+      createRetiredCoreStateStep({
         stateDir,
         env,
-        hasLegacy: detected.pluginInstallIndex.hasLegacy,
+        mode: params.mode,
       }),
     ],
     remaining: [
@@ -1585,6 +1575,13 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     ...(configBefore.configDigest ? { configDigest: configBefore.configDigest } : {}),
     ...(identityBefore.stateDigest ? { stateDigest: identityBefore.stateDigest } : {}),
   };
+  const stepContext = {
+    config: configBefore.config,
+    configPath: snapshot.configPath,
+    configIncludedPaths: configBefore.configIncludedPaths,
+    stateDir: snapshot.stateDir,
+    env,
+  };
   const refusedPlan = (
     refusal: NonNullable<LegacyStateMigrationPlan["refusal"]>,
     warnings: string[],
@@ -1609,18 +1606,6 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       ...configBefore.warnings,
     ]);
   }
-  // The identity owner refuses unusable snapshot paths first; only an admitted
-  // state directory is scanned for retired files, so a non-directory path keeps
-  // its `snapshot-identity-unavailable` refusal instead of an inspection error.
-  assertNoRetiredRuntimeStateFiles(
-    requestedSnapshot.stateDir,
-    env,
-    () => requestedSnapshot.homeDir,
-  );
-  assertNoRetiredStateFiles(
-    "JSON delivery queues",
-    listRetiredDeliveryQueueFiles(requestedSnapshot.stateDir),
-  );
   if (identityBefore.configDigest !== configBefore.rootDigest) {
     const message = "Copied config changed while migration planning was starting.";
     return refusedPlan({ code: "snapshot-identity-changed", message }, [
@@ -1644,12 +1629,10 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     candidateRoot: params.candidate.root,
     artifactPreservingReadOnly: true,
   });
-  const pluginInstallIndexStep = createPluginInstallIndexStep({
+  const retiredCoreStateStep = createRetiredCoreStateStep({
     stateDir: snapshot.stateDir,
     env,
-    hasLegacy: migrationFileExists(
-      resolveLegacyInstalledPluginIndexStorePath({ stateDir: snapshot.stateDir }),
-    ),
+    mode: params.mode,
   });
   if (
     pendingStateDirMigration &&
@@ -1668,14 +1651,8 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       mode: params.mode,
       requiredness: "conditional",
     }),
-    pluginInstallIndexStep,
-    createConfigMachineStateStep({
-      config: configBefore.config,
-      configPath: snapshot.configPath,
-      configIncludedPaths: configBefore.configIncludedPaths,
-      stateDir: snapshot.stateDir,
-      env,
-    }),
+    retiredCoreStateStep,
+    createConfigMachineStateStep(stepContext),
     discovery,
     ...buildUnresolvedBlockedPreludeSteps(params.mode, invocationPurpose),
     detection,
@@ -1692,12 +1669,10 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   const outsideSharedAuthSources =
     params.mode === "doctor"
       ? listMigrationEndpointsOutsideRoot(
-          [
-            {
-              kind: "sqlite",
-              path: path.join(resolveSharedMainAuthAgentDir(env), "openclaw-agent.sqlite"),
-            },
-          ],
+          resolveSharedAuthMigrationSources(configBefore.config, env).map(({ sourcePath }) => ({
+            kind: "sqlite" as const,
+            path: sourcePath,
+          })),
           snapshot.stateDir,
         )
       : [];
@@ -1713,9 +1688,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
             message: "Selected shared-auth migration source is outside the copied state snapshot.",
           };
     const detectionStep = createMigrationDetectionStep({
-      configPath: snapshot.configPath,
-      configIncludedPaths: configBefore.configIncludedPaths,
-      stateDir: snapshot.stateDir,
+      ...stepContext,
       refusal,
       run: () => ({ changes: [], warnings: [refusal.message] }),
     });
@@ -1728,10 +1701,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     ]);
     const steps = unresolvedSteps(
       createAgentTargetDiscoveryStep({
-        configPath: snapshot.configPath,
-        configIncludedPaths: configBefore.configIncludedPaths,
-        stateDir: snapshot.stateDir,
-        env,
+        ...stepContext,
         run: () => ({ changes: [], warnings: [] }),
       }),
       detectionStep,
@@ -1753,10 +1723,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   if (outsideSessionStoreEndpoints.length > 0) {
     const refusal = createSessionTargetOutsideSnapshotRefusal(outsideSessionStoreEndpoints);
     const discoveryStep = createAgentTargetDiscoveryStep({
-      configPath: snapshot.configPath,
-      configIncludedPaths: configBefore.configIncludedPaths,
-      stateDir: snapshot.stateDir,
-      env,
+      ...stepContext,
       refusal,
       run: () => ({ changes: [], warnings: [refusal.message] }),
     });
@@ -1767,9 +1734,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     const blockedSteps = unresolvedSteps(
       discoveryStep,
       createMigrationDetectionStep({
-        configPath: snapshot.configPath,
-        configIncludedPaths: configBefore.configIncludedPaths,
-        stateDir: snapshot.stateDir,
+        ...stepContext,
         run: () => ({ changes: [], warnings: [] }),
       }),
     );
@@ -1873,11 +1838,11 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   });
   for (const step of remainingMainSteps) {
     if (step.id === "skill-workshop") {
-      // Recorded legacy targets can name workspaces outside copied state.
+      // Draft exports target agent directories that can lie outside copied state.
       // Keep the owner visible without inspecting or granting those paths.
       step.refusal = {
         code: "skill-workshop-planning-deferred",
-        message: "Skill Workshop relocation requires separately bound workspace and skill targets.",
+        message: "Skill Workshop proposal export requires separately bound agent directories.",
       };
     }
   }
@@ -1886,10 +1851,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     deferredSessionStoreEndpoints: deferredPluginSessionStores,
   });
   const plannedAgentTargetDiscoveryStep = createAgentTargetDiscoveryStep({
-    configPath: snapshot.configPath,
-    configIncludedPaths: configBefore.configIncludedPaths,
-    stateDir: snapshot.stateDir,
-    env,
+    ...stepContext,
     refusal: agentTargetRefusal,
     run: () => ({
       changes: [],
@@ -1901,9 +1863,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     ...agentTargetRefusalEndpoints,
   ]);
   const migrationDetectionStep = createMigrationDetectionStep({
-    configPath: snapshot.configPath,
-    configIncludedPaths: configBefore.configIncludedPaths,
-    stateDir: snapshot.stateDir,
+    ...stepContext,
     refusal:
       detected.warnings.length > 0 && detected.warningDisposition !== "recoverable"
         ? {
@@ -1915,22 +1875,12 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   });
   const executionSteps = [
     ...preparation,
-    createConfigMachineStateStep({
-      config: configBefore.config,
-      configPath: snapshot.configPath,
-      configIncludedPaths: configBefore.configIncludedPaths,
-      stateDir: snapshot.stateDir,
-      env,
-    }),
+    createConfigMachineStateStep(stepContext),
     plannedAgentTargetDiscoveryStep,
     ...buildLegacyStateMigrationPreludeSteps({
       mode: params.mode,
       invocationPurpose,
-      config: configBefore.config,
-      configPath: snapshot.configPath,
-      configIncludedPaths: configBefore.configIncludedPaths,
-      stateDir: snapshot.stateDir,
-      env,
+      ...stepContext,
       homedir: () => snapshot.homeDir,
       agentDatabaseTargets,
       orphanSessionStores: copiedSessionStores,
@@ -1941,8 +1891,7 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       ...(params.mode === "doctor"
         ? {
             pluginPreparation: createPluginMigrationPreparationStep({
-              configPath: snapshot.configPath,
-              configIncludedPaths: configBefore.configIncludedPaths,
+              ...stepContext,
               pluginIds,
               refusal: pluginPreparationRefusal,
               run: () => ({
@@ -2062,147 +2011,6 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   return plan;
 }
 
-async function runLegacyStateMigrationSteps(
-  steps: readonly LegacyStateMigrationStep[],
-  onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void,
-  shouldRun?: (step: LegacyStateMigrationStep) => boolean,
-  options?: {
-    onUnexpectedFailure?: (error: unknown) => void;
-    refusedAgentDatabasePaths?: Set<string>;
-  },
-): Promise<{
-  sources: MigrationMessages[];
-  sharedSources: MigrationMessages[];
-  finalSources: MigrationMessages[];
-  sharedNoticeSources: MigrationMessages[];
-  finalNoticeSources: MigrationMessages[];
-  entries: Array<{ id: string; result: MigrationMessages }>;
-  receipts: LegacyStateMigrationStepReceipt[];
-  deferredSteps: LegacyStateMigrationStep[];
-  haltedBy: LegacyStateMigrationStepReceipt | undefined;
-}> {
-  const sources: MigrationMessages[] = [];
-  const sharedSources: MigrationMessages[] = [];
-  const finalSources: MigrationMessages[] = [];
-  const sharedNoticeSources: MigrationMessages[] = [];
-  const finalNoticeSources: MigrationMessages[] = [];
-  const entries: Array<{ id: string; result: MigrationMessages }> = [];
-  const receipts: LegacyStateMigrationStepReceipt[] = [];
-  const deferredSteps: LegacyStateMigrationStep[] = [];
-  let haltedBy: LegacyStateMigrationStepReceipt | undefined;
-
-  // Keep writers serial. Scoped ownership refusals leave independent owners available.
-  for (const [index, step] of steps.entries()) {
-    const refusedDependencies = [...(options?.refusedAgentDatabasePaths ?? [])].filter(
-      (databasePath) =>
-        // Post-session plugins depend on canonical session repair, including its database owners.
-        step.deferredExecution?.kind === "post-session-plugin" ||
-        (step.reversibility !== "not-applicable" &&
-          [...step.source, ...step.target].some(
-            (endpoint) =>
-              endpoint.kind !== "owner" &&
-              (path.resolve(endpoint.path) === databasePath ||
-                (endpoint.kind === "path" && isPathInside(endpoint.path, databasePath))),
-          )),
-    );
-    if (refusedDependencies.length > 0) {
-      const message = `Migration step "${step.id}" was not run because it requires refused agent database(s): ${refusedDependencies.join(", ")}.`;
-      const result = { changes: [], warnings: [message] };
-      const receipt: LegacyStateMigrationStepReceipt = {
-        ...migrationStepPlan(step),
-        outcome: "refused",
-        ...result,
-        refusal: { code: "blocked-by-agent-database-refusal", message },
-        refusedAgentDatabasePaths: refusedDependencies,
-      };
-      entries.push({ id: step.id, result });
-      receipts.push(receipt);
-      onStepReceipt?.(receipt);
-      sources.push(result);
-      (step.phase === "shared" ? sharedSources : finalSources).push(result);
-      continue;
-    }
-    if (step.deferredExecution) {
-      // This phase depends on later canonical session repair. Keep its authority open
-      // until that writer runs; an earlier refusal still closes it through the tail path.
-      deferredSteps.push(step);
-      continue;
-    }
-    if (shouldRun && !shouldRun(step) && step.requiredness === "not-required") {
-      const receipt: LegacyStateMigrationStepReceipt = {
-        ...migrationStepPlan(step),
-        outcome: "skipped",
-        changes: [],
-        warnings: [],
-      };
-      receipts.push(receipt);
-      onStepReceipt?.(receipt);
-      continue;
-    }
-    let result: MigrationMessages;
-    let receipt: LegacyStateMigrationStepReceipt | undefined;
-    let unexpectedFailure: { error: unknown } | undefined;
-    try {
-      result = await step.run();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      result = { changes: [], warnings: [message] };
-      receipt = {
-        ...migrationStepPlan(step),
-        outcome: "refused",
-        ...result,
-        refusal: { code: "step-threw", message },
-      };
-      unexpectedFailure = { error };
-    }
-    receipt ??= createLegacyStateMigrationStepReceipt(migrationStepPlan(step), result);
-    entries.push({ id: step.id, result });
-    receipts.push(receipt);
-    onStepReceipt?.(receipt);
-    if (unexpectedFailure) {
-      options?.onUnexpectedFailure?.(unexpectedFailure.error);
-    }
-    sources.push(result);
-    (step.phase === "shared" ? sharedSources : finalSources).push(result);
-    if (!unexpectedFailure && step.collectNotices) {
-      (step.phase === "shared" ? sharedNoticeSources : finalNoticeSources).push(result);
-    }
-    if (receipt.outcome === "refused") {
-      if (
-        step.id === "media-persistence" &&
-        result.refusedAgentDatabasePaths?.length &&
-        options?.refusedAgentDatabasePaths
-      ) {
-        for (const databasePath of result.refusedAgentDatabasePaths) {
-          options.refusedAgentDatabasePaths.add(path.resolve(databasePath));
-        }
-        continue;
-      }
-      haltedBy = receipt;
-      receipts.push(
-        ...createBlockedLegacyStateMigrationStepReceipts({
-          steps: steps.slice(index + 1),
-          blocker: receipt,
-          onStepReceipt,
-        }),
-      );
-      break;
-    }
-  }
-
-  return {
-    sources,
-    sharedSources,
-    finalSources,
-    sharedNoticeSources,
-    finalNoticeSources,
-    entries,
-    receipts,
-    deferredSteps,
-    haltedBy,
-  };
-}
-
 function completedPluginMigrationFields(
   sources: readonly MigrationMessages[],
 ): Pick<MigrationMessages, "completedPluginIds" | "requiredPluginIds" | "statelessPluginIds"> {
@@ -2225,6 +2033,7 @@ function completedPluginMigrationFields(
 /** Admit preflight's shared-state writers through the same schema step as later migrations. */
 export async function prepareLegacyStateDatabaseSchema(
   env: NodeJS.ProcessEnv,
+  integrityCheck?: "quick" | "full",
 ): Promise<LegacyStateMigrationStepReceipt> {
   const { receipts } = await runLegacyStateMigrationSteps([
     createStateSchemaMigrationStep({
@@ -2232,6 +2041,7 @@ export async function prepareLegacyStateDatabaseSchema(
       env,
       mode: "doctor-preparation",
       requiredness: "conditional",
+      integrityCheck,
     }),
   ]);
   return receipts[0]!;
@@ -2239,10 +2049,10 @@ export async function prepareLegacyStateDatabaseSchema(
 
 export async function runLegacyStateMigrations(params: {
   detected: LegacyStateDetection;
+  integrityCheck?: "quick" | "full";
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
-  doctorOnlyStateMigrations?: boolean;
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
   legacySessionSurfaces: PreparedLegacySessionSurfaces;
 }): Promise<
@@ -2251,26 +2061,20 @@ export async function runLegacyStateMigrations(params: {
     stepReceipts: LegacyStateMigrationStepReceipt[];
   }
 > {
+  const signal = resolveSqliteInspectionSignal();
+  let failure: { error: unknown } | undefined;
+  const executionOptions = {
+    onUnexpectedFailure: (error: unknown) => {
+      failure ??= { error };
+    },
+  };
   const detected = params.detected;
-  assertNoRetiredRuntimeStateFiles(detected.stateDir, params.env);
-  assertNoRetiredStateFiles(
-    "JSON delivery queues",
-    listRetiredDeliveryQueueFiles(detected.stateDir),
-  );
   const env = params.env ?? process.env;
   const config = params.config ?? ({} as OpenClawConfig);
-  assertNoRetiredStateFiles("OAuth credential sidecars", [
-    ...listReferencedLegacyOAuthSidecarPaths(env, config, detected.stateDir),
-    ...listReferencedLegacyOAuthSidecarPaths(
-      { ...env, OPENCLAW_OAUTH_DIR: detected.oauthDir },
-      config,
-      detected.stateDir,
-    ),
-  ]);
-  const legacySessionSurfaces = params.legacySessionSurfaces;
   const buildSteps = (pluginStateMigrationInventory?: PluginDoctorStateMigrationInventory) =>
     buildLegacyStateMigrationSteps({
       mode: "doctor",
+      integrityCheck: params.integrityCheck,
       detected,
       config,
       env,
@@ -2279,25 +2083,34 @@ export async function runLegacyStateMigrations(params: {
       // The health contribution's later session repair consumes preflight's handoff.
       // This migration pass does not own that separate phase.
       deferPostSessionPluginMigrations: false,
-      legacySessionSurfaces,
+      legacySessionSurfaces: params.legacySessionSurfaces,
     });
   const { preparation: preparationSteps, remaining: remainingSteps } = buildSteps();
-  const preparation = await runLegacyStateMigrationSteps(preparationSteps, params.onStepReceipt);
+  const preparation = await runLegacyStateMigrationSteps(
+    preparationSteps,
+    params.onStepReceipt,
+    undefined,
+    executionOptions,
+  );
   if (preparation.haltedBy) {
     const notices = mergeNotices(preparation.sources);
+    const stepReceipts = [
+      ...preparation.receipts,
+      ...createBlockedLegacyStateMigrationStepReceipts({
+        steps: remainingSteps,
+        blocker: preparation.haltedBy,
+        onStepReceipt: params.onStepReceipt,
+      }),
+    ];
+    if (failure && signal?.aborted && failure.error === signal.reason) {
+      throw failure.error;
+    }
     return {
       changes: preparation.sources.flatMap((source) => source.changes),
       warnings: preparation.sources.flatMap((source) => source.warnings),
       ...(notices.length > 0 ? { notices } : {}),
       mode: "doctor",
-      stepReceipts: [
-        ...preparation.receipts,
-        ...createBlockedLegacyStateMigrationStepReceipts({
-          steps: remainingSteps,
-          blocker: preparation.haltedBy,
-          onStepReceipt: params.onStepReceipt,
-        }),
-      ],
+      stepReceipts,
     };
   }
 
@@ -2307,12 +2120,17 @@ export async function runLegacyStateMigrations(params: {
   const migrations = await runLegacyStateMigrationSteps(
     buildSteps(inventory).remaining,
     params.onStepReceipt,
+    undefined,
+    executionOptions,
   );
   const notices = mergeNotices([
     ...preparation.sources,
     ...migrations.sharedNoticeSources,
     ...migrations.finalNoticeSources,
   ]);
+  if (failure && signal?.aborted && failure.error === signal.reason) {
+    throw failure.error;
+  }
   return {
     mode: "doctor",
     ...completedPluginMigrationFields(migrations.sources),
@@ -2334,6 +2152,7 @@ export async function autoMigrateLegacyState(params: {
   cfg: OpenClawConfigWithLegacyRoster;
   sourceConfigBeforeMigrations?: OpenClawConfigWithLegacyRoster;
   invocationPurpose?: LegacyStateMigrationInvocationPurpose;
+  integrityCheck?: "quick" | "full";
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   pluginDoctorConfig?: OpenClawConfig;
   /** Include inputs captured by the config snapshot that produced cfg. */
@@ -2359,13 +2178,17 @@ export async function autoMigrateLegacyState(params: {
   stepReceipts: LegacyStateMigrationStepReceipt[];
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
 }> {
+  const signal = resolveSqliteInspectionSignal();
   let failure: { error: unknown } | undefined;
   const result = await executeLegacyStateMigrations(params, (error) => {
     failure ??= { error };
   });
-  // Automatic callers still receive the original failure, but only after the execution
-  // owner has closed every remaining receipt without running later migrations.
-  if (params.doctorOnlyStateMigrations !== true && failure) {
+  // Settle all receipts before forwarding cancellation to Doctor's service restoration.
+  if (
+    failure &&
+    (params.doctorOnlyStateMigrations !== true ||
+      (signal?.aborted && failure.error === signal.reason))
+  ) {
     throw failure.error;
   }
   return result;
@@ -2393,13 +2216,11 @@ async function executeLegacyStateMigrations(
         : [],
     ),
   };
+  const runSteps = (
+    steps: readonly LegacyStateMigrationStep[],
+    shouldRun?: (step: LegacyStateMigrationStep) => boolean,
+  ) => runLegacyStateMigrationSteps(steps, params.onStepReceipt, shouldRun, executionOptions);
   const initialStateDir = resolveStateDir(env, homedir);
-  assertNoRetiredRuntimeStateFiles(initialStateDir, env, homedir);
-  assertNoRetiredStateFiles("JSON delivery queues", listRetiredDeliveryQueueFiles(initialStateDir));
-  assertNoRetiredStateFiles(
-    "OAuth credential sidecars",
-    listReferencedLegacyOAuthSidecarPaths(env, params.cfg, initialStateDir),
-  );
   const checkKey = `${path.resolve(initialStateDir)}\0${mode}`;
   // An earlier attempt may leave post-session work or a refusal unresolved.
   // Explicit Doctor calls need fresh receipts and handoffs, not startup's once-cache.
@@ -2425,12 +2246,10 @@ async function executeLegacyStateMigrations(
     config: pluginDoctorConfig,
     env,
   });
-  let pluginInstallIndexStep = createPluginInstallIndexStep({
+  let retiredCoreStateStep = createRetiredCoreStateStep({
     stateDir: initialStateDir,
     env,
-    hasLegacy: migrationFileExists(
-      resolveLegacyInstalledPluginIndexStorePath({ stateDir: initialStateDir }),
-    ),
+    mode,
   });
 
   // Preflight normally owns this relocation. Direct callers must retain the same
@@ -2459,14 +2278,7 @@ async function executeLegacyStateMigrations(
         },
       }
     : undefined;
-  const stateDirMigration = stateDirStep
-    ? await runLegacyStateMigrationSteps(
-        [stateDirStep],
-        params.onStepReceipt,
-        undefined,
-        executionOptions,
-      )
-    : undefined;
+  const stateDirMigration = stateDirStep ? await runSteps([stateDirStep]) : undefined;
   const stateDirResult = stateDirMigration?.entries[0]?.result ?? {
     changes: [],
     warnings: [],
@@ -2541,6 +2353,7 @@ async function executeLegacyStateMigrations(
       homedir,
       agentDatabaseTargets,
       agentDatabaseMigrationDiscovery,
+      integrityCheck: params.integrityCheck,
       orphanSessionStores: overrides?.orphanSessionStores,
       pluginSessionStoreAgentIds:
         overrides?.pluginSessionStoreAgentIds ?? pluginSessionStoreAgentIds,
@@ -2592,6 +2405,7 @@ async function executeLegacyStateMigrations(
         : undefined;
     return buildLegacyStateMigrationSteps({
       mode,
+      integrityCheck: params.integrityCheck,
       detected: migrationDetection,
       config: pluginDoctorConfig,
       sessionConfig: params.cfg,
@@ -2609,16 +2423,29 @@ async function executeLegacyStateMigrations(
       beforeWorkspaceStateMigration: params.beforeWorkspaceStateMigration,
     }).remaining;
   };
-  const completeBlockedPlanReceipts = async (paramsForBlockedPlan: {
+  const finishBlockedPlan = (blocked: {
+    completed: readonly MigrationMessages[];
+    warnings?: readonly string[];
+    notices?: string[];
+    log?: boolean;
     receipts: readonly LegacyStateMigrationStepReceipt[];
     blocker: LegacyStateMigrationStepReceipt;
     pendingPreludeSteps: readonly LegacyStateMigrationStep[];
-  }): Promise<LegacyStateMigrationStepReceipt[]> => {
+  }): Awaited<ReturnType<typeof autoMigrateLegacyState>> => {
+    const changes = blocked.completed.flatMap((result) => result.changes);
+    const warnings = [
+      ...blocked.completed.flatMap((result) => result.warnings),
+      ...(blocked.warnings ?? []),
+    ];
+    const notices = blocked.notices ?? [];
+    if (blocked.log) {
+      logStateMigrationResult({ changes, warnings, notices }, params.log);
+    }
     const receipts = [
-      ...paramsForBlockedPlan.receipts,
+      ...blocked.receipts,
       ...createBlockedLegacyStateMigrationStepReceipts({
-        steps: paramsForBlockedPlan.pendingPreludeSteps,
-        blocker: paramsForBlockedPlan.blocker,
+        steps: blocked.pendingPreludeSteps,
+        blocker: blocked.blocker,
         onStepReceipt: params.onStepReceipt,
       }),
     ];
@@ -2640,17 +2467,26 @@ async function executeLegacyStateMigrations(
     receipts.push(
       ...createBlockedLegacyStateMigrationStepReceipts({
         steps: blockedSteps,
-        blocker: paramsForBlockedPlan.blocker,
+        blocker: blocked.blocker,
         onStepReceipt: params.onStepReceipt,
       }),
     );
-    return receipts;
+    return {
+      mode,
+      migrated: changes.length > 0,
+      skipped: false,
+      changes,
+      warnings,
+      stepReceipts: receipts,
+      ...(notices.length > 0 ? { notices } : {}),
+    };
   };
   let stateSchemaStep = createStateSchemaMigrationStep({
     stateDir,
     env,
     mode,
     requiredness: "conditional",
+    integrityCheck: params.integrityCheck,
   });
   const configMachineStateStep = createConfigMachineStateStep({
     config: pluginDoctorConfig,
@@ -2670,13 +2506,11 @@ async function executeLegacyStateMigrations(
           params.cfg,
           stateEnv,
         );
-        // Preflight inspects custom session stores without binding their migration owners.
-        agentDatabaseTargets = hasCustomAgentDirOverride(env)
-          ? []
-          : resolveConfiguredAgentDatabaseTargets(params.cfg, {
-              env: stateEnv,
-              registeredDatabases: agentDatabaseMigrationDiscovery.registeredAgentDatabases,
-            });
+        agentDatabaseTargets = resolveDoctorAgentMigrationTargets(params.cfg, stateEnv, {
+          registeredDatabases: agentDatabaseMigrationDiscovery.registeredAgentDatabases,
+          mode,
+          skipConfigured: hasCustomAgentDirOverride(env),
+        });
         return { changes: [], warnings: [] };
       } catch (error) {
         if (mode === "automatic") {
@@ -2695,35 +2529,25 @@ async function executeLegacyStateMigrations(
     },
   });
   if (stateDirMigration?.haltedBy && stateDirStep) {
-    const notices = mergeNotices([stateDirResult]);
-    logStateMigrationResult(
-      { changes: stateDirResult.changes, warnings: stateDirResult.warnings, notices },
-      params.log,
-    );
-    return {
-      mode,
-      migrated: stateDirResult.changes.length > 0,
-      skipped: false,
-      changes: stateDirResult.changes,
-      warnings: stateDirResult.warnings,
-      stepReceipts: await completeBlockedPlanReceipts({
-        receipts: stateDirMigration.receipts,
-        blocker: stateDirMigration.haltedBy,
-        pendingPreludeSteps: [
-          stateSchemaStep,
-          pluginInstallIndexStep,
-          configMachineStateStep,
-          agentTargetDiscoveryStep,
-          ...buildUnresolvedBlockedPreludeSteps(mode, invocationPurpose),
-        ],
-      }),
-      ...(notices.length > 0 ? { notices } : {}),
-    };
+    return finishBlockedPlan({
+      completed: [stateDirResult],
+      notices: mergeNotices([stateDirResult]),
+      log: true,
+      receipts: stateDirMigration.receipts,
+      blocker: stateDirMigration.haltedBy,
+      pendingPreludeSteps: [
+        stateSchemaStep,
+        retiredCoreStateStep,
+        configMachineStateStep,
+        agentTargetDiscoveryStep,
+        ...buildUnresolvedBlockedPreludeSteps(mode, invocationPurpose),
+      ],
+    });
   }
-  pluginInstallIndexStep = createPluginInstallIndexStep({
+  retiredCoreStateStep = createRetiredCoreStateStep({
     stateDir,
     env: stateEnv,
-    hasLegacy: migrationFileExists(resolveLegacyInstalledPluginIndexStorePath({ stateDir })),
+    mode,
   });
   try {
     if (detectOpenClawStateDatabaseSchemaMigrations(stateSchemaOptions).length > 0) {
@@ -2732,18 +2556,14 @@ async function executeLegacyStateMigrations(
         env,
         mode,
         requiredness: "required",
+        integrityCheck: params.integrityCheck,
       });
     }
   } catch {
     // The repair step owns diagnostics for unreadable or unsupported schemas.
   }
-  const statePreparationSteps = [stateSchemaStep, pluginInstallIndexStep];
-  const stateSchemaMigration = await runLegacyStateMigrationSteps(
-    statePreparationSteps,
-    params.onStepReceipt,
-    undefined,
-    executionOptions,
-  );
+  const statePreparationSteps = [stateSchemaStep, retiredCoreStateStep];
+  const stateSchemaMigration = await runSteps(statePreparationSteps);
   const stateSchemaResult = stateSchemaMigration.entries[0]?.result ?? {
     changes: [],
     warnings: [],
@@ -2765,24 +2585,17 @@ async function executeLegacyStateMigrations(
     if (mode !== "doctor" && stateSchemaResult.warnings.length > 0) {
       onUnexpectedFailure(new Error(formatStartupMigrationFailure(stateSchemaResult.warnings)));
     }
-    const pendingPreludeSteps = [
-      configMachineStateStep,
-      agentTargetDiscoveryStep,
-      ...buildUnresolvedBlockedPreludeSteps(mode, invocationPurpose),
-    ];
-    return {
-      mode,
-      migrated: stateSchema.changes.length > 0,
-      skipped: false,
-      changes: stateSchema.changes,
-      warnings: stateSchema.warnings,
-      ...(stateSchema.notices?.length ? { notices: stateSchema.notices } : {}),
-      stepReceipts: await completeBlockedPlanReceipts({
-        receipts: stateSchemaMigration.receipts,
-        blocker: stateSchemaMigration.haltedBy,
-        pendingPreludeSteps,
-      }),
-    };
+    return finishBlockedPlan({
+      completed: [stateSchema],
+      notices: stateSchema.notices,
+      receipts: stateSchemaMigration.receipts,
+      blocker: stateSchemaMigration.haltedBy,
+      pendingPreludeSteps: [
+        configMachineStateStep,
+        agentTargetDiscoveryStep,
+        ...buildUnresolvedBlockedPreludeSteps(mode, invocationPurpose),
+      ],
+    });
   }
   if (stateSchema.changes.length > 0) {
     pluginStateMigrationInventory = resolveLivePluginDoctorStateMigrationInventory({
@@ -2792,76 +2605,33 @@ async function executeLegacyStateMigrations(
     });
   }
   // Preserve retired locators before advisory returns can permit config repair.
-  const configMachineStateMigration = await runLegacyStateMigrationSteps(
-    [configMachineStateStep],
-    params.onStepReceipt,
-    undefined,
-    executionOptions,
-  );
-  const configMachineState = configMachineStateMigration.entries[0]?.result ?? {
-    changes: [],
-    warnings: [],
-  };
-  if (configMachineStateMigration.haltedBy) {
-    return {
-      mode,
-      migrated: stateSchema.changes.length > 0,
-      skipped: false,
-      changes: stateSchema.changes,
-      warnings: [...stateSchema.warnings, ...configMachineState.warnings],
-      ...(stateSchema.notices?.length ? { notices: stateSchema.notices } : {}),
-      stepReceipts: await completeBlockedPlanReceipts({
-        receipts: [...stateSchemaMigration.receipts, ...configMachineStateMigration.receipts],
-        blocker: configMachineStateMigration.haltedBy,
+  const preparationPreludeSteps = [configMachineStateStep, agentTargetDiscoveryStep];
+  const preparationPreludeSources: MigrationMessages[] = [];
+  const preludeReceipts: LegacyStateMigrationStepReceipt[] = [];
+  for (const [index, step] of preparationPreludeSteps.entries()) {
+    const execution = await runSteps([step]);
+    const result = execution.entries[0]?.result ?? { changes: [], warnings: [] };
+    preludeReceipts.push(...execution.receipts);
+    if (execution.haltedBy) {
+      return finishBlockedPlan({
+        completed: [stateSchema, ...preparationPreludeSources],
+        warnings: result.warnings,
+        notices: stateSchema.notices,
+        receipts: [...stateSchemaMigration.receipts, ...preludeReceipts],
+        blocker: execution.haltedBy,
         pendingPreludeSteps: [
-          agentTargetDiscoveryStep,
+          ...preparationPreludeSteps.slice(index + 1),
           ...buildUnresolvedBlockedPreludeSteps(mode, invocationPurpose),
         ],
-      }),
-    };
+      });
+    }
+    preparationPreludeSources.push(result);
   }
-  const agentTargetDiscovery = await runLegacyStateMigrationSteps(
-    [agentTargetDiscoveryStep],
-    params.onStepReceipt,
-    undefined,
-    executionOptions,
-  );
-  const agentTargetResult = agentTargetDiscovery.entries[0]?.result ?? {
-    changes: [],
-    warnings: [],
-  };
-  if (agentTargetDiscovery.haltedBy) {
-    const changes = [...stateSchema.changes, ...configMachineState.changes];
-    return {
-      mode,
-      migrated: changes.length > 0,
-      skipped: false,
-      changes,
-      warnings: [
-        ...stateSchema.warnings,
-        ...configMachineState.warnings,
-        ...agentTargetResult.warnings,
-      ],
-      ...(stateSchema.notices?.length ? { notices: stateSchema.notices } : {}),
-      stepReceipts: await completeBlockedPlanReceipts({
-        receipts: [
-          ...stateSchemaMigration.receipts,
-          ...configMachineStateMigration.receipts,
-          ...agentTargetDiscovery.receipts,
-        ],
-        blocker: agentTargetDiscovery.haltedBy,
-        pendingPreludeSteps: buildUnresolvedBlockedPreludeSteps(mode, invocationPurpose),
-      }),
-    };
-  }
+  const configMachineState = preparationPreludeSources[0]!;
   const initialPreludeSteps = buildPreludeSteps({
     pluginSessionStoreAgentIds: [],
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
   });
-  const preludeReceipts: LegacyStateMigrationStepReceipt[] = [
-    ...configMachineStateMigration.receipts,
-    ...agentTargetDiscovery.receipts,
-  ];
   const runPreludeStep = async (
     steps: readonly LegacyStateMigrationStep[],
     id: string,
@@ -2870,12 +2640,7 @@ async function executeLegacyStateMigrations(
     if (!step) {
       return { changes: [], warnings: [] };
     }
-    const execution = await runLegacyStateMigrationSteps(
-      [step],
-      params.onStepReceipt,
-      undefined,
-      executionOptions,
-    );
+    const execution = await runSteps([step]);
     preludeReceipts.push(...execution.receipts);
     return {
       ...(execution.entries[0]?.result ?? { changes: [], warnings: [] }),
@@ -2897,78 +2662,37 @@ async function executeLegacyStateMigrations(
     profileWorkspaceIndex < 0
       ? initialPreludeSteps
       : initialPreludeSteps.slice(0, profileWorkspaceIndex);
-  const persistence = await runLegacyStateMigrationSteps(
-    persistenceSteps,
-    params.onStepReceipt,
-    undefined,
-    executionOptions,
-  );
+  const persistence = await runSteps(persistenceSteps);
   preludeReceipts.push(...persistence.receipts);
+  const completedPrelude = [stateSchema, configMachineState, ...persistence.sources];
   if (persistence.haltedBy) {
-    const completed = [stateSchema, configMachineState, ...persistence.sources];
-    const blocker = persistence.haltedBy;
-    return {
-      mode,
-      migrated: completed.some((result) => result.changes.length > 0),
-      skipped: false,
-      changes: completed.flatMap((result) => result.changes),
-      warnings: completed.flatMap((result) => result.warnings),
-      ...(stateSchema.notices?.length ? { notices: stateSchema.notices } : {}),
-      stepReceipts: await completeBlockedPlanReceipts({
-        receipts: [...stateSchemaMigration.receipts, ...preludeReceipts],
-        blocker,
-        pendingPreludeSteps: initialPreludeSteps.slice(persistenceSteps.length),
-      }),
-    };
+    return finishBlockedPlan({
+      completed: completedPrelude,
+      notices: stateSchema.notices,
+      receipts: [...stateSchemaMigration.receipts, ...preludeReceipts],
+      blocker: persistence.haltedBy,
+      pendingPreludeSteps: initialPreludeSteps.slice(persistenceSteps.length),
+    });
   }
-  const profileWorkspace = await runPreludeStep(initialPreludeSteps, "profile-workspace");
-  if (profileWorkspace.haltedBy) {
-    const completed = [stateSchema, configMachineState, ...persistence.sources];
-    const changes = completed.flatMap((result) => result.changes);
-    const warnings = [
-      ...completed.flatMap((result) => result.warnings),
-      ...profileWorkspace.warnings,
-    ];
-    const notices = mergeNotices(completed);
-    logStateMigrationResult({ changes, warnings, notices }, params.log);
-    const blocker = profileWorkspace.haltedBy;
-    return {
-      mode,
-      migrated: changes.length > 0,
-      skipped: false,
-      changes,
-      warnings,
-      ...(notices.length > 0 ? { notices } : {}),
-      stepReceipts: await completeBlockedPlanReceipts({
+  let profileWorkspace: MigrationMessages = { changes: [], warnings: [] };
+  for (const id of ["profile-workspace", "plugin-migration-preparation"]) {
+    const result = await runPreludeStep(initialPreludeSteps, id);
+    const isProfileWorkspace = id === "profile-workspace";
+    if (result.haltedBy) {
+      return finishBlockedPlan({
+        completed: completedPrelude,
+        warnings: result.warnings,
+        notices: isProfileWorkspace ? mergeNotices(completedPrelude) : stateSchema.notices,
+        log: isProfileWorkspace,
         receipts: [...stateSchemaMigration.receipts, ...preludeReceipts],
-        blocker,
-        pendingPreludeSteps: pendingPreludeAfter(initialPreludeSteps, blocker.id),
-      }),
-    };
-  }
-  const pluginPreparationResult = await runPreludeStep(
-    initialPreludeSteps,
-    "plugin-migration-preparation",
-  );
-  if (pluginPreparationResult.haltedBy) {
-    const completed = [stateSchema, configMachineState, ...persistence.sources, profileWorkspace];
-    const blocker = pluginPreparationResult.haltedBy;
-    return {
-      mode,
-      migrated: completed.some((result) => result.changes.length > 0),
-      skipped: false,
-      changes: completed.flatMap((result) => result.changes),
-      warnings: [
-        ...completed.flatMap((result) => result.warnings),
-        ...pluginPreparationResult.warnings,
-      ],
-      ...(stateSchema.notices?.length ? { notices: stateSchema.notices } : {}),
-      stepReceipts: await completeBlockedPlanReceipts({
-        receipts: [...stateSchemaMigration.receipts, ...preludeReceipts],
-        blocker,
-        pendingPreludeSteps: pendingPreludeAfter(initialPreludeSteps, blocker.id),
-      }),
-    };
+        blocker: result.haltedBy,
+        pendingPreludeSteps: pendingPreludeAfter(initialPreludeSteps, result.haltedBy.id),
+      });
+    }
+    if (isProfileWorkspace) {
+      profileWorkspace = result;
+      completedPrelude.push(result);
+    }
   }
   if (mode === "doctor") {
     preparedSessionStores = inspectOrphanSessionStoreEndpoints({
@@ -2983,37 +2707,19 @@ async function executeLegacyStateMigrations(
     // Atomic store rewrites can split filesystem aliases captured by discovery.
     preparedSessionStores = undefined;
   }
+  completedPrelude.push(orphanKeys);
   if (orphanKeys.haltedBy) {
-    const completed = [
-      stateSchema,
-      configMachineState,
-      ...persistence.sources,
-      profileWorkspace,
-      orphanKeys,
-    ];
-    const blocker = orphanKeys.haltedBy;
-    return {
-      mode,
-      migrated: completed.some((result) => result.changes.length > 0),
-      skipped: false,
-      changes: completed.flatMap((result) => result.changes),
-      warnings: completed.flatMap((result) => result.warnings),
-      ...(stateSchema.notices?.length ? { notices: stateSchema.notices } : {}),
-      stepReceipts: await completeBlockedPlanReceipts({
-        receipts: [...stateSchemaMigration.receipts, ...preludeReceipts],
-        blocker,
-        pendingPreludeSteps: [],
-      }),
-    };
+    return finishBlockedPlan({
+      completed: completedPrelude,
+      notices: stateSchema.notices,
+      receipts: [...stateSchemaMigration.receipts, ...preludeReceipts],
+      blocker: orphanKeys.haltedBy,
+      pendingPreludeSteps: [],
+    });
   }
 
   const detectionStep = createDetectionStep();
-  const detectionExecution = await runLegacyStateMigrationSteps(
-    [detectionStep],
-    params.onStepReceipt,
-    undefined,
-    executionOptions,
-  );
+  const detectionExecution = await runSteps([detectionStep]);
   preludeReceipts.push(...detectionExecution.receipts);
   if (detectionExecution.haltedBy || !detected) {
     preludeReceipts.push(
@@ -3029,14 +2735,7 @@ async function executeLegacyStateMigrations(
         onStepReceipt: params.onStepReceipt,
       }),
     );
-    const completed = [
-      stateSchema,
-      configMachineState,
-      ...persistence.sources,
-      profileWorkspace,
-      orphanKeys,
-      ...detectionExecution.sources,
-    ];
+    const completed = [...completedPrelude, ...detectionExecution.sources];
     const changes = completed.flatMap((result) => result.changes);
     const warnings = [...new Set(completed.flatMap((result) => result.warnings))];
     const notices = mergeNotices(completed);
@@ -3058,21 +2757,9 @@ async function executeLegacyStateMigrations(
   const remainingMigrationSteps = migrationSteps.filter(
     (step) => !eagerMigrationStepIds.has(step.id),
   );
-  const eagerMigrations = await runLegacyStateMigrationSteps(
-    eagerMigrationSteps,
-    params.onStepReceipt,
-    undefined,
-    executionOptions,
-  );
+  const eagerMigrations = await runSteps(eagerMigrationSteps);
   if (eagerMigrations.haltedBy) {
-    const completed = [
-      stateSchema,
-      configMachineState,
-      ...persistence.sources,
-      profileWorkspace,
-      orphanKeys,
-      ...eagerMigrations.sources,
-    ];
+    const completed = [...completedPrelude, ...eagerMigrations.sources];
     const changes = completed.flatMap((result) => result.changes);
     const warnings = [
       ...new Set([...completed.flatMap((result) => result.warnings), ...detected.warnings]),
@@ -3135,11 +2822,9 @@ async function executeLegacyStateMigrations(
     !detected.workspace.hasLegacy &&
     !detected.channelPairing.hasLegacy;
   // SQLite rows can still need owner repair when legacy file detectors have no work.
-  const migrations = await runLegacyStateMigrationSteps(
+  const migrations = await runSteps(
     remainingMigrationSteps,
-    params.onStepReceipt,
     useFileDetectionFastPath ? (step) => step.runWithoutFileDetection === true : undefined,
-    executionOptions,
   );
   const deferredPostSessionStep = migrations.deferredSteps.find(
     (step) => step.deferredExecution?.kind === "post-session-plugin",

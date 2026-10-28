@@ -19,7 +19,7 @@ export const { applyProviderConfig: applyChutesProviderConfig } = createModelCat
     api: "openai-completions",
     baseUrl: CHUTES_BASE_URL,
     // Replace mode skips discovery; merge mode must not persist generated pricing as authored pins.
-    catalogModels: cfg.models?.mode === "replace" ? structuredClone(CHUTES_MODEL_CATALOG) : [],
+    catalogModels: cfg.models?.mode === "replace" ? CHUTES_MODEL_CATALOG : [],
     aliases: [
       ...CHUTES_MODEL_CATALOG.map((model) => `chutes/${model.id}`),
       {

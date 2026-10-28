@@ -1,5 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { waitForAgentDatabasePreparation } from "../../state/agent-database-preparation-context.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
@@ -11,11 +12,8 @@ import type {
   SqliteSessionArtifactPreparationDiagnostics,
   SqliteSessionReclamationDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
-import {
-  hasPreparedNativeSessionDeletion,
-  withSqliteSessionDeletions,
-} from "./session-accessor.sqlite-deletion.js";
-import { prepareSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-artifacts.js";
+import { withSqliteSessionDeletions } from "./session-accessor.sqlite-deletion.js";
+import { prepareSessionLifecycleArtifactCleanupForMaintenance } from "./session-accessor.sqlite-lifecycle-artifacts.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
@@ -30,28 +28,109 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import { reclaimIncognitoSessionLifecycle } from "./session-incognito-lifecycle-operations.js";
 import { maintenanceLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
 export async function cleanupSessionLifecycleArtifactsCore(
-  params:
-    | SessionLifecycleArtifactCleanupParams
-    | ({ kind: "incognito" } & Parameters<typeof reclaimIncognitoSessionLifecycle>[0]),
+  params: SessionLifecycleArtifactCleanupParams,
 ): Promise<SessionLifecycleArtifactCleanupResult> {
-  if ("kind" in params) {
-    const result = await reclaimIncognitoSessionLifecycle(params);
-    return {
-      removedEntries: result.removedEntries,
-      archivedTranscriptArtifacts: result.archivedTranscripts.length,
-    };
-  }
   const sessionKeySegmentPrefix = params.sessionKeySegmentPrefix.trim();
   const transcriptContentMarker = params.transcriptContentMarker;
   const pluginOwnerId = params.pluginOwnerId?.trim();
   if (!sessionKeySegmentPrefix || !transcriptContentMarker) {
     return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
+  const authority = { assertCurrent() {}, authorize() {} };
+  const captured = captureSessionActorStorageOwner(params, authority);
+  if (captured) {
+    const owner = captured.owner;
+    const anchorKey = owner?.listSessions(captured.authority)[0]?.target.sessionKey;
+    if (!owner || !anchorKey) {
+      return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+    }
+    const input = {
+      sessionKeySegmentPrefix,
+      transcriptContentMarker,
+      pluginOwnerId,
+      orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+      nowMs: params.nowMs ?? Date.now(),
+    };
+    return (
+      (await withSessionActorStorage(
+        { ...params, sessionKey: anchorKey },
+        {
+          authority: captured.authority,
+          lifetime: {
+            assertCurrent: () => owner.assertCurrent(),
+            assertReadable: () => owner.assertCurrent(),
+          },
+        },
+        async (memory) => {
+          const plan = await memory.actor.storage.read(
+            { type: "session.lifecycle.artifacts", input },
+            memory.authority,
+          );
+          if (!plan.entries.length && !plan.windows.length) {
+            return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+          }
+          const entries = plan.entries.map(({ sessionKey, expected: entry }) => ({
+            sessionKey,
+            entry,
+          }));
+          const target = captureSessionTranscriptTargetBinding({
+            agentId: owner.agentId,
+            storePath: owner.path,
+            env: params.env,
+          });
+          return withSqliteSessionDeletions(
+            {
+              agentId: owner.agentId,
+              path: owner.path,
+              env: target.env,
+              ownerStorePath: params.storePath,
+            },
+            entries,
+            async (assertDeletionCurrent, capture) => {
+              const companions: { settlement?: ReturnType<typeof capture> } = {};
+              const outcome = await memory.actor.storage.mutate(
+                {
+                  type: "session.lifecycle.reclaim",
+                  input: { entries: plan.entries, artifacts: { input, windows: plan.windows } },
+                },
+                {
+                  authorize: (...args) => memory.authority.authorize(...args),
+                  assertCurrent() {
+                    memory.authority.assertCurrent();
+                    assertDeletionCurrent();
+                  },
+                },
+                {
+                  beforeCommit(receipt) {
+                    const removed = new Set(receipt.value.removedSessionKeys);
+                    companions.settlement = capture(
+                      entries.filter((entry) => removed.has(entry.sessionKey)),
+                    );
+                    return companions.settlement.beforeCommit();
+                  },
+                  settled: (settledOutcome) => companions.settlement?.settle(settledOutcome.kind),
+                },
+              );
+              const result = readSessionActorStorageResult(outcome);
+              return {
+                removedEntries: result.removedSessionKeys.length,
+                archivedTranscriptArtifacts: 0,
+              };
+            },
+            { memory: owner, additionalIdentities: plan.windows.map((window) => window.sessionId) },
+          );
+        },
+      )) ?? { removedEntries: 0, archivedTranscriptArtifacts: 0 }
+    );
   }
 
   const requested = captureLifecycleDatabaseScope(
@@ -62,18 +141,28 @@ export async function cleanupSessionLifecycleArtifactsCore(
     }),
   );
   const requestedOptions = toDatabaseOptions(requested);
+  const preparation = waitForAgentDatabasePreparation(requestedOptions.agentId, {
+    env: requested.env,
+  });
+  if (preparation) {
+    await preparation;
+  }
   const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(requestedOptions);
   const opened = useWorker ? getOpenClawAgentDatabaseIfOpen(requestedOptions) : undefined;
   const openedIdentity = opened ? readOpenClawAgentDatabaseIdentity(opened) : undefined;
   const source = useWorker
     ? openedIdentity
       ? {
-          key: `file:${String(openedIdentity.identity)}`,
+          key: `file:${openedIdentity.identity}`,
           birthtime: openedIdentity.birthtime,
           canonicalPath: openedIdentity.filename,
         }
       : readDatabasePathIdentitySync(requested.path)
     : undefined;
+  // An absent store has no historical artifacts, even if startup creates it after capture.
+  if (source?.key.startsWith("path:")) {
+    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
   const resolved = { ...requested, path: source?.canonicalPath ?? requested.path };
   const databaseOptions = { ...toDatabaseOptions(resolved), path: resolved.path };
   return withSqliteMutationWorkerLifetime(databaseOptions, async ({ assertCurrent, signal }) => {
@@ -103,7 +192,7 @@ export async function cleanupSessionLifecycleArtifactsCore(
           diagnostics: artifactPreparation,
         };
         if (!source) {
-          return prepareSessionLifecycleArtifactCleanup(databaseOptions, input);
+          return prepareSessionLifecycleArtifactCleanupForMaintenance(databaseOptions, input);
         }
         const continuation = opened ? captureCanonicalSessionReaderContinuation(opened) : undefined;
         try {
@@ -165,14 +254,8 @@ export async function cleanupSessionLifecycleArtifactsCore(
           const reclaimed = await runSqliteSessionReclamation({
             diagnostics,
             assertCommitAllowed,
-            forceInProcess: hasPreparedNativeSessionDeletion(),
             plan,
           });
-          if (reclaimed.kind !== plan.kind) {
-            throw new Error(
-              `SQLite session reclamation returned ${reclaimed.kind} for ${plan.kind}`,
-            );
-          }
           return reclaimed.value;
         }),
       { additionalIdentities: cleanupPlan.deletePlans.map((plan) => plan.sessionId) },

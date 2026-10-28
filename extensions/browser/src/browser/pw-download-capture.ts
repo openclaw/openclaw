@@ -1,7 +1,7 @@
-/** Shared Playwright download capture and output handling. */
 import crypto from "node:crypto";
 import path from "node:path";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Download } from "playwright-core";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import { writeExternalFileWithinOutputRoot } from "./output-files.js";
@@ -52,7 +52,7 @@ export async function saveBrowserDownload(
     throw error;
   }
   opts.signal?.throwIfAborted();
-  const requestedPath = opts.outputPath?.trim();
+  const requestedPath = readNonBlankString(opts.outputPath);
   const implicitRoot = opts.outputRoot ?? DEFAULT_DOWNLOAD_DIR;
   const managedPath = requestedPath || buildManagedDownloadPath(implicitRoot, suggestedFilename);
   const savedPath = await writeExternalFileWithinOutputRoot({
@@ -112,10 +112,8 @@ export function createDownloadCaptureForPage(
   };
 
   const retireDeadline = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
 
   const cleanup = () => {

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { onTestFinished, vi, type Mock } from "vitest";
 import type { runPostCorePluginConvergence } from "../../commands/doctor/shared/post-core-plugin-convergence.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import type { readConfigFileSnapshot as ReadConfigFileSnapshot } from "../../config/config.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import type {
@@ -13,6 +14,7 @@ import type {
 import { isMissingPathError } from "../../infra/errors.js";
 import { writeJsonFixture } from "./update-cli-package.test-support.js";
 import type { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
+import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 
 type PostCoreUpdateOptions = Parameters<typeof completePostCorePluginUpdate>[0];
 
@@ -21,20 +23,12 @@ export function createChangedPostCoreUpdateOptions(
 ): PostCoreUpdateOptions {
   return {
     root: "/tmp/openclaw-updated-root",
-    pluginUpdate: {
+    pluginUpdate: createPostCorePluginUpdateResult({
       status: "ok",
       changed: true,
       warnings: [],
-      sync: {
-        changed: false,
-        switchedToBundled: [],
-        switchedToNpm: [],
-        warnings: [],
-        errors: [],
-      },
       npm: { changed: true, outcomes: [] },
-      integrityDrifts: [],
-    },
+    }),
     yes: true,
     json: true,
     timeoutMs: 30_000,
@@ -55,20 +49,7 @@ export function createConfigValidationFailure(
 }
 
 export function createUpdateCliBaseSnapshot(config: OpenClawConfig): ConfigFileSnapshot {
-  return {
-    path: "/tmp/openclaw-config.json",
-    exists: true,
-    raw: "{}",
-    parsed: {},
-    resolved: config,
-    sourceConfig: config,
-    valid: true,
-    config,
-    runtimeConfig: config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  };
+  return createTestConfigSnapshot(config, config, "/tmp/openclaw-config.json");
 }
 
 export const pluginSyncResult = (
@@ -138,14 +119,7 @@ export const stableWhatsAppConfig = (): OpenClawConfig =>
     },
   });
 
-export function createUpdateCliConfigFixtures({
-  baseConfig,
-  baseSnapshot,
-  readConfigFileSnapshot,
-  syncPluginsForUpdateChannel,
-  updateNpmInstalledPlugins,
-  createCaseDir,
-}: {
+export function createUpdateCliConfigFixtures(deps: {
   baseConfig: OpenClawConfig;
   baseSnapshot: ConfigFileSnapshot;
   readConfigFileSnapshot: typeof ReadConfigFileSnapshot;
@@ -153,109 +127,98 @@ export function createUpdateCliConfigFixtures({
   updateNpmInstalledPlugins: Mock;
   createCaseDir: (prefix: string) => string;
 }) {
-  const mockNpmPluginOutcomes = (
-    outcomes: unknown[],
-    changed = false,
-    config: OpenClawConfig = baseConfig,
-  ) => {
-    updateNpmInstalledPlugins.mockResolvedValueOnce({ changed, config, outcomes });
-  };
-
-  const mockNoopPostUpdatePluginConvergence = () => {
-    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => pluginSyncResult(config));
-    updateNpmInstalledPlugins.mockImplementation(async ({ config }) =>
-      npmPluginUpdateResult(config),
-    );
-  };
-
-  const mockPostDoctorSnapshot = (
-    configPath: string,
-    config: OpenClawConfig,
-    options: { preserveParsed?: boolean } = {},
-  ) => {
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      path: configPath,
-      ...(options.preserveParsed ? {} : { parsed: config }),
-      sourceConfig: config,
-      config,
-      runtimeConfig: config,
-      hash: "post-doctor-hash",
-    });
-  };
-
-  const configSnapshot = (
-    config: OpenClawConfig,
-    overrides: Partial<ConfigFileSnapshot> = {},
-  ): ConfigFileSnapshot => ({
-    ...baseSnapshot,
-    parsed: config,
-    resolved: config,
-    sourceConfig: config,
-    config,
-    runtimeConfig: config,
-    ...overrides,
-  });
-
-  const useFileBackedConfig = async (): Promise<void> => {
-    const configPath = resolveConfigPath();
-    const previous = await fs.readFile(configPath, "utf8").catch((error: unknown) => {
-      if (!isMissingPathError(error)) {
-        throw error;
-      }
-      return undefined;
-    });
-    onTestFinished(async () => {
-      if (previous === undefined) {
-        await fs.rm(configPath, { force: true });
-      } else {
-        await fs.writeFile(configPath, previous);
-      }
-    });
-    const raw = "{}\n";
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, raw, { mode: 0o600 });
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue(
-      configSnapshot(baseConfig, {
-        path: configPath,
-        raw,
-        hash: createHash("sha256").update(raw).digest("hex"),
-      }),
-    );
-  };
-
-  const setupPostCoreConfigFixture = async (params: {
-    backupConfig?: OpenClawConfig;
-    postDoctorConfig: OpenClawConfig;
-    preUpdateConfig?: OpenClawConfig;
-    snapshotSuffix?: ".bak" | ".pre-update";
-    preserveParsed?: boolean;
-  }) => {
-    const tempDir = createCaseDir("openclaw-update");
-    const configPath = path.join(tempDir, "openclaw.json");
-    await fs.mkdir(tempDir, { recursive: true });
-    if (params.preUpdateConfig) {
-      await writeJsonFixture(
-        `${configPath}${params.snapshotSuffix ?? ".pre-update"}`,
-        params.preUpdateConfig,
+  const fixtures = {
+    mockNpmPluginOutcomes: (outcomes: unknown[], changed = false, config = deps.baseConfig) => {
+      deps.updateNpmInstalledPlugins.mockResolvedValueOnce({ changed, config, outcomes });
+    },
+    mockNoopPostUpdatePluginConvergence: () => {
+      deps.syncPluginsForUpdateChannel.mockImplementation(async ({ config }) =>
+        pluginSyncResult(config),
       );
-    }
-    if (params.backupConfig) {
-      await writeJsonFixture(`${configPath}.bak`, params.backupConfig);
-    }
-    await writeJsonFixture(configPath, params.postDoctorConfig);
-    mockPostDoctorSnapshot(configPath, params.postDoctorConfig, {
-      preserveParsed: params.preserveParsed,
-    });
-    mockNoopPostUpdatePluginConvergence();
-    return { tempDir, configPath };
+      deps.updateNpmInstalledPlugins.mockImplementation(async ({ config }) =>
+        npmPluginUpdateResult(config),
+      );
+    },
+    configSnapshot: (
+      config: OpenClawConfig,
+      overrides: Partial<ConfigFileSnapshot> = {},
+    ): ConfigFileSnapshot => {
+      return {
+        ...deps.baseSnapshot,
+        parsed: config,
+        resolved: config,
+        sourceConfig: config,
+        config,
+        runtimeConfig: config,
+        ...overrides,
+      };
+    },
+    mockPostDoctorSnapshot: (
+      configPath: string,
+      config: OpenClawConfig,
+      options: { preserveParsed?: boolean } = {},
+    ) => {
+      vi.mocked(deps.readConfigFileSnapshot).mockResolvedValue(
+        fixtures.configSnapshot(config, {
+          path: configPath,
+          parsed: options.preserveParsed ? deps.baseSnapshot.parsed : config,
+          resolved: deps.baseSnapshot.resolved,
+          hash: "post-doctor-hash",
+        }),
+      );
+    },
+    useFileBackedConfig: async (): Promise<void> => {
+      const configPath = resolveConfigPath();
+      const previous = await fs.readFile(configPath, "utf8").catch((error: unknown) => {
+        if (!isMissingPathError(error)) {
+          throw error;
+        }
+        return undefined;
+      });
+      onTestFinished(async () => {
+        if (previous === undefined) {
+          await fs.rm(configPath, { force: true });
+        } else {
+          await fs.writeFile(configPath, previous);
+        }
+      });
+      const raw = "{}\n";
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, raw, { mode: 0o600 });
+      vi.mocked(deps.readConfigFileSnapshot).mockResolvedValue(
+        fixtures.configSnapshot(deps.baseConfig, {
+          path: configPath,
+          raw,
+          hash: createHash("sha256").update(raw).digest("hex"),
+        }),
+      );
+    },
+    setupPostCoreConfigFixture: async (params: {
+      backupConfig?: OpenClawConfig;
+      postDoctorConfig: OpenClawConfig;
+      preUpdateConfig?: OpenClawConfig;
+      snapshotSuffix?: ".bak" | ".pre-update";
+      preserveParsed?: boolean;
+    }) => {
+      const tempDir = deps.createCaseDir("openclaw-update");
+      const configPath = path.join(tempDir, "openclaw.json");
+      await fs.mkdir(tempDir, { recursive: true });
+      if (params.preUpdateConfig) {
+        await writeJsonFixture(
+          configPath + (params.snapshotSuffix ?? ".pre-update"),
+          params.preUpdateConfig,
+        );
+      }
+      if (params.backupConfig) {
+        await writeJsonFixture(configPath + ".bak", params.backupConfig);
+      }
+      await writeJsonFixture(configPath, params.postDoctorConfig);
+      fixtures.mockPostDoctorSnapshot(configPath, params.postDoctorConfig, {
+        preserveParsed: params.preserveParsed,
+      });
+      fixtures.mockNoopPostUpdatePluginConvergence();
+      return { tempDir, configPath };
+    },
   };
-  return {
-    mockNpmPluginOutcomes,
-    mockNoopPostUpdatePluginConvergence,
-    mockPostDoctorSnapshot,
-    configSnapshot,
-    useFileBackedConfig,
-    setupPostCoreConfigFixture,
-  };
+  return fixtures;
 }

@@ -1,3 +1,8 @@
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import type { Command } from "commander";
+import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 // Sub-CLI descriptor catalog used for root help placeholders and lazy registration.
 import { isCronMachineOutput } from "../cron-cli/output-mode.js";
 import { isDevicesMachineOutput } from "../devices-output-mode.js";
@@ -7,269 +12,223 @@ import { isNodesMachineOutput } from "../nodes-cli/output-mode.js";
 import { isProxyMachineOutput } from "../proxy-output-mode.js";
 import { isSkillsMachineOutput } from "../skills-output-mode.js";
 import { isSystemMachineOutput } from "../system-output-mode.js";
-import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
-import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
+import type { RegisteredCommandDescriptor } from "./command-group-descriptors.js";
+import { isPrivateQaCliEnabled } from "./private-qa-policy.js";
+import { getSubCliCommandMetadata, type SubCliCommandName } from "./subcli-command-metadata.js";
 
-const subCliCommandDescriptors = [
-  { name: "acp", description: "Run an ACP bridge backed by the Gateway", hasSubcommands: true },
-  {
-    name: "gateway",
-    description: "Run, inspect, and query the WebSocket Gateway",
-    hasSubcommands: true,
+export type SubCliRegistrationContext = {
+  purpose?: "runtime" | "completion";
+};
+
+type SubCliCommand = RegisteredCommandDescriptor<
+  [argv: string[], context: SubCliRegistrationContext]
+>;
+type SubCliRegistration = SubCliCommand["register"];
+
+const PRIVATE_QA_DIST_RELATIVE_PATH = path.join("dist", "plugin-sdk", "qa-lab.js");
+const SOURCE_CHECKOUT_MARKER_RELATIVE_PATHS = [".git", "pnpm-workspace.yaml"] as const;
+
+function resolvePrivateQaSourceModuleSpecifier(): string | null {
+  if (!isPrivateQaCliEnabled()) {
+    return null;
+  }
+  const packageRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+    moduleUrl: import.meta.url,
+  });
+  if (!packageRoot) {
+    return null;
+  }
+  const sourceModulePath = path.join(packageRoot, PRIVATE_QA_DIST_RELATIVE_PATH);
+  const hasSourceCheckoutMarker = SOURCE_CHECKOUT_MARKER_RELATIVE_PATHS.some((relativePath) =>
+    fs.existsSync(path.join(packageRoot, relativePath)),
+  );
+  if (
+    !hasSourceCheckoutMarker ||
+    !fs.existsSync(path.join(packageRoot, "src")) ||
+    !fs.existsSync(sourceModulePath)
+  ) {
+    return null;
+  }
+  return pathToFileURL(sourceModulePath).href;
+}
+
+/** Load the private QA module from a source checkout or throw a user-facing availability error. */
+function loadPrivateQaCliModule(): Promise<Record<string, unknown>> {
+  const specifier = resolvePrivateQaSourceModuleSpecifier();
+  if (!specifier) {
+    throw new Error("Private QA CLI is only available from an OpenClaw source checkout.");
+  }
+  return import(specifier);
+}
+
+async function registerPluginCommandsIfNeeded(program: Command, argv: string[]) {
+  const { resolveCliArgvInvocation } = await import("../argv-invocation.js");
+  const { resolveCliCommandPathPolicy } = await import("../command-path-policy.js");
+  const invocation = resolveCliArgvInvocation(argv);
+  const shouldRegisterPluginCommands =
+    !invocation.hasHelpOrVersion &&
+    resolveCliCommandPathPolicy(invocation.commandPath).loadPlugins !== "never";
+  if (shouldRegisterPluginCommands) {
+    const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
+    await registerPluginCliCommandsFromValidatedConfig(program);
+  }
+}
+
+const registerCapability: SubCliRegistration = async (program, argv) =>
+  (await import("../capability-cli.js")).registerCapabilityCli(program, argv);
+
+const registerApprovals: SubCliRegistration = async (program) =>
+  (await import("../exec-approvals-cli.js")).registerExecApprovalsCli(program);
+
+const registerTui: SubCliRegistration = async (program) =>
+  (await import("../tui-cli.js")).registerTuiCli(program);
+
+const registerCron: SubCliRegistration = async (program) =>
+  (await import("../cron-cli.js")).registerCronCli(program);
+
+// Implementations are exhaustive over the metadata catalog; parsing never imports this map.
+const registrations = {
+  acp: { register: async (program) => (await import("../acp-cli.js")).registerAcpCli(program) },
+  gateway: {
+    register: async (program) => (await import("../gateway-cli.js")).registerGatewayCli(program),
     machineOutput: ({ argv }) => isGatewayMachineOutput(argv),
   },
-  {
-    name: "daemon",
-    description: "Manage the Gateway service (launchd/systemd/schtasks)",
-    hasSubcommands: true,
+  daemon: {
+    register: async (program) => (await import("../daemon-cli.js")).registerDaemonCli(program),
   },
-  { name: "logs", description: "Tail gateway file logs via RPC", hasSubcommands: false },
-  {
-    name: "system",
-    description: "System tools (events, heartbeat, presence)",
-    hasSubcommands: true,
+  logs: { register: async (program) => (await import("../logs-cli.js")).registerLogsCli(program) },
+  system: {
+    register: async (program) => (await import("../system-cli.js")).registerSystemCli(program),
     machineOutput: ({ argv }) => isSystemMachineOutput(argv),
   },
-  {
-    name: "models",
-    description: "Model discovery, scanning, and configuration",
-    hasSubcommands: true,
+  models: {
+    register: async (program) => (await import("../models-cli.js")).registerModelsCli(program),
     machineOutput: ({ argv }) => isModelsStatusJsonOutput(argv) || isModelsPlainMachineOutput(argv),
   },
-  {
-    name: "promos",
-    description: "Discover and claim promotional model offers from ClawHub",
-    hasSubcommands: true,
+  promos: {
+    register: async (program) => (await import("../promos-cli.js")).registerPromosCli(program),
   },
-  {
-    name: "telemetry",
-    description: "Inspect and manage anonymous usage telemetry",
-    hasSubcommands: true,
-    parentDefaultHelp: true,
+  telemetry: {
+    register: async (program) =>
+      (await import("../telemetry-cli.js")).registerTelemetryCli(program),
   },
-  {
-    name: "infer",
-    description: "Run provider-backed inference commands through a stable CLI surface",
-    hasSubcommands: true,
+  infer: { register: registerCapability },
+  capability: { register: registerCapability },
+  approvals: { register: registerApprovals },
+  "exec-approvals": { register: registerApprovals },
+  "exec-policy": {
+    register: async (program) =>
+      (await import("../exec-policy-cli.js")).registerExecPolicyCli(program),
   },
-  {
-    name: "capability",
-    description: "Run provider capability commands (fallback alias: infer)",
-    hasSubcommands: true,
-  },
-  {
-    name: "approvals",
-    description: "Manage approval policy and pending requests",
-    hasSubcommands: true,
-    parentDefaultHelp: true,
-  },
-  {
-    name: "exec-approvals",
-    description: "Manage exec approvals (alias for approvals)",
-    hasSubcommands: true,
-  },
-  {
-    name: "exec-policy",
-    description: "Show or synchronize requested exec policy with host approvals",
-    hasSubcommands: true,
-  },
-  {
-    name: "nodes",
-    description: "Manage gateway-owned nodes (pairing, status, invoke, and media)",
-    hasSubcommands: true,
+  nodes: {
+    register: async (program, argv) =>
+      (await import("../nodes-cli.js")).registerNodesCli(program, argv),
     machineOutput: ({ argv }) => isNodesMachineOutput(argv),
   },
-  {
-    name: "devices",
-    description:
-      "Device pairing and auth tokens (for mobile app setup codes, use `openclaw qr` instead)",
-    hasSubcommands: true,
+  devices: {
+    register: async (program) => (await import("../devices-cli.js")).registerDevicesCli(program),
     machineOutput: ({ argv }) => isDevicesMachineOutput(argv),
-    parentDefaultHelp: true,
   },
-  {
-    name: "users",
-    description: "Manage durable user profiles and email aliases",
-    hasSubcommands: true,
-    parentDefaultHelp: true,
+  users: {
+    register: async (program) => (await import("../users-cli.js")).registerUsersCli(program),
   },
-  {
-    name: "node",
-    description: "Run and manage the headless node host service",
-    hasSubcommands: true,
+  node: { register: async (program) => (await import("../node-cli.js")).registerNodeCli(program) },
+  connect: {
+    register: async (program) => (await import("../connect-cli.js")).registerConnectCli(program),
   },
-  {
-    name: "connect",
-    description: "Connect this machine to an OpenClaw Gateway as a node",
-    hasSubcommands: false,
+  worker: {
+    register: async (program) => (await import("../worker-cli.js")).registerWorkerCli(program),
   },
-  {
-    name: "worker",
-    description: "Run the restricted cloud worker runtime",
-    hasSubcommands: false,
+  sandbox: {
+    register: async (program) => (await import("../sandbox-cli.js")).registerSandboxCli(program),
   },
-  {
-    name: "sandbox",
-    description: "Manage sandbox containers (Docker-based agent isolation)",
-    hasSubcommands: true,
+  worktrees: {
+    register: async (program) =>
+      (await import("../worktrees-cli.js")).registerWorktreesCli(program),
   },
-  {
-    name: "fleet",
-    description: "Provision and manage isolated tenant cells (experimental)",
-    hasSubcommands: true,
+  attach: {
+    register: async (program) => (await import("../attach-cli.js")).registerAttachCli(program),
   },
-  {
-    name: "worktrees",
-    description: "Create, inspect, restore, and clean up managed worktrees",
-    hasSubcommands: true,
-    parentDefaultHelp: true,
+  tui: { register: registerTui },
+  resume: {
+    register: async (program) => (await import("../resume-cli.js")).registerResumeCli(program),
   },
-  {
-    name: "attach",
-    description: "Attach Claude Code to a gateway session with scoped MCP tools",
-    hasSubcommands: false,
+  terminal: { register: registerTui },
+  chat: { register: registerTui },
+  cron: { register: registerCron, machineOutput: ({ argv }) => isCronMachineOutput(argv) },
+  automations: { register: registerCron, machineOutput: ({ argv }) => isCronMachineOutput(argv) },
+  dns: { register: async (program) => (await import("../dns-cli.js")).registerDnsCli(program) },
+  docs: { register: async (program) => (await import("../docs-cli.js")).registerDocsCli(program) },
+  qa: {
+    register: async (program) => {
+      // This registrar comes from a source-checkout artifact, not a statically known module.
+      const { registerQaLabCli } = await loadPrivateQaCliModule();
+      if (typeof registerQaLabCli !== "function") {
+        throw new Error("Missing program command registrar: registerQaLabCli");
+      }
+      await registerQaLabCli(program);
+    },
   },
-  {
-    name: "tui",
-    description: "Open a terminal UI connected to the Gateway",
-    hasSubcommands: false,
-  },
-  {
-    name: "resume",
-    description: "Resume a recent Gateway session in the TUI",
-    hasSubcommands: false,
-  },
-  {
-    name: "terminal",
-    description: "Open a local terminal UI (alias for tui --local)",
-    hasSubcommands: false,
-  },
-  {
-    name: "chat",
-    description: "Open a local terminal UI (alias for tui --local)",
-    hasSubcommands: false,
-  },
-  {
-    name: "cron",
-    description: "Manage automations (via Gateway)",
-    hasSubcommands: true,
-    machineOutput: ({ argv }) => isCronMachineOutput(argv),
-    parentDefaultHelp: true,
-  },
-  {
-    name: "automations",
-    description: "Manage automations (alias for cron)",
-    hasSubcommands: true,
-    machineOutput: ({ argv }) => isCronMachineOutput(argv),
-    parentDefaultHelp: true,
-  },
-  {
-    name: "dns",
-    description: "DNS helpers for wide-area discovery (Tailscale + CoreDNS)",
-    hasSubcommands: true,
-  },
-  {
-    name: "docs",
-    description: "Search the live OpenClaw docs",
-    hasSubcommands: false,
-  },
-  {
-    name: "qa",
-    description: "Run QA scenarios and launch the private QA debugger UI",
-    hasSubcommands: true,
-  },
-  {
-    name: "proxy",
-    description: "Run the OpenClaw debug proxy and inspect captured traffic",
-    hasSubcommands: true,
+  proxy: {
+    register: async (program) => (await import("../proxy-cli.js")).registerProxyCli(program),
     machineOutput: ({ argv }) => isProxyMachineOutput(argv),
   },
-  {
-    name: "hooks",
-    description: "Manage internal agent hooks",
-    hasSubcommands: true,
+  hooks: {
+    register: async (program) => (await import("../hooks-cli.js")).registerHooksCli(program),
   },
-  {
-    name: "webhooks",
-    description: "Webhook helpers and integrations",
-    hasSubcommands: true,
+  webhooks: {
+    register: async (program) => (await import("../webhooks-cli.js")).registerWebhooksCli(program),
   },
-  {
-    name: "qr",
-    description: "Generate a mobile pairing QR code and setup code",
-    hasSubcommands: false,
+  qr: { register: async (program) => (await import("../qr-cli.js")).registerQrCli(program) },
+  clawbot: {
+    register: async (program) => (await import("../clawbot-cli.js")).registerClawbotCli(program),
   },
-  {
-    name: "clawbot",
-    description: "Legacy clawbot command aliases",
-    hasSubcommands: true,
+  pairing: {
+    register: async (program, argv) => {
+      // Pairing reads channel capabilities while registering, so initialize plugins first.
+      await registerPluginCommandsIfNeeded(program, argv);
+      (await import("../pairing-cli.js")).registerPairingCli(program);
+    },
   },
-  {
-    name: "pairing",
-    description: "Secure DM pairing (approve inbound requests)",
-    hasSubcommands: true,
+  plugins: {
+    register: async (program, argv) => {
+      (await import("../plugins-cli.js")).registerPluginsCli(program);
+      await registerPluginCommandsIfNeeded(program, argv);
+    },
   },
-  {
-    name: "plugins",
-    description: "Manage OpenClaw plugins and extensions",
-    hasSubcommands: true,
-    parentDefaultHelp: true,
+  channels: {
+    register: async (program, argv, context) =>
+      (await import("../channels-cli.js")).registerChannelsCli(program, argv, {
+        includeSetupOptions: context.purpose === "completion",
+      }),
   },
-  {
-    name: "channels",
-    description: "Manage connected chat channels and accounts",
-    hasSubcommands: true,
-    parentDefaultHelp: true,
+  directory: {
+    register: async (program) =>
+      (await import("../directory-cli.js")).registerDirectoryCli(program),
   },
-  {
-    name: "directory",
-    description: "Lookup contact and group IDs (self, peers, groups) for supported chat channels",
-    hasSubcommands: true,
+  security: {
+    register: async (program) => (await import("../security-cli.js")).registerSecurityCli(program),
   },
-  {
-    name: "security",
-    description: "Audit local config and state for common security foot-guns",
-    hasSubcommands: true,
+  secrets: {
+    register: async (program) => (await import("../secrets-cli.js")).registerSecretsCli(program),
   },
-  {
-    name: "secrets",
-    description: "Secrets runtime controls",
-    hasSubcommands: true,
-  },
-  {
-    name: "skills",
-    description: "List and inspect available skills",
-    hasSubcommands: true,
+  skills: {
+    register: async (program) => (await import("../skills-cli.js")).registerSkillsCli(program),
     machineOutput: ({ argv }) => isSkillsMachineOutput(argv),
   },
-  {
-    name: "update",
-    description: "Update OpenClaw and inspect update channel status",
-    hasSubcommands: true,
+  update: {
+    register: async (program) => (await import("../update-cli.js")).registerUpdateCli(program),
   },
-  {
-    name: "completion",
-    description: "Generate shell completion script",
-    hasSubcommands: false,
+  completion: {
+    register: async (program) =>
+      (await import("../completion-cli.js")).registerCompletionCli(program),
   },
-] as const satisfies ReadonlyArray<NamedCommandDescriptor>;
+} satisfies Record<SubCliCommandName, Pick<SubCliCommand, "register" | "machineOutput">>;
 
-export const SUB_CLI_DESCRIPTORS = getSubCliEntriesCore();
-
-export function getSubCliEntriesCore(): ReadonlyArray<NamedCommandDescriptor> {
-  return isPrivateQaCliEnabled()
-    ? subCliCommandDescriptors
-    : subCliCommandDescriptors.filter((descriptor) => descriptor.name !== "qa");
-}
-
-export function getSubCliCommandsWithSubcommands(): string[] {
-  return getSubCliEntriesCore()
-    .filter((descriptor) => descriptor.hasSubcommands)
-    .map((descriptor) => descriptor.name);
-}
-
-export function getSubCliParentDefaultHelpCommands(): string[] {
-  return getSubCliEntriesCore()
-    .filter((descriptor) => descriptor.parentDefaultHelp)
-    .map((descriptor) => descriptor.name);
+export function getSubCliEntriesCore(): readonly SubCliCommand[] {
+  return getSubCliCommandMetadata().map((metadata) =>
+    Object.assign({}, metadata, registrations[metadata.name]),
+  );
 }

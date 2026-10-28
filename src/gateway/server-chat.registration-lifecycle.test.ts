@@ -1,7 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
-import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import {
+  emitAgentEventForOwner,
+  onAgentRuntimeEvent,
+  resetAgentEventsForTest,
+  type AgentEventPayload,
+} from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  registerAgentRunContext,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import {
   chatBroadcastCalls,
   createAgentEventTestHarness,
@@ -12,26 +21,6 @@ import { createChatAbortMarker } from "./server-chat.js";
 import { broadcastChatError } from "./server-methods/chat-broadcast.js";
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: vi.fn(() => ({})) }));
-vi.mock("../infra/heartbeat-visibility.js", () => ({
-  resolveHeartbeatVisibility: vi.fn(() => ({
-    showOk: false,
-    showAlerts: true,
-    useIndicator: true,
-  })),
-}));
-vi.mock("./session-utils.js", () => {
-  const loadSessionEntry = vi.fn(() => ({
-    cfg: {},
-    agentId: "main",
-    storePath: "/tmp/sessions.json",
-    store: {},
-    entry: undefined,
-    canonicalKey: "session-1",
-    storeKeys: ["session-1"],
-    legacyKey: undefined,
-  }));
-  return { loadSessionEntry, loadGatewaySessionEntryReadOnly: loadSessionEntry };
-});
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 
@@ -55,25 +44,142 @@ function createHarness(params?: AgentEventTestHarnessOptions) {
 }
 
 describe("chat run registration lifecycle", () => {
-  it.each([true, false])(
-    "releases finalized hidden run registrations without message subscribers (messages=%s)",
-    async (projectSessionMessages) => {
+  it("releases finalized hidden run registrations without message subscribers", async () => {
+    const h = createHarness();
+    for (let index = 0; index < 300; index += 1) {
+      const runId = `hidden-run-${index}`;
+      h.register(runId, "agent:main:hidden", runId);
+      registerAgentRunContext(runId, {
+        sessionKey: "agent:main:hidden",
+        isControlUiVisible: false,
+        projectSessionMessages: true,
+        projectSessionLifecycle: false,
+      });
+      await h.emit(runId, "lifecycle", { phase: "end" });
+    }
+    expect(h.chat()).toHaveLength(0);
+    expect(h.chatRunState.runs.size).toBe(0);
+  });
+
+  it.each([false, true])(
+    "delivers hidden compaction lifecycle only to its session subscribers (completed=%s)",
+    async (completed) => {
       const h = createHarness();
-      for (let index = 0; index < 300; index += 1) {
-        const runId = `hidden-run-${index}`;
-        h.register(runId, "agent:main:hidden", runId);
-        registerAgentRunContext(runId, {
-          sessionKey: "agent:main:hidden",
-          isControlUiVisible: false,
-          projectSessionMessages,
-          projectSessionLifecycle: false,
+      const runId = "hidden-compaction";
+      const sessionKey = "agent:main:hidden-compaction";
+      h.register(runId, sessionKey, "client-compaction");
+      registerAgentRunContext(runId, {
+        sessionKey,
+        isControlUiVisible: false,
+        projectSessionMessages: true,
+        projectSessionLifecycle: false,
+      });
+      h.sessionMessageSubscribers.subscribe("selected-reader", sessionKey);
+      h.sessionMessageSubscribers.subscribe("foreign-reader", "agent:main:other");
+      await h.emitMany(runId, [
+        ["compaction", { phase: "start", itemId: "recovery-compaction" }],
+        ["compaction", { phase: "notice", messages: ["Synthetic private hook notice"] }],
+        ["compaction", { phase: "end", itemId: "recovery-compaction", completed }],
+      ]);
+
+      const deliveries = h.targetedAgent();
+      expect(deliveries.map(([, payload]) => payload)).toEqual([
+        expect.objectContaining({
+          runId: "client-compaction",
+          sessionKey,
+          stream: "compaction",
+          data: { phase: "start", itemId: "recovery-compaction" },
+        }),
+        expect.objectContaining({
+          runId: "client-compaction",
+          sessionKey,
+          stream: "compaction",
+          data: { phase: "end", itemId: "recovery-compaction", completed },
+        }),
+      ]);
+      for (const delivery of deliveries) {
+        expect(delivery[2]).toEqual(new Set(["selected-reader"]));
+        expect(delivery[3]).toMatchObject({
+          sessionKeys: [sessionKey],
+          sessionSubscriptionVerified: true,
         });
-        await h.emit(runId, "lifecycle", { phase: "end" });
       }
-      expect(h.chat()).toHaveLength(0);
-      expect(h.chatRunState.runs.size).toBe(0);
+      expect(h.broadcast).not.toHaveBeenCalled();
+      expect(h.nodeSendToSession).not.toHaveBeenCalled();
+      expect(h.targetedChat()).toHaveLength(0);
     },
   );
+
+  it.each(["none", "other-session", "projection-disabled"] as const)(
+    "keeps hidden compaction excluded with %s message subscribers",
+    async (audience) => {
+      const h = createHarness();
+      const runId = "hidden-compaction-excluded";
+      const sessionKey = "agent:main:hidden-compaction-excluded";
+      registerAgentRunContext(runId, {
+        sessionKey,
+        isControlUiVisible: false,
+        projectSessionMessages: audience !== "projection-disabled",
+        projectSessionLifecycle: false,
+      });
+      if (audience !== "none") {
+        h.sessionMessageSubscribers.subscribe(
+          "reader",
+          audience === "other-session" ? "agent:main:other" : sessionKey,
+        );
+      }
+      await h.emitMany(runId, [
+        ["compaction", { phase: "start", itemId: "recovery-compaction" }],
+        ["compaction", { phase: "end", itemId: "recovery-compaction", completed: true }],
+      ]);
+      expect(h.targetedAgent()).toHaveLength(0);
+      expect(h.broadcast).not.toHaveBeenCalled();
+      expect(h.nodeSendToSession).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not deliver a hidden compaction end captured before its owner was released", async () => {
+    const h = createHarness();
+    const runId = "retired-compaction-owner";
+    const sessionKey = "agent:main:retired-compaction-owner";
+    const claimId = expectDefined(
+      claimAgentRunContext(
+        runId,
+        { sessionKey, isControlUiVisible: false, projectSessionLifecycle: false },
+        { exclusive: true, trackOwner: true },
+      ),
+      "compaction owner claim",
+    );
+    h.sessionMessageSubscribers.subscribe("selected-reader", sessionKey);
+    const captured: AgentEventPayload[] = [];
+    const stop = onAgentRuntimeEvent((event) => {
+      if (event.runId === runId) {
+        captured.push(event);
+      }
+    });
+    try {
+      for (const phase of ["start", "end"] as const) {
+        expect(
+          emitAgentEventForOwner(
+            { runId, stream: "compaction", data: { phase, itemId: "retired-compaction" } },
+            claimId,
+          ),
+        ).toBe(true);
+      }
+      expect(captured).toHaveLength(2);
+      await h.handler(expectDefined(captured[0], "captured compaction start"));
+      releaseAgentRunContext(runId, claimId);
+      await h.handler(expectDefined(captured[1], "captured compaction end"));
+      expect(h.targetedAgent().map(([, payload]) => payload.data)).toEqual([
+        { phase: "start", itemId: "retired-compaction" },
+      ]);
+      expect(h.broadcast).not.toHaveBeenCalled();
+      expect(h.nodeSendToSession).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      releaseAgentRunContext(runId, claimId);
+    }
+  });
 
   it("cancels deferred lifecycle errors when the handler is disposed", async () => {
     vi.useFakeTimers();
@@ -248,6 +354,7 @@ describe("chat run registration lifecycle", () => {
       expect(agentRunSeq.get(runId)).toBe(1);
       if (settled) {
         broadcastChatError({
+          terminalEntry: undefined,
           context: harness,
           runId,
           sessionKey: "session-reply-dispatch",

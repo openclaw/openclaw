@@ -20,7 +20,7 @@ import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
 export type PluginManifestContractListKey = Exclude<
   keyof PluginManifestContracts,
-  "embeddedExtensionFactories" | "agentToolResultMiddleware" | "trustedToolPolicies" | "tools"
+  "agentToolResultMiddleware" | "trustedToolPolicies" | "tools"
 >;
 
 type PluginManifestRecordStatic = Omit<
@@ -38,8 +38,11 @@ type PluginManifestRecordStatic = Omit<
 >;
 
 export type PluginThemeArtwork = {
+  icons?: Record<string, { svg: string }>;
   hats?: Record<string, { svg: string }>;
   critters?: Record<string, { svg: string; title?: string; crossMs?: number }>;
+  /** Base64 keeps the bytes immutable inside frozen metadata snapshots, which cannot freeze Buffers. */
+  backgrounds?: Partial<Record<"light" | "dark", { base64: string }>>;
 };
 
 export type PluginManifestRecord = PluginManifestRecordStatic & {

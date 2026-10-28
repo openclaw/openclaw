@@ -1,5 +1,6 @@
 // Shared query and logical-identity helpers do not resolve or open physical stores.
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -61,7 +62,7 @@ export type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
   sessionId: string;
 };
 
-export function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
+export function getSessionKysely(database: EngineConnection) {
   return getNodeSqliteKysely<SessionSqliteDatabase>(database);
 }
 

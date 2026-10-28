@@ -245,8 +245,7 @@ extension IOSGatewayChatTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        let route = await self.currentSessionMutationRoute()
-        guard let route,
+        guard let route = await self.currentSessionMutationRoute(),
               let supportsRoutingContract = await gateway.supportsServerCapability(
                   .chatSendRoutingContract,
                   ifCurrentRoute: route)
@@ -259,6 +258,7 @@ extension IOSGatewayChatTransport {
             agentID: target.agentID,
             expectedSessionRoutingContract: guardedContract,
             expectedSessionSettings: target.expectedSessionSettings,
+            queueMode: target.queueMode,
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,
@@ -272,6 +272,7 @@ extension IOSGatewayChatTransport {
         agentID: String? = nil,
         expectedSessionRoutingContract: String? = nil,
         expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
+        queueMode: OpenClawChatQueueMode? = nil,
         message: String,
         thinking: String?,
         idempotencyKey: String,
@@ -290,17 +291,13 @@ extension IOSGatewayChatTransport {
             throw OpenClawChatTransportSendError.notDispatched
         }
         let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
-        let startLogMessage =
-            "chat.send start sessionKey=\(target.sessionKey) "
-                + "len=\(message.count) attachments=\(attachments.count)"
-        Self.logger.info("\(startLogMessage, privacy: .public)")
-        GatewayDiagnostics.log(startLogMessage)
         let request = OpenClawChatGatewayRequests.sendMessage(
             sessionKey: target.sessionKey,
             agentID: target.agentID,
             expectedSessionRoutingContract: expectedSessionRoutingContract,
             expectedSessionSettings: expectedSessionSettings,
             supportsSessionSettingsCAS: supportsSettingsCAS,
+            queueMode: queueMode,
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,
@@ -310,10 +307,7 @@ extension IOSGatewayChatTransport {
                 request,
                 ifCurrentRoute: expectedRoute,
                 distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
-            let decoded = try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
-            Self.logger.info("chat.send ok runId=\(decoded.runId, privacy: .public)")
-            GatewayDiagnostics.log("chat.send ok runId=\(decoded.runId) status=\(decoded.status)")
-            return decoded
+            return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
         } catch is GatewayNodeSessionRequestError {
             Self.logger.info("chat.send skipped because the captured route changed before dispatch")
             GatewayDiagnostics.log("chat.send skipped before dispatch: route changed")

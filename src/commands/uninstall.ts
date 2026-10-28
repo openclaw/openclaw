@@ -6,12 +6,11 @@ import {
   stylePromptTitle,
 } from "../../packages/terminal-core/src/prompt-style.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { isNixMode } from "../config/config.js";
-import { resolveGatewayService } from "../daemon/service.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveHomeDir } from "../utils.js";
 import { resolveCleanupPlanForDryRun, resolveCleanupPlanForRemoval } from "./cleanup-plan.js";
+import { stopGatewayForCleanup } from "./cleanup-service.js";
 import { removePath, removeStateAndLinkedPaths, removeWorkspaceDirs } from "./cleanup-utils.js";
 
 type UninstallScope = "service" | "state" | "workspace" | "app";
@@ -26,49 +25,6 @@ type UninstallOptions = {
   nonInteractive?: boolean;
   dryRun?: boolean;
 };
-
-async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
-  if (isNixMode) {
-    // Nix owns service lifecycle in Nix mode; uninstalling via launchd/systemd would fight the profile.
-    runtime.error(
-      `Nix mode detected; service uninstall is disabled. Manage the service through your Nix profile instead, then run ${formatCliCommand("openclaw status")} to verify.`,
-    );
-    return false;
-  }
-  const service = resolveGatewayService();
-  let loaded;
-  try {
-    loaded = await service.isLoaded({ env: process.env });
-  } catch (err) {
-    runtime.error(
-      `Gateway service check failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for service diagnostics.`,
-    );
-    return false;
-  }
-  if (!loaded) {
-    runtime.log(`Gateway service ${service.notLoadedText}.`);
-  }
-  let stopped = true;
-  if (loaded) {
-    try {
-      await service.stop({ env: process.env, stdout: process.stdout });
-    } catch (err) {
-      stopped = false;
-      runtime.error(
-        `Gateway stop failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} before retrying uninstall.`,
-      );
-    }
-  }
-  try {
-    await service.uninstall({ env: process.env, stdout: process.stdout });
-  } catch (err) {
-    runtime.error(
-      `Gateway uninstall failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for the service state.`,
-    );
-    return false;
-  }
-  return stopped;
-}
 
 async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean): Promise<boolean> {
   if (process.platform !== "darwin") {
@@ -86,7 +42,6 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   const scopes = new Set(
     (["service", "state", "workspace", "app"] as const).filter((scope) => opts.all || opts[scope]),
   );
-  const hadExplicit = scopes.size > 0;
   const interactive = !opts.nonInteractive;
   if (!interactive && !opts.yes) {
     runtime.error(
@@ -96,7 +51,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
     return;
   }
 
-  if (!hadExplicit) {
+  if (scopes.size === 0) {
     if (!interactive) {
       runtime.error(
         `Non-interactive uninstall requires explicit scopes. Use --all, or choose scopes such as --service --state.`,
@@ -176,7 +131,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   if (scopes.has("service")) {
     if (dryRun) {
       runtime.log("[dry-run] remove gateway service");
-    } else if (!(await stopAndUninstallService(runtime))) {
+    } else if (!(await stopGatewayForCleanup(runtime, "uninstall"))) {
       // Service removal may prevent relaunch even when runtime termination is
       // uncertain; preserve mutable user data until teardown can be verified.
       serviceSafe = false;
@@ -197,8 +152,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   }
 
   if (scopes.has("state") && cleanupPlan) {
-    const { stateDir, configPath, oauthDir, configInsideState, oauthInsideState, workspaceDirs } =
-      cleanupPlan;
+    const { workspaceDirs } = cleanupPlan;
     if (!scopes.has("workspace")) {
       const retiredWorkspace = await attemptCleanup("Retired workspace state cleanup failed", () =>
         removeWorkspaceDirs(workspaceDirs, runtime, { dryRun, preserveWorkspace: true }),
@@ -210,11 +164,10 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
     }
     // Preserve workspaces when state-only uninstall is requested; workspace scope removes them explicitly.
     const state = await attemptCleanup("State cleanup failed", () =>
-      removeStateAndLinkedPaths(
-        { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
-        runtime,
-        { dryRun, preservePaths: scopes.has("workspace") ? [] : workspaceDirs },
-      ),
+      removeStateAndLinkedPaths(cleanupPlan, runtime, {
+        dryRun,
+        preservePaths: scopes.has("workspace") ? [] : workspaceDirs,
+      }),
     );
     stateRemoved = state ?? false;
     workspaceBlocked = state === undefined;

@@ -1,11 +1,17 @@
-import { expressionBuilder } from "kysely";
+import { isDeepStrictEqual } from "node:util";
+import { expressionBuilder, type InsertObject } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import {
+  sessionEntrySnapshotColumnsDefinition as snapshotColumns,
+  type SessionEntryProjection,
+} from "./session-entry-snapshot-values.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionEntrySnapshot = {
@@ -13,20 +19,7 @@ export type SessionEntrySnapshot = {
   valueJson: string;
 };
 
-export type SessionEntrySnapshotField = SessionEntrySnapshot["field"];
-export type SessionEntryProjection = "full" | "list" | readonly SessionEntrySnapshotField[];
-
-export type SessionEntrySnapshotRow = {
-  session_diff_baseline_json?: string | null;
-  skills_snapshot_json?: string | null;
-  system_prompt_report_json?: string | null;
-};
-
-const snapshotColumns = [
-  ["sessionDiffBaseline", "session_diff_baseline_json"],
-  ["skillsSnapshot", "skills_snapshot_json"],
-  ["systemPromptReport", "system_prompt_report_json"],
-] as const;
+export type { SessionEntrySnapshotRow } from "./session-entry-storage.types.js";
 
 /** One statement owns hot and cold facts; JSON remains opaque to SQLite's depth limit. */
 export function sessionEntrySnapshotColumnsForKeys(
@@ -62,12 +55,17 @@ export function splitSessionEntrySnapshots(
   entryJson: string;
   snapshots: SessionEntrySnapshot[];
   snapshotsChanged: boolean;
+  snapshotsRemoved: boolean;
 } {
   const { sessionDiffBaseline, skillsSnapshot, systemPromptReport, ...hot } = entry;
   const values = { sessionDiffBaseline, skillsSnapshot, systemPromptReport };
   const snapshotsChanged =
     mode === "complete" ||
-    snapshotColumns.some(([field]) => values[field] !== mode.previousEntry?.[field]);
+    snapshotColumns.some(
+      ([field]) =>
+        values[field] !== mode.previousEntry?.[field] &&
+        !isDeepStrictEqual(values[field], mode.previousEntry?.[field]),
+    );
   const snapshots: SessionEntrySnapshot[] = [];
   for (const [field] of snapshotsChanged ? snapshotColumns : []) {
     const valueJson = JSON.stringify(values[field]);
@@ -75,27 +73,30 @@ export function splitSessionEntrySnapshots(
       snapshots.push({ field, valueJson });
     }
   }
-  return { entryJson: JSON.stringify(hot), snapshots, snapshotsChanged };
+  const snapshotsRemoved =
+    mode === "complete" ||
+    (snapshotsChanged &&
+      snapshotColumns.some(
+        ([field]) =>
+          mode.previousEntry?.[field] !== undefined &&
+          !snapshots.some((snapshot) => snapshot.field === field),
+      ));
+  return { entryJson: JSON.stringify(hot), snapshots, snapshotsChanged, snapshotsRemoved };
 }
 
-export function attachSessionEntrySnapshots<T extends object>(
-  entry: T,
-  row: SessionEntrySnapshotRow,
-  projection: SessionEntryProjection = "full",
-): T {
-  for (const [field, alias] of snapshotColumns) {
-    if (projection !== "full" && (projection === "list" || !projection.includes(field))) {
-      // Pending legacy rows may still carry snapshots inline.
-      Reflect.deleteProperty(entry, field);
-      continue;
-    }
-    const valueJson = row[alias];
-    if (valueJson != null) {
-      const value: unknown = JSON.parse(valueJson);
-      Object.assign(entry, { [field]: value });
-    }
-  }
-  return entry;
+export function buildSessionEntrySnapshotUpsert(
+  database: EngineConnection,
+  rows: readonly InsertObject<DB, "session_entry_snapshots">[],
+) {
+  return getNodeSqliteKysely<DB>(database)
+    .insertInto("session_entry_snapshots")
+    .values(rows)
+    .onConflict((conflict) =>
+      conflict
+        .columns(["session_key", "field"])
+        .doUpdateSet((eb) => ({ value_json: eb.ref("excluded.value_json") }))
+        .whereRef("session_entry_snapshots.value_json", "!=", "excluded.value_json"),
+    );
 }
 
 /** The entry writer owns this synchronous transaction and publishes its committed facts. */
@@ -103,42 +104,38 @@ export function writeSessionEntrySnapshots(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionKey: string,
   snapshots: readonly SessionEntrySnapshot[],
+  { snapshotsRemoved = true }: { snapshotsRemoved?: boolean } = {},
 ): void {
   if (!database.db.isTransaction) {
     throw new Error("Session snapshot writes require an entry transaction");
   }
   const db = getNodeSqliteKysely<DB>(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .deleteFrom("session_entry_snapshots")
-      .where("session_key", "=", sessionKey)
-      .$if(snapshots.length > 0, (query) =>
-        query.where(
-          "field",
-          "not in",
-          snapshots.map((snapshot) => snapshot.field),
-        ),
-      ),
-  );
-  if (snapshots.length > 0) {
+  if (snapshotsRemoved) {
     executeSqliteQuerySync(
       database.db,
       db
-        .insertInto("session_entry_snapshots")
-        .values(
-          snapshots.map((snapshot) => ({
-            session_key: sessionKey,
-            field: snapshot.field,
-            value_json: snapshot.valueJson,
-          })),
-        )
-        .onConflict((conflict) =>
-          conflict
-            .columns(["session_key", "field"])
-            .doUpdateSet((eb) => ({ value_json: eb.ref("excluded.value_json") }))
-            .whereRef("session_entry_snapshots.value_json", "!=", "excluded.value_json"),
+        .deleteFrom("session_entry_snapshots")
+        .where("session_key", "=", sessionKey)
+        .$if(snapshots.length > 0, (query) =>
+          query.where(
+            "field",
+            "not in",
+            snapshots.map((snapshot) => snapshot.field),
+          ),
         ),
+    );
+  }
+  if (snapshots.length > 0) {
+    executeSqliteQuerySync(
+      database.db,
+      buildSessionEntrySnapshotUpsert(
+        database.db,
+        snapshots.map((snapshot) => ({
+          session_key: sessionKey,
+          field: snapshot.field,
+          value_json: snapshot.valueJson,
+        })),
+      ),
     );
   }
 }

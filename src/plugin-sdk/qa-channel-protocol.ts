@@ -299,21 +299,12 @@ const QA_BUS_TOOL_CALL_MAX_COUNT = 50;
 const QA_BUS_TOOL_CALL_MAX_DEPTH = 4;
 const QA_BUS_TOOL_CALL_MAX_ARRAY_LENGTH = 20;
 const QA_BUS_TOOL_CALL_MAX_OBJECT_KEYS = 40;
-const QA_BUS_TOOL_CALL_REDACTED = "[redacted]";
-
-const QA_BUS_TOOL_CALL_SENSITIVE_KEY_RE =
-  /authorization|cookie|credential|password|secret|token|api[-_]?key|access[-_]?key|private[-_]?key/iu;
-
-function sanitizeQaBusToolCallValue(value: unknown, depth: number, key?: string): unknown {
-  if (key && QA_BUS_TOOL_CALL_SENSITIVE_KEY_RE.test(key)) {
-    return QA_BUS_TOOL_CALL_REDACTED;
-  }
+function sanitizeQaBusToolCallValue(value: unknown, depth: number): unknown {
   if (value === null || typeof value === "boolean" || typeof value === "number") {
     return typeof value === "number" && !Number.isFinite(value) ? String(value) : value;
   }
   if (typeof value === "string") {
-    // Tool args often embed credentials in command/header/env shapes; keep structure, not raw text.
-    return QA_BUS_TOOL_CALL_REDACTED;
+    return value;
   }
   if (typeof value === "bigint") {
     return value.toString();
@@ -334,7 +325,7 @@ function sanitizeQaBusToolCallValue(value: unknown, depth: number, key?: string)
       Object.entries(value)
         .slice(0, QA_BUS_TOOL_CALL_MAX_OBJECT_KEYS)
         .flatMap(([entryKey, entryValue]) => {
-          const sanitized = sanitizeQaBusToolCallValue(entryValue, depth + 1, entryKey);
+          const sanitized = sanitizeQaBusToolCallValue(entryValue, depth + 1);
           return sanitized === undefined ? [] : [[entryKey, sanitized]];
         }),
     );
@@ -353,7 +344,7 @@ export function sanitizeQaBusToolCallArguments(
   return isRecord(sanitized) ? sanitized : undefined;
 }
 
-/** Normalize and redact a bounded list of tool calls from untrusted QA input. */
+/** Normalize a bounded list of tool calls from untrusted QA input. */
 export function sanitizeQaBusToolCalls(value: unknown): QaBusToolCall[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;

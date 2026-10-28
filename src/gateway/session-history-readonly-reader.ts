@@ -1,9 +1,16 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
+import {
+  readRecentSessionTranscriptMessageEventsFromProjection,
+  readSessionTranscriptBoundedMessageTailPageFromProjection,
+} from "../config/sessions/session-accessor.sqlite-active-events-read.js";
 import { resolveConversationInDatabase } from "../config/sessions/session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
-import { readTranscriptDisplayDeltaFromProjection } from "../config/sessions/session-accessor.sqlite-history-query.js";
+import { resolveWorkerVisibleHistoryProjection } from "../config/sessions/session-accessor.sqlite-history-projection.worker.js";
+import {
+  readSessionTranscriptHistoryEventPageFromProjection,
+  readTranscriptDisplayDeltaFromProjection,
+} from "../config/sessions/session-accessor.sqlite-history-query.js";
 import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
@@ -20,6 +27,11 @@ import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
 } from "../config/sessions/session-transcript-projection-error.js";
+import { hasSessionTranscriptEntryReceipt } from "../config/sessions/session-transcript-projection-facts-scope.js";
+import {
+  readRecentTranscriptConversationText,
+  type ReadRecentSessionConversationTurnOptions,
+} from "../config/sessions/transcript-recent-text.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../state/openclaw-agent-db-readonly.js";
@@ -27,12 +39,13 @@ import { isSubagentCoordinationHistoryInput } from "./chat-display-projection.hi
 import type { SessionArtifactReadQuery } from "./session-artifact-read.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createBoundSessionHistorySubagentSource } from "./session-history-subagent-sources.js";
+import { aggregateSessionTranscriptUsage } from "./session-transcript-derived-readers.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
 import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
 
 /** Source and run facts live only for one history operation, on its admitted database. */
-export function createBoundSessionHistorySubagentProjection(
+function createBoundSessionHistorySubagentProjection(
   readSnapshot: <T>(read: (projection: CurrentTranscriptProjection) => T) => T,
   stateDatabase: PreparedSessionHistoryReadTarget["stateDatabase"],
   readSourceDatabases: () => GatewaySessionStoreReadSources | undefined,
@@ -91,10 +104,15 @@ export function createReadonlySessionHistoryReader(
     const result = withScopedOpenClawAgentDatabaseReadOnly(
       (database) =>
         readWithCanonicalSessionAdmission(database, () => {
-          // Repeat the original conditional row validation at every reader invocation,
-          // after dispatch. A current entry may name a successor; it never selects this transcript.
           const entryValidationKey = target.entryValidationKey;
-          if (entryValidationKey !== undefined) {
+          if (
+            entryValidationKey !== undefined &&
+            !hasSessionTranscriptEntryReceipt(
+              database,
+              target.transcript.sessionId,
+              entryValidationKey,
+            )
+          ) {
             readSessionEntryRow(database, entryValidationKey);
           }
           return read(database);
@@ -117,7 +135,10 @@ export function createReadonlySessionHistoryReader(
           databaseAgentId: target.database.agentId,
           path: target.database.path,
         },
-        read,
+        (projection) => {
+          projection.resolveVisibleHistory = resolveWorkerVisibleHistoryProjection;
+          return read(projection);
+        },
       ),
     );
     if (result.kind === "unavailable") {
@@ -131,6 +152,22 @@ export function createReadonlySessionHistoryReader(
     () => (sourceDatabases ??= resolveSourceDatabases?.()),
   );
   return {
+    readRecentUsage: (maxBytes: number) =>
+      readSnapshot((projection) =>
+        aggregateSessionTranscriptUsage(
+          readRecentSessionTranscriptMessageEventsFromProjection(projection, {
+            maxBytes,
+            maxLines: 1000,
+            maxMessages: 1000,
+          }).events.map(({ event }) => asOptionalRecord(event)?.message),
+        ),
+      ),
+    readHistoryEventPage: (
+      options: Parameters<typeof readSessionTranscriptHistoryEventPageFromProjection>[1],
+    ) =>
+      readSnapshot((projection) =>
+        readSessionTranscriptHistoryEventPageFromProjection(projection, options),
+      ),
     readHistoryRevision: () =>
       readSnapshot((projection) => ({
         database: projection.database.db,
@@ -145,6 +182,13 @@ export function createReadonlySessionHistoryReader(
     readBoundedMessageTail: (options: SessionTranscriptBoundedMessageTailOptions) =>
       readSnapshot((projection) =>
         readSessionTranscriptBoundedMessageTailPageFromProjection(projection, options),
+      ),
+    readRecentConversationText: (options: ReadRecentSessionConversationTurnOptions) =>
+      readSnapshot((projection) =>
+        readRecentTranscriptConversationText(
+          (page) => readSessionTranscriptBoundedMessageTailPageFromProjection(projection, page),
+          options,
+        ),
       ),
     readArtifactSummaries: async (query: Extract<SessionArtifactReadQuery, { kind: "list" }>) => {
       const { readArtifactSummariesFromProjection } = await import("./session-artifact-read.js");

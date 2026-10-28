@@ -1,0 +1,108 @@
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
+import type {
+  TemplateAppliedExtension,
+  TemplatePackageKind,
+  TemplatePackageSource,
+} from "./manifest-contract.js";
+
+export const TEMPLATE_PACKAGE_REF_SCHEMA_VERSION = "openclaw.templatePackageRef.v1" as const;
+export type TemplatePackageRefStatus = "pending" | "complete" | "failed" | "rolled_back";
+type TemplatePackageRelationship = "managed" | "referenced";
+type TemplatePackageOrigin = "template-introduced" | "pre-existing";
+
+export type PersistedTemplatePackageRef = {
+  schemaVersion: typeof TEMPLATE_PACKAGE_REF_SCHEMA_VERSION;
+  agentId: string;
+  templateName: string;
+  kind: TemplatePackageKind;
+  source: TemplatePackageSource;
+  ref: string;
+  version: string;
+  integrity: string;
+  status: TemplatePackageRefStatus;
+  relationship: TemplatePackageRelationship;
+  origin: TemplatePackageOrigin;
+  independentOwner: boolean;
+  extension?: TemplateAppliedExtension;
+  installedAtMs: number;
+  updatedAtMs: number;
+};
+
+export type PackageRefRow = Omit<
+  DB["template_package_refs"],
+  "independent_owner" | "installed_at_ms" | "updated_at_ms"
+> & {
+  package_kind: TemplatePackageKind;
+  package_source: TemplatePackageSource;
+  package_status: TemplatePackageRefStatus;
+  relationship: TemplatePackageRelationship;
+  origin: TemplatePackageOrigin;
+  independent_owner: number | bigint;
+  extension_format: TemplateAppliedExtension["format"] | null;
+  extension_detected_format: TemplateAppliedExtension["detectedFormat"] | null;
+  installed_at_ms: number | bigint;
+  updated_at_ms: number | bigint;
+};
+
+function parsePackageRefExtension(row: PackageRefRow): TemplateAppliedExtension | undefined {
+  const values = [
+    row.extension_id,
+    row.extension_format,
+    row.extension_detected_format,
+    row.extension_mapped_json,
+    row.extension_unavailable_json,
+    row.extension_adapter_identity,
+  ];
+  if (values.every((value) => value === null)) {
+    return undefined;
+  }
+  if (values.some((value) => value === null)) {
+    throw new Error(
+      `Template package reference ${row.package_kind}:${row.package_ref} has incomplete extension provenance.`,
+    );
+  }
+  const formats = new Set(["openclaw", "claude", "codex", "cursor"]);
+  if (!formats.has(row.extension_format!) || !formats.has(row.extension_detected_format!)) {
+    throw new Error(
+      `Template package reference ${row.package_kind}:${row.package_ref} has unsupported extension format provenance.`,
+    );
+  }
+  const mapped = JSON.parse(row.extension_mapped_json!) as unknown;
+  const unavailable = JSON.parse(row.extension_unavailable_json!) as unknown;
+  if (!isStringArray(mapped) || !isStringArray(unavailable)) {
+    throw new Error(
+      `Template package reference ${row.package_kind}:${row.package_ref} has invalid extension inventory provenance.`,
+    );
+  }
+  return {
+    id: row.extension_id!,
+    format: row.extension_format!,
+    detectedFormat: row.extension_detected_format!,
+    mapped,
+    unavailable,
+    adapterIdentity: row.extension_adapter_identity!,
+  };
+}
+
+export function rowToPackageRef(row: PackageRefRow): PersistedTemplatePackageRef {
+  const extension = parsePackageRefExtension(row);
+  return {
+    schemaVersion: TEMPLATE_PACKAGE_REF_SCHEMA_VERSION,
+    agentId: row.agent_id,
+    templateName: row.template_name,
+    kind: row.package_kind,
+    source: row.package_source,
+    ref: row.package_ref,
+    version: row.package_version,
+    integrity: row.package_integrity,
+    status: row.package_status,
+    relationship: row.relationship,
+    origin: row.origin,
+    independentOwner: sqliteNumber(row.independent_owner) === 1,
+    ...(extension ? { extension } : {}),
+    installedAtMs: sqliteNumber(row.installed_at_ms),
+    updatedAtMs: sqliteNumber(row.updated_at_ms),
+  };
+}

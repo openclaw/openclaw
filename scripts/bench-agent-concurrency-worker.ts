@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
+import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../src/state/openclaw-state-db.generated.js";
 import {
   WORKER_RESULT_SENTINEL,
@@ -203,9 +204,8 @@ async function readDurableRows() {
 }
 
 function listSqliteFiles(root: string): string[] {
-  return fs
-    .readdirSync(root, { recursive: true })
-    .map(String)
+  return listDirectoryTreeStrictSync(root)
+    .map((walkEntry) => walkEntry.relativePath)
     .filter((entry) => entry.includes(".sqlite"))
     .toSorted();
 }
@@ -259,6 +259,8 @@ async function runSpawnSample(
       buildRegistration: () => ({
         runId,
         childSessionKey: `agent:bench:subagent:${mode}:${serial}:${index}`,
+        childAgentId: "bench",
+        sessionEntry: { sessionId: runId },
         requesterSessionKey: "agent:bench:main",
         requesterDisplayKey: "bench",
         task: `benchmark child ${index}`,
@@ -452,6 +454,8 @@ function sweepRow(child: number, generation: number, now: number): SubagentRunRe
   return {
     runId: `bench-sweep-${child}-${generation}`,
     childSessionKey: `agent:bench:subagent:sweep-${child}`,
+    childAgentId: "bench",
+    childSessionIdentity: { sessionId: `bench-sweep-${child}` },
     requesterSessionKey: "agent:bench:main",
     requesterDisplayKey: "bench",
     task: `sweep child ${child}`,
@@ -459,7 +463,6 @@ function sweepRow(child: number, generation: number, now: number): SubagentRunRe
     generation,
     createdAt: now - generation,
     archiveAtMs: current ? undefined : now - 1,
-    terminalOwner: current ? "interrupted-recovery" : undefined,
     completion: { required: false },
     delivery: { status: "not_required" },
     endedReason: current ? "subagent-error" : undefined,
@@ -469,7 +472,7 @@ function sweepRow(child: number, generation: number, now: number): SubagentRunRe
       endedAt: now - 1_000,
       outcome: {
         status: "error",
-        error: current ? "interrupted recovery replay" : "retired recovery generation",
+        error: current ? "synthetic execution failed" : "superseded execution generation",
       },
       suppressSessionEffects: true,
     },
@@ -499,8 +502,8 @@ async function runSweepSample(childCount: number): Promise<Sample> {
   }
   await mutateSubagentRuns([...seeded.keys()], () => ({ value: undefined, postimages: seeded }));
   let sessionEffects = 0;
-  let recoveryProjections = 0;
   let lostContextCompletions = 0;
+  let retiredObligations = 0;
   const sweeper = createSubagentRegistrySweeper({
     runs,
     resumedRuns: new Set(),
@@ -510,22 +513,14 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     completeSubagentRunWithRecovery: async () => {
       lostContextCompletions += 1;
     },
-    getGatewayRecoveryRuntime: () => undefined,
-    finalizeInterruptedSubagentRun: async ({ runId, expectedEntry }) => {
-      if (
-        !isSameSubagentRunOwner(runs.get(runId), expectedEntry) ||
-        expectedEntry?.generation !== 3
-      ) {
-        throw new Error(`unexpected recovery projection owner: ${runId}`);
-      }
-      recoveryProjections += 1;
-      return 1;
-    },
     resumeRequesterSettleWake: () => {},
+    // These synthetic rows suppress session effects and carry no requester delivery obligations.
+    resumePendingRequesterSettlements: () => false,
     startSubagentAnnounceCleanupFlow: () => true,
     completeCleanupBookkeeping: async () => {},
     isCleanupOwnerCurrent: (entry) =>
       isSameSubagentRunOwner(runs.get(entry.runId), entry) || !runs.has(entry.runId),
+    isTerminalTailActive: () => false,
     sessionEffectsHostCurrent: (entry) => entry.execution.suppressSessionEffects !== true,
     shouldSuppressSessionEffects: async (entry) => entry.execution.suppressSessionEffects === true,
     discardTerminalDelivery: () => {},
@@ -533,7 +528,7 @@ async function runSweepSample(childCount: number): Promise<Sample> {
     emitSubagentEndedHookForRun: async () => {},
     callGateway: async () => {
       sessionEffects += 1;
-      throw new Error("Recovery-sweep benchmark attempted Gateway session effects");
+      throw new Error("Registry-sweep benchmark attempted Gateway session effects");
     },
     cleanupCollectorLaunchResources: async () => true,
     runContextEngineSubagentEnded: async () => {
@@ -543,6 +538,9 @@ async function runSweepSample(childCount: number): Promise<Sample> {
       sessionEffects += 1;
     },
     retireSupersededRun: async () => {},
+    retireObligations: async () => {
+      retiredObligations += 1;
+    },
     getRunsForChildSession: getSubagentRunsForChildSession,
     getRunsForCollectorGroup: () => [],
     warn: () => {},
@@ -557,11 +555,11 @@ async function runSweepSample(childCount: number): Promise<Sample> {
       removedRows === childCount * 2 &&
       retainedCurrent === childCount &&
       sessionEffects === 0 &&
-      recoveryProjections === childCount &&
-      lostContextCompletions === 0;
+      lostContextCompletions === 0 &&
+      retiredObligations === 0;
     if (!ok) {
       throw new Error(
-        `registry sweep invariant failed: ${JSON.stringify({ childCount, removedRows, retainedCurrent, sessionEffects, recoveryProjections, lostContextCompletions })}`,
+        `registry sweep invariant failed: ${JSON.stringify({ childCount, removedRows, retainedCurrent, sessionEffects, lostContextCompletions, retiredObligations })}`,
       );
     }
     return {
@@ -572,8 +570,8 @@ async function runSweepSample(childCount: number): Promise<Sample> {
         removedRows,
         retainedCurrent,
         sessionEffects,
-        recoveryProjections,
         lostContextCompletions,
+        retiredObligations,
       },
     };
   } finally {

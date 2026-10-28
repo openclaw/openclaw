@@ -32,7 +32,8 @@ export type ModelSetupWizardStartMethod =
   | "models.authLogin"
   | "openclaw.setup.auth.start"
   | "openclaw.setup.prepare.start"
-  | "openclaw.setup.activate.start";
+  | "openclaw.setup.activate.start"
+  | "openclaw.setup.runtime.start";
 
 export type ModelSetupWizardCompletion = {
   startMethod: ModelSetupWizardStartMethod;
@@ -89,14 +90,20 @@ export class ModelSetupWizardRunner {
   private session: WizardSession | null = null;
   private retirementGeneration = 0;
   private authLabel: string | undefined;
+  private authBrandId: string | undefined;
   private pendingSignIn:
     | { kind: ProviderLoginOption["kind"]; window: WindowProxy | null }
     | undefined;
 
   constructor(private readonly options: WizardRunnerOptions) {}
 
-  prepareSignIn(kind: ProviderLoginOption["kind"] | "install" | "custom", label: string): void {
+  prepareSignIn(
+    kind: ProviderLoginOption["kind"] | "install" | "custom",
+    label: string,
+    brandId?: string,
+  ): void {
     this.authLabel = label;
+    this.authBrandId = brandId;
     this.pendingSignIn?.window?.close();
     const browser = kind === "oauth" || kind === "device-code";
     this.pendingSignIn = {
@@ -187,9 +194,11 @@ export class ModelSetupWizardRunner {
     authChoice: string,
     startMethod: Exclude<
       ModelSetupWizardStartMethod,
-      "openclaw.setup.activate.start" | "mcp.authLogin"
+      "openclaw.setup.activate.start" | "openclaw.setup.runtime.start" | "mcp.authLogin"
     > = "openclaw.setup.auth.start",
-    preferences: Pick<SystemAgentSetupActivateParams, "nativeSessionCatalogsEnabled"> = {},
+    preferences: Pick<SystemAgentSetupActivateParams, "nativeSessionCatalogsEnabled"> & {
+      selectModel?: true;
+    } = {},
     modelTarget?: "utility",
   ): Promise<ModelSetupWizardCompletion | null> {
     return this.startSession(authChoice, startMethod, {
@@ -215,13 +224,23 @@ export class ModelSetupWizardRunner {
     return this.startSession(serverName, "mcp.authLogin", { serverName });
   }
 
+  startRuntime(
+    params: { agentId: string; runtimeId: string; configPatch: Record<string, unknown> },
+    label: string,
+  ): Promise<ModelSetupWizardCompletion | null> {
+    this.authLabel = label;
+    this.authBrandId = undefined;
+    return this.startSession(params.runtimeId, "openclaw.setup.runtime.start", params);
+  }
+
   private async startSession(
     authChoice: string,
     startMethod: ModelSetupWizardStartMethod,
     params:
-      | { authChoice: string; modelTarget?: "utility" }
+      | { authChoice: string; modelTarget?: "utility"; selectModel?: true }
       | SystemAgentSetupActivateParams
-      | { serverName: string },
+      | { serverName: string }
+      | { agentId: string; runtimeId: string; configPatch: Record<string, unknown> },
     activationTargetId?: string,
   ): Promise<ModelSetupWizardCompletion | null> {
     const client = this.options.getClient();
@@ -257,7 +276,12 @@ export class ModelSetupWizardRunner {
     this.session = session;
     this.setState({ phase: "starting", authChoice });
     try {
-      const agentId = startMethod === "mcp.authLogin" ? null : this.options.getAgentId();
+      const agentId =
+        "agentId" in params
+          ? params.agentId
+          : startMethod === "mcp.authLogin"
+            ? null
+            : this.options.getAgentId();
       const request = client
         .request<WizardStartResult>(
           startMethod,
@@ -281,16 +305,14 @@ export class ModelSetupWizardRunner {
           };
         });
       const started = await this.awaitWizardStart(session, request);
-      if (!started.done) {
-        session.admitted = true;
+      if (started.done) {
+        return this.applyResult(session, started);
       }
-      if (session !== this.session && !started.done) {
+      session.admitted = true;
+      if (session !== this.session) {
         // Admission can finish after cancellation; release only its original session.
         await this.cancelSession(session);
         return null;
-      }
-      if (started.done) {
-        return this.applyResult(session, started);
       }
       return await this.requestNext(session);
     } catch (error) {
@@ -323,9 +345,9 @@ export class ModelSetupWizardRunner {
     }
   }
 
-  async cancel(options: { settleActiveRequest?: boolean } = {}): Promise<void> {
+  async cancel(): Promise<void> {
     const session = this.session;
-    this.clearSession(!options.settleActiveRequest);
+    this.clearSession();
     if (session) {
       await this.cancelSession(session);
     }
@@ -338,11 +360,13 @@ export class ModelSetupWizardRunner {
       return "cancelled";
     }
     session.cancellationRequested = true;
+    const isCurrent = () =>
+      session === this.session && !this.isRetired(session) && !session.suspended;
     let result: WizardStatusResult | undefined;
     try {
       result = await this.sendCancellation(session);
     } catch (error) {
-      if (session !== this.session || this.isRetired(session) || session.suspended) {
+      if (!isCurrent()) {
         return undefined;
       }
       if (isWizardNotFoundError(error)) {
@@ -351,11 +375,15 @@ export class ModelSetupWizardRunner {
       }
       throw error;
     }
-    if (session !== this.session || this.isRetired(session) || session.suspended) {
+    if (!isCurrent()) {
       return undefined;
     }
     if (result?.status === "cancelled" || result?.status === "error") {
-      if (session.startMethod === "models.authLogin" || session.startMethod === "mcp.authLogin") {
+      if (
+        session.startMethod === "models.authLogin" ||
+        session.startMethod === "mcp.authLogin" ||
+        session.startMethod === "openclaw.setup.runtime.start"
+      ) {
         // Cancellation acknowledges the abort before provider teardown releases
         // admission. Status waits for that release; a purged session is settled.
         try {
@@ -368,14 +396,14 @@ export class ModelSetupWizardRunner {
             },
           );
         } catch (error) {
-          if (session !== this.session || this.isRetired(session) || session.suspended) {
+          if (!isCurrent()) {
             return undefined;
           }
           if (!isWizardNotFoundError(error)) {
             throw error;
           }
         }
-        if (session !== this.session || this.isRetired(session) || session.suspended) {
+        if (!isCurrent()) {
           return undefined;
         }
       }
@@ -400,23 +428,23 @@ export class ModelSetupWizardRunner {
     this.clearSession();
   }
 
-  private clearSession(abortRequest = true): void {
+  private clearSession(): void {
     this.pendingSignIn?.window?.close();
     this.pendingSignIn = undefined;
     this.session?.reservedWindow?.close();
     clearTimeout(this.session?.externalInputTimer);
-    if (abortRequest) {
-      this.session?.abortController.abort();
-    }
+    this.session?.abortController.abort();
     this.session = null;
     this.authLabel = undefined;
+    this.authBrandId = undefined;
     this.setState({ phase: "idle" });
   }
 
   fail(message: string): void {
-    const label = this.authLabel;
+    const { authLabel, authBrandId } = this;
     this.close();
-    this.authLabel = label;
+    this.authLabel = authLabel;
+    this.authBrandId = authBrandId;
     this.setState({ phase: "error", message });
   }
 
@@ -516,11 +544,10 @@ export class ModelSetupWizardRunner {
     if (session !== this.session || session.suspended) {
       return null;
     }
-    if (isCurrent?.() === false) {
-      this.close();
-      return null;
-    }
-    if (result.done && result.status === "cancelled" && session.cancellationRequested) {
+    if (
+      isCurrent?.() === false ||
+      (result.done && result.status === "cancelled" && session.cancellationRequested)
+    ) {
       this.close();
       return null;
     }
@@ -556,8 +583,8 @@ export class ModelSetupWizardRunner {
         };
       }
     }
-    clearTimeout(session.externalInputTimer);
     if (result.done) {
+      clearTimeout(session.externalInputTimer);
       session.reservedWindow?.close();
       this.session = null;
     }
@@ -656,15 +683,16 @@ export class ModelSetupWizardRunner {
     this.setState({ phase: "error", message: [message, ...session.notes].join("\n\n") });
   }
 
-  private async cancelSession(session: WizardSession): Promise<WizardStatusResult | undefined> {
+  private async cancelSession(session: WizardSession): Promise<void> {
     try {
-      return await this.sendCancellation(
+      await this.sendCancellation(
         session,
-        session.startMethod === "models.authLogin" || session.startMethod === "mcp.authLogin",
+        session.startMethod === "models.authLogin" ||
+          session.startMethod === "mcp.authLogin" ||
+          session.startMethod === "openclaw.setup.runtime.start",
       );
     } catch {
       // Detached cleanup is best effort; explicit cancellation surfaces failures.
-      return undefined;
     }
   }
 
@@ -724,6 +752,9 @@ export class ModelSetupWizardRunner {
     clearTimeout(this.session?.externalInputTimer);
     if (this.authLabel) {
       state.authLabel = this.authLabel;
+    }
+    if (this.authBrandId) {
+      state.authBrandId = this.authBrandId;
     }
     this.currentState = state;
     this.options.onChange(state);

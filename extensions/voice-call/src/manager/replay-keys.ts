@@ -1,11 +1,9 @@
-// Voice Call manager helpers own bounded webhook replay identity.
-
 /** Match the existing voice-call webhook replay-cache cardinality. */
 const MAX_MANAGER_REPLAY_KEYS = 10_000;
 /** Keep typical provider replay IDs near one raw persisted-record chunk. */
 export const MAX_CALL_REPLAY_KEYS = 500;
 
-function pruneOldestEntries(keys: Set<string> | Map<string, symbol>): void {
+function pruneOldestEntries(keys: Set<string>): void {
   while (keys.size > MAX_MANAGER_REPLAY_KEYS) {
     const oldest = keys.keys().next().value;
     if (oldest === undefined) {
@@ -32,33 +30,5 @@ export function trimCallReplayKeys(keys: string[]): void {
   const overflow = keys.length - MAX_CALL_REPLAY_KEYS;
   if (overflow > 0) {
     keys.splice(0, overflow);
-  }
-}
-
-/**
- * Reserve one rejected provider call. The token prevents a stale failed
- * hangup from deleting a newer reservation after bounded eviction and reuse.
- */
-export function reserveRejectedProviderCall(
-  calls: Map<string, symbol>,
-  providerCallId: string,
-): symbol | undefined {
-  if (calls.has(providerCallId)) {
-    return undefined;
-  }
-  const reservation = Symbol(providerCallId);
-  calls.set(providerCallId, reservation);
-  pruneOldestEntries(calls);
-  return reservation;
-}
-
-/** Release a rejected-call reservation only when the failing attempt still owns it. */
-export function releaseRejectedProviderCall(
-  calls: Map<string, symbol>,
-  providerCallId: string,
-  reservation: symbol,
-): void {
-  if (calls.get(providerCallId) === reservation) {
-    calls.delete(providerCallId);
   }
 }

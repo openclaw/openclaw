@@ -1,6 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isShellToolDisplayName, resolveToolDisplay } from "../agents/tool-display.js";
-/** Formats compact tool metadata labels for auto-reply progress/status messages. */
 import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import { shortenHomeInString } from "../utils.js";
 
@@ -37,9 +36,7 @@ export function formatToolAggregateParts(
     const slash = m.lastIndexOf("/");
     const dir = m.slice(0, slash);
     const base = m.slice(slash + 1);
-    if (!grouped[dir]) {
-      grouped[dir] = [];
-    }
+    grouped[dir] ??= [];
     grouped[dir].push(base);
   }
 

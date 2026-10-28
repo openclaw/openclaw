@@ -2,19 +2,21 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
 import {
-  acquireAgentRunPreparedModelRuntime,
-  acquireAgentRuntimeCleanupRegistries,
-  getPreparedModelRuntimeSnapshot,
-  loadPublishedGatewayReplyDispatchRuntime,
-  refreshPreparedModelRuntimeSnapshots,
+  acquireAgentRunPreparedModelRuntime as acquire,
+  acquireAgentRuntimeCleanupRegistries as acquireCleanup,
+  getPreparedModelRuntimeSnapshot as readSnapshot,
+  loadPublishedGatewayReplyDispatchRuntime as loadDispatch,
+  markPreparedModelRuntimeSnapshotsStale as markStale,
+  refreshPreparedModelRuntimeSnapshots as refresh,
 } from "./prepared-model-runtime.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
@@ -24,160 +26,153 @@ beforeEach(() => {
   mocks.configuredAgentIds = ["default"];
 });
 
-async function publishGateway() {
-  const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
-  await refreshPreparedModelRuntimeSnapshots(config, {
-    catalogMode: "static",
-    gatewayLifecycle: true,
+it("reprepares run admission when config publication supersedes its unfinished build", async () => {
+  const config = { messages: { responsePrefix: "before" } };
+  const current = { messages: { responsePrefix: "after" } };
+  await refresh(config, { gatewayLifecycle: true, catalogMode: "static" });
+  const gate = createEnteredGate();
+  mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+    await gate.wait();
+    return { entries: [] };
   });
-  return {
-    agentId: "default",
-    agentDir: fixture.state.agentDir("default"),
-    config,
-    workspaceDir: "/tmp/unused-workspace",
-  };
-}
+  const admission = acquire({
+    ...fixture.agentInput("default", config),
+    loadRuntimePlugins: true,
+  });
+  void admission.catch(() => {});
+  let publication: Promise<void> | undefined;
+  try {
+    await gate.entered;
+    publication = refresh(current, { gatewayLifecycle: true, catalogMode: "static" });
+    gate.release();
+    await publication;
+    await using lease = await admission;
+    expect(lease.snapshot.config).toEqual(current);
+    expect(lease.snapshot.isCurrent()).toBe(true);
+    expect((await loadDispatch({ agentId: "default" }))?.config).toEqual(current);
+  } finally {
+    gate.release();
+    await Promise.allSettled([
+      publication,
+      admission.then((lease) => lease[Symbol.asyncDispose]()),
+    ]);
+  }
+});
 
-describe("prepared model runtime Gateway leases", () => {
-  it("borrows a configured generation for another model but builds for an uncovered provider", async () => {
-    const config = {
-      agents: { defaults: { model: "configured-provider/primary" } },
-      plugins: {
-        slots: { memory: "none" },
-        entries: {
-          "configured-plugin": { enabled: true },
-          "additional-plugin": { enabled: true },
-        },
+it("bounds repeated preparation supersession and leaves ordinary failures untouched", async () => {
+  const input = fixture.agentInput("unconfigured", {});
+  mocks.prepareStaticCatalog.mockImplementation(async () => {
+    markStale("fixture publication changed");
+    return { entries: [] };
+  });
+  await expect(acquire(input)).rejects.toThrow(
+    "Model runtime changed during both preparation attempts; retry the request",
+  );
+  expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
+  const failure = new Error("fixture credentials unavailable");
+  mocks.prepareStaticCatalog.mockReset().mockRejectedValue(failure);
+  await expect(acquire(input)).rejects.toBe(failure);
+  expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
+});
+
+it("borrows a configured generation for another model but builds for an uncovered provider", async () => {
+  const config = {
+    agents: { defaults: { model: "configured-provider/primary" } },
+    plugins: {
+      slots: { memory: "none" },
+      entries: {
+        "configured-plugin": { enabled: true },
+        "additional-plugin": { enabled: true },
       },
-    };
-    const configuredRegistry = createEmptyPluginRegistry();
-    configuredRegistry.plugins.push(
-      createPluginRecord({ id: "configured-plugin", imported: true }),
-    );
-    const additionalRegistry = createEmptyPluginRegistry();
-    additionalRegistry.plugins.push(
-      createPluginRecord({ id: "additional-plugin", imported: true }),
-    );
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) =>
-      params.selections?.some(
-        (selection: { provider: string }) => selection.provider === "additional-provider",
-      )
-        ? additionalRegistry
-        : configuredRegistry,
-    );
-    const metadata = createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: makeRegistry([
-        {
-          id: "configured-plugin",
-          origin: "bundled",
-          channels: [],
-          providers: ["configured-provider"],
-        },
-        {
-          id: "additional-plugin",
-          origin: "bundled",
-          channels: [],
-          providers: ["additional-provider"],
-        },
-      ]),
-    });
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-      pluginMetadataSnapshot: {
-        ...metadata,
-        owners: {
-          ...metadata.owners,
-          providers: new Map([
-            ["configured-provider", ["configured-plugin"]],
-            ["additional-provider", ["additional-plugin"]],
-          ]),
-        },
-      },
-    });
-    const published = expectDefined(
-      await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      "configured dispatch runtime",
-    );
-    const input = {
-      config,
-      agentId: "default",
-      agentDir: published.agentDir,
-      workspaceDir: published.workspaceDir,
-    };
-    const configured = expectDefined(getPreparedModelRuntimeSnapshot(input), "configured snapshot");
-    const loadsBeforeRun = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
-    await using covered = await acquireAgentRunPreparedModelRuntime({
+    },
+  };
+  const configuredRegistry = createEmptyPluginRegistry();
+  configuredRegistry.plugins.push(createPluginRecord({ id: "configured-plugin", imported: true }));
+  const additionalRegistry = createEmptyPluginRegistry();
+  additionalRegistry.plugins.push(createPluginRecord({ id: "additional-plugin", imported: true }));
+  mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) =>
+    params.selections?.some(
+      (selection: { provider: string }) => selection.provider === "additional-provider",
+    )
+      ? additionalRegistry
+      : configuredRegistry,
+  );
+  const metadata = createPluginMetadataSnapshot({
+    config,
+    manifestRegistry: makeRegistry(
+      ["configured", "additional"].map((name) => ({
+        id: `${name}-plugin`,
+        origin: "bundled",
+        channels: [],
+        providers: [`${name}-provider`],
+      })),
+    ),
+  });
+  metadata.owners.providers = new Map(
+    ["configured", "additional"].map((name) => [`${name}-provider`, [`${name}-plugin`]]),
+  );
+  await refresh(config, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+    pluginMetadataSnapshot: metadata,
+  });
+  const published = expectDefined(await loadDispatch({ agentId: "default" }), "dispatch");
+  const { agentDir, workspaceDir } = published;
+  const input = { config, agentId: "default", agentDir, workspaceDir };
+  const configured = expectDefined(readSnapshot(input), "configured snapshot");
+  const acquireProvider = (provider: string, folder: string) =>
+    acquire({
       ...input,
-      runtimePluginSelections: [
-        { provider: "configured-provider", modelId: "utility", runtime: "openclaw" },
-      ],
+      workspaceDir: folder,
+      runtimePluginSelections: [{ provider, modelId: "utility", runtime: "openclaw" }],
     });
+  for (const folder of [input.workspaceDir, "/tmp/outside-folder"]) {
+    await using covered = await acquireProvider("configured-provider", folder);
     expect(covered.snapshot).toBe(configured);
     expect(covered.pluginGeneration).toBe(published.pluginGeneration);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(loadsBeforeRun);
+  }
 
-    await using uncovered = await acquireAgentRunPreparedModelRuntime({
+  await using uncovered = await acquireProvider("additional-provider", "/tmp/outside-folder");
+  expect(uncovered.snapshot).not.toBe(configured);
+  expect(uncovered.pluginGeneration).not.toBe(published.pluginGeneration);
+  expect(uncovered.snapshot.pluginRegistry).toBe(additionalRegistry);
+  expect(readSnapshot(input)).toBe(configured);
+  expect(await loadDispatch({ agentId: "default" })).toBe(published);
+});
+
+it("retains recent run owners for reuse and agent cleanup while evicting old selections", async () => {
+  mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => createEmptyPluginRegistry());
+  const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+  await refresh(config, { catalogMode: "static", gatewayLifecycle: true });
+  const input = {
+    config,
+    agentId: "default",
+    agentDir: fixture.state.agentDir("default"),
+    workspaceDir: fixture.state.workspaceDir,
+  };
+  const acquireModel = async (modelId: string) => {
+    await using lease = await acquire({
       ...input,
-      runtimePluginSelections: [
-        { provider: "additional-provider", modelId: "utility", runtime: "openclaw" },
-      ],
+      loadRuntimePlugins: true,
+      runtimePluginSelections: [{ provider: "openai", modelId, runtime: "codex" }],
     });
-    expect(uncovered.snapshot).not.toBe(configured);
-    expect(uncovered.pluginGeneration).not.toBe(published.pluginGeneration);
-    expect(uncovered.snapshot.pluginRegistry).toBe(additionalRegistry);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(loadsBeforeRun + 1);
-    expect(getPreparedModelRuntimeSnapshot(input)).toBe(configured);
-    expect(await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })).toBe(published);
-  });
+    return lease.snapshot;
+  };
 
-  it("evicts old idle gateway run owners while reusing recent selections", async () => {
-    const input = await publishGateway();
-    const acquire = async (modelId: string) => {
-      await using lease = await acquireAgentRunPreparedModelRuntime({
-        ...input,
-        loadRuntimePlugins: true,
-        runtimePluginSelections: [{ provider: "openai", modelId, runtime: "codex" }],
-      });
-      return lease.snapshot;
-    };
-
-    const first = await acquire("run-model-0");
-    for (let index = 1; index < 8; index += 1) {
-      await acquire(`run-model-${index}`);
+  const first = await acquireModel("run-model-0");
+  const second = await acquireModel("run-model-1");
+  {
+    await using cleanup = await acquireCleanup(input.agentDir);
+    for (const snapshot of [first, second]) {
+      expect(cleanup.registries).toContain(snapshot.pluginRegistry);
     }
-    const recent = await acquire("run-model-8");
-    expect(await acquire("run-model-8")).toBe(recent);
-    expect(await acquire("run-model-0")).not.toBe(first);
-  });
-
-  it("retains switched-away execution registries for agent-scoped session cleanup", async () => {
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() =>
-      createEmptyPluginRegistry(),
-    );
-    const input = await publishGateway();
-    const previous = [];
-    for (const modelId of ["first", "second"]) {
-      await using lease = await acquireAgentRunPreparedModelRuntime({
-        ...input,
-        loadRuntimePlugins: true,
-        workspaceDir: fixture.state.workspaceDir,
-        runtimePluginSelections: [{ provider: "openai", modelId, runtime: "codex" }],
-      });
-      previous.push(lease.snapshot.pluginRegistry);
-    }
-    mocks.loadAgentRuntimePluginRegistryHandle.mockClear();
-    await using cleanup = await acquireAgentRuntimeCleanupRegistries(
-      fixture.state.agentDir("default"),
-    );
-    for (const registry of previous) {
-      expect(cleanup.registries).toContain(registry);
-    }
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).not.toHaveBeenCalled();
-    await using unrelated = await acquireAgentRuntimeCleanupRegistries(
-      fixture.state.agentDir("other"),
-    );
+    await using unrelated = await acquireCleanup(fixture.state.agentDir("other"));
     expect(unrelated.registries).toEqual([]);
-  });
+  }
+  for (let index = 2; index < 8; index += 1) {
+    await acquireModel(`run-model-${index}`);
+  }
+  const recent = await acquireModel("run-model-8");
+  expect(await acquireModel("run-model-8")).toBe(recent);
+  expect(await acquireModel("run-model-0")).not.toBe(first);
 });

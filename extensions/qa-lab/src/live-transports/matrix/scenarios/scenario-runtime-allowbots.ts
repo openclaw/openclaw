@@ -12,23 +12,6 @@ import {
 } from "./scenario-runtime-shared.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
-async function runObserverBotReplyScenario(params: {
-  context: MatrixQaScenarioContext;
-  roomKey?: string;
-  tokenPrefix: string;
-  withMention?: boolean;
-}) {
-  return await runTopologyScopedTopLevelScenario({
-    accessToken: params.context.observerAccessToken,
-    actorId: "observer",
-    actorUserId: params.context.observerUserId,
-    context: params.context,
-    roomKey: params.roomKey ?? params.context.topology.defaultRoomKey,
-    tokenPrefix: params.tokenPrefix,
-    ...(params.withMention === undefined ? {} : { withMention: params.withMention }),
-  });
-}
-
 async function runObserverBotNoReplyScenario(params: {
   context: MatrixQaScenarioContext;
   tokenPrefix: string;
@@ -60,16 +43,20 @@ export async function runAllowBotsDefaultBlockScenario(context: MatrixQaScenario
 export async function runAllowBotsTrueUnmentionedOpenRoomScenario(
   context: MatrixQaScenarioContext,
 ) {
-  return await runObserverBotReplyScenario({
+  return await runTopologyScopedTopLevelScenario({
+    actorId: "observer",
     context,
+    roomKey: context.topology.defaultRoomKey,
     tokenPrefix: "MATRIX_QA_ALLOWBOTS_TRUE_OPEN",
     withMention: false,
   });
 }
 
 export async function runAllowBotsMentionsMentionedRoomScenario(context: MatrixQaScenarioContext) {
-  return await runObserverBotReplyScenario({
+  return await runTopologyScopedTopLevelScenario({
+    actorId: "observer",
     context,
+    roomKey: context.topology.defaultRoomKey,
     tokenPrefix: "MATRIX_QA_ALLOWBOTS_MENTIONS_MENTIONED",
   });
 }
@@ -85,7 +72,8 @@ export async function runAllowBotsMentionsUnmentionedOpenRoomBlockScenario(
 }
 
 export async function runAllowBotsMentionsDmUnmentionedScenario(context: MatrixQaScenarioContext) {
-  return await runObserverBotReplyScenario({
+  return await runTopologyScopedTopLevelScenario({
+    actorId: "observer",
     context,
     roomKey: MATRIX_QA_BOT_DM_ROOM_KEY,
     tokenPrefix: "MATRIX_QA_ALLOWBOTS_MENTIONS_DM",
@@ -106,8 +94,10 @@ export async function runAllowBotsRoomOverrideBlocksAccountTrueScenario(
 export async function runAllowBotsRoomOverrideEnablesAccountOffScenario(
   context: MatrixQaScenarioContext,
 ) {
-  return await runObserverBotReplyScenario({
+  return await runTopologyScopedTopLevelScenario({
+    actorId: "observer",
     context,
+    roomKey: context.topology.defaultRoomKey,
     tokenPrefix: "MATRIX_QA_ALLOWBOTS_ROOM_ENABLE",
   });
 }

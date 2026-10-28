@@ -126,23 +126,14 @@ export async function validateDirFetchEntries(input: {
 
   const entries: string[] = [];
   for (const entry of input.entries) {
-    if (typeof entry !== "string" || entry.length === 0) {
-      await audit({
-        canonicalPath: input.canonicalPath,
-        decision: "denied:policy",
-        errorCode: invalidCode,
-        reason: "entry is not a non-empty string",
-      });
-      return policyDeniedResult({
-        op: input.op,
-        code: invalidCode,
-        message: `directory ${input.phase} entry is invalid: entry is not a non-empty string`,
-        details: { path: input.canonicalPath, reason: "entry is not a non-empty string" },
-      });
-    }
-    const entryValidation = validateDirFetchPreflightEntry(entry);
+    const hasName = typeof entry === "string" && entry.length > 0;
+    const entryValidation = hasName
+      ? validateDirFetchPreflightEntry(entry)
+      : { ok: false as const, reason: "entry is not a non-empty string" };
     if (!entryValidation.ok) {
-      const candidate = joinRemotePolicyPath(input.canonicalPath, entry);
+      const candidate = hasName
+        ? joinRemotePolicyPath(input.canonicalPath, entry)
+        : input.canonicalPath;
       await audit({
         canonicalPath: candidate,
         decision: "denied:policy",
@@ -152,7 +143,7 @@ export async function validateDirFetchEntries(input: {
       return policyDeniedResult({
         op: input.op,
         code: invalidCode,
-        message: `directory ${input.phase} entry ${entry} is invalid: ${entryValidation.reason}`,
+        message: `directory ${input.phase} entry${hasName ? ` ${entry}` : ""} is invalid: ${entryValidation.reason}`,
         details: { path: candidate, reason: entryValidation.reason },
       });
     }
@@ -315,7 +306,7 @@ async function invokePreflight(input: {
       result: policyDeniedResult({
         op: input.op,
         code: "PREFLIGHT_PATH_MISSING",
-        message: "node preflight did not return a canonical path",
+        message: "node preflight did not return a resolved path",
       }),
     };
   }
@@ -355,7 +346,7 @@ export async function validateCanonicalAuthorization(input: {
   ) {
     const approval = await input.ctx.approvals?.request({
       title: `${promptVerb(input.op)} target changed: ${input.requestedPath}`,
-      description: `The node now resolves this path to:\n${input.canonicalPath}\n\nApprove this exact canonical target for ${input.ctx.nodeId}.`,
+      description: `The node now resolves this path to:\n${input.canonicalPath}\n\nApprove this exact resolved target for ${input.ctx.nodeId}.`,
       severity: input.kind === "write" ? "warning" : "info",
       toolName: input.op,
     });
@@ -364,12 +355,12 @@ export async function validateCanonicalAuthorization(input: {
         canonicalPath: input.canonicalPath,
         decision: "denied:symlink_escape",
         errorCode: "CANONICAL_PATH_CHANGED",
-        reason: "canonical path differs from the standing approval",
+        reason: "resolved path differs from the standing approval",
       });
       return policyDeniedResult({
         op: input.op,
         code: "CANONICAL_PATH_CHANGED",
-        message: "the canonical path differs from the standing approval and was not reapproved",
+        message: "the resolved path differs from the standing approval and was not reapproved",
         details: { path: input.canonicalPath },
       });
     }
@@ -447,7 +438,7 @@ export async function runPathPreflight(input: {
         canonicalPath: preflight.canonicalPath,
         decision: "denied:symlink_escape",
         errorCode: "CANONICAL_PATH_CHANGED",
-        reason: "canonical path changed again after reapproval",
+        reason: "resolved path changed again after reapproval",
         durationMs: Date.now() - input.startedAt,
       });
       return {
@@ -455,7 +446,7 @@ export async function runPathPreflight(input: {
         result: policyDeniedResult({
           op: input.op,
           code: "CANONICAL_PATH_CHANGED",
-          message: "the canonical path changed again after reapproval; retry the operation",
+          message: "the resolved path changed again after reapproval; retry the operation",
           details: { path: preflight.canonicalPath },
         }),
       };

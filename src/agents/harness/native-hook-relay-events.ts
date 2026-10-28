@@ -46,8 +46,11 @@ function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_too
 
 type NativeHookRelayPolicy = Pick<
   ActiveNativeHookRelayRegistration,
-  "preToolUseLoopDetection" | "sessionKey" | "config" | "agentId"
-> & { executionAdmissionToolNames?: readonly string[] };
+  "preToolUseLoopDetection" | "requirePreToolUse" | "sessionKey" | "config" | "agentId"
+> & {
+  executionAdmissionToolNames?: readonly string[];
+  postToolUseToolNames?: readonly string[];
+};
 
 /** Snapshot the same canonical native tool family for planning and receipt admission. */
 export function snapshotNativeHookRelayExecutionAdmission(
@@ -78,13 +81,18 @@ export function nativeHookRelayEventHasLocalWork(
 ): boolean {
   if (event === "pre_tool_use") {
     return (
+      registration.requirePreToolUse === true ||
       Boolean(registration.executionAdmissionToolNames?.length) ||
       hasBeforeToolCallPolicy() ||
       nativePreToolUseMayRunLoopDetection(registration)
     );
   }
   if (event === "post_tool_use") {
-    return hasGlobalHooks("after_tool_call") || listAgentToolResultMiddlewares("codex").length > 0;
+    return (
+      Boolean(registration.postToolUseToolNames?.length) ||
+      hasGlobalHooks("after_tool_call") ||
+      listAgentToolResultMiddlewares("codex").length > 0
+    );
   }
   if (event === "before_agent_finalize") {
     return hasGlobalHooks("before_agent_finalize");
@@ -97,7 +105,7 @@ export function nativeHookRelayEventToolMatcher(
   event: NativeHookRelayEvent,
 ): readonly string[] | undefined {
   if (event === "pre_tool_use") {
-    if (nativePreToolUseMayRunLoopDetection(registration)) {
+    if (registration.requirePreToolUse || nativePreToolUseMayRunLoopDetection(registration)) {
       return undefined;
     }
     // Relay selection and policy execution must read the same scoped/root registry.
@@ -115,11 +123,21 @@ export function nativeHookRelayEventToolMatcher(
     const scope = mergePluginToolMatcherScopes([
       getGlobalToolHookMatcherScope("after_tool_call"),
       getAgentToolResultMiddlewareMatcherScope("codex"),
+      registration.postToolUseToolNames?.length
+        ? { matchAll: false, toolNames: registration.postToolUseToolNames }
+        : undefined,
     ]);
     return scope?.matchAll ? undefined : scope?.toolNames;
   }
   return undefined;
 }
+
+const nativeHookRelayHandlers = {
+  pre_tool_use: runNativeHookRelayPreToolUse,
+  post_tool_use: runNativeHookRelayPostToolUse,
+  before_agent_finalize: runNativeHookRelayBeforeAgentFinalize,
+  permission_request: runNativeHookRelayPermissionRequest,
+};
 
 export async function processNativeHookRelayInvocation(params: {
   registration: NativeHookRelayRegistration;
@@ -127,16 +145,7 @@ export async function processNativeHookRelayInvocation(params: {
   executionAdmission?: NativeHookRelayExecutionAdmission;
   assertExecutionAdmissionCurrent: () => void;
 }): Promise<NativeHookRelayProcessResponse> {
-  if (params.invocation.event === "pre_tool_use") {
-    return runNativeHookRelayPreToolUse(params);
-  }
-  if (params.invocation.event === "post_tool_use") {
-    return runNativeHookRelayPostToolUse(params);
-  }
-  if (params.invocation.event === "before_agent_finalize") {
-    return runNativeHookRelayBeforeAgentFinalize(params);
-  }
-  return runNativeHookRelayPermissionRequest(params);
+  return nativeHookRelayHandlers[params.invocation.event](params);
 }
 
 async function runNativeHookRelayPreToolUse(

@@ -18,20 +18,18 @@ const OP_READ_CONCURRENCY = 4;
 const OP_READ_TIMEOUT_MS = 7_000;
 const MAX_SECRET_REFS_PER_REQUEST = 32;
 const MAX_SECRET_VALUE_BYTES = 64 * 1024;
+const MAX_ERROR_DETAIL_CHARS = 512;
 
 function writeResponse(response) {
   process.stdout.write(`${JSON.stringify(response)}\n`);
 }
 
-function parseRequest(input) {
+function parseRequestIds(input) {
   const parsed = JSON.parse(input);
   if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.ids)) {
     throw new Error("invalid exec SecretRef request");
   }
-  return {
-    protocolVersion: 1,
-    ids: parsed.ids.filter((id) => typeof id === "string" && id.length > 0),
-  };
+  return parsed.ids.filter((id) => typeof id === "string" && id.length > 0);
 }
 
 async function resolveOpCommand() {
@@ -173,9 +171,8 @@ async function runOpRead(opCommand, token, secretReference) {
     [opCommand, "read", "--cache=false", "--no-newline", secretReference],
     {
       baseEnv: {},
-      discardOutput: { stderr: true },
       env: opEnvironment(token),
-      maxOutputBytes: { stdout: MAX_SECRET_VALUE_BYTES },
+      maxOutputBytes: MAX_SECRET_VALUE_BYTES,
       timeoutMs: OP_READ_TIMEOUT_MS,
     },
   );
@@ -186,13 +183,23 @@ async function runOpRead(opCommand, token, secretReference) {
     throw new Error(`op read timed out after ${OP_READ_TIMEOUT_MS}ms.`);
   }
   if (result.termination === "output-limit") {
-    throw new Error("op read output exceeded the secret value limit.");
+    throw new Error("op read output exceeded the limit.");
   }
   if (result.termination === "error") {
     throw new Error("op read could not be started.");
   }
   if (result.code !== 0) {
-    throw new Error(`op read failed with exit code ${String(result.code)}.`);
+    const { redactSensitiveText } = await import("openclaw/plugin-sdk/security-runtime");
+    let detail = result.stderr.toString("utf8").replaceAll(token, "***");
+    const secret = result.stdout.toString("utf8");
+    if (secret) {
+      detail = detail.replaceAll(secret, "***");
+    }
+    // Redact before truncation so a cut cannot hide the prefix identifying a credential.
+    detail = redactSensitiveText(detail, { mode: "tools" }).trim().slice(-MAX_ERROR_DETAIL_CHARS);
+    throw new Error(
+      `op read failed with exit code ${String(result.code)}.${detail ? ` ${detail}` : ""}`,
+    );
   }
   return result.stdout.toString("utf8");
 }
@@ -230,8 +237,7 @@ async function resolveFromOnePassword(ids) {
 
 async function main() {
   const input = await consumeText(process.stdin.setEncoding("utf8"));
-  const request = parseRequest(input);
-  writeResponse(await resolveFromOnePassword(request.ids));
+  writeResponse(await resolveFromOnePassword(parseRequestIds(input)));
 }
 
 main().catch(() => {

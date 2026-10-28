@@ -1,13 +1,19 @@
+import "./sessions-files.mocks.test-support.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as identityFile from "../../agents/identity-file.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { root as openSafeRoot } from "../../infra/fs-safe.js";
-import { resolveOpenPathCommand } from "./open-path.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   assistantToolCall,
@@ -15,6 +21,7 @@ import {
   useSqliteSession,
   visibleMessageEvent,
   createSessionFilesHandlerInvoker,
+  createSessionFilesClient,
   createVisibleMessagesMock,
   expectError,
   expectOkPayload,
@@ -23,50 +30,59 @@ import {
   removeWorkspaceFixture,
   writeWorkspaceFile,
 } from "./sessions-files.test-support.js";
+import * as workspaceFs from "./workspace-fs.js";
 
-const hoisted = vi.hoisted(() => ({
+const { sessionFilesMocks } = await import("./sessions-files.mocks.test-support.js");
+
+const openPathMocks = vi.hoisted(() => ({
   execOpenPath: vi.fn(),
-  loadSessionEntry: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(),
-  resolveDefaultAgentId: vi.fn(),
-  readDelta: vi.fn(),
 }));
+const hoisted = { ...sessionFilesMocks, ...openPathMocks };
 
 vi.mock("./open-path.js", async () => {
   const actual = await vi.importActual<typeof import("./open-path.js")>("./open-path.js");
-  return { ...actual, execOpenPath: hoisted.execOpenPath };
+  return { ...actual, execOpenPath: openPathMocks.execOpenPath };
 });
-
-vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
-  resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
-  resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
-}));
-
-vi.mock("../session-utils.js", async (original) => ({
-  ...(await original<typeof import("../session-utils.js")>()),
-  loadSessionEntry: hoisted.loadSessionEntry,
-  loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
-}));
-
-vi.mock("../session-transcript-readers.js", async (original) => ({
-  ...(await original<typeof import("../session-transcript-readers.js")>()),
-  readSessionTranscriptVisibleMessageDeltaCore: hoisted.readDelta,
-}));
 
 const sessionKey = "agent:main:main";
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
-function listFiles(params: Record<string, unknown> = {}) {
-  return invoke("sessions.files.list", { sessionKey, ...params });
+const files = createSessionFilesClient(invoke, () => ({ sessionKey }));
+const saveFile = (
+  name: string,
+  content: string,
+  original: string | Buffer,
+  context?: Record<string, unknown>,
+) =>
+  files.request(
+    "set",
+    {
+      path: name,
+      content,
+      expectedHash: createHash("sha256").update(original).digest("hex"),
+    },
+    context,
+  );
+const workspacePath = (...parts: string[]) => path.join(workspaceRoot, ...parts);
+const readWorkspace = (...parts: string[]) => fs.readFileSync(workspacePath(...parts), "utf8");
+const writeWorkspace = (name: string, content: string) =>
+  writeWorkspaceFile(workspaceRoot, name, content);
+async function expectFile(name: string, expected: Record<string, unknown>) {
+  expect((await files.ok("get", name)).file).toMatchObject(expected);
 }
-
-function getFile(filePath: string) {
-  return invoke("sessions.files.get", { sessionKey, path: filePath });
-}
-
-function saveFile(params: Record<string, unknown>) {
-  return invoke("sessions.files.set", { sessionKey, ...params });
-}
+const expectText = (name: string, content: string, extra: Record<string, unknown> = {}) =>
+  expectFile(name, {
+    content,
+    contentEncoding: "utf8",
+    hash: hashContent(content),
+    mimeType: "text/plain",
+    path: name,
+    previewKind: "text",
+    ...extra,
+  });
+const browserKinds = (entries: Record<string, unknown>[]) =>
+  entries.map((entry) => [entry.path, entry.kind, entry.sessionKind]);
+const errorType = async (operation: Parameters<typeof files.error>[0], name: string) =>
+  (await files.error(operation, name)).details.type;
 
 const outsideDirs = useAutoCleanupTempDirTracker(afterEach);
 const outsideFile = () => path.join(outsideDirs.make("session-files-outside-"), "outside.txt");
@@ -75,13 +91,12 @@ const mockVisibleMessages = createVisibleMessagesMock(hoisted.readDelta);
 
 let workspaceRoot: string;
 beforeEach(() => {
-  workspaceRoot = prepareSessionFilesTest(
-    { ...hoisted, readSessionTranscriptVisibleMessageDeltaCore: hoisted.readDelta },
-    mockVisibleMessages,
-  );
+  workspaceRoot = prepareSessionFilesTest(hoisted, mockVisibleMessages);
+  setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   removeWorkspaceFixture(workspaceRoot);
 });
 
@@ -89,7 +104,7 @@ describe("sessions.files RPC handlers", () => {
   function mockSession(
     entry: Record<string, unknown>,
     agentId = "main",
-    storePath = path.join(workspaceRoot, ".sessions.json"),
+    storePath = workspacePath(".sessions.json"),
   ) {
     hoisted.loadSessionEntry.mockReturnValue({
       agentId,
@@ -99,6 +114,33 @@ describe("sessions.files RPC handlers", () => {
       entry,
     });
   }
+
+  it.each(["list", "get", "assets", "set", "reveal"] as const)(
+    "rejects device-folder %s without touching either host's files",
+    async (operation) => {
+      const deviceRoot = outsideDirs.make("session-files-device-");
+      writeWorkspace("notes.txt", "GATEWAY");
+      fs.writeFileSync(path.join(deviceRoot, "notes.txt"), "DEVICE");
+      mockSession({
+        sessionId: "device-session",
+        deviceFolder: { deviceId: "paired-device", path: deviceRoot },
+        spawnedCwd: workspaceRoot,
+        spawnedWorkspaceDir: workspaceRoot,
+      });
+      // Each method validates a different request shape before the shared device gate.
+      const request = {
+        list: { path: "notes.txt" },
+        get: { path: "notes.txt" },
+        assets: { path: "notes.txt", refs: [] },
+        set: { path: "notes.txt", content: "WRONG HOST", expectedHash: hashContent("GATEWAY") },
+        reveal: {},
+      }[operation];
+      const error = await files.error(operation, request);
+      expect(error.details).toMatchObject({ type: "device_folder_files_unavailable" });
+      expect(readWorkspace("notes.txt")).toBe("GATEWAY");
+      expect(fs.readFileSync(path.join(deviceRoot, "notes.txt"), "utf8")).toBe("DEVICE");
+    },
+  );
 
   function fixedStoreConfig() {
     return {
@@ -111,27 +153,11 @@ describe("sessions.files RPC handlers", () => {
     } as const;
   }
 
-  it("reveals the same workspace root returned by sessions.files.list", async () => {
-    const listPayload = expectOkPayload(await listFiles());
-    const revealPayload = expectOkPayload(
-      await invoke("sessions.files.reveal", {
-        key: sessionKey,
-      }),
-    );
-
-    expect(revealPayload).toEqual({ ok: true, path: listPayload.root });
-    // Compare against the resolver's own output so the assertion holds on
-    // every supported platform (open / xdg-open / PowerShell Start-Process).
-    expect(hoisted.execOpenPath).toHaveBeenCalledWith(
-      resolveOpenPathCommand(listPayload.root as string),
-    );
-  });
-
   it("returns no workspace listing while the session checkout is pending", async () => {
     mockSession({ sessionId: "sess-pending", pendingWorktree: { titleSource: "New checkout" } });
     mockVisibleMessages([]);
 
-    expect(expectOkPayload(await listFiles())).toEqual({
+    expect(await files.ok("list")).toEqual({
       sessionKey,
       files: [],
     });
@@ -139,6 +165,7 @@ describe("sessions.files RPC handlers", () => {
 
   it("uses the persisted fixed-store owner for a bare session workspace", async () => {
     const cfg = fixedStoreConfig();
+    setRuntimeConfigSnapshot(cfg);
     hoisted.loadSessionEntry.mockReturnValue({
       agentId: "ops",
       canonicalKey: "global",
@@ -150,119 +177,89 @@ describe("sessions.files RPC handlers", () => {
       agentId === "ops" ? workspaceRoot : path.join(workspaceRoot, "wrong-research"),
     );
 
-    const payload = expectOkPayload(
-      await invoke(
-        "sessions.files.list",
-        { sessionKey: "global" },
-        { getRuntimeConfig: () => cfg },
-      ),
+    const payload = await files.ok(
+      "list",
+      { sessionKey: "global" },
+      { getRuntimeConfig: () => cfg },
     );
-
     expect(payload.root).toBe(workspaceRoot);
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "ops" });
-    expect(hoisted.readDelta).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
-      expect.any(Object),
-    );
   });
 
   it("rejects a foreign agent before a bare fixed-store workspace write", async () => {
     const cfg = fixedStoreConfig();
+    setRuntimeConfigSnapshot(cfg);
 
-    const error = expectError(
-      await invoke(
-        "sessions.files.set",
-        {
-          sessionKey: "global",
-          agentId: "research",
-          path: "ui/chat.ts",
-          content: "foreign write\n",
-          expectedHash: hashContent("export const chat = true;\n"),
-        },
-        { getRuntimeConfig: () => cfg },
-      ),
+    const error = await files.error(
+      "set",
+      {
+        sessionKey: "global",
+        agentId: "research",
+        path: "ui/chat.ts",
+        content: "foreign write\n",
+        expectedHash: hashContent("export const chat = true;\n"),
+      },
+      { getRuntimeConfig: () => cfg },
     );
 
     expect(error).toMatchObject({
       code: "INVALID_REQUEST",
       message: 'agent "research" does not match session key agent "ops"',
     });
-    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
-    expect(fs.readFileSync(path.join(workspaceRoot, "ui/chat.ts"), "utf8")).toBe(
-      "export const chat = true;\n",
-    );
+    expect(readWorkspace("ui/chat.ts")).toBe("export const chat = true;\n");
   });
 
-  it("refuses to reveal a remote session workspace", async () => {
-    const payload = expectOkPayload(
-      await invoke(
-        "sessions.files.reveal",
-        { key: sessionKey },
-        {
-          workerSessionPlacementService: {
-            getMany: () => new Map([["sess-main", { state: "active" }]]),
-          },
-        },
-      ),
-    );
-
-    expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
-    expect(payload.error).toContain("runs remotely");
-    expect(hoisted.execOpenPath).not.toHaveBeenCalled();
-  });
-
-  it("refuses to reveal an exec-node session workspace", async () => {
-    mockSession({
-      sessionId: "sess-main",
-      sessionFile: "sess-main.jsonl",
-      spawnedCwd: workspaceRoot,
-      execNode: "build-mac",
-    });
-
-    const payload = expectOkPayload(await invoke("sessions.files.reveal", { key: sessionKey }));
-
-    expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
-    expect(payload.error).toContain("exec node");
-    expect(hoisted.execOpenPath).not.toHaveBeenCalled();
-  });
-
-  it("refuses to reveal when the session has no workspace root", async () => {
-    hoisted.resolveAgentWorkspaceDir.mockReturnValue(undefined);
-    mockSession({ sessionId: "sess-main", sessionFile: "sess-main.jsonl" });
-
-    const payload = expectOkPayload(await invoke("sessions.files.reveal", { key: sessionKey }));
-
-    expect(payload).toEqual({
-      ok: false,
-      error: "No workspace root is available for this session.",
-    });
-    expect(hoisted.execOpenPath).not.toHaveBeenCalled();
-  });
+  it.each(["runs remotely", "exec node", "No workspace root"])(
+    "refuses to reveal: %s",
+    async (reason) => {
+      if (reason === "No workspace root") {
+        hoisted.resolveAgentWorkspaceDir.mockReturnValue(undefined);
+        mockSession({ sessionId: "sess-main", sessionFile: "sess-main.jsonl" });
+      } else if (reason === "exec node") {
+        mockSession({ sessionId: "sess-main", spawnedCwd: workspaceRoot, execNode: "build-mac" });
+      }
+      const context =
+        reason === "runs remotely"
+          ? {
+              workerSessionPlacementService: {
+                getMany: () => new Map([["sess-main", { state: "active" }]]),
+              },
+            }
+          : {};
+      const payload = await files.ok("reveal", {}, context);
+      if (reason === "No workspace root") {
+        expect(payload).toEqual({
+          ok: false,
+          error: "No workspace root is available for this session.",
+        });
+      } else {
+        expect(payload).toMatchObject({
+          ok: false,
+          path: workspaceRoot,
+          error: expect.stringContaining(reason),
+        });
+      }
+      expect(hoisted.execOpenPath).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns opener failures as successful RPC results", async () => {
-    const warn = vi.fn();
     hoisted.execOpenPath.mockRejectedValueOnce(new Error("xdg-open: no method available"));
+    const payload = await files.ok("reveal", {}, { logGateway: { warn: vi.fn() } });
 
-    const payload = expectOkPayload(
-      await invoke("sessions.files.reveal", { key: sessionKey }, { logGateway: { warn } }),
-    );
-
-    expect(payload).toMatchObject({ ok: false, path: workspaceRoot });
-    expect(payload.error).toContain("headless environment");
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("sessions.files.reveal failed path="),
-    );
+    expect(payload).toMatchObject({
+      ok: false,
+      path: workspaceRoot,
+      error: expect.stringContaining("headless environment"),
+    });
   });
 
   it("prefers the spawned workspace root over a nested spawned cwd", async () => {
-    const nestedCwd = path.join(workspaceRoot, "packages/app");
-    fs.mkdirSync(nestedCwd, { recursive: true });
-    writeWorkspaceFile(workspaceRoot, "packages/app/src/readme.md", "# Nested read me\n");
-    writeWorkspaceFile(workspaceRoot, "packages/shared/config.ts", "export const shared = true;\n");
+    writeWorkspace("packages/app/src/readme.md", "# Nested read me\n");
+    writeWorkspace("packages/shared/config.ts", "export const shared = true;\n");
     mockSession({
       sessionId: "sess-main",
       sessionFile: "sess-main.jsonl",
-      spawnedCwd: nestedCwd,
+      spawnedCwd: workspacePath("packages/app"),
       spawnedWorkspaceDir: workspaceRoot,
     });
     mockVisibleMessages([
@@ -270,140 +267,171 @@ describe("sessions.files RPC handlers", () => {
       assistantToolCall("read", { path: "../shared/config.ts" }),
     ]);
 
-    const payload = expectOkPayload(await listFiles());
+    const payload = await files.ok("list");
 
-    expect(payload.root).toBe(workspaceRoot);
-    expect(payload.files).toEqual([
-      expect.objectContaining({
-        missing: false,
-        path: "../shared/config.ts",
-      }),
-      expect.objectContaining({
-        missing: false,
-        path: "src/readme.md",
-      }),
-    ]);
-    expect(
-      payload.browser.entries.map((entry: Record<string, unknown>) => [
-        entry.path,
-        entry.kind,
-        entry.sessionKind,
-      ]),
-    ).toEqual([
+    expect(payload).toMatchObject({
+      root: workspaceRoot,
+      files: [
+        { missing: false, path: "../shared/config.ts" },
+        { missing: false, path: "src/readme.md" },
+      ],
+    });
+    expect(browserKinds(payload.browser.entries)).toEqual([
       ["packages", "directory", "read"],
       ["src", "directory", undefined],
       ["ui", "directory", undefined],
       ["package.json", "file", undefined],
     ]);
 
-    const preview = expectOkPayload(await getFile("src/readme.md"));
-    expect(preview.file.content).toBe("# Nested read me\n");
-    expect(preview.file.workspacePath).toBe("packages/app/src/readme.md");
-
-    const workspaceRootPreview = expectOkPayload(
-      await getFile(path.join(workspaceRoot, "src/readme.md")),
-    );
-    expect(workspaceRootPreview.file.content).toBe("# Read me\n");
-    expect(workspaceRootPreview.file.workspacePath).toBe("src/readme.md");
-
-    const browserPreview = expectOkPayload(await getFile("packages/app/src/readme.md"));
-    expect(browserPreview.file.content).toBe("# Nested read me\n");
-
-    const aliasedPreview = expectOkPayload(await getFile("packages//app/src/readme.md"));
-    expect(aliasedPreview.file.workspacePath).toBe("packages/app/src/readme.md");
-
-    const parentRelativePreview = expectOkPayload(await getFile("../shared/config.ts"));
-    expect(parentRelativePreview.file.content).toBe("export const shared = true;\n");
-
-    const parentRelativeBrowserPreview = expectOkPayload(
-      await getFile("packages/shared/config.ts"),
-    );
-    expect(parentRelativeBrowserPreview.file.content).toBe("export const shared = true;\n");
+    for (const [name, expected] of [
+      [
+        "src/readme.md",
+        { content: "# Nested read me\n", workspacePath: "packages/app/src/readme.md" },
+      ],
+      [workspacePath("src/readme.md"), { content: "# Read me\n", workspacePath: "src/readme.md" }],
+      ["packages/app/src/readme.md", { content: "# Nested read me\n" }],
+      ["packages//app/src/readme.md", { workspacePath: "packages/app/src/readme.md" }],
+      ["../shared/config.ts", { content: "export const shared = true;\n" }],
+      ["packages/shared/config.ts", { content: "export const shared = true;\n" }],
+    ] as const) {
+      await expectFile(name, expected);
+    }
   });
 
   it("round-trips listed folders beginning with two dots", async () => {
-    writeWorkspaceFile(workspaceRoot, "..notes/readme.md", "# Notes\n");
-    const root = expectOkPayload(await listFiles());
+    writeWorkspace("..notes/readme.md", "# Notes\n");
+    const root = await files.ok("list");
     const selected = root.browser.entries.find(
       (entry: Record<string, unknown>) => entry.name === "..notes",
     );
-    const folder = expectOkPayload(await listFiles({ path: selected.path }));
+    const folder = await files.ok("list", { path: selected.path });
     expect(folder.browser).toMatchObject({
       path: "..notes",
       parentPath: "",
       entries: [{ path: "..notes/readme.md", kind: "file" }],
     });
-    const preview = expectOkPayload(await getFile(folder.browser.entries[0].path));
-    expect(preview.file.content).toBe("# Notes\n");
+    await expectFile(folder.browser.entries[0].path, { content: "# Notes\n" });
   });
 
-  it("browses, searches, and previews files not referenced by the session", async () => {
-    const folderPayload = expectOkPayload(await listFiles({ path: "ui" }));
+  it("lists the admitted local root without a separate metadata probe", async () => {
+    mockVisibleMessages([]);
+    const stat = vi.spyOn(workspaceFs, "statWorkspacePath");
+    try {
+      const payload = await files.ok("list");
+      expect(browserKinds(payload.browser.entries)).toEqual([
+        ["src", "directory", undefined],
+        ["ui", "directory", undefined],
+        ["package.json", "file", undefined],
+      ]);
+      expect(stat).not.toHaveBeenCalled();
+    } finally {
+      stat.mockRestore();
+    }
+  });
 
-    expect(folderPayload.browser.parentPath).toBe("");
-    expect(
-      folderPayload.browser.entries.map((entry: Record<string, unknown>) => [
-        entry.path,
-        entry.kind,
-        entry.sessionKind,
-      ]),
-    ).toEqual([
-      ["ui/chat.ts", "file", "modified"],
-      ["ui/vite.config.ts", "file", undefined],
-    ]);
-
-    const searchPayload = expectOkPayload(await listFiles({ search: "vite" }));
-
-    expect(searchPayload.browser.search).toBe("vite");
-    expect(
-      searchPayload.browser.entries.map((entry: Record<string, unknown>) => entry.path),
-    ).toEqual(["ui/vite.config.ts"]);
-
-    const preview = expectOkPayload(await getFile("ui/vite.config.ts"));
-
-    expect(preview.file).toMatchObject({
-      content: "export default {};\n",
-      contentEncoding: "utf8",
-      hash: hashContent("export default {};\n"),
-      kind: "read",
-      mimeType: "text/plain",
-      missing: false,
-      path: "ui/vite.config.ts",
-      previewKind: "text",
+  it.each([
+    { cwd: "", prefix: "" },
+    { cwd: "ui", prefix: "../" },
+  ])("omits existing directories from file activity with cwd '$cwd'", async ({ cwd, prefix }) => {
+    writeWorkspace(".cache/note.txt", "cached note\n");
+    fs.symlinkSync(
+      outsideDirs.make("session-files-directory-"),
+      workspacePath("cache-link"),
+      "dir",
+    );
+    mockSession({
+      sessionId: "sess-directories",
+      spawnedCwd: workspacePath(cwd),
+      spawnedWorkspaceDir: workspaceRoot,
     });
+    mockVisibleMessages(
+      [
+        prefix || ".",
+        `${prefix}.cache`,
+        `${prefix}ui`,
+        workspacePath("src"),
+        `${prefix}src/readme.md`,
+        `${prefix}missing.txt`,
+        `${prefix}cache-link`,
+      ].map((filePath) => assistantToolCall("read", { path: filePath })),
+    );
+
+    const payload = await files.ok("list");
+    expect(payload.files).toEqual([
+      expect.objectContaining({ path: `${prefix}cache-link`, kind: "read", missing: true }),
+      expect.objectContaining({ path: `${prefix}missing.txt`, kind: "read", missing: true }),
+      expect.objectContaining({ path: `${prefix}src/readme.md`, kind: "read", missing: false }),
+    ]);
+    expect(payload.browser.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: ".cache", kind: "directory" }),
+        expect.objectContaining({ path: "src", kind: "directory" }),
+        expect.objectContaining({ path: "ui", kind: "directory" }),
+      ]),
+    );
+    expect((await files.ok("list", { path: ".cache" })).browser).toMatchObject({
+      path: ".cache",
+      entries: [{ path: ".cache/note.txt", kind: "file" }],
+    });
+    expect(await errorType("get", `${prefix}.cache`)).toBe("session_file_not_found");
   });
 
   it("truncates broad workspace searches by visited entries, not only by matches", async () => {
     for (let index = 0; index < 5_025; index += 1) {
-      writeWorkspaceFile(workspaceRoot, `bulk-${String(index).padStart(4, "0")}.txt`, "");
+      writeWorkspace(`bulk-${String(index).padStart(4, "0")}.txt`, "");
     }
-    writeWorkspaceFile(workspaceRoot, "zz-tail-needle.ts", "export const needle = true;\n");
+    writeWorkspace("zz-tail-needle.ts", "");
 
-    const payload = expectOkPayload(await listFiles({ search: "needle" }));
+    const payload = await files.ok("list", { search: "needle" });
 
-    expect(payload.browser).toMatchObject({
-      search: "needle",
-      truncated: true,
-    });
-    expect(payload.browser.entries).toEqual([]);
+    expect(payload.browser).toMatchObject({ search: "needle", truncated: true, entries: [] });
   });
 
-  it.runIf(process.platform === "linux").each([{ operation: "browse", query: { path: "ui" } }])(
-    "reports non-UTF-8 filenames during workspace $operation",
-    async ({ query }) => {
+  it.each(["dist", ".git/objects"])(
+    "marks excluded content, but not repository metadata, incomplete (%s)",
+    async (excluded) => {
+      writeWorkspace("src/REPORT.md", "# Source report\n");
+      writeWorkspace(`${excluded}/REPORT.md`, "# Excluded report\n");
+      const { browser } = await files.ok("list", { search: "REPORT.md" });
+      expect(browser).toMatchObject({ search: "REPORT.md", entries: [{ path: "src/REPORT.md" }] });
+      if (excluded === "dist") {
+        expect(browser.truncated).toBe(true);
+      } else {
+        expect(browser).not.toHaveProperty("truncated");
+      }
+    },
+  );
+
+  it.each([
+    ["München", "Mu\u0308nchen.md"],
+    ["Mu\u0308nchen", "München.md"],
+  ])(
+    "finds a canonically equivalent workspace filename without rewriting it (%s)",
+    async (query, filename) => {
+      writeWorkspace(filename, "# Canonically equivalent filename\n");
+
+      const { browser } = await files.ok("list", { search: query });
+
+      expect(browser.entries).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: filename })]),
+      );
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "reports non-UTF-8 filenames during workspace browse",
+    async () => {
       const invalidPath = Buffer.concat([
         Buffer.from(path.join(workspaceRoot, "ui") + path.sep),
         Buffer.from([0xff]),
       ]);
       fs.writeFileSync(invalidPath, "unaddressable file");
 
-      await expect(listFiles(query)).rejects.toMatchObject({
+      await expect(files.request("list", { path: "ui" })).rejects.toMatchObject({
         code: "invalid-path",
         message: 'Cannot list workspace directory "ui": directory entry name is not valid UTF-8',
       });
-      expect(fs.readFileSync(path.join(workspaceRoot, "ui", "vite.config.ts"), "utf8")).toBe(
-        "export default {};\n",
-      );
+      expect(readWorkspace("ui/vite.config.ts")).toBe("export default {};\n");
       expect(fs.readFileSync(invalidPath, "utf8")).toBe("unaddressable file");
     },
   );
@@ -413,75 +441,141 @@ describe("sessions.files RPC handlers", () => {
     writeWorkspaceFile(outsideDir, "secret.txt", "linked parent outside\n");
     fs.symlinkSync(outsideDir, path.join(workspaceRoot, "linked-dir"), "dir");
 
-    const error = expectError(await getFile("linked-dir/secret.txt"));
-
-    expect(error.details).toMatchObject({
-      path: "linked-dir/secret.txt",
-      type: "session_file_not_found",
-    });
+    expect(await errorType("get", "linked-dir/secret.txt")).toBe("session_file_not_found");
   });
 
   it("does not browse paths outside the session workspace root", async () => {
-    const payload = expectOkPayload(await listFiles({ path: "../" }));
+    const payload = await files.ok("list", { path: "../" });
 
     expect(payload.root).toBe(workspaceRoot);
     expect(payload.browser).toBeUndefined();
   });
 
   it("does not derive a workspace root from transcript cwd", async () => {
-    const sessionsDir = path.join(workspaceRoot, "custom-sessions");
     const transcriptCwd = outsideDirs.make("session-files-transcript-");
     writeWorkspaceFile(transcriptCwd, "secret.txt", "transcript cwd secret\n");
-    fs.mkdirSync(sessionsDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(sessionsDir, "sess-main.jsonl"),
+    writeWorkspace(
+      "custom-sessions/sess-main.jsonl",
       `${JSON.stringify({ cwd: transcriptCwd })}\n`,
-      "utf8",
     );
-    hoisted.loadSessionEntry.mockReturnValue({
-      agentId: "main",
-      canonicalKey: "agent:main:main",
-      cfg: {},
-      storePath: path.join(sessionsDir, "sessions.json"),
-      entry: {
-        sessionId: "sess-main",
-        sessionFile: "sess-main.jsonl",
-      },
-    });
+    mockSession(
+      { sessionId: "sess-main", sessionFile: "sess-main.jsonl" },
+      "main",
+      workspacePath("custom-sessions/sessions.json"),
+    );
     mockVisibleMessages([assistantToolCall("read", { path: "secret.txt" })]);
-    const listPayload = expectOkPayload(await listFiles());
+    const listPayload = await files.ok("list");
 
-    expect(listPayload.root).toBe(workspaceRoot);
-    expect(listPayload.browser).toBeDefined();
-    expect(listPayload.files).toMatchObject([
-      {
-        missing: true,
-        path: "secret.txt",
-      },
-    ]);
-
-    const error = expectError(await getFile("secret.txt"));
-    expect(error.details).toMatchObject({
-      path: "secret.txt",
-      type: "session_file_not_found",
+    expect(listPayload).toMatchObject({
+      root: workspaceRoot,
+      browser: expect.any(Object),
+      files: [{ missing: true, path: "secret.txt" }],
     });
+    expect(await errorType("get", "secret.txt")).toBe("session_file_not_found");
   });
+
+  it("refreshes committed identity bytes after a pending pre-write read", async () => {
+    const identityPath = workspacePath("IDENTITY.md");
+    const original = "- Name: Before\n";
+    const replacement = "- Name: After\n";
+    writeWorkspace("IDENTITY.md", original);
+    const captured = createDeferred();
+    const release = createDeferred();
+    const joined = createDeferred();
+    let firstRead = true;
+    const worker = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async () => {
+      const snapshot = identityFile.readIdentityFileSnapshot({ identityPath });
+      if (firstRead) {
+        firstRead = false;
+        captured.resolve();
+        await release.promise;
+      }
+      return snapshot;
+    });
+    const loadIdentity = identityFile.loadAgentIdentityFromWorkspaceAsync;
+    let identityLoads = 0;
+    const load = vi
+      .spyOn(identityFile, "loadAgentIdentityFromWorkspaceAsync")
+      .mockImplementation((workspace) => {
+        const pending = loadIdentity(workspace);
+        if (++identityLoads === 2) {
+          joined.resolve();
+        }
+        return pending;
+      });
+    const staleRead = identityFile.loadAgentIdentityFromWorkspaceAsync(workspaceRoot);
+    let publication: Promise<identityFile.AgentIdentityFile | null> | undefined;
+    const broadcast = vi.fn(() => {
+      publication = identityFile.loadAgentIdentityFromWorkspaceAsync(workspaceRoot);
+    });
+    let save: ReturnType<typeof invoke> | undefined;
+    try {
+      await awaitGateBeforeSettlement(captured.promise, staleRead, "identity read was not started");
+      save = saveFile(identityPath, replacement, original, { broadcast });
+      await awaitGateBeforeSettlement(joined.promise, save, "identity read was not joined");
+      expect(fs.readFileSync(identityPath, "utf8")).toBe(replacement);
+      expect(broadcast).not.toHaveBeenCalled();
+      release.resolve();
+      expectOkPayload(await save);
+      expect(broadcast).toHaveBeenCalledExactlyOnceWith("agent.identity.changed", {
+        agentId: "main",
+      });
+      expect(await staleRead).toEqual({ name: "Before" });
+      expect(await publication).toEqual({ name: "After" });
+    } finally {
+      release.resolve();
+      await Promise.allSettled([staleRead, ...(save ? [save] : [])]);
+      load.mockRestore();
+      worker.mockRestore();
+    }
+  });
+
+  it.each(["nested", "project", "conflict"] as const)(
+    "does not invalidate agent identity for a %s file save",
+    async (variant) => {
+      const name = variant === "nested" ? "ui/IDENTITY.md" : "IDENTITY.md";
+      const original = "- Name: Before\n";
+      writeWorkspace(name, original);
+      if (variant === "project") {
+        hoisted.resolveAgentWorkspaceDir.mockReturnValue(workspacePath("agent"));
+      }
+      const broadcast = vi.fn();
+      const calls = await saveFile(
+        name,
+        "- Name: After\n",
+        variant === "conflict" ? "stale" : original,
+        { broadcast },
+      );
+      if (variant === "conflict") {
+        expect(expectError(calls).details.type).toBe("session_file_conflict");
+        expect(readWorkspace(name)).toBe(original);
+      } else {
+        expectOkPayload(calls);
+        expect(readWorkspace(name)).toBe("- Name: After\n");
+      }
+      expect(broadcast).not.toHaveBeenCalled();
+    },
+  );
 
   it("allows only one concurrent save across nested workspace aliases", async () => {
     const original = "export default {};\n";
-    const expectedHash = hashContent(original);
-    const firstSave = saveFile({
-      path: "ui/vite.config.ts",
-      content: "export default { first: true };\n",
-      expectedHash,
-    });
-    mockSession({ sessionId: "nested", spawnedCwd: path.join(workspaceRoot, "ui") });
+    const firstSession = hoisted.loadSessionEntry();
+    const nestedKey = "agent:main:nested";
+    const nestedSession = {
+      ...firstSession,
+      canonicalKey: nestedKey,
+      entry: { ...firstSession.entry, sessionId: "nested", spawnedCwd: workspacePath("ui") },
+    };
+    hoisted.loadSessionEntry.mockImplementation((key: string) =>
+      key === nestedKey ? nestedSession : firstSession,
+    );
     const [first, second] = await Promise.all([
-      firstSave,
-      saveFile({
+      saveFile("ui/vite.config.ts", "export default { first: true };\n", original),
+      files.request("set", {
+        sessionKey: nestedKey,
         path: "./vite.config.ts",
         content: "export default { second: true };\n",
-        expectedHash,
+        expectedHash: hashContent(original),
       }),
     ]);
 
@@ -489,20 +583,13 @@ describe("sessions.files RPC handlers", () => {
     expect(calls.filter((call) => call?.ok)).toHaveLength(1);
     const conflict = expectError(calls.filter((call) => !call.ok));
     expect(conflict.details).toMatchObject({ type: "session_file_conflict" });
-    const content = fs.readFileSync(path.join(workspaceRoot, "ui/vite.config.ts"), "utf8");
+    const content = readWorkspace("ui/vite.config.ts");
     expect(["export default { first: true };\n", "export default { second: true };\n"]).toContain(
       content,
     );
     expect(conflict.details.currentHash).toBe(hashContent(content));
     const saved = expectOkPayload(calls.filter((call) => call.ok));
-    expect(saved.file).toMatchObject({
-      name: "vite.config.ts",
-      kind: "modified",
-      missing: false,
-      size: Buffer.byteLength(content),
-      hash: hashContent(content),
-    });
-    expect(Number.isInteger(saved.file.updatedAtMs)).toBe(true);
+    expect(saved.file.hash).toBe(hashContent(content));
     expect(saved.file.content).toBeUndefined();
   });
 
@@ -511,11 +598,7 @@ describe("sessions.files RPC handlers", () => {
     const bufferFrom = vi.spyOn(Buffer, "from");
     try {
       const error = expectError(
-        await saveFile({
-          path: "ui/vite.config.ts",
-          content,
-          expectedHash: hashContent("export default {};\n"),
-        }),
+        await saveFile("ui/vite.config.ts", content, "export default {};\n"),
       );
 
       expect(error.details).toMatchObject({
@@ -534,79 +617,47 @@ describe("sessions.files RPC handlers", () => {
     const original = "\uFEFFexport default {};\n";
     writeWorkspaceFile(workspaceRoot, "bom.ts", original);
 
-    const preview = expectOkPayload(await getFile("bom.ts"));
+    const preview = await files.ok("get", "bom.ts");
     expect(preview.file.content).toBe(original);
     expect(preview.file.hash).toBe(hashContent(original));
 
     const next = "\uFEFFexport default { bom: true };\n";
-    expectOkPayload(
-      await saveFile({
-        path: "bom.ts",
-        content: next,
-        expectedHash: preview.file.hash,
-      }),
-    );
+    await files.ok("set", {
+      path: "bom.ts",
+      content: next,
+      expectedHash: preview.file.hash,
+    });
     const bytes = fs.readFileSync(path.join(workspaceRoot, "bom.ts"));
     expect([...bytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
     expect(bytes.toString("utf8")).toBe(next);
   });
 
-  it("rejects replacement content containing NUL bytes", async () => {
-    const error = expectError(
-      await saveFile({
-        path: "ui/vite.config.ts",
-        content: "before\0after",
-        expectedHash: hashContent("export default {};\n"),
-      }),
-    );
-
-    expect(error.details).toMatchObject({
-      path: "ui/vite.config.ts",
-      type: "session_file_unsafe",
-    });
-    expect(fs.readFileSync(path.join(workspaceRoot, "ui/vite.config.ts"), "utf8")).toBe(
-      "export default {};\n",
-    );
-  });
-
-  it("rejects writes to binary files even with a matching byte hash", async () => {
-    const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]);
-    fs.writeFileSync(path.join(workspaceRoot, "logo.png"), binary);
-
-    const error = expectError(
-      await saveFile({
-        path: "logo.png",
-        content: "text\n",
-        expectedHash: createHash("sha256").update(binary).digest("hex"),
-      }),
-    );
-
-    expect(error.details).toMatchObject({
-      path: "logo.png",
-      type: "session_file_unsafe",
-    });
-    expect(fs.readFileSync(path.join(workspaceRoot, "logo.png"))).toEqual(binary);
-  });
+  it.each([
+    ["NUL replacement", "ui/vite.config.ts", "before\0after", "export default {};\n"],
+    [
+      "binary target",
+      "logo.png",
+      "text\n",
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02]),
+    ],
+  ] as const)(
+    "rejects an unsafe %s without changing the file",
+    async (_label, name, content, original) => {
+      fs.writeFileSync(workspacePath(name), original);
+      const error = expectError(await saveFile(name, content, original));
+      expect(error.details).toMatchObject({ path: name, type: "session_file_unsafe" });
+      expect(fs.readFileSync(workspacePath(name))).toEqual(Buffer.from(original));
+    },
+  );
 
   it("registers session assets and rejects more than 64 references before loading files", async () => {
-    const empty = expectOkPayload(
-      await invoke("sessions.files.assets", {
-        sessionKey,
-        path: "index.html",
-        refs: [],
-      }),
-    );
+    const empty = await files.ok("assets", { path: "index.html", refs: [] });
     expect(empty).toEqual({ assets: [] });
-    hoisted.loadSessionEntry.mockClear();
-    const error = expectError(
-      await invoke("sessions.files.assets", {
-        sessionKey,
-        path: "index.html",
-        refs: Array.from({ length: 65 }, (_, index) => `image-${index}.png`),
-      }),
-    );
+    const error = await files.error("assets", {
+      path: "index.html",
+      refs: Array.from({ length: 65 }, (_, index) => `image-${index}.png`),
+    });
     expect(error.code).toBe("INVALID_REQUEST");
-    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
   });
 });
 
@@ -668,52 +719,34 @@ describe("sessions.files preview formats", () => {
           })),
       },
     });
-    const payload = expectOkPayload(await getFile("result.json"));
+    const payload = await files.ok("get", "result.json");
     expect(payload.file).toMatchObject({
       content: '{"total":46}',
       previewKind: "text",
       missing: false,
     });
     expect(payload.file.hash).toBeUndefined();
-    const listed = expectOkPayload(await listFiles());
-    expect(listed.browser.entries.map((entry: { name: string }) => entry.name)).toEqual([
-      "large.txt",
-      "result.json",
-    ]);
-    expect(listed.gitCheckout).toBeUndefined();
-    includeFileTypes = false;
-    // Older nodes reject symlink stats instead of returning a file type.
-    const legacyListing = expectOkPayload(await listFiles());
-    expect(legacyListing.browser.entries.map((entry: { name: string }) => entry.name)).toEqual([
-      "large.txt",
-      "result.json",
-    ]);
+    // Older nodes omit file types and reject symlink stats.
+    for (includeFileTypes of [true, false]) {
+      const listed = await files.ok("list");
+      expect(listed.browser.entries.map((entry: { name: string }) => entry.name)).toEqual([
+        "large.txt",
+        "result.json",
+      ]);
+      expect(listed.gitCheckout).toBeUndefined();
+    }
     denyLegacyChild = true;
-    await expect(
-      invoke("sessions.files.list", {
-        sessionKey,
-      }),
-    ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
+    await expect(files.request("list")).rejects.toMatchObject({ code: "PERMISSION_DENIED" });
     denyLegacyChild = false;
-    const reveal = expectOkPayload(
-      await invoke("sessions.files.reveal", {
-        key: sessionKey,
-      }),
-    );
+    const reveal = await files.ok("reveal");
     expect(reveal).toMatchObject({ ok: false, error: expect.stringContaining("remote host") });
-    expect(expectError(await getFile("large.txt")).details.type).toBe("session_file_too_large");
-    expect(readFile).toHaveBeenCalledTimes(1);
-    await expect(
-      invoke("sessions.files.set", {
-        sessionKey,
-        path: "result.json",
-        content: "changed",
-        expectedHash: hashContent('{"total":46}'),
-      }),
-    ).rejects.toThrow("conflict-safe editing");
-    expect(fs.readFileSync(path.join(workspaceRoot, "result.json"), "utf8")).toBe("Gateway decoy");
+    expect((await files.error("get", "large.txt")).details.type).toBe("session_file_too_large");
+    await expect(saveFile("result.json", "changed", '{"total":46}')).rejects.toThrow(
+      "conflict-safe editing",
+    );
+    expect(readWorkspace("result.json")).toBe("Gateway decoy");
     releaseRemote();
-    await expect(getFile("result.json")).rejects.toThrow("stopped or not ready");
+    await expect(files.request("get", "result.json")).rejects.toThrow("stopped or not ready");
   });
 
   it("reports the preview limit when a remote file grows between stat and fetch", async () => {
@@ -728,22 +761,13 @@ describe("sessions.files preview formats", () => {
         },
       },
     });
-    const result = await getFile("growing.txt");
-    expect(expectError(result).details.type).toBe("session_file_too_large");
+    expect(await errorType("get", "growing.txt")).toBe("session_file_too_large");
   });
 
   it.each(TEXT_PREVIEW_FIXTURES)("keeps detected $format text editable", async (fixture) => {
     const fileName = `detected-${fixture.format.toLowerCase().replaceAll(" ", "-")}.bin`;
     fs.writeFileSync(path.join(workspaceRoot, fileName), fixture.content, "utf8");
-    const payload = expectOkPayload(await getFile(fileName));
-    expect(payload.file).toMatchObject({
-      content: fixture.content,
-      contentEncoding: "utf8",
-      hash: hashContent(fixture.content),
-      mimeType: fixture.mimeType,
-      path: fileName,
-      previewKind: "text",
-    });
+    await expectText(fileName, fixture.content, { mimeType: fixture.mimeType });
   });
 });
 
@@ -755,9 +779,11 @@ describe("sessions.files touched-file folds", () => {
   ) {
     return { kind: "page", cursor, events, hasMore, serializedBytes: 100 };
   }
-  const listTouched = async () => expectOkPayload(await listFiles());
+  const listTouched = () => files.ok("list");
   const touchedKinds = (payload: Record<string, unknown>[]) =>
     payload.map((file) => [file.path, file.kind]);
+  const toolPage = (cursor: string, name: string, filePath: string) =>
+    page(cursor, [visibleMessageEvent(assistantToolCall(name, { path: filePath }), 1)]);
 
   it("retains incremental cursors across more than 16 concurrently viewed sessions", async () => {
     hoisted.resolveAgentWorkspaceDir.mockReturnValue(undefined);
@@ -806,9 +832,8 @@ describe("sessions.files touched-file folds", () => {
       );
     });
 
-    const params = { sessionKey };
-    const first = invoke("sessions.files.list", params);
-    const second = invoke("sessions.files.list", params);
+    const first = files.request("list");
+    const second = files.request("list");
 
     await firstPageRead.promise;
     expect(hoisted.readDelta).toHaveBeenCalledTimes(1);
@@ -824,11 +849,9 @@ describe("sessions.files touched-file folds", () => {
     const secondStorePath = path.join(workspaceRoot, "store-b.sqlite");
     hoisted.readDelta.mockImplementation((scope, limits) => {
       expect(limits.cursor).toBeUndefined();
-      const message =
-        scope.storePath === firstStorePath
-          ? assistantToolCall("read", { path: "src/readme.md" })
-          : assistantToolCall("edit", { path: "ui/chat.ts" });
-      return page(`${scope.storePath}-final`, [visibleMessageEvent(message, 1)], false);
+      return scope.storePath === firstStorePath
+        ? toolPage("store-a-final", "read", "src/readme.md")
+        : toolPage("store-b-final", "edit", "ui/chat.ts");
     });
 
     useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, sessionId, firstStorePath);
@@ -836,35 +859,21 @@ describe("sessions.files touched-file folds", () => {
     useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, sessionId, secondStorePath);
     const second = await listTouched();
 
-    expect(first.files).toEqual([expect.objectContaining({ path: "src/readme.md", kind: "read" })]);
-    expect(second.files).toEqual([
-      expect.objectContaining({ path: "ui/chat.ts", kind: "modified" }),
-    ]);
+    expect(touchedKinds(first.files)).toEqual([["src/readme.md", "read"]]);
+    expect(touchedKinds(second.files)).toEqual([["ui/chat.ts", "modified"]]);
   });
 
   it("rebuilds the SQLite fold from the bootstrap cursor after a reset", async () => {
     useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-reset");
     hoisted.readDelta.mockImplementation((_scope, limits) => {
       if (limits.cursor === undefined) {
-        return page(
-          "generation-1",
-          [visibleMessageEvent(assistantToolCall("read", { path: "src/readme.md" }), 1)],
-          false,
-        );
+        return toolPage("generation-1", "read", "src/readme.md");
       }
       if (limits.cursor === "generation-1") {
-        return {
-          kind: "reset",
-          cursor: "generation-2-bootstrap",
-          reason: "generation_mismatch",
-        };
+        return { kind: "reset", cursor: "generation-2-bootstrap", reason: "generation_mismatch" };
       }
       if (limits.cursor === "generation-2-bootstrap") {
-        return page(
-          "generation-2-final",
-          [visibleMessageEvent(assistantToolCall("edit", { path: "ui/chat.ts" }), 1)],
-          false,
-        );
+        return toolPage("generation-2-final", "edit", "ui/chat.ts");
       }
       throw new Error(`unexpected cursor: ${String(limits.cursor)}`);
     });
@@ -872,65 +881,50 @@ describe("sessions.files touched-file folds", () => {
     const beforeReset = await listTouched();
     const afterReset = await listTouched();
 
-    expect(beforeReset.files).toEqual([
-      expect.objectContaining({ path: "src/readme.md", kind: "read" }),
-    ]);
-    expect(afterReset.files).toEqual([
-      expect.objectContaining({ path: "ui/chat.ts", kind: "modified" }),
-    ]);
-    expect(hoisted.readDelta).toHaveBeenCalledTimes(3);
+    expect(touchedKinds(beforeReset.files)).toEqual([["src/readme.md", "read"]]);
+    expect(touchedKinds(afterReset.files)).toEqual([["ui/chat.ts", "modified"]]);
   });
 
-  it("collects touched files from existing transcript tool-call spellings", async () => {
-    useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-spellings");
-    mockVisibleMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "tool_use", name: "read", input: { path: "src/readme.md" } },
-          { type: "toolcall", name: "edit", arguments: { path: "ui/vite.config.ts" } },
-          { type: "tool_use", name: "read", args: { path: "ui/chat.ts" } },
-          {
-            type: "tool_call",
-            name: "apply_patch",
-            input: {
-              input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n",
-            },
-          },
-        ],
-      },
-    ]);
-
-    const payload = await listTouched();
-
-    expect(touchedKinds(payload.files)).toEqual([
-      ["package.json", "modified"],
-      ["ui/vite.config.ts", "modified"],
-      ["src/readme.md", "read"],
-      ["ui/chat.ts", "read"],
-    ]);
-  });
-
-  it("collects changed files from structured apply_patch changes", async () => {
-    useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-structured-patch");
-    mockVisibleMessages([
-      assistantToolCall("apply_patch", {
+  it.each([
+    {
+      name: "existing transcript tool-call spellings",
+      content: [
+        { type: "tool_use", name: "read", input: { path: "src/readme.md" } },
+        { type: "toolcall", name: "edit", arguments: { path: "ui/vite.config.ts" } },
+        { type: "tool_use", name: "read", args: { path: "ui/chat.ts" } },
+        {
+          type: "tool_call",
+          name: "apply_patch",
+          input: { input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n" },
+        },
+      ],
+      expected: [
+        ["package.json", "modified"],
+        ["ui/vite.config.ts", "modified"],
+        ["src/readme.md", "read"],
+        ["ui/chat.ts", "read"],
+      ],
+    },
+    {
+      name: "structured apply_patch changes",
+      content: assistantToolCall("apply_patch", {
         changes: [
           { path: "ui/chat.ts", kind: "update" },
           { path: "src/readme.md", kind: "delete" },
           { path: "old-name.md", kind: { type: "update", move_path: "package.json" } },
         ],
-      }),
-    ]);
-
-    const payload = await listTouched();
-
-    expect(touchedKinds(payload.files)).toEqual([
-      ["old-name.md", "modified"],
-      ["package.json", "modified"],
-      ["src/readme.md", "modified"],
-      ["ui/chat.ts", "modified"],
-    ]);
+      }).content,
+      expected: [
+        ["old-name.md", "modified"],
+        ["package.json", "modified"],
+        ["src/readme.md", "modified"],
+        ["ui/chat.ts", "modified"],
+      ],
+    },
+  ])("collects touched files from $name", async ({ content, expected }) => {
+    useSqliteSession(hoisted.loadSessionEntry, workspaceRoot, "sess-touched-spellings");
+    mockVisibleMessages([{ role: "assistant", content }]);
+    expect(touchedKinds((await listTouched()).files)).toEqual(expected);
   });
 
   it("omits transcript paths outside the workspace without hiding missing workspace files", async () => {
@@ -953,16 +947,12 @@ describe("sessions.files touched-file folds", () => {
     const payload = await listTouched();
 
     expect(payload.files).toHaveLength(3);
-    expect(payload.files).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ path: "..cache/missing.txt", missing: true }),
-        expect.objectContaining({ path: "missing.txt", missing: true }),
-        expect.objectContaining({
-          path: "src/readme.md",
-          missing: false,
-          workspacePath: "src/readme.md",
-        }),
-      ]),
-    );
+    for (const expected of [
+      { path: "..cache/missing.txt", missing: true },
+      { path: "missing.txt", missing: true },
+      { path: "src/readme.md", missing: false, workspacePath: "src/readme.md" },
+    ]) {
+      expect(payload.files).toContainEqual(expect.objectContaining(expected));
+    }
   });
 });

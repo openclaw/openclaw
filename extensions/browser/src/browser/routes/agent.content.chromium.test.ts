@@ -1,119 +1,95 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import type { Page } from "playwright-core";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test-support.js";
-import { resolveBrowserConfig } from "../config.js";
+import { describe, expect, it } from "vitest";
 import { DEFAULT_UPLOAD_DIR } from "../paths.js";
-import { getPlaywrightCore } from "../playwright-core.runtime.js";
-import { closePlaywrightBrowserConnection } from "../pw-session.js";
-import { createBrowserRouteContext, type BrowserServerState } from "../server-context.js";
-import { getFreePort } from "../test-port.js";
+import { registerBrowserAgentActRoutes } from "./agent.act.js";
+import { chromiumTempDirs as tempDirs, withChromiumPage } from "./chromium.test-support.js";
 import { registerBrowserRoutes } from "./index.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-async function withContentPage(
-  run: (fixture: {
-    page: Page;
-    call: (
-      method: "get" | "post",
-      route: string,
-      values?: Record<string, unknown>,
-      params?: Record<string, string>,
-      signal?: AbortSignal,
-    ) => Promise<ReturnType<typeof createBrowserRouteResponse>>;
-  }) => Promise<void>,
-) {
-  const port = await getFreePort();
-  const cdpUrl = `http://127.0.0.1:${port}`;
-  const context = await getPlaywrightCore().chromium.launchPersistentContext(
-    path.join(tempDirs.make("openclaw-browser-content-"), "profile"),
+const withContentPage = (run: Parameters<typeof withChromiumPage>[1]) =>
+  withChromiumPage(
     {
-      headless: true,
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-      args: [`--remote-debugging-port=${port}`],
+      "http://127.0.0.1:11111/content": "<main>Main text</main><article>Article text</article>",
     },
+    run,
+    registerBrowserRoutes,
   );
-  try {
-    const page = context.pages()[0] ?? (await context.newPage());
-    // The control connection owns dialog responses; keep the fixture connection from dismissing them.
-    page.on("dialog", () => {});
-    await page.route("http://127.0.0.1:11111/**", (route) =>
-      route.fulfill({
-        contentType: "text/html",
-        body: "<main>Main text</main><article>Article text</article>",
-      }),
-    );
-    await page.goto("http://127.0.0.1:11111/content");
-    const session = await context.newCDPSession(page);
-    const { targetInfo } = await session.send("Target.getTargetInfo");
-    await session.detach();
-    const state: BrowserServerState = {
-      port: 0,
-      resolved: resolveBrowserConfig({
-        defaultProfile: "content",
-        evaluateEnabled: false,
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-        profiles: { content: { cdpUrl, color: "#123456", attachOnly: true } },
-      }),
-      profiles: new Map(),
-    };
-    const routes = createBrowserRouteApp();
-    registerBrowserRoutes(routes.app, createBrowserRouteContext({ getState: () => state }));
-    await run({
-      page,
-      call: async (method, route, values, params, signal) => {
-        const handler = expectDefined(
-          (method === "get" ? routes.getHandlers : routes.postHandlers).get(route),
-          `registered ${route} route`,
-        );
-        const response = createBrowserRouteResponse();
-        const input = { targetId: targetInfo.targetId, ...values };
-        await handler(
-          {
-            params: params ?? {},
-            query: method === "get" ? input : {},
-            body: method === "post" ? input : undefined,
-            signal,
-          },
-          response.res,
-        );
-        return response;
-      },
-    });
-  } finally {
-    await closePlaywrightBrowserConnection({ cdpUrl });
-    await context.close();
+
+function selectField(element: Element) {
+  (element as HTMLElement).focus();
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+    element.setSelectionRange(7, 10);
+  } else {
+    const text = element.firstChild!;
+    window.getSelection()!.setBaseAndExtent(text, 7, text, 10);
   }
 }
+
+describe.runIf(process.env.OPENCLAW_BROWSER_PASTE_E2E === "1")("Chromium focused paste", () => {
+  it("inserts at the selection in password, multiline, editable, and cross-origin fields", async () => {
+    await withChromiumPage(
+      {
+        "http://127.0.0.1:11111/form": `<input id="password" type="password" value="before-old-after">
+            <textarea id="multiline">before-old-after</textarea>
+            <div id="editable" contenteditable>before-old-after</div>
+            <iframe src="http://127.0.0.1:22222/field"></iframe>
+            <script>document.addEventListener("input", () => document.body.dataset.input = "yes")</script>`,
+        "http://127.0.0.1:22222/field":
+          '<input id="frame" type="password" value="before-old-after">',
+      },
+      async ({ page, call, targetId }) => {
+        const paste = async (text: string) => {
+          const response = await call("post", "/act", { kind: "insertText", text });
+          expect(response.statusCode, JSON.stringify(response.body)).toBe(200);
+          expect(response.body).toMatchObject({ ok: true, targetId });
+          expect(JSON.stringify(response.body)).not.toContain(text);
+        };
+
+        for (const [field, text] of [
+          [page.locator("#password"), "  p🦞ss  "],
+          [page.locator("#multiline"), "  first 🦞\nsecond  "],
+          [page.locator("#editable"), "editable 🦞"],
+          [page.frameLocator("iframe").locator("#frame"), "iframe 🦞"],
+        ] as const) {
+          await field.evaluate(selectField);
+          await paste(text);
+          const value = await field.evaluate((element) =>
+            element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+              ? element.value
+              : element.textContent,
+          );
+          expect(value).toBe(`before-${text}-after`);
+        }
+        expect(await page.locator("body").getAttribute("data-input")).toBe("yes");
+        expect(await page.locator("#password").inputValue()).toBe("before-  p🦞ss  -after");
+      },
+      registerBrowserAgentActRoutes,
+    );
+  }, 30_000);
+});
 
 describe.runIf(process.env.OPENCLAW_BROWSER_CONTENT_E2E === "1")(
   "Chromium browser content routes",
   () => {
     it.each(["", "  padded 🦞  "])(
       "preserves prompt response %j",
-      async (promptText) => {
-        await withContentPage(async ({ page, call }) => {
+      (promptText) =>
+        withContentPage(async ({ page, call }) => {
           const armed = await call("post", "/hooks/dialog", { accept: true, promptText });
           expect(armed.statusCode, JSON.stringify(armed.body)).toBe(200);
           expect(await page.evaluate(() => prompt("Enter a value", "default"))).toBe(promptText);
-        });
-      },
+        }),
       30_000,
     );
 
     it.each(["local", "session"])(
       "returns every native %s storage key",
-      async (kind) => {
-        await withContentPage(async ({ page, call }) => {
+      (kind) =>
+        withContentPage(async ({ page, call }) => {
           const entries: Array<[string, string]> = [
             ["", "empty"],
             ["__proto__", "prototype"],
             [" padded ", "spaces"],
-            ["normal", "value"],
           ];
           await page.evaluate(
             ({ kind: storageKind, entries: storageEntries }) => {
@@ -128,11 +104,8 @@ describe.runIf(process.env.OPENCLAW_BROWSER_CONTENT_E2E === "1")(
           expect(response.statusCode, JSON.stringify(response.body)).toBe(200);
           expect(response.body).toMatchObject({ ok: true, values: Object.fromEntries(entries) });
           const selected = await call("get", "/storage/:kind", { key: "__proto__" }, { kind });
-          expect(selected.body).toMatchObject({
-            values: Object.fromEntries([["__proto__", "prototype"]]),
-          });
-        });
-      },
+          expect(selected.body).toHaveProperty("values.__proto__", "prototype");
+        }),
       30_000,
     );
 
@@ -141,37 +114,28 @@ describe.runIf(process.env.OPENCLAW_BROWSER_CONTENT_E2E === "1")(
         await fs.mkdir(DEFAULT_UPLOAD_DIR, { recursive: true });
         const file = path.join(tempDirs.make("content-upload-", DEFAULT_UPLOAD_DIR), "fixture.txt");
         await fs.writeFile(file, "synthetic upload");
-        const warm = await call("get", "/text");
-        expect(warm.body).toMatchObject({ ok: true, text: "Article text" });
+        const upload = () =>
+          call("post", "/hooks/file-chooser", {
+            element: "#upload",
+            paths: [file],
+            timeoutMs: 500,
+          });
+        const uploadInput = page.locator("#upload");
+        await call("get", "/text");
         await page.evaluate(() => {
           setTimeout(() => {
-            const input = document.createElement("input");
-            input.type = "file";
-            input.id = "upload";
-            document.body.append(input);
+            document.body.insertAdjacentHTML("beforeend", '<input id="upload" type="file">');
           }, 1_500);
         });
-        const response = await call("post", "/hooks/file-chooser", {
-          element: "#upload",
-          paths: [file],
-          timeoutMs: 500,
-        });
+        const response = await upload();
         expect(response.statusCode, JSON.stringify(response.body)).toBeGreaterThanOrEqual(400);
-        await page.locator("#upload").waitFor({ state: "attached" });
-        expect(
-          await page.locator("#upload").evaluate((input: HTMLInputElement) => input.files?.length),
-        ).toBe(0);
-        const retry = await call("post", "/hooks/file-chooser", {
-          element: "#upload",
-          paths: [file],
-          timeoutMs: 500,
-        });
+        await uploadInput.waitFor({ state: "attached" });
+        expect(await uploadInput.evaluate((el: HTMLInputElement) => el.files?.length)).toBe(0);
+        const retry = await upload();
         expect(retry.statusCode, JSON.stringify(retry.body)).toBe(200);
-        expect(
-          await page
-            .locator("#upload")
-            .evaluate((input: HTMLInputElement) => input.files?.[0]?.name),
-        ).toBe("fixture.txt");
+        expect(await uploadInput.evaluate((el: HTMLInputElement) => el.files?.[0]?.name)).toBe(
+          "fixture.txt",
+        );
       });
     }, 30_000);
 

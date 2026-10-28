@@ -8,7 +8,11 @@ import ai.openclaw.app.SessionCatalog
 import ai.openclaw.app.SessionCatalogEntry
 import ai.openclaw.app.SessionCatalogState
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSessionPatch
+import ai.openclaw.app.chat.SIDEBAR_SESSION_PAGE_SIZE
+import ai.openclaw.app.chat.SIDEBAR_SESSION_SEE_LESS_THRESHOLD
 import ai.openclaw.app.chat.SessionSnooze
+import ai.openclaw.app.chat.normalizeSidebarSectionOrder
 import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.defaultSidebarVisiblePages
 import ai.openclaw.app.i18n.nativeString
@@ -40,7 +44,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -61,6 +64,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -74,8 +78,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.onPlaced
-import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
@@ -83,19 +85,18 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.round
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.util.Collections
 import kotlin.math.sign
-
-private const val SIDEBAR_CATALOG_REFRESH_MS = 30_000L
 
 internal enum class SidebarSessionDragSource {
   Catalog,
@@ -119,17 +120,17 @@ internal fun sidebarSessionPinnedAfterDrag(
 internal enum class SidebarDestination(
   val stableId: String,
   val settingsRoute: SettingsRoute? = null,
+  val tab: Tab? = null,
   val icon: ImageVector = checkNotNull(settingsRoute).icon,
 ) {
   Settings(stableId = "settings", settingsRoute = SettingsRoute.Home),
-  Work(stableId = "work", icon = ClawIcons.Overview),
-  Home(stableId = "home", icon = ClawIcons.Chat),
+  Work(stableId = "work", tab = Tab.Overview, icon = ClawIcons.Overview),
+  Home(stableId = "home", tab = Tab.Chat, icon = ClawIcons.Chat),
   Skills(stableId = "skills", settingsRoute = SettingsRoute.Skills),
-  Threads(stableId = "threads", icon = ClawIcons.Threads),
+  Threads(stableId = "threads", tab = Tab.Sessions, icon = ClawIcons.Threads),
   Agents(stableId = "agents", settingsRoute = SettingsRoute.Agents),
   Automations(stableId = "automations", settingsRoute = SettingsRoute.CronJobs),
   Usage(stableId = "usage", settingsRoute = SettingsRoute.Usage),
-  SkillWorkshop(stableId = "skill-workshop", settingsRoute = SettingsRoute.SkillWorkshop),
   Dreaming(stableId = "dreaming", settingsRoute = SettingsRoute.Dreaming),
   Terminal(stableId = "terminal", settingsRoute = SettingsRoute.Terminal),
   Desktop(stableId = "desktop", settingsRoute = SettingsRoute.Desktop),
@@ -178,21 +179,21 @@ internal fun updateSidebarDestinationVisibility(
 ): List<String> {
   val current = visibleIds.toSet()
   if (!visible && destination.stableId in current && current.size == 1) return visibleIds
-  val updated =
-    if (visible) {
-      current + destination.stableId
-    } else {
-      current - destination.stableId
-    }
+  val updated = if (visible) current + destination.stableId else current - destination.stableId
   return SidebarDestination.entries.map(SidebarDestination::stableId).filter(updated::contains)
 }
 
-private const val SIDEBAR_SESSION_LIMIT = 8
+internal data class SidebarSessionGroupSection(
+  val name: String,
+  val entries: List<ChatSessionEntry>,
+)
 
 internal data class SidebarSessionPresentation(
   val pinned: List<ChatSessionEntry>,
-  val recentSections: List<SessionSection>,
-  val canExpandRecent: Boolean,
+  val groups: List<SidebarSessionGroupSection>,
+  /** Uncategorized channel group chats (gateway kind "group"), not catalog folders. */
+  val chatGroups: List<ChatSessionEntry>,
+  val recent: List<ChatSessionEntry>,
 )
 
 internal fun sidebarRecentSessions(
@@ -209,25 +210,59 @@ internal fun sidebarRecentSessions(
         .thenBy { it.key },
     ).toList()
 
+/**
+ * Category folders follow the gateway catalog order, then unknown categories.
+ * Empty catalog folders stay. Pinned rows stay in Pinned. kind=="group" rows
+ * without a category form the Groups zone. Recent is everything else, so the
+ * Recent cap does not hide folder members or channel groups.
+ */
+internal fun sidebarSessionGroupSections(
+  sessions: List<ChatSessionEntry>,
+  knownGroups: List<String>,
+): List<SidebarSessionGroupSection> {
+  val byCategory = linkedMapOf<String, MutableList<ChatSessionEntry>>()
+  val known =
+    knownGroups.mapNotNull { name ->
+      val trimmed = name.trim()
+      if (trimmed.isEmpty() || byCategory.containsKey(trimmed)) {
+        null
+      } else {
+        byCategory[trimmed] = mutableListOf()
+        trimmed
+      }
+    }
+  for (session in sessions) {
+    val category = session.category?.trim()?.takeIf { it.isNotEmpty() } ?: continue
+    byCategory.getOrPut(category) { mutableListOf() }.add(session)
+  }
+  val extras = byCategory.keys.filter { it !in known }.sortedWith(String.CASE_INSENSITIVE_ORDER)
+  return (known + extras).map { name -> SidebarSessionGroupSection(name, byCategory[name].orEmpty()) }
+}
+
 internal fun sidebarSessionPresentation(
   sessions: List<ChatSessionEntry>,
   knownGroups: List<String>,
-  expanded: Boolean,
   excludedSessionKeys: Set<String> = emptySet(),
   currentSessionKey: String = "",
   nowMs: Long = System.currentTimeMillis(),
 ): SidebarSessionPresentation {
   val activeSessions = sidebarRecentSessions(sessions, currentSessionKey, nowMs)
   val pinned = activeSessions.filter { it.pinned == true }
-  val recent =
+  val navigable =
     activeSessions.filter { session ->
       session.pinned != true && session.key !in excludedSessionKeys
     }
-  val visibleRecent = if (expanded) recent else recent.take(SIDEBAR_SESSION_LIMIT)
+  val grouped = navigable.filter { !it.category.isNullOrBlank() }
+  val ungrouped = navigable.filter { it.category.isNullOrBlank() }
+  // An explicit category wins, matching web/Mac. Groups is only kind=="group".
+  val chatGroups = ungrouped.filter { it.kind == "group" }
+  val recent = ungrouped.filter { it.kind != "group" }
+
   return SidebarSessionPresentation(
     pinned = pinned,
-    recentSections = groupSessionEntries(visibleRecent, knownGroups).filter { it.entries.isNotEmpty() },
-    canExpandRecent = recent.size > SIDEBAR_SESSION_LIMIT,
+    groups = sidebarSessionGroupSections(grouped, knownGroups),
+    chatGroups = chatGroups,
+    recent = recent,
   )
 }
 
@@ -375,28 +410,6 @@ internal data class SidebarPalette(
   val hairline: Color,
 )
 
-internal class SidebarRowHost {
-  private data class Placement(
-    val band: IntRect?,
-    val viewport: IntRect,
-  )
-
-  private var placement: Placement? = null
-  var generation by mutableLongStateOf(0L)
-    private set
-
-  fun recordPlacement(
-    band: IntRect?,
-    viewport: IntRect,
-  ) {
-    val next = Placement(band, viewport)
-    if (next != placement) {
-      placement = next
-      generation++
-    }
-  }
-}
-
 internal fun sidebarPalette(colors: ClawColors): SidebarPalette =
   SidebarPalette(
     background = colors.canvas,
@@ -406,6 +419,39 @@ internal fun sidebarPalette(colors: ClawColors): SidebarPalette =
     muted = colors.textMuted,
     hairline = colors.border,
   )
+
+internal data class SidebarSectionWindow(
+  val rows: List<ChatSessionEntry>,
+  val canShowMore: Boolean,
+  val canShowLess: Boolean,
+)
+
+/** The active session stays visible even outside the locally revealed page. */
+internal fun sidebarSectionWindow(
+  entries: List<ChatSessionEntry>,
+  visibleLimit: Int,
+  activeSessionKey: String,
+): SidebarSectionWindow {
+  val limit = visibleLimit.coerceAtLeast(0)
+  val total = entries.size
+  val canShowLess = limit > SIDEBAR_SESSION_PAGE_SIZE && total > SIDEBAR_SESSION_SEE_LESS_THRESHOLD
+  if (limit >= total) {
+    return SidebarSectionWindow(
+      rows = entries,
+      canShowMore = false,
+      canShowLess = canShowLess,
+    )
+  }
+  val page = entries.take(limit).toMutableList()
+  val shown = page.mapTo(HashSet()) { it.key }
+  val active = entries.firstOrNull { it.key == activeSessionKey && it.key !in shown }
+  if (active != null) page.add(active)
+  return SidebarSectionWindow(
+    rows = page,
+    canShowMore = true,
+    canShowLess = canShowLess && page.size > SIDEBAR_SESSION_SEE_LESS_THRESHOLD,
+  )
+}
 
 @Composable
 internal fun OpenClawSidebar(
@@ -426,16 +472,19 @@ internal fun OpenClawSidebar(
   onSelectCatalogSession: (SessionCatalogEntry) -> Unit,
   onCreateCatalogSession: (String) -> Unit,
   onSelectDestination: (SidebarDestination) -> Unit,
-  rowHostBand: IntRect? = null,
 ) {
   val palette = sidebarPalette(ClawTheme.colors)
   var sessionNowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
   val scope = rememberCoroutineScope()
   val lifecycle = LocalLifecycleOwner.current.lifecycle
   val scrollState = rememberScrollState()
-  val rowHost = remember { SidebarRowHost() }
   val agentPicker = agentPickerState(agents, selectedAgentId)
-  val storedGroups by viewModel.sessionCustomGroups.collectAsState()
+  val localGroups by viewModel.sessionCustomGroups.collectAsState()
+  val groupCatalog by viewModel.sessionGroupCatalog.collectAsState()
+  val rosterHasMore by viewModel.sessionRosterHasMore.collectAsState()
+  val rosterLoadingMore by viewModel.sessionRosterLoadingMore.collectAsState()
+  val rosterLoadFailed by viewModel.sessionRosterLoadFailed.collectAsState()
+  val storedGroups = (groupCatalog.names + localGroups).distinct()
   val questions by viewModel.chatQuestions.collectAsState()
   val approvalInbox by viewModel.execApprovalInbox.collectAsState()
   val defaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
@@ -465,7 +514,9 @@ internal fun OpenClawSidebar(
   }
   var pagesExpanded by rememberSaveable { mutableStateOf(true) }
   var pagesMenuMode by rememberSaveable { mutableStateOf(SidebarPagesMenuMode.Closed) }
-  var sessionsExpanded by rememberSaveable { mutableStateOf(false) }
+  val visibleLimits = remember(gatewayStableId, selectedAgentId) { mutableStateMapOf<String, Int>() }
+  var collapsedGroups by rememberSaveable(gatewayStableId, selectedAgentId) { mutableStateOf(emptyList<String>()) }
+  var chatGroupsExpanded by rememberSaveable(gatewayStableId, selectedAgentId) { mutableStateOf(true) }
   var expandedCatalogIds by rememberSaveable { mutableStateOf(emptyList<String>()) }
   var pinnedExpanded by rememberSaveable { mutableStateOf(false) }
   var recentExpanded by rememberSaveable { mutableStateOf(false) }
@@ -487,13 +538,19 @@ internal fun OpenClawSidebar(
     sidebarSessionPresentation(
       sessions = sessions,
       knownGroups = storedGroups,
-      expanded = sessionsExpanded,
       excludedSessionKeys = catalogSessionKeys,
       currentSessionKey = activeSessionKey,
       nowMs = sessionNowMs,
     )
   val pinnedSessions = recentPresentation.pinned
-  val recentSections = recentPresentation.recentSections
+  val recentRows = recentPresentation.recent
+  val groupsByName = recentPresentation.groups.associateBy { it.name }
+  val sectionOrder =
+    normalizeSidebarSectionOrder(
+      groupCatalog.sectionOrder,
+      recentPresentation.groups.map { it.name },
+      if (catalogAvailable) catalogSections.map { it.catalog.id } else emptyList(),
+    )
   val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
   val orderedPages = orderedSidebarDestinations(pageOrder).filter { it.settingsRoute?.isAvailable(desktopObserveAvailable) != false }
   val visiblePageIdSet = visiblePageIds.toSet()
@@ -522,7 +579,7 @@ internal fun OpenClawSidebar(
   }
   val setSessionPinned: (String, String?, Boolean) -> Unit = { key, ownerAgentId, pinned ->
     scope.launch {
-      viewModel.patchChatSession(key = key, ownerAgentId = ownerAgentId, pinned = pinned)
+      viewModel.patchChatSession(ChatSessionPatch(key = key, ownerAgentId = ownerAgentId, pinned = pinned))
     }
   }
   val sessionRows: @Composable (List<ChatSessionEntry>, SidebarSessionDragSource?) -> Unit = { entries, dragSource ->
@@ -531,7 +588,6 @@ internal fun OpenClawSidebar(
         SidebarSessionRow(
           session = session,
           attention = attentionFor(listOf(sidebarAttentionSessionKey(session.key, session.ownerAgentId ?: selectedAgentId ?: defaultAgentId))),
-          rowHost = rowHost,
           selected = session.key == activeSessionKey,
           palette = palette,
           onClick = { onSelectSession(session) },
@@ -548,6 +604,26 @@ internal fun OpenClawSidebar(
           onDragActiveChange = if (dragSource == null) ({}) else onDragActiveChange,
         )
       }
+    }
+  }
+  LaunchedEffect(connection.isConnected, gatewayStableId, selectedAgentId, visible) {
+    if (connection.isConnected && visible) {
+      viewModel.refreshSessionGroups()
+      viewModel.refreshChatSessions()
+    }
+  }
+  val sectionRows: @Composable (String, List<ChatSessionEntry>) -> Unit = { token, entries ->
+    val window = sidebarSectionWindow(entries, visibleLimits[token] ?: SIDEBAR_SESSION_PAGE_SIZE, activeSessionKey)
+    sessionRows(window.rows, SidebarSessionDragSource.Recent)
+    if (window.canShowMore) {
+      SidebarActionRow(nativeString("Show more"), Icons.Default.KeyboardArrowDown, palette, onClick = {
+        visibleLimits[token] = (visibleLimits[token] ?: SIDEBAR_SESSION_PAGE_SIZE) + SIDEBAR_SESSION_PAGE_SIZE
+      })
+    }
+    if (window.canShowLess) {
+      SidebarActionRow(nativeString("Show less"), Icons.Default.KeyboardArrowUp, palette, onClick = {
+        visibleLimits[token] = SIDEBAR_SESSION_PAGE_SIZE
+      })
     }
   }
   LaunchedEffect(
@@ -570,10 +646,19 @@ internal fun OpenClawSidebar(
     if (!catalogRefreshNeeded) return@LaunchedEffect
     lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
       viewModel.refreshSessionCatalog(selectedAgentId)
-      while (true) {
-        delay(SIDEBAR_CATALOG_REFRESH_MS)
-        viewModel.refreshSessionCatalog(selectedAgentId)
-      }
+      viewModel.sessionCatalogState
+        .map { state ->
+          state.errorText != null ||
+            state.catalogs.any { catalog ->
+              catalog.errorText != null || catalog.hosts.any { it.errorText != null }
+            }
+        }.distinctUntilChanged()
+        .collectLatest { failed ->
+          while (true) {
+            delay(if (failed) 30_000L else 120_000L)
+            viewModel.refreshSessionCatalog(selectedAgentId)
+          }
+        }
     }
   }
   // Canonical debounced gateway search shared with the Sessions browser; the
@@ -697,39 +782,22 @@ internal fun OpenClawSidebar(
           Modifier
             .weight(1f)
             .fillMaxWidth()
-            .onPlaced {
-              // Observe the viewport, never row reorder/drag offsets or the scrolling content.
-              rowHost.recordPlacement(rowHostBand, IntRect(it.positionInParent().round(), it.size))
-            }.verticalScroll(scrollState),
+            .verticalScroll(scrollState),
       ) {
         if (searchState.query.isNotEmpty()) {
           SidebarSectionTitle(nativeString("Threads"), palette)
-          when (sessionEmptyMode(searchState.query, searchState.loading)) {
-            SessionEmptyMode.SearchLoading -> {
-              Text(
-                text = nativeString("Searching threads"),
-                style = ClawTheme.type.caption,
-                color = palette.muted,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
-              )
-            }
-
-            else -> {
-              if (searchResults.isEmpty()) {
-                Text(
-                  text = nativeString("No matching threads"),
-                  style = ClawTheme.type.caption,
-                  color = palette.muted,
-                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
-                )
-              } else {
-                sessionRows(searchResults, null)
-              }
-            }
+          if (searchState.loading || searchResults.isEmpty()) {
+            Text(
+              text = if (searchState.loading) nativeString("Searching threads") else nativeString("No matching threads"),
+              style = ClawTheme.type.caption,
+              color = palette.muted,
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+            )
+          } else {
+            sessionRows(searchResults, null)
           }
         } else {
           SidebarPagesHeader(
-            rowHost = rowHost,
             expanded = pagesExpanded,
             menuMode = pagesMenuMode,
             destinations = orderedPages,
@@ -760,7 +828,6 @@ internal fun OpenClawSidebar(
               key(destination.stableId) {
                 SidebarNavigationRow(
                   destination = destination,
-                  rowHost = rowHost,
                   selected = destination == activeDestination,
                   palette = palette,
                   onClick = { onSelectDestination(destination) },
@@ -793,25 +860,11 @@ internal fun OpenClawSidebar(
             }
           }
 
-          if (catalogAvailable) {
+          for (token in sectionOrder) {
             when {
-              catalogState.loading && catalogSections.isEmpty() -> {
-                SidebarCatalogStatus(nativeString("Loading"), palette, progress = true)
-              }
-
-              catalogErrorText != null && catalogSections.isEmpty() -> {
-                SidebarCatalogStatus(catalogErrorText, palette)
-              }
-
-              catalogSections.isEmpty() -> {
-                SidebarCatalogStatus(nativeString("No sessions"), palette)
-              }
-
-              else -> {
-                if (catalogState.loading) {
-                  SidebarCatalogStatus(nativeString("Loading"), palette, progress = true)
-                }
-                catalogSections.forEach { section ->
+              token.startsWith("catalog:") -> {
+                val section = catalogSections.firstOrNull { it.catalog.id == token.removePrefix("catalog:") }
+                if (section != null) {
                   val catalog = section.catalog
                   key("catalog:${catalog.id}") {
                     SidebarCollapsibleHeader(
@@ -851,7 +904,6 @@ internal fun OpenClawSidebar(
                     if (section.expanded) {
                       SidebarSessionCatalog(
                         attentionFor = ::attentionFor,
-                        rowHost = rowHost,
                         state = catalogState,
                         catalog = catalog,
                         activeSessionKey = activeSessionKey,
@@ -874,45 +926,73 @@ internal fun OpenClawSidebar(
                     }
                   }
                 }
-                catalogErrorText?.let { SidebarCatalogStatus(it, palette) }
+              }
+
+              token.startsWith("category:") -> {
+                val group = groupsByName[token.removePrefix("category:")] ?: continue
+                val expanded = group.name !in collapsedGroups
+                SidebarCollapsibleHeader(
+                  label = group.name,
+                  attention = if (expanded) null else attentionFor(group.entries.map { it.key }),
+                  expanded = expanded,
+                  palette = palette,
+                  iconContent = { Icon(Icons.Outlined.Folder, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                  onClick = { collapsedGroups = toggleSidebarExpansion(collapsedGroups, group.name) },
+                )
+                if (expanded) sectionRows(token, group.entries)
+              }
+
+              token == "groups" && recentPresentation.chatGroups.isNotEmpty() -> {
+                SidebarCollapsibleHeader(
+                  label = nativeString("Groups"),
+                  attention = if (chatGroupsExpanded) null else attentionFor(recentPresentation.chatGroups.map { it.key }),
+                  expanded = chatGroupsExpanded,
+                  palette = palette,
+                  onClick = { chatGroupsExpanded = !chatGroupsExpanded },
+                )
+                if (chatGroupsExpanded) sectionRows(token, recentPresentation.chatGroups)
+              }
+
+              token == "ungrouped" -> {
+                SidebarCollapsibleHeader(
+                  label = nativeString("Recent"),
+                  attention = if (recentExpanded) null else attentionFor(recentRows.map { it.key }),
+                  expanded = recentExpanded,
+                  palette = palette,
+                  onClick = { recentExpanded = !recentExpanded },
+                )
+                if (recentExpanded) {
+                  if (recentRows.isEmpty()) {
+                    Text(
+                      nativeString("No recent sessions"),
+                      style = ClawTheme.type.caption,
+                      color = palette.muted,
+                      modifier = Modifier.padding(horizontal = 40.dp, vertical = 10.dp),
+                    )
+                  } else {
+                    sectionRows(token, recentRows)
+                  }
+                }
               }
             }
           }
-
-          SidebarCollapsibleHeader(
-            label = nativeString("Recent"),
-            attention = if (recentExpanded) null else attentionFor(sidebarRecentSessions(sessions, activeSessionKey, sessionNowMs).filter { it.pinned != true && it.key !in catalogSessionKeys }.map { it.key }),
-            expanded = recentExpanded,
-            palette = palette,
-            onClick = { recentExpanded = !recentExpanded },
-          )
-          if (recentExpanded) {
-            if (recentSections.isEmpty()) {
-              Text(
-                text = nativeString("No recent sessions"),
-                style = ClawTheme.type.caption,
-                color = palette.muted,
-                modifier = Modifier.padding(horizontal = 40.dp, vertical = 10.dp),
-              )
-            } else {
-              recentSections.forEach { section ->
-                section.title?.let { title -> SidebarSectionTitle(title, palette, Modifier.padding(start = 24.dp)) }
-                sessionRows(section.entries, SidebarSessionDragSource.Recent)
-              }
+          if (catalogAvailable) {
+            if (catalogState.loading) SidebarCatalogStatus(nativeString("Loading"), palette, progress = true)
+            catalogErrorText?.let { SidebarCatalogStatus(it, palette) }
+            if (catalogSections.isEmpty() && !catalogState.loading && catalogErrorText == null) {
+              SidebarCatalogStatus(nativeString("No sessions"), palette)
             }
-            if (recentPresentation.canExpandRecent) {
-              SidebarActionRow(
-                label = nativeString(if (sessionsExpanded) "Show less" else "Show more"),
-                icon =
-                  if (sessionsExpanded) {
-                    Icons.Default.KeyboardArrowUp
-                  } else {
-                    Icons.Default.KeyboardArrowDown
-                  },
-                palette = palette,
-                onClick = { sessionsExpanded = !sessionsExpanded },
-              )
+          }
+          if (rosterHasMore) {
+            if (rosterLoadFailed) {
+              SidebarCatalogStatus(nativeString("Could not load more sessions. Try again."), palette)
             }
+            SidebarActionRow(
+              label = nativeString(if (rosterLoadingMore) "Loading" else "Load more sessions"),
+              icon = Icons.Default.KeyboardArrowDown,
+              palette = palette,
+              onClick = { if (!rosterLoadingMore) scope.launch { viewModel.loadMoreChatSessions() } },
+            )
           }
         }
       }
@@ -942,7 +1022,6 @@ internal fun OpenClawSidebar(
 
 @Composable
 private fun SidebarPagesHeader(
-  rowHost: SidebarRowHost,
   expanded: Boolean,
   menuMode: SidebarPagesMenuMode,
   destinations: List<SidebarDestination>,
@@ -972,17 +1051,7 @@ private fun SidebarPagesHeader(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-      Icon(
-        imageVector =
-          if (expanded) {
-            Icons.Default.KeyboardArrowDown
-          } else {
-            Icons.AutoMirrored.Filled.KeyboardArrowRight
-          },
-        contentDescription = null,
-        tint = palette.muted,
-        modifier = Modifier.size(18.dp),
-      )
+      SidebarDisclosureIcon(expanded, palette)
       Text(
         text = nativeString("Pages"),
         style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Medium),
@@ -1072,7 +1141,6 @@ private fun SidebarPagesHeader(
                 val visible = destination.stableId in visiblePageIds
                 SidebarNavigationRow(
                   destination = destination,
-                  rowHost = rowHost,
                   selected = false,
                   pinned = visible,
                   palette = palette,
@@ -1107,7 +1175,6 @@ private fun SidebarPagesHeader(
 @Composable
 private fun SidebarSessionCatalog(
   attentionFor: (Collection<String>) -> SidebarAttention?,
-  rowHost: SidebarRowHost,
   state: SessionCatalogState,
   catalog: SessionCatalog,
   activeSessionKey: String,
@@ -1125,12 +1192,8 @@ private fun SidebarSessionCatalog(
 ) {
   val hosts = sidebarCatalogHosts(listOf(catalog))
   when {
-    catalog.errorText != null && hosts.isEmpty() -> {
-      SidebarCatalogStatus(catalog.errorText, palette)
-    }
-
     hosts.isEmpty() -> {
-      SidebarCatalogStatus(nativeString("No sessions"), palette)
+      SidebarCatalogStatus(catalog.errorText ?: nativeString("No sessions"), palette)
     }
 
     else -> {
@@ -1148,13 +1211,7 @@ private fun SidebarSessionCatalog(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-          Icon(
-            imageVector =
-              if (hostExpanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = palette.muted,
-            modifier = Modifier.size(18.dp),
-          )
+          SidebarDisclosureIcon(hostExpanded, palette)
           Icon(
             imageVector = Icons.Outlined.DesktopWindows,
             contentDescription = null,
@@ -1168,33 +1225,20 @@ private fun SidebarSessionCatalog(
             modifier = Modifier.weight(1f),
             maxLines = 1,
           )
-          when {
-            !host.errorText.isNullOrBlank() -> {
-              Icon(
-                imageVector = Icons.Outlined.ErrorOutline,
-                contentDescription = nativeString("Host error"),
-                tint = ClawTheme.colors.danger,
-                modifier = Modifier.size(16.dp),
-              )
-            }
-
-            !host.connected -> {
-              Text(
-                text = nativeString("Offline"),
-                style = ClawTheme.type.caption,
-                color = palette.muted,
-                maxLines = 1,
-              )
-            }
-
-            else -> {
-              Text(
-                text = host.workspaces.sumOf { it.sessions.size }.toString(),
-                style = ClawTheme.type.caption,
-                color = palette.muted,
-                maxLines = 1,
-              )
-            }
+          if (!host.errorText.isNullOrBlank()) {
+            Icon(
+              imageVector = Icons.Outlined.ErrorOutline,
+              contentDescription = nativeString("Host error"),
+              tint = ClawTheme.colors.danger,
+              modifier = Modifier.size(16.dp),
+            )
+          } else {
+            Text(
+              text = if (host.connected) host.workspaces.sumOf { it.sessions.size }.toString() else nativeString("Offline"),
+              style = ClawTheme.type.caption,
+              color = palette.muted,
+              maxLines = 1,
+            )
           }
           if (!hostExpanded) attentionFor(host.workspaces.flatMap { it.sessions }.mapNotNull { it.sessionKey })?.let { SidebarAttentionIndicator(it, palette) }
         }
@@ -1214,17 +1258,7 @@ private fun SidebarSessionCatalog(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-              Icon(
-                imageVector =
-                  if (expanded) {
-                    Icons.Default.KeyboardArrowDown
-                  } else {
-                    Icons.AutoMirrored.Filled.KeyboardArrowRight
-                  },
-                contentDescription = null,
-                tint = palette.muted,
-                modifier = Modifier.size(18.dp),
-              )
+              SidebarDisclosureIcon(expanded, palette)
               Icon(
                 imageVector = Icons.Outlined.Folder,
                 contentDescription = null,
@@ -1260,7 +1294,6 @@ private fun SidebarSessionCatalog(
                 SidebarCatalogSessionRow(
                   session = session,
                   attention = session.sessionKey?.let { attentionFor(listOf(sidebarAttentionSessionKey(it, session.agentId ?: state.agentId))) },
-                  rowHost = rowHost,
                   liveSession = session.sessionKey?.let(liveSessionsByKey::get),
                   selected = session.sessionKey == activeSessionKey,
                   continuing = state.continuingEntryId == session.locatorId,
@@ -1301,7 +1334,6 @@ internal fun sidebarCatalogSessionSelectionEnabled(
 private fun SidebarCatalogSessionRow(
   session: SessionCatalogEntry,
   attention: SidebarAttention?,
-  rowHost: SidebarRowHost,
   liveSession: ChatSessionEntry?,
   selected: Boolean,
   continuing: Boolean,
@@ -1336,7 +1368,6 @@ private fun SidebarCatalogSessionRow(
   SidebarRowSurface(
     selected = selected,
     stateDescription = attention?.status,
-    rowHost = rowHost,
     palette = palette,
     enabled = enabled && selectionEnabled,
     onClick = onClick,

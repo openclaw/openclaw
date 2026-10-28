@@ -58,11 +58,7 @@ internal fun resolveNotificationCandidatePackages(
   appPackageName: String,
 ): Set<String> {
   val blockedPackage = appPackageName.trim()
-  return sequenceOf(
-    configuredPackages.asSequence(),
-    launcherPackages.asSequence(),
-    recentPackages.asSequence(),
-  ).flatten()
+  return (configuredPackages.asSequence() + launcherPackages + recentPackages)
     .map { it.trim() }
     .filter { it.isNotEmpty() && it != blockedPackage }
     .toSet()

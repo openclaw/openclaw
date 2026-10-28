@@ -1,16 +1,23 @@
+import os from "node:os";
 import path from "node:path";
 import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
+import type { WorkerHeartbeatResult } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { CLEARED_GITHUB_CREDENTIALS } from "../agents/github-host-runtime.js";
+import { managedGitHubIdentityEnvironment } from "../agents/github-tool-identity-env.js";
 import {
-  managedGitHubIdentityEnvironment,
   removeManagedGitHubProfile,
   writeManagedGitHubProfileFiles,
 } from "../agents/github-tool-identity.js";
 import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { executeGitCommand } from "../infra/git-exec.js";
+import { AGENT_GIT_CONFIG_PARAMETERS } from "../infra/git-maintenance-env.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { WorkerGitHubLaunchBinding } from "./launch-descriptor.js";
+import {
+  parseWorkerGitHubLaunchBinding,
+  type WorkerGitHubLaunchBinding,
+} from "./launch-descriptor.js";
 
 const log = createSubsystemLogger("worker/github");
 
@@ -109,14 +116,25 @@ export async function prepareWorkerGitHubEnvironment(params: {
   turnId: string;
   cwd: string;
   signal?: AbortSignal;
-}): Promise<PreparedGitHubToolEnvironment | undefined> {
+}): Promise<
+  | (PreparedGitHubToolEnvironment & {
+      refresh: (
+        snapshot: NonNullable<WorkerHeartbeatResult["github"]>,
+        assertCurrent: () => void,
+      ) => Promise<void>;
+    })
+  | undefined
+> {
   const { binding, stateDir, turnId, cwd, signal } = params;
+  signal?.throwIfAborted();
   registerSecretValueForRedaction(binding.token);
   const profileDir = path.join(stateDir, "github-profiles", sha256HexPrefixCore(turnId, 16));
   try {
     // Each turn owns its path; retained commands keep their existing credentials.
     await removeManagedGitHubProfile(profileDir);
-    await writeManagedGitHubProfileFiles(profileDir, binding);
+    await writeManagedGitHubProfileFiles(profileDir, binding, {
+      assertCurrent: () => signal?.throwIfAborted(),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Worker GitHub identity profile could not be written: ${message}`, {
@@ -132,7 +150,7 @@ export async function prepareWorkerGitHubEnvironment(params: {
       ["credential.helper", "!gh auth git-credential"],
     ],
   });
-  if (process.platform === "win32") {
+  if (os.platform() === "win32") {
     const permissions = await inspectPathPermissions(profileDir);
     if (
       !permissions.ok ||
@@ -153,15 +171,34 @@ export async function prepareWorkerGitHubEnvironment(params: {
     {
       ...process.env,
       ...localIdentityEnv,
-      GH_TOKEN: binding.token,
-      GITHUB_TOKEN: "",
+      ...CLEARED_GITHUB_CREDENTIALS,
     },
     signal,
   );
   return {
+    refresh: async (snapshot, assertCurrent) => {
+      const assertActive = () => {
+        assertCurrent();
+        signal?.throwIfAborted();
+      };
+      assertActive();
+      const replacement = parseWorkerGitHubLaunchBinding({ ...binding, token: snapshot.token });
+      if (
+        !replacement ||
+        (snapshot.expiresAtMs !== undefined && snapshot.expiresAtMs <= Date.now())
+      ) {
+        throw new Error("Worker GitHub refresh is invalid or expired");
+      }
+      registerSecretValueForRedaction(replacement.token);
+      await writeManagedGitHubProfileFiles(profileDir, replacement, {
+        assertCurrent: assertActive,
+      });
+      assertActive();
+    },
     managedLocalIdentity: true,
     excludedStoreNames: [],
-    credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+    credentialScrubEnv: { ...CLEARED_GITHUB_CREDENTIALS },
     localIdentityEnv,
+    localGitConfigParameters: AGENT_GIT_CONFIG_PARAMETERS,
   };
 }

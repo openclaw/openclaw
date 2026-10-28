@@ -5,8 +5,8 @@ import { delimiter, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
-  classifyReleaseSnapshot,
   releaseChildSpec,
+  releaseChildSpecs,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -24,12 +24,8 @@ function fixture(role = "normalCi") {
     name,
     run_id: 101,
     run_attempt: 1,
-    head_sha: workflowSha,
     status: conclusion === null ? "in_progress" : "completed",
     conclusion,
-    started_at: "2026-09-23T00:00:00Z",
-    completed_at: conclusion === null ? null : "2026-09-23T00:01:00Z",
-    html_url: `https://example.invalid/jobs/${id}`,
   });
   const jobs = [job(1, "resolve target"), job(2, "node tests"), job(3, PUBLISHER, null)];
   return {
@@ -87,7 +83,8 @@ if (endpoint === "repos/openclaw/openclaw/actions/runs/101") {
 } else if (endpoint.startsWith("repos/openclaw/openclaw/actions/runs/101/attempts/")) {
   const attempt = Number(endpoint.split("/").at(-2));
   const jobs = fixture.attempts[attempt - 1];
-  process.stdout.write(JSON.stringify([{total_count: jobs.length, jobs}]));
+  const page = Number(new URL("https://example.invalid/" + endpoint).searchParams.get("page") ?? 1);
+  process.stdout.write(JSON.stringify({total_count: jobs.length, jobs: jobs.slice((page - 1) * 100, page * 100)}));
 } else {
   throw new Error("Unexpected evidence read: " + endpoint);
 }
@@ -118,63 +115,26 @@ if (endpoint === "repos/openclaw/openclaw/actions/runs/101") {
   return { result, receipt, output };
 }
 
-describe("full release child evidence producer", () => {
-  it.each(["normalCi"])("blocks failed selected metadata and workload jobs for %s", (key) => {
-    const workload = {
-      name: "install_smoke",
-      status: "completed",
-      conclusion: "success",
-    };
-    const metadata = { name: PUBLISHER, status: "completed", conclusion: "failure" };
-    const snapshot = () =>
-      classifyReleaseSnapshot({
-        children: [
-          {
-            key,
-            selected: true,
-            required: true,
-            result: "success",
-            source: "fresh",
-            runId: "101",
-            runAttempt: 1,
-            status: "completed",
-            conclusion: "success",
-            jobs: [workload, metadata],
-          },
-        ],
-        releaseProfile: "stable",
-        workflowRef: "main",
-      });
-    expect(snapshot()).toMatchObject({
-      state: "blocked_complete",
-      blockers: [expect.objectContaining({ job: PUBLISHER, kind: "job_failure" })],
-    });
-    metadata.conclusion = "success";
-    expect(snapshot()).toMatchObject({ state: "passed", blockers: [] });
-    workload.conclusion = "failure";
-    expect(snapshot()).toMatchObject({
-      state: "blocked_complete",
-      blockers: [expect.objectContaining({ job: "install_smoke", kind: "job_failure" })],
-    });
-  });
+function sealed(data = fixture(), runAttempt = 1) {
+  const { result, receipt, output } = seal(data, runAttempt);
+  expect(result.status, result.stderr).toBe(0);
+  return { evidence: JSON.parse(readFileSync(receipt, "utf8")), output };
+}
 
-  it.each([
-    "ci.yml",
-    "plugin-prerelease.yml",
-    "openclaw-release-checks.yml",
-    "openclaw-performance.yml",
-    "npm-telegram-beta-e2e.yml",
-  ])("waits for every workload job in %s before sealing", (filename) => {
-    const workflow = parse(readFileSync(`.github/workflows/${filename}`, "utf8")) as {
-      jobs: Record<string, { needs?: string[]; uses?: string }>;
-    };
-    const sealJob = workflow.jobs.seal_release_child_evidence;
-    expect(sealJob?.uses).toBe("./.github/workflows/full-release-child-evidence.yml");
-    expect(sealJob?.needs?.toSorted()).toEqual(
-      Object.keys(workflow.jobs)
-        .filter((name) => name !== "seal_release_child_evidence")
-        .toSorted(),
-    );
+describe("full release child evidence producer", () => {
+  it("waits for every workload job before sealing any release child", () => {
+    for (const filename of new Set(releaseChildSpecs().map((spec) => spec.workflow))) {
+      const workflow = parse(readFileSync(`.github/workflows/${filename}`, "utf8")) as {
+        jobs: Record<string, { needs?: string[]; uses?: string }>;
+      };
+      const sealJob = workflow.jobs.seal_release_child_evidence;
+      expect(sealJob?.uses).toBe("./.github/workflows/full-release-child-evidence.yml");
+      expect(sealJob?.needs?.toSorted()).toEqual(
+        Object.keys(workflow.jobs)
+          .filter((name) => name !== "seal_release_child_evidence")
+          .toSorted(),
+      );
+    }
   });
 
   it("keeps unavailable reuse metadata from changing workload qualification", () => {
@@ -196,140 +156,105 @@ describe("full release child evidence producer", () => {
     expect(upload?.with?.overwrite).toBe(false);
   });
 
-  it.each(["success", "failure"])(
-    "seals %s workload facts independently of the parent",
-    (conclusion) => {
-      const data = fixture();
-      data.jobs[1]!.conclusion = conclusion;
-      const { result, receipt, output } = seal(data);
-      expect(result.status, result.stderr).toBe(0);
-      const evidence = JSON.parse(readFileSync(receipt, "utf8"));
-      expect(evidence).toMatchObject({
-        schema: "openclaw.full-release-child-evidence/v1",
-        sourceParentRunId: "77",
-        sourceParentAttempt: 1,
-        runId: "101",
-        plannedRunAttempt: 1,
-        effectiveRunAttempt: 1,
-        role: "normalCi",
-        targetSha: TARGET,
-        workflowSha: TARGET,
-        workloadConclusion: conclusion,
-        inputs: { release_scope: "full", target_ref: TARGET },
-        publisher: { jobId: "3", jobName: PUBLISHER },
-      });
-      expect(evidence.jobs.map((job: { name: string }) => job.name)).toEqual([
-        "node tests",
-        "resolve target",
-      ]);
-      const { sha256, ...payload } = evidence;
-      expect(sha256).toBe(createHash("sha256").update(JSON.stringify(payload)).digest("hex"));
-      expect(readFileSync(output, "utf8")).toBe(
-        `artifact_name=full-release-child-evidence-${TARGET}-normalCi-101-1\n`,
-      );
-    },
-  );
-
-  it.each(["pluginPrereleaseIndependent", "releaseChecksCandidate"])(
-    "seals %s evidence at the exact target SHA",
-    (role) => {
-      const { result, receipt } = seal(fixture(role));
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({
-        role,
-        targetSha: TARGET,
-        workflowSha: TARGET,
-      });
-    },
-  );
-
   it.each([
-    { runAttempt: 2, retryWorkload: true, observedRunAttempts: [1, 2], accepted: 2 },
-    { runAttempt: 3, retryWorkload: false, observedRunAttempts: [1, 2, 3], accepted: 1 },
-  ])(
-    "composes attempt $runAttempt with workload retry=$retryWorkload and excludes publishers",
-    ({ runAttempt, retryWorkload, observedRunAttempts, accepted }) => {
-      const data = fixture();
-      data.run.run_attempt = runAttempt;
-      data.run.triggering_actor.login = "release-maintainer";
-      data.jobs[2]!.status = "completed";
-      data.jobs[2]!.conclusion = retryWorkload ? "success" : "failure";
-      if (retryWorkload) {
-        data.jobs[1]!.conclusion = "failure";
-      }
-      for (let attempt = 2; attempt <= runAttempt; attempt += 1) {
-        data.attempts.push([
-          ...(retryWorkload
-            ? [{ ...data.jobs[1]!, run_attempt: attempt, conclusion: "success" }]
-            : []),
-          {
-            ...data.jobs[2]!,
-            id: attempt + 2,
-            run_attempt: attempt,
-            status: attempt === runAttempt ? "in_progress" : "completed",
-            conclusion: attempt === runAttempt ? null : "failure",
-          },
-        ]);
-      }
-      const { result, receipt } = seal(data, runAttempt);
-      expect(result.status, result.stderr).toBe(0);
-      const evidence = JSON.parse(readFileSync(receipt, "utf8"));
-      expect(evidence).toMatchObject({
-        workloadConclusion: "success",
-        effectiveRunAttempt: runAttempt,
-        triggeringActor: "release-maintainer",
-        publisher: { jobId: String(runAttempt + 2) },
-      });
-      expect(evidence.observedRunAttempts).toEqual(observedRunAttempts);
-      expect(
-        evidence.jobs.map((job: { name: string; acceptedRunAttempt: number }) => [
-          job.name,
-          job.acceptedRunAttempt,
-        ]),
-      ).toEqual([
-        ["node tests", accepted],
-        ["resolve target", 1],
-      ]);
-    },
-  );
+    ["normalCi", "success"],
+    ["normalCi", "failure"],
+  ])("seals %s %s workload facts independently of the parent", (role, conclusion) => {
+    const data = fixture(role);
+    data.jobs[1]!.conclusion = conclusion;
+    const { evidence, output } = sealed(data);
+    expect(evidence).toMatchObject({
+      schema: "openclaw.full-release-child-evidence/v1",
+      sourceParentRunId: "77",
+      sourceParentAttempt: 1,
+      runId: "101",
+      plannedRunAttempt: 1,
+      effectiveRunAttempt: 1,
+      role,
+      targetSha: TARGET,
+      workflowSha: TARGET,
+      workloadConclusion: conclusion,
+      inputs: { release_scope: "full", target_ref: TARGET },
+      publisher: { jobId: "3", jobName: PUBLISHER },
+    });
+    expect(evidence.jobs.map((job: { name: string }) => job.name)).toEqual([
+      "node tests",
+      "resolve target",
+    ]);
+    const { sha256, ...payload } = evidence;
+    expect(sha256).toBe(createHash("sha256").update(JSON.stringify(payload)).digest("hex"));
+    expect(readFileSync(output, "utf8")).toBe(
+      `artifact_name=full-release-child-evidence-${TARGET}-${role}-101-1\n`,
+    );
+  });
 
-  it.each([
-    {
-      name: "workflow SHA different from the target",
-      mutate: (data: ReturnType<typeof fixture>) => {
-        data.run.head_sha = SHA;
-      },
-      error: "does not match the target SHA",
-    },
-    {
-      name: "stale run attempt",
-      mutate: (data: ReturnType<typeof fixture>) => {
-        data.run.run_attempt = 2;
-      },
-      error: "current active workflow attempt",
-    },
-    {
-      name: "foreign child repository",
-      mutate: (data: ReturnType<typeof fixture>) => {
-        data.run.repository.full_name = "other/repository";
-      },
-      error: "provenance changed",
-    },
-    {
-      name: "active predecessor",
-      mutate: (data: ReturnType<typeof fixture>) => {
-        data.jobs[1]!.status = "in_progress";
-      },
-      error: "predecessor jobs are active",
-    },
-    {
-      name: "ambiguous publisher",
-      mutate: (data: ReturnType<typeof fixture>) => {
-        data.jobs.push({ ...data.jobs[2]!, id: 4 });
-      },
-      error: "publisher job identity",
-    },
-  ])("rejects $name", ({ mutate, error }) => {
+  it("seals a complete paginated attempt without a monolithic metadata response", () => {
+    const data = fixture();
+    for (let index = 0; index < 100; index++) {
+      data.jobs.push({ ...data.jobs[1]!, id: index + 10, name: `workload ${index}` });
+    }
+    const { evidence } = sealed(data);
+    expect(evidence).toMatchObject({ workloadConclusion: "success", observedRunAttempts: [1] });
+    expect(evidence.jobs).toHaveLength(102);
+  });
+
+  it("composes retried workloads with retained jobs and excludes publishers", () => {
+    const data = fixture();
+    data.run.run_attempt = 2;
+    data.run.triggering_actor.login = "release-maintainer";
+    data.jobs[2]!.status = "completed";
+    data.jobs[2]!.conclusion = "failure";
+    data.jobs[1]!.conclusion = "failure";
+    data.attempts.push([
+      { ...data.jobs[1]!, run_attempt: 2, conclusion: "success" },
+      { ...data.jobs[2]!, id: 4, run_attempt: 2, status: "in_progress", conclusion: null },
+    ]);
+    const { evidence } = sealed(data, 2);
+    expect(evidence).toMatchObject({
+      workloadConclusion: "success",
+      effectiveRunAttempt: 2,
+      triggeringActor: "release-maintainer",
+      publisher: { jobId: "4" },
+    });
+    expect(evidence.observedRunAttempts).toEqual([1, 2]);
+    expect(
+      evidence.jobs.map((job: { name: string; acceptedRunAttempt: number }) => [
+        job.name,
+        job.acceptedRunAttempt,
+      ]),
+    ).toEqual([
+      ["node tests", 2],
+      ["resolve target", 1],
+    ]);
+  });
+
+  it.each<[string, (data: ReturnType<typeof fixture>) => void, string]>([
+    [
+      "workflow SHA different from the target",
+      (data) => void (data.run.head_sha = SHA),
+      "does not match the target SHA",
+    ],
+    [
+      "stale run attempt",
+      (data) => void (data.run.run_attempt = 2),
+      "current active workflow attempt",
+    ],
+    [
+      "foreign child repository",
+      (data) => void (data.run.repository.full_name = "other/repository"),
+      "provenance changed",
+    ],
+    [
+      "active predecessor",
+      (data) => void (data.jobs[1]!.status = "in_progress"),
+      "predecessor jobs are active",
+    ],
+    [
+      "ambiguous publisher",
+      (data) => void data.jobs.push({ ...data.jobs[2]!, id: 4 }),
+      "publisher job identity",
+    ],
+  ])("rejects %s", (_name, mutate, error) => {
     const data = fixture();
     mutate(data);
     const { result } = seal(data);

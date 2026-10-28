@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/facetime",
-  "version": "2026.9.8",
+  "version": "2026.10.8",
   "description": "Experimental FaceTime realtime voice carrier for OpenClaw agents",
   "license": "MIT",
   "author": "OpenClaw contributors",
@@ -57,18 +57,17 @@
     "install:driver": "bash scripts/install-driver.sh",
     "uninstall:driver": "bash scripts/install-driver.sh --uninstall",
     "inject:helper": "bash scripts/inject-helper.sh",
-    "inject:helper:phone": "bash scripts/inject-helper.sh --app Phone",
     "inject:helper:terminal": "bash scripts/inject-helper-terminal.sh"
   },
   "dependencies": {
-    "typebox": "1.3.34"
+    "typebox": "1.4.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.9.8"
+    "openclaw": ">=2026.10.8"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -83,15 +82,15 @@
       "clawhubSpec": "clawhub:@openclaw/facetime",
       "npmSpec": "@openclaw/facetime",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.9.4",
+      "minHostVersion": ">=2026.10.3",
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.9.8"
+      "pluginApi": ">=2026.10.8"
     },
     "build": {
       "bundledDist": false,
-      "openclawVersion": "2026.9.8"
+      "openclawVersion": "2026.10.8"
     },
     "release": {
       "publishToClawHub": true,

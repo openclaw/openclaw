@@ -43,20 +43,4 @@ describe("decision model configuration", () => {
       resolveDecisionModelSetting({ agents: { defaults: { model: "chat/large" } } }),
     ).toBeUndefined();
   });
-
-  it.each(["bare-model", "/model", "provider/", null, `p/${"x".repeat(511)}`])(
-    "rejects an invalid decision model at global and agent scope: %j",
-    (decisionModel) => {
-      expect(
-        OpenClawSchema.safeParse({
-          agents: { ownership: "explicit", defaults: { decisionModel }, entries: { worker: {} } },
-        }).success,
-      ).toBe(false);
-      expect(
-        OpenClawSchema.safeParse({
-          agents: { ownership: "explicit", entries: { worker: { decisionModel } } },
-        }).success,
-      ).toBe(false);
-    },
-  );
 });

@@ -1,3 +1,4 @@
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -9,49 +10,57 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { parseSessionPendingInputMessage } from "./session-accessor.sqlite-pending-inputs.js";
+import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 
 export type SessionPendingInputWithdrawal = {
   sessionKey: string;
   sessionId: string;
-  runId: string;
-};
+} & ({ runId: string } | { inputIds: readonly string[] });
 
-type SessionPendingInputWithdrawalReceipt = SessionPendingInputWithdrawal & {
-  kind: "session-pending-input-withdrawal";
-  withdrawn: boolean;
-};
+export type RetiredPendingInputDismissalOutcome =
+  | { kind: "dismissed"; inputIds: string[]; runIds: string[]; missingIds: string[] }
+  | { kind: "active"; inputIds: string[] }
+  | { kind: "stale" };
 
-/** Retain the accepted receipt while withdrawing only an input the agent has not consumed. */
+export type SessionPendingInputWithdrawalResult = boolean | RetiredPendingInputDismissalOutcome;
+
+/** Retain accepted receipts while hiding only inputs the agent has not consumed. */
 export function discardSessionPendingInputInWorker(
   database: OpenClawAgentDatabase,
   options: OpenClawAgentDatabaseOptions,
   input: SessionPendingInputWithdrawal,
   admit: (stage: "transaction" | "commit", publication?: unknown) => void,
-): boolean {
+): SessionPendingInputWithdrawalResult {
   return runOpenClawAgentWriteTransaction(
     (current) => {
       if (current.db !== database.db) {
         throw new Error("Pending input withdrawal lost its canonical database owner");
       }
-      admit("transaction");
-      const commitResult = (withdrawn: boolean) => {
-        const receipt: SessionPendingInputWithdrawalReceipt = {
-          kind: "session-pending-input-withdrawal",
-          ...input,
-          withdrawn,
-        };
+      const commitResult = (outcome: SessionPendingInputWithdrawalResult) => {
+        const receipt = { kind: "session-pending-input-withdrawal", ...input, outcome };
         deferSqliteWorkerCommitReceipt(current.db, receipt);
         admit("commit", receipt);
-        return withdrawn;
+        return outcome;
       };
-      const schema = getAdmittedSqliteSchemaFacts(current.db);
+      const schema =
+        getPostgresPhysicalFacts(current.db) ?? getAdmittedSqliteSchemaFacts(current.db);
       if (!schema) {
         throw new Error("Pending input withdrawal requires admitted schema facts");
       }
-      if (!schema.tables.has("session_pending_inputs")) {
-        return commitResult(false);
+      if (!hasSessionPendingInputsSchema(current.db)) {
+        admit("transaction");
+        return commitResult(
+          "runId" in input
+            ? false
+            : {
+                kind: "dismissed",
+                inputIds: [],
+                runIds: [],
+                missingIds: [...input.inputIds],
+              },
+        );
       }
       const db = getSessionKysely(current.db);
       const session = executeSqliteQueryTakeFirstSync(
@@ -62,36 +71,75 @@ export function discardSessionPendingInputInWorker(
           .where("session_key", "=", input.sessionKey),
       );
       if (session?.current_session_id !== input.sessionId) {
-        return commitResult(false);
+        admit("transaction");
+        return commitResult("runId" in input ? false : { kind: "stale" });
       }
-      const rows = executeSqliteQuerySync(
+      const query = db
+        .selectFrom("session_pending_inputs")
+        .select(["input_id", "run_id", "state", "message_json"])
+        .where("session_key", "=", input.sessionKey)
+        .where("session_id", "=", input.sessionId)
+        .where("consumed_event_id", "is", null);
+      const found = executeSqliteQuerySync(
         current.db,
-        db
-          .selectFrom("session_pending_inputs")
-          .select(["input_id", "message_json"])
-          .where("session_key", "=", input.sessionKey)
-          .where("session_id", "=", input.sessionId)
-          .where("run_id", "=", input.runId)
-          .where("consumed_event_id", "is", null)
-          .limit(2),
+        "runId" in input
+          ? query.where("run_id", "=", input.runId).limit(2)
+          : query.where("input_id", "in", [...input.inputIds]),
       ).rows;
-      const row = rows.length === 1 ? rows[0] : undefined;
-      if (!row) {
+      if ("runId" in input && found.length !== 1) {
+        admit("transaction");
         return commitResult(false);
       }
-      const message = parseSessionPendingInputMessage(row.message_json);
-      const result = executeSqliteQuerySync(
-        current.db,
-        db
-          .updateTable("session_pending_inputs")
-          .set({ state: "cancelled", message_json: JSON.stringify({ ...message, display: false }) })
-          .where("input_id", "=", row.input_id)
-          .where("session_key", "=", input.sessionKey)
-          .where("session_id", "=", input.sessionId)
-          .where("run_id", "=", input.runId)
-          .where("consumed_event_id", "is", null),
+      const byId = new Map(found.map((row) => [row.input_id, row]));
+      const rows =
+        "runId" in input
+          ? found
+          : input.inputIds.flatMap((id) => {
+              const row = byId.get(id);
+              return row ? [row] : [];
+            });
+      const active = "inputIds" in input ? rows.filter((row) => row.state !== "cancelled") : [];
+      if (active.length) {
+        admit("transaction");
+        return commitResult({ kind: "active", inputIds: active.map((row) => row.input_id) });
+      }
+      // The host owns run liveness; authorize these exact rows before changing them.
+      admit("transaction", {
+        kind: "pending-input-withdrawal-candidates",
+        inputIds: rows.map((row) => row.input_id),
+      });
+      for (const row of rows) {
+        const message = parseSessionPendingInputMessage(row.message_json);
+        if (row.state === "cancelled" && message.display === false) {
+          continue;
+        }
+        const result = executeSqliteQuerySync(
+          current.db,
+          db
+            .updateTable("session_pending_inputs")
+            .set({
+              state: "cancelled",
+              message_json: JSON.stringify({ ...message, display: false }),
+            })
+            .where("input_id", "=", row.input_id)
+            .where("session_key", "=", input.sessionKey)
+            .where("session_id", "=", input.sessionId)
+            .where("consumed_event_id", "is", null),
+        );
+        if (result.numAffectedRows !== 1n) {
+          throw new Error("Pending input withdrawal changed during its transaction");
+        }
+      }
+      return commitResult(
+        "runId" in input
+          ? true
+          : {
+              kind: "dismissed",
+              inputIds: rows.map((row) => row.input_id),
+              runIds: rows.map((row) => row.run_id),
+              missingIds: input.inputIds.filter((id) => !byId.has(id)),
+            },
       );
-      return commitResult(result.numAffectedRows === 1n);
     },
     options,
     { operationLabel: "session.pending-input.withdraw" },

@@ -1,5 +1,5 @@
 /** Startup outcome coverage loaded by the post-attach startup suite. */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGatewayStartupOutcomeRecorder,
   formatGatewayStartupOutcomes,
@@ -13,22 +13,24 @@ type GatewayStartupOutcome = Parameters<typeof formatGatewayStartupOutcomes>[0][
 const inactiveParams: GatewayStartupOutcomeRecorderParams = {
   cfg: {},
   gatewayStartHooks: false,
-  env: {},
+  internalHooksConfigured: false,
 };
 
 describe("gateway startup outcomes", () => {
+  beforeEach(() => vi.stubEnv("OPENCLAW_SKIP_GMAIL_WATCHER", ""));
+  afterEach(() => vi.unstubAllEnvs());
   it.each([
     {
       account: "operator@example.com",
-      env: { OPENCLAW_SKIP_GMAIL_WATCHER: "1" },
+      skip: "1",
       reason: "disabled-by-environment",
     },
-    { account: undefined, env: {}, reason: "no-gmail-account" },
-  ])("records Gmail skip reason $reason", ({ account, env, reason }) => {
+    { account: undefined, skip: undefined, reason: "no-gmail-account" },
+  ])("records Gmail skip reason $reason", ({ account, skip, reason }) => {
+    vi.stubEnv("OPENCLAW_SKIP_GMAIL_WATCHER", skip);
     const recorder = createGatewayStartupOutcomeRecorder({
       ...inactiveParams,
       cfg: { hooks: { enabled: true, gmail: { account } } },
-      env,
     });
     expect(recorder.snapshot().find((outcome) => outcome.subsystem === "gmail-watcher")).toEqual({
       subsystem: "gmail-watcher",
@@ -40,6 +42,7 @@ describe("gateway startup outcomes", () => {
   it("records awaited internal hook outcomes without logging raw error fields", () => {
     const recorder = createGatewayStartupOutcomeRecorder({
       ...inactiveParams,
+      internalHooksConfigured: true,
       cfg: {
         hooks: {
           enabled: true,

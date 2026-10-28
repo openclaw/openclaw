@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
@@ -66,10 +67,21 @@ it("propagates async max-age errors without invoking the synchronous fallback", 
 });
 
 it("retains legacy adapter results and missing-support no-ops during migration", async () => {
+  using warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
   expect(await setChannelConversationBindingIdleTimeoutBySessionKeyAsync(idleParams)).toEqual([]);
+  expect(warning).not.toHaveBeenCalled();
   const records = [{ boundAt: 1, lastActivityAt: 2 }];
   fixture.adapter = { setIdleTimeoutBySessionKey: () => records };
-  expect(await setChannelConversationBindingIdleTimeoutBySessionKeyAsync(idleParams)).toEqual(
-    records,
+  await withPluginRuntimePluginScope({ pluginId: "thread-binding-compat-proof" }, async () => {
+    expect(await setChannelConversationBindingIdleTimeoutBySessionKeyAsync(idleParams)).toEqual(
+      records,
+    );
+    await setChannelConversationBindingIdleTimeoutBySessionKeyAsync(idleParams);
+  });
+  expect(warning).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining(
+      "ChannelConversationBindingSupport.setIdleTimeoutBySessionKey is deprecated; use ChannelConversationBindingSupport.setIdleTimeoutBySessionKeyAsync",
+    ),
+    { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
   );
 });

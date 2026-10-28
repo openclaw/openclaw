@@ -3,15 +3,20 @@ import {
   readSessionEntryInWorker,
   readSessionEntryReadOnlyInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import { persistCliSessionBindingResult } from "../cli-session-store.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import type {
+  CliSessionBinding,
+  InternalSessionEntry as SessionEntry,
+} from "../../config/sessions/types.js";
+import {
+  persistCliSessionBindingResult,
+  persistStoppedFirstCliSessionInStore,
+} from "../cli-session-store.js";
 import { getCliSessionBinding } from "../cli-session.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import { createAgentRunSupersededAbortError } from "../run-termination.js";
-import {
-  withLocalSessionPlacementTurnSettlement,
-  type LocalTurnPlacementClaim,
-} from "../session-placement-admission.js";
+import { withLocalSessionPlacementTurnSettlement } from "../session-placement-admission.js";
+import type { LocalTurnPlacementClaim } from "../session-placement-admission.types.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 type CliCandidateSettlement = Pick<
@@ -34,8 +39,13 @@ export function withAdmittedCliCandidate(
   run: (candidate: {
     sessionEntry: SessionEntry | undefined;
     cliSessionBinding: ReturnType<typeof getCliSessionBinding>;
-    assertSettlementCurrent: () => void;
+    assertSettlementCurrent: SessionSourceAssertion;
     settleResult: (settlement: CliCandidateSettlement) => Promise<EmbeddedAgentRunResult>;
+    persistStoppedFirstSession: (
+      settlement: Omit<CliCandidateSettlement, "result" | "preserveBinding"> & {
+        binding: CliSessionBinding;
+      },
+    ) => Promise<void>;
   }) => Promise<EmbeddedAgentRunResult>,
 ): Promise<EmbeddedAgentRunResult> {
   return withLocalSessionPlacementTurnSettlement(
@@ -60,15 +70,13 @@ export function withAdmittedCliCandidate(
         throw createAgentRunSupersededAbortError();
       }
       return run({
-        sessionEntry,
+        // History preparation publishes its writer into this candidate's working row.
+        sessionEntry: sessionEntry ? { ...sessionEntry } : undefined,
         cliSessionBinding: getCliSessionBinding(sessionEntry, params.provider),
         assertSettlementCurrent,
         settleResult: async ({ result, expectedSession, sessionStore, preserveBinding }) => {
           const classification = params.classifyResult?.(result);
-          if (
-            preserveBinding ||
-            (classification && result.meta.agentMeta?.clearCliSessionBinding !== true)
-          ) {
+          if (classification && result.meta.agentMeta?.clearCliSessionBinding !== true) {
             return result;
           }
           return persistCliSessionBindingResult({
@@ -79,12 +87,24 @@ export function withAdmittedCliCandidate(
             result,
             expectedSession,
             sessionStore,
+            preserveBinding,
             assertSettlementCurrent,
             abortSignal: params.admission?.abortSignal,
           });
         },
+        persistStoppedFirstSession: ({ binding, expectedSession, sessionStore }) =>
+          persistStoppedFirstCliSessionInStore({
+            agentId: params.claim.agentId,
+            provider: params.provider,
+            sessionKey: target?.sessionKey,
+            storePath: target?.storePath,
+            binding,
+            expectedSession,
+            sessionStore,
+            assertSettlementCurrent,
+          }),
       });
     },
-    params.admission,
+    { ...params.admission, sessionTarget: params.sessionTarget },
   );
 }

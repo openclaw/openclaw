@@ -15,9 +15,9 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import {
-  ensureExecApprovalsSnapshot,
-  loadExecApprovalsReadOnlyAsync,
-} from "../infra/exec-approvals-store.js";
+  ensureExecApprovalsSocket,
+  readExecApprovalsSocket,
+} from "../infra/exec-approvals-socket.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
@@ -135,6 +135,7 @@ const spawnModelAutoSelectionSchema = z.object({
 const sessionSpawnContextSchema = z
   .object({
     requesterProfileId: normalizedRequiredStringSchema.optional(),
+    gitContributorProfileId: normalizedRequiredStringSchema.optional(),
     requesterSenderIsOwner: z.boolean().optional(),
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
     inheritedPermissionMode: z.enum(["read-only", "guarded", "workspace", "full"]).optional(),
@@ -148,11 +149,23 @@ const sessionSpawnContextSchema = z
       version: z.literal(1),
       allow: stringListSchema,
       deny: stringListSchema,
+      delegatedToolPolicy: z
+        .object({
+          requesterSessionKey: normalizedRequiredStringSchema,
+          targetAgentId: normalizedRequiredStringSchema,
+          deny: stringListSchema,
+          requesterDeny: stringListSchema,
+        })
+        .strict()
+        .optional(),
     }),
     spawnModelAutoSelection: spawnModelAutoSelectionSchema.optional(),
   })
   .transform((context): AgentRuntimeSessionSpawnContext => ({
     ...(context.requesterProfileId ? { requesterProfileId: context.requesterProfileId } : {}),
+    ...(context.gitContributorProfileId
+      ? { gitContributorProfileId: context.gitContributorProfileId }
+      : {}),
     ...(context.completionOwnerSessionKey
       ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
       : {}),
@@ -261,11 +274,11 @@ function decodeDelegatedAuthority(
 }
 
 async function readSharedAgentRuntimeIdentitySecret(): Promise<string | null> {
-  return (await loadExecApprovalsReadOnlyAsync()).socket?.token?.trim() || null;
+  return (await readExecApprovalsSocket())?.socket_token?.trim() || null;
 }
 
 async function requireSharedAgentRuntimeIdentitySecret(): Promise<string> {
-  const token = (await ensureExecApprovalsSnapshot()).file.socket?.token?.trim();
+  const token = (await ensureExecApprovalsSocket()).socket_token?.trim();
   if (!token) {
     throw new Error(
       "Unable to mint agent runtime identity token without local socket credentials.",

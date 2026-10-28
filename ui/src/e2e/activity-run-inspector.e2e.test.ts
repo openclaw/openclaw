@@ -4,6 +4,7 @@ import type { BrowserContext, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import type { AuditRunInspectResult } from "../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -909,7 +910,7 @@ suite.define(() => {
     }
   });
 
-  it("shows loading, request failure, retry, and disconnected states", async () => {
+  it("shows loading, request failure, and retry while retaining evidence offline", async () => {
     const context = await newContext();
     const page = await context.newPage();
     const runId = "retry-run";
@@ -933,8 +934,15 @@ suite.define(() => {
       await page.getByRole("button", { name: "Retry inspection" }).click();
       await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
 
-      await gateway.closeLatest(1006, "network unavailable");
-      await page.getByRole("heading", { name: "Gateway disconnected" }).waitFor();
+      const receipts = page.locator(".run-inspector__receipt-list");
+      const evidence = await receipts.textContent();
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      expect(await receipts.textContent()).toBe(evidence);
+      expect(await page.getByRole("heading", { name: "Gateway disconnected" }).count()).toBe(0);
+      expect(await page.getByRole("button", { name: "Load more receipts" }).isDisabled()).toBe(
+        true,
+      );
       await screenshot(page, "08-disconnected.png");
     } finally {
       await suite.closeBrowserContext(context);

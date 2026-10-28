@@ -1,4 +1,3 @@
-/** Formats /help and /commands output for text and native command-list surfaces. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -8,6 +7,7 @@ import { getChannelPlugin } from "../channels/plugins/index.js";
 import { isCommandFlagEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginCommands } from "../plugins/commands.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import {
@@ -24,7 +24,6 @@ const COMMAND_CATEGORIES = [
   ["media", "Media"],
   ["tools", "Tools"],
 ] as const;
-type DisplayCategory = (typeof COMMAND_CATEGORIES)[number][0];
 
 /** Builds the compact slash-command help text shown by `/help`. */
 export function buildHelpMessage(cfg?: OpenClawConfig): string {
@@ -35,11 +34,10 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
     "/verbose on|off|full",
     "/trace on|off|raw",
   ];
-  if (isCommandFlagEnabled(cfg, "config")) {
-    optionParts.push("/config");
-  }
-  if (isCommandFlagEnabled(cfg, "debug")) {
-    optionParts.push("/debug");
+  for (const key of ["config", "debug"] as const) {
+    if (isCommandFlagEnabled(cfg, key)) {
+      optionParts.push(`/${key}`);
+    }
   }
   return [
     "ℹ️ Help",
@@ -123,13 +121,9 @@ export function buildCommandsMessagePaginated(
     ? listChatCommandsForConfig(cfg, { skillCommands })
     : listChatCommands({ skillCommands });
   const pluginCommands = listPluginCommands();
-  const grouped = new Map<DisplayCategory, ChatCommandDefinition[]>();
-  for (const command of commands) {
-    const category = command.category === "docks" ? "tools" : (command.category ?? "tools");
-    const list = grouped.get(category) ?? [];
-    list.push(command);
-    grouped.set(category, list);
-  }
+  const grouped = groupRecords(commands, (command) =>
+    command.category === "docks" ? "tools" : (command.category ?? "tools"),
+  );
   const items: Array<{ label: string; text: string }> = [];
 
   for (const [category, label] of COMMAND_CATEGORIES) {
@@ -157,14 +151,12 @@ export function buildCommandsMessagePaginated(
     ? items.slice(startIndex, startIndex + COMMANDS_PER_PAGE)
     : items;
   const itemLines: string[] = [];
-  let currentLabel: string | null = null;
-  for (const item of pageItems) {
-    if (item.label !== currentLabel) {
+  for (const [index, item] of pageItems.entries()) {
+    if (item.label !== pageItems[index - 1]?.label) {
       if (itemLines.length > 0) {
         itemLines.push("");
       }
       itemLines.push(item.label);
-      currentLabel = item.label;
     }
     itemLines.push(`  ${item.text}`);
   }

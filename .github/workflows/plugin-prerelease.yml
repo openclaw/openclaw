@@ -32,6 +32,11 @@ on:
         required: false
         default: false
         type: boolean
+      test_runtime_policy:
+        description: Extension batch runtime override (node, bun-all, or dual-all); empty uses Bun, or both runtimes for full release validation
+        required: false
+        default: ""
+        type: string
       phase:
         description: Plugin prerelease phase to run
         required: false
@@ -81,7 +86,9 @@ jobs:
   resolve_target:
     name: Resolve target ref
     if: github.event_name != 'schedule' || (github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main')
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: &linux_runner_ubuntu >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 5
     outputs:
       checkout_revision: ${{ steps.resolve.outputs.sha }}
@@ -113,7 +120,7 @@ jobs:
   preflight:
     name: Build plugin prerelease plan
     needs: [resolve_target]
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       run_plugin_prerelease_suite: ${{ steps.manifest.outputs.run_plugin_prerelease_suite }}
@@ -179,9 +186,9 @@ jobs:
           fi
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Checkout target
@@ -242,15 +249,15 @@ jobs:
           EOF
 
       - name: Setup manifest TypeScript runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.x"
+          node-version: "24.22.1"
 
       - name: Setup manifest pnpm
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: restore
-          node-version: "24.x"
+          node-version: "24.22.1"
 
       - name: Install manifest dependencies
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
@@ -259,6 +266,7 @@ jobs:
         id: manifest
         env:
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ inputs.test_runtime_policy }}
           PHASE: ${{ github.event_name == 'schedule' && 'independent' || inputs.phase }}
           NODE_TEST_EXCLUDE_PATTERNS_JSON: ${{ steps.node_test_exclusions.outputs.patterns_json }}
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: ${{ steps.node_test_exclusions.outputs.extension_patterns_json }}
@@ -272,6 +280,10 @@ jobs:
           const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";
           const hourly = process.env.GITHUB_EVENT_NAME === "schedule";
           const phase = process.env.PHASE ?? "all";
+          const runtimePolicy = process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim();
+          if (runtimePolicy && !["node", "bun-all", "dual-all"].includes(runtimePolicy)) {
+            throw new Error("test_runtime_policy must be node, bun-all, or dual-all");
+          }
 
           let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
           let resolveExtensionRuntime = () => ({ test_runtime_policy: "node", requires_bun: false });
@@ -370,32 +382,38 @@ jobs:
                     shardCount: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT,
                   })
                 : allExtensionShards
-            ).map(async (shard) => ({
-              check_name: shard.checkName,
-              extensions_csv: shard.extensionIds.join(","),
-              exclusion_configs: shard.planGroups.map((group) => ({
-                config: group.config,
-                includePatterns: group.roots.map((root) => root.endsWith(".test.ts") ? root : `${root}/**/*.test.ts`),
-              })),
-              vitest_config: "",
-              vitest_max_workers: shard.extensionIds.some((extensionId) =>
-                extensionId.startsWith("memory-"),
-              )
-                ? 4
-                : 1,
-              runner: shard.extensionIds.some((extensionId) => extensionId.startsWith("memory-"))
-                ? "blacksmith-16vcpu-ubuntu-2404"
-                  : [0, 1, 2, 3].includes(shard.index)
-                    ? "blacksmith-8vcpu-ubuntu-2404"
-                    : "blacksmith-4vcpu-ubuntu-2404",
-              shard_index: shard.index + 1,
-              task: "extensions-batch",
-              ...await resolveExtensionRuntime({
+            ).map(async (shard) => {
+              const runtime = await resolveExtensionRuntime({
                 planGroups: shard.planGroups,
                 fullReleaseValidation,
                 vitestArgs: extensionVitestArgs,
-              }),
-            })));
+              });
+              if (runtimePolicy && (runtime.test_runtime_policy !== runtimePolicy || runtime.requires_bun !== (runtimePolicy !== "node"))) {
+                throw new Error(`Target ref does not support requested test_runtime_policy: ${runtimePolicy}`);
+              }
+              return {
+                check_name: shard.checkName,
+                extensions_csv: shard.extensionIds.join(","),
+                exclusion_configs: shard.planGroups.map((group) => ({
+                  config: group.config,
+                  includePatterns: group.roots.map((root) => root.endsWith(".test.ts") ? root : `${root}/**/*.test.ts`),
+                })),
+                vitest_config: "",
+                vitest_max_workers: shard.extensionIds.some((extensionId) =>
+                  extensionId.startsWith("memory-"),
+                )
+                  ? 4
+                  : 1,
+                runner: shard.extensionIds.some((extensionId) => extensionId.startsWith("memory-"))
+                  ? "blacksmith-16vcpu-ubuntu-2404"
+                    : [0, 1, 2, 3].includes(shard.index)
+                      ? "blacksmith-8vcpu-ubuntu-2404"
+                      : "blacksmith-4vcpu-ubuntu-2404",
+                shard_index: shard.index + 1,
+                task: "extensions-batch",
+                ...runtime,
+              };
+            }));
             const telegramShards = [];
             for (const group of [
               ...fileSplitPlanGroups,
@@ -673,7 +691,7 @@ jobs:
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_extensions == 'true'
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner) }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.test_runtime_policy == 'dual-all' && 120 || 60 }}
     strategy:
       fail-fast: false
       max-parallel: 12
@@ -755,7 +773,7 @@ jobs:
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'
     continue-on-error: true
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -775,7 +793,7 @@ jobs:
 
       - name: Run plugin inspector advisory sweep
         env:
-          OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.26"
+          OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.27"
           OPENCLAW_PLUGIN_INSPECTOR_ROOT: .artifacts/plugin-inspector
         shell: bash
         run: |
@@ -922,7 +940,7 @@ jobs:
 
       - name: Upload plugin inspector advisory artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-inspector-advisory
           path: .artifacts/plugin-inspector/**
@@ -989,7 +1007,7 @@ jobs:
       - plugin-prerelease-inspector
       - plugin-prerelease-docker-suite
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_plugin_prerelease_suite == 'true' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 5
     steps:
       - name: Verify plugin prerelease suite

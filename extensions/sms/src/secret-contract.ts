@@ -7,27 +7,19 @@ import {
 const DEFAULT_ACCOUNT_ID = "default";
 
 function hasTopLevelSmsAccount(channel: Record<string, unknown>): boolean {
-  for (const field of ["accountSid", "fromNumber", "messagingServiceSid", "defaultTo"]) {
-    if (typeof channel[field] === "string" && channel[field].trim().length > 0) {
-      return true;
-    }
-  }
-  return false;
+  return ["accountSid", "fromNumber", "messagingServiceSid", "defaultTo"].some(
+    (field) => typeof channel[field] === "string" && channel[field].trim().length > 0,
+  );
 }
 
 function hasEnvBackedDefaultSmsAccount(env: NodeJS.ProcessEnv): boolean {
-  for (const name of [
+  return [
     "TWILIO_ACCOUNT_SID",
     "TWILIO_AUTH_TOKEN",
     "TWILIO_PHONE_NUMBER",
     "TWILIO_SMS_FROM",
     "TWILIO_MESSAGING_SERVICE_SID",
-  ]) {
-    if (typeof env[name] === "string" && env[name].trim().length > 0) {
-      return true;
-    }
-  }
-  return false;
+  ].some((name) => typeof env[name] === "string" && env[name].trim().length > 0);
 }
 
 export const channelSecrets = createChannelSecretContract({

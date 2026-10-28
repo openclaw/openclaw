@@ -1,8 +1,9 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
-import type { AssistantMessage, Model } from "../../llm/types.js";
+import type { AssistantMessage, Model, ModelRequestHeaders } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { notifyListeners } from "../../shared/listeners.js";
+import { gateAgentToolExecution } from "../agent-tool-availability.js";
 import {
   getSteeringRuntimeContext,
   shouldRetainSteeringRuntimeContext,
@@ -16,7 +17,6 @@ import type {
   ThinkingLevel,
 } from "../runtime/index.js";
 import { isToolResultError } from "../tool-result-error.js";
-import { takeCodeModeResponseSource } from "../transcript-code-mode-source.js";
 import { persistAgentSessionMessage } from "./agent-session-transcript.js";
 import type {
   AgentSessionConfig,
@@ -38,6 +38,10 @@ import {
 } from "./extensions/index.js";
 import type { RegisteredTool } from "./extensions/types.js";
 import type { CustomMessage } from "./messages.js";
+import {
+  getModelPromptProjectionAppend,
+  sessionManagerAppendPromptContext,
+} from "./model-prompt-projection-append.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { PromptTemplate } from "./prompt-templates.js";
@@ -47,7 +51,7 @@ import {
 } from "./queued-user-message-retirement.js";
 import type { ResourceLoader } from "./resource-loader.js";
 import type { SessionManager } from "./session-manager.js";
-import { prepareSessionToolResult } from "./session-tool-result-redaction.js";
+import { createSessionToolResultPreparer } from "./session-tool-result-preparation.js";
 import type { SettingsManager } from "./settings-manager.js";
 import { reportSteeringMessagePersistenceFailure } from "./steering-message-identity.js";
 import type { BuildSystemPromptOptions } from "./system-prompt-metadata.js";
@@ -75,7 +79,6 @@ export abstract class AgentSessionBase {
   protected contextOverflowRecoveryOwner: "session" | "caller";
   protected resolveCompactionThinkingLevel?: AgentSessionConfig["resolveCompactionThinkingLevel"];
 
-  protected branchSummaryAbortController: AbortController | undefined = undefined;
   private extensionModifiedToolResultIds = new Set<string>();
 
   protected retryAbortController: AbortController | undefined = undefined;
@@ -132,7 +135,7 @@ export abstract class AgentSessionBase {
 
   protected async getRequiredRequestAuth(model: Model): Promise<{
     apiKey: string;
-    headers?: Record<string, string>;
+    headers?: ModelRequestHeaders;
   }> {
     const result = await this.sessionModelRegistry.getApiKeyAndHeaders(model);
     if (!result.ok) {
@@ -158,7 +161,7 @@ export abstract class AgentSessionBase {
 
   protected async getCompactionRequestAuth(model: Model): Promise<{
     apiKey?: string;
-    headers?: Record<string, string>;
+    headers?: ModelRequestHeaders;
   }> {
     if (
       getStreamLlmRuntime(this.agent.streamFn) ===
@@ -175,10 +178,6 @@ export abstract class AgentSessionBase {
     return this.withExternalSessionWriteSettlement
       ? await this.withExternalSessionWriteSettlement(run)
       : await run();
-  }
-
-  private eventMayWriteSession(event: AgentEvent): boolean {
-    return event.type === "message_end" || this.currentExtensionRunner.hasHandlers(event.type);
   }
 
   /**
@@ -267,11 +266,7 @@ export abstract class AgentSessionBase {
   }
 
   protected emitQueueUpdate(): void {
-    this.emit({
-      type: "queue_update",
-      steering: this.steeringMessages.map((entry) => entry.text),
-      followUp: this.followUpMessages.map((entry) => entry.text),
-    });
+    this.emit({ type: "queue_update" });
   }
 
   protected trackQueuedUserMessage(
@@ -302,7 +297,8 @@ export abstract class AgentSessionBase {
   protected lastRunEndedForTurnHandoff = false;
 
   /** Internal handler for agent events - shared by subscribe and reconnect */
-  protected handleAgentEvent = async (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
+  protected handleAgentEvent = (event: AgentEvent, signal?: AbortSignal): Promise<void> => {
+    const prepareToolResult = createSessionToolResultPreparer(this.sessionManager, event);
     if (event.type === "agent_end") {
       const reason: unknown = signal?.reason;
       this.lastRunEndedForTurnHandoff =
@@ -311,20 +307,29 @@ export abstract class AgentSessionBase {
         reason !== null &&
         (reason as { turnHandoff?: unknown }).turnHandoff === true;
     }
-    if (this.eventMayWriteSession(event)) {
-      await this.runWithSessionWriteSettlement(
-        async () => await this.handleAgentEventUnlocked(event),
-      );
-      // Supported callbacks can change the current result or register another secret.
-      prepareSessionToolResult(this.sessionManager, event);
-      return;
+    if (event.type === "message_end" || this.currentExtensionRunner.hasHandlers(event.type)) {
+      return this.runWithSessionWriteSettlement(() =>
+        this.handleAgentEventUnlocked(event, prepareToolResult),
+      ).then(() => {
+        // Supported callbacks can replace the current result.
+        prepareToolResult();
+      });
     }
-    await this.handleAgentEventUnlocked(event);
+    return this.handleAgentEventUnlocked(
+      event,
+      prepareToolResult,
+      event.type === "message_update" ? false : undefined,
+    );
   };
 
-  private async handleAgentEventUnlocked(event: AgentEvent): Promise<void> {
+  private async handleAgentEventUnlocked(
+    event: AgentEvent,
+    prepareToolResult: () => boolean,
+    hasExtensionHandlers?: boolean,
+  ): Promise<void> {
     if (event.type === "agent_start") {
       this.lastAssistantEntryId = undefined;
+      this.turnIndex = 0;
     }
 
     // Retire the exact queued display entry before publishing message_start.
@@ -333,14 +338,17 @@ export abstract class AgentSessionBase {
       retireQueuedUserMessage(event.message);
     }
 
-    const sourceSlots =
-      event.type === "message_end" ? takeCodeModeResponseSource(event.message) : undefined;
     let messageChanged = false;
-    if (event.type !== "message_update" || this.currentExtensionRunner.hasHandlers(event.type)) {
+    // Delta dispatch reaches here synchronously; user-message retirement can run callbacks.
+    if (hasExtensionHandlers ?? this.currentExtensionRunner.hasHandlers(event.type)) {
       messageChanged = await this.emitExtensionEvent(event);
     }
-    // Extensions can replace the final result. Protect listeners before publishing it.
-    messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
+    // Turn numbering belongs to the session, including turns with no extension listeners.
+    if (event.type === "turn_end") {
+      this.turnIndex++;
+    }
+    // Extensions can replace the final result. Apply the size cap before publishing it.
+    messageChanged = prepareToolResult() || messageChanged;
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
     if (event.type === "agent_end") {
@@ -353,17 +361,23 @@ export abstract class AgentSessionBase {
       this.emit(event);
     }
     // Persist the same prepared bytes after synchronous listener changes.
-    messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
+    messageChanged = prepareToolResult() || messageChanged;
 
     if (event.type === "message_end") {
       if (event.message.role === "custom") {
         const message = event.message;
-        await this.sessionManager.appendCustomMessageEntryAsync(
-          message.customType,
-          message.content,
-          message.display,
-          message.details,
-        );
+        const prepareProjection = getModelPromptProjectionAppend(message);
+        if (prepareProjection) {
+          await this.sessionManager[sessionManagerAppendPromptContext](message, prepareProjection);
+        } else {
+          await this.sessionManager.appendCustomMessageEntryAsync(
+            message.customType,
+            message.content,
+            message.display,
+            message.details,
+            message.timestamp,
+          );
+        }
       } else if (
         event.message.role === "user" ||
         event.message.role === "assistant" ||
@@ -385,11 +399,11 @@ export abstract class AgentSessionBase {
               retainedSteeringContext.content,
               retainedSteeringContext.display,
               retainedSteeringContext.details,
+              retainedSteeringContext.timestamp,
             );
           }
           const entryId = await persistAgentSessionMessage(this.sessionManager, event.message, {
             invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
-            sourceAppend: sourceSlots,
           });
           if (event.message.role === "assistant") {
             this.lastAssistantEntryId = entryId;
@@ -419,14 +433,7 @@ export abstract class AgentSessionBase {
         this.overflowRecoveryAttempts = 0;
       }
       if (assistantMsg.stopReason !== "error" && this.retryCount > 0) {
-        this.emit({
-          type: "auto_retry_end",
-          success: assistantMsg.stopReason !== "aborted",
-          attempt: this.retryCount,
-          ...(assistantMsg.stopReason === "aborted"
-            ? { finalError: assistantMsg.errorMessage }
-            : {}),
-        });
+        this.emit({ type: "auto_retry_end" });
         this.retryCount = 0;
       }
     }
@@ -448,12 +455,7 @@ export abstract class AgentSessionBase {
   }
 
   private async emitExtensionEvent(event: AgentEvent): Promise<boolean> {
-    if (event.type === "agent_start") {
-      this.turnIndex = 0;
-      await this.currentExtensionRunner.emit({ type: "agent_start" });
-    } else if (event.type === "agent_end") {
-      await this.currentExtensionRunner.emit({ type: "agent_end", messages: event.messages });
-    } else if (event.type === "turn_start") {
+    if (event.type === "turn_start") {
       await this.currentExtensionRunner.emit({
         type: "turn_start",
         turnIndex: this.turnIndex,
@@ -465,18 +467,6 @@ export abstract class AgentSessionBase {
         turnIndex: this.turnIndex,
         message: event.message,
         toolResults: event.toolResults,
-      });
-      this.turnIndex++;
-    } else if (event.type === "message_start") {
-      await this.currentExtensionRunner.emit({
-        type: "message_start",
-        message: event.message,
-      });
-    } else if (event.type === "message_update") {
-      await this.currentExtensionRunner.emit({
-        type: "message_update",
-        message: event.message,
-        assistantMessageEvent: event.assistantMessageEvent,
       });
     } else if (event.type === "message_end") {
       const replacement = await this.currentExtensionRunner.emitMessageEnd({
@@ -510,6 +500,8 @@ export abstract class AgentSessionBase {
         result: event.result,
         isError: event.isError,
       });
+    } else {
+      await this.currentExtensionRunner.emit({ ...event });
     }
     return false;
   }
@@ -559,12 +551,7 @@ export abstract class AgentSessionBase {
    */
   dispose(): void {
     notifyListeners(
-      [
-        () => this.abortRetry(),
-        () => this.abortCompaction(),
-        () => this.abortBranchSummary(),
-        () => this.agent.abort(),
-      ],
+      [() => this.abortRetry(), () => this.abortCompaction(), () => this.agent.abort()],
       undefined,
     );
 
@@ -597,11 +584,6 @@ export abstract class AgentSessionBase {
     return this.agent.state.systemPrompt;
   }
 
-  /** Current retry attempt (0 if not retrying) */
-  get retryAttempt(): number {
-    return this.retryCount;
-  }
-
   getActiveToolNames(): string[] {
     return this.agent.state.tools.map((t) => t.name);
   }
@@ -623,16 +605,25 @@ export abstract class AgentSessionBase {
   /**
    * Set active tools by name.
    * Only tools in the registry can be enabled. Unknown tool names are ignored.
+   * An execution cap preserves these definitions and refuses denied calls.
    * Refreshes extension prompt metadata while preserving the runtime-owned prompt.
    * Changes take effect on the next agent turn.
    */
-  setActiveToolsByName(toolNames: string[]): void {
+  setActiveToolsByName(toolNames: string[], callableToolNames?: readonly string[]): void {
     const tools: AgentTool[] = [];
     const validToolNames: string[] = [];
+    const callable = callableToolNames ? new Set(callableToolNames) : undefined;
     for (const name of toolNames) {
       const tool = this.toolRegistry.get(name);
       if (tool) {
-        tools.push(tool);
+        tools.push(
+          !callable || callable.has(name)
+            ? tool
+            : gateAgentToolExecution(
+                tool,
+                `${name} is not available in this turn. Do not retry ${name}.`,
+              ),
+        );
         validToolNames.push(name);
       }
     }
@@ -649,12 +640,11 @@ export abstract class AgentSessionBase {
     this.agent.state.systemPrompt = systemPrompt;
   }
 
-  /** Whether compaction or branch summarization is currently running */
+  /** Whether manual or automatic compaction is currently running */
   get isCompacting(): boolean {
     return (
       this.autoCompactionAbortController !== undefined ||
-      this.compactionAbortController !== undefined ||
-      this.branchSummaryAbortController !== undefined
+      this.compactionAbortController !== undefined
     );
   }
 
@@ -734,5 +724,4 @@ export abstract class AgentSessionBase {
   ): Promise<boolean>;
   abstract abortRetry(): void;
   abstract abortCompaction(): void;
-  abstract abortBranchSummary(): void;
 }

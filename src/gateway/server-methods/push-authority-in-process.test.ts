@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { registerWebPushSubscription } from "../../infra/push-web.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -47,6 +48,7 @@ vi.mock("../session-sharing.js", async () => ({
 let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
 beforeEach(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
+  setRuntimeConfigSnapshot({});
   vi.clearAllMocks();
   resetGatewayWorkAdmission();
 });
@@ -54,7 +56,7 @@ afterEach(async () => await state?.cleanup());
 
 describe("Web Push opaque in-process authority", () => {
   it.each(["resolver retired", "caller revoked", "transport retirement"] as const)(
-    "retains the full native commit guard for %s",
+    "retains the full opaque commit guard at the worker grant for %s",
     async (scenario) => {
       const profileId = ensureProfileForEmail("push-owner@example.test").id;
       const entered = createDeferred();
@@ -63,14 +65,14 @@ describe("Web Push opaque in-process authority", () => {
       const resolverCommitChecks = vi.fn();
       const callerCommitChecks = vi.fn();
       const work = new AsyncWorkScope();
-      let inNativeCommit = false;
+      let inWorkerGrant = false;
       let observedFamily: string | undefined;
       vi.mocked(registerWebPushSubscription).mockImplementation(async (params) => {
         const guard = expectDefined(params.guard, "retained Web Push mutation guard");
         observedFamily = guard.family;
         entered.resolve();
         await release.promise;
-        inNativeCommit = true;
+        inWorkerGrant = true;
         try {
           if (guard.family === "worker") {
             guard.assertProfiles({ profileId, bindingCurrent: true });
@@ -78,7 +80,7 @@ describe("Web Push opaque in-process authority", () => {
           guard.assertCurrent();
           persisted();
         } finally {
-          inNativeCommit = false;
+          inWorkerGrant = false;
         }
         return {
           subscriptionId: "in-process-subscription",
@@ -127,13 +129,13 @@ describe("Web Push opaque in-process authority", () => {
       let liveContext: GatewayRequestContext | undefined = context;
       let callerAllowed = true;
       const resolveGatewayContext = () => {
-        if (inNativeCommit) {
+        if (inWorkerGrant) {
           resolverCommitChecks();
         }
         return liveContext;
       };
       const assertCallerCurrent = () => {
-        if (inNativeCommit) {
+        if (inWorkerGrant) {
           callerCommitChecks();
         }
         if (!callerAllowed) {
@@ -191,7 +193,7 @@ describe("Web Push opaque in-process authority", () => {
           payload: { subscriptionId: "in-process-subscription" },
         });
       }
-      expect(observedFamily).toBe("native-compatibility");
+      expect(observedFamily).toBe("worker");
       expect(resolverCommitChecks).toHaveBeenCalled();
       if (scenario !== "resolver retired") {
         expect(callerCommitChecks).toHaveBeenCalled();

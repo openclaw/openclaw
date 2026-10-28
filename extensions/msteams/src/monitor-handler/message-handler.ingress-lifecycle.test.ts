@@ -11,7 +11,7 @@ import {
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { createMSTeamsIngress } from "../msteams-ingress.js";
 import type { MSTeamsIngressLifecycle } from "../msteams-ingress.js";
@@ -20,161 +20,116 @@ import type { MSTeamsTurnContext } from "../sdk-types.js";
 // oxfmt-ignore
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
-import { buildChannelActivity, createMessageHandlerDeps } from "./message-handler.test-support.js";
+import {
+  buildChannelActivity,
+  createDebounceControl,
+  createMessageHandlerDeps,
+  createTurnContext,
+} from "./message-handler.test-support.js";
 
-const runtimeApiMockState = getRuntimeApiMockState();
+const dispatch = getRuntimeApiMockState().dispatchReplyWithBufferedBlockDispatcher;
+const openDM: OpenClawConfig = {
+  channels: { msteams: { dmPolicy: "open", allowFrom: ["*"] } },
+};
 
 vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>();
   return { ...actual, createChannelIngressMonitor: vi.fn(actual.createChannelIngressMonitor) };
 });
 
-function createLifecycle(): MSTeamsIngressLifecycle & {
-  onAdopted: ReturnType<typeof vi.fn>;
-  onAbandoned: ReturnType<typeof vi.fn>;
-} {
+function createLifecycle() {
   return {
     abortSignal: new AbortController().signal,
     onAdopted: vi.fn(async () => {}),
     onAbandoned: vi.fn(async () => {}),
     onDeferred: () => {},
     onAdoptionFinalizing: () => {},
-  };
+  } satisfies MSTeamsIngressLifecycle;
 }
 
 function context(activity: MSTeamsTurnContext["activity"]): MSTeamsTurnContext {
-  return {
-    activity,
-    sendActivity: vi.fn(async () => ({ id: "sent" })),
-    sendActivities: vi.fn(async () => []),
-    updateActivity: vi.fn(async () => ({ id: "updated" })),
-    deleteActivity: vi.fn(async () => {}),
-  };
+  return createTurnContext(activity, { sent: "sent", updated: "updated" });
 }
 
 function directActivity(id: string, text: string): MSTeamsTurnContext["activity"] {
-  return {
-    ...buildChannelActivity({
-      id,
-      text,
-      conversation: { id: "dm-conversation", conversationType: "personal" },
-      channelData: {},
-      entities: [],
-    }),
-  } as MSTeamsTurnContext["activity"];
+  return buildChannelActivity({
+    id,
+    text,
+    conversation: { id: "dm-conversation", conversationType: "personal" },
+    channelData: {},
+    entities: [],
+  }) as MSTeamsTurnContext["activity"];
 }
 
-function createHandler(cfg: OpenClawConfig, createDebouncer = createInboundDebouncer) {
+function createHandler(cfg = openDM, createDebouncer = createInboundDebouncer, debounceMs = 40) {
   const { deps } = createMessageHandlerDeps(cfg, {
     createInboundDebouncer: createDebouncer,
-    resolveInboundDebounceMs: vi.fn(() => 40),
+    resolveInboundDebounceMs: vi.fn(() => debounceMs),
   });
   return createMSTeamsMessageHandler(deps);
+}
+function expectAdopted(lifecycle: ReturnType<typeof createLifecycle>) {
+  expect(lifecycle.onAdopted).toHaveBeenCalledTimes(1);
+  expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
 }
 
 describe("Microsoft Teams drain claim ownership", () => {
   beforeEach(() => {
-    runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    dispatch.mockClear();
   });
+  afterEach(() => vi.useRealTimers());
 
-  it("fans merged-flush adoption to every constituent claim", async () => {
-    const handler = createHandler({
-      messages: { inbound: { debounceMs: 40 } },
-      channels: { msteams: { dmPolicy: "open", allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    const first = createLifecycle();
-    const second = createLifecycle();
-
-    const results = [
-      await handler(context(directActivity("activity-first", "part one")), first),
-      await handler(context(directActivity("activity-second", "part two")), second),
-    ];
-
-    expect(results).toEqual([{ kind: "deferred" }, { kind: "deferred" }]);
-    await vi.waitFor(
-      () => {
-        expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
-          1,
-        );
-        expect(first.onAdopted).toHaveBeenCalledTimes(1);
-        expect(second.onAdopted).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 5_000 },
-    );
-    const dispatchParams = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock
-      .calls[0]?.[0] as { ctx?: { BodyForAgent?: string } } | undefined;
-    expect(dispatchParams?.ctx?.BodyForAgent).toContain("part one\npart two");
-    expect(first.onAbandoned).not.toHaveBeenCalled();
-    expect(second.onAbandoned).not.toHaveBeenCalled();
-  });
-
-  it("dispatches HTML-only text through the immediate debounce flush without double stripping", async () => {
-    const handler = createHandler({
-      channels: { msteams: { dmPolicy: "open", allowFrom: ["*"] } },
-    });
-    const lifecycle = createLifecycle();
-
-    await handler(
-      context({
-        ...directActivity("activity-html", ""),
-        attachments: [
-          {
-            contentType: "TEXT/HTML",
-            content: "<at>Bot</at><p>Use x &lt; 5 &copy;; literal &lt;at&gt;Alice&lt;/at&gt;</p>",
+  it.each(["batched", "gated", "html"])("settles %s claims once", async (mode) => {
+    vi.useFakeTimers();
+    const clock = createDebounceControl();
+    const gated = mode === "gated";
+    const html = mode === "html";
+    const cfg: OpenClawConfig = gated
+      ? { channels: { msteams: { groupPolicy: "open", requireMention: true } } }
+      : openDM;
+    const messages = gated
+      ? [buildChannelActivity({ id: "gated", text: "not for the bot", entities: [] })]
+      : html
+        ? [
+            {
+              ...directActivity("html", ""),
+              attachments: [
+                {
+                  contentType: "TEXT/HTML",
+                  content:
+                    "<at>Bot</at><p>Use x &lt; 5 &copy;; literal &lt;at&gt;Alice&lt;/at&gt;</p>",
+                },
+              ],
+            },
+          ]
+        : [directActivity("first", "part one"), directActivity("second", "part two")];
+    const handler = createHandler(cfg, clock.createDebouncer);
+    const claims = messages.map(() => createLifecycle());
+    try {
+      for (const [i, message] of messages.entries()) {
+        expect(await handler(context(message), claims[i])).toEqual({ kind: "deferred" });
+      }
+      if (html) {
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      }
+      await clock.flush(40);
+      expect(dispatch).toHaveBeenCalledTimes(gated ? 0 : 1);
+      for (const claim of claims) {
+        expectAdopted(claim);
+      }
+      if (!gated) {
+        expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
+          ctx: {
+            BodyForAgent: expect.stringContaining(
+              html ? "Use x < 5 ©; literal <at>Alice</at>" : "part one\npart two",
+            ),
           },
-        ],
-      }),
-      lifecycle,
-    );
-
-    expect(
-      runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher,
-    ).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          BodyForAgent: expect.stringContaining("Use x < 5 ©; literal <at>Alice</at>"),
-        }),
-      }),
-    );
-    expect(
-      runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].replyOptions
-        ?.turnAdoptionLifecycle,
-    ).toMatchObject({ admission: "exclusive" });
-    expect(lifecycle.onAdopted).toHaveBeenCalledTimes(1);
-    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
-  });
-
-  it("completes a gated no-dispatch turn instead of stalling its claim", async () => {
-    const { deps } = createMessageHandlerDeps(
-      {
-        channels: {
-          msteams: {
-            groupPolicy: "open",
-            requireMention: true,
-          },
-        },
-      } as OpenClawConfig,
-      {
-        createInboundDebouncer,
-        resolveInboundDebounceMs: vi.fn(() => 20),
-      },
-    );
-    const handler = createMSTeamsMessageHandler(deps);
-    const lifecycle = createLifecycle();
-    const gatedActivity = buildChannelActivity({
-      id: "activity-gated",
-      text: "not for the bot",
-      entities: [],
-    }) as MSTeamsTurnContext["activity"];
-
-    const result = await handler(context(gatedActivity), lifecycle);
-
-    expect(result).toEqual({ kind: "deferred" });
-    await vi.waitFor(() => expect(lifecycle.onAdopted).toHaveBeenCalledTimes(1), {
-      timeout: 5_000,
-    });
-    expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
-    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
+          replyOptions: { turnAdoptionLifecycle: { admission: "exclusive" } },
+        });
+      }
+    } finally {
+      await clock.flush(40);
+    }
   });
 
   it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {
@@ -196,22 +151,21 @@ describe("Microsoft Teams drain claim ownership", () => {
       { version: 1, receivedAt: now - 2 * 24 * 60 * 60_000, rawActivity: JSON.stringify(incoming) },
       { laneKey: "dm-conversation", receivedAt: now - 2 * 24 * 60 * 60_000 },
     );
-    const dispatchMock = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher;
+    const dispatchMock = dispatch;
     const priorImplementation = dispatchMock.getMockImplementation();
     dispatchMock.mockRejectedValue(new Error("Microsoft Teams dispatch failed before adoption"));
 
     let stopCurrent: (() => Promise<void>) | undefined;
-    const createIntegratedIngress = () => {
-      let capturedDrain: (() => Promise<void>) | undefined;
-      const createDebouncer: typeof createInboundDebouncer = (options) => {
-        const debouncer = createInboundDebouncer(options);
-        capturedDrain = debouncer.drain;
-        return debouncer;
-      };
-      const handler = createHandler(
-        { channels: { msteams: { dmPolicy: "open", allowFrom: ["*"] } } },
-        createDebouncer,
-      );
+    type Pending = Awaited<ReturnType<typeof queue.listPending>>[number];
+    const restart = async (
+      timestamp: number,
+      expected: number | Pending,
+      dispatches: number,
+      replay = true,
+    ) => {
+      vi.setSystemTime(timestamp);
+      const clock = createDebounceControl();
+      const handler = createHandler(openDM, clock.createDebouncer);
       const ingress = createMSTeamsIngress({
         accountId: "test-app",
         queue,
@@ -219,66 +173,48 @@ describe("Microsoft Teams drain claim ownership", () => {
         dispatch: async (activity, lifecycle) => await handler(context(activity), lifecycle),
       });
       const monitorResult = vi.mocked(createChannelIngressMonitor).mock.results.at(-1);
-      if (monitorResult?.type !== "return" || !capturedDrain) {
+      if (monitorResult?.type !== "return") {
         throw new Error("Expected the Microsoft Teams ingress and debounce owners");
       }
       const monitor = monitorResult.value;
-      const drainDebounce = capturedDrain;
       stopCurrent = async () => {
         await monitor.pause();
         await monitor.waitForIdle();
-        await vi.advanceTimersByTimeAsync(40);
-        await drainDebounce();
+        await clock.flush(40);
         await ingress.stop();
       };
-      return { ...ingress, waitForIdle: monitor.waitForIdle, drainDebounce };
-    };
-    const expectPendingAttempt = async (
-      ingress: ReturnType<typeof createIntegratedIngress>,
-      attempts: number,
-    ) => {
-      await ingress.waitForIdle();
-      await vi.advanceTimersByTimeAsync(40);
-      await ingress.drainDebounce();
+      ingress.start();
+      if (replay) {
+        await ingress.accept(incoming);
+      }
+      await monitor.waitForIdle();
+      if (typeof expected === "number") {
+        await clock.flush(40);
+      }
       const pending = await queue.listPending({ limit: "all" });
       expect(pending).toEqual([
-        expect.objectContaining({
-          id: "activity-abandon",
-          attempts,
-          lastAttemptAt: expect.any(Number),
-          lastError: "turn-abandoned",
-        }),
+        typeof expected === "number"
+          ? expect.objectContaining({
+              id: "activity-abandon",
+              attempts: expected,
+              lastAttemptAt: expect.any(Number),
+              lastError: "turn-abandoned",
+            })
+          : expected,
       ]);
+      expect(dispatchMock).toHaveBeenCalledTimes(dispatches);
       const observed = pending[0];
-      const lastAttemptAt = observed?.lastAttemptAt;
-      if (lastAttemptAt === undefined) {
-        throw new Error(`Missing Microsoft Teams retry timestamp for attempt ${attempts}`);
+      if (!observed || observed.lastAttemptAt === undefined) {
+        throw new Error("Missing Microsoft Teams retry timestamp");
       }
-      return { ...observed, lastAttemptAt };
+      await ingress.stop();
+      return { ...observed, lastAttemptAt: observed.lastAttemptAt };
     };
 
     try {
-      const first = createIntegratedIngress();
-      first.start();
-      const firstAttempt = await expectPendingAttempt(first, 1);
-      expect(dispatchMock).toHaveBeenCalledTimes(1);
-      await first.stop();
-
-      vi.setSystemTime(firstAttempt.lastAttemptAt + 999);
-      const second = createIntegratedIngress();
-      second.start();
-      await second.accept(incoming);
-      await second.waitForIdle();
-      expect(dispatchMock).toHaveBeenCalledTimes(1);
-      expect(await queue.listPending({ limit: "all" })).toEqual([firstAttempt]);
-      await second.stop();
-      vi.setSystemTime(firstAttempt.lastAttemptAt + 1_001);
-      const afterBackoff = createIntegratedIngress();
-      afterBackoff.start();
-      await afterBackoff.accept(incoming);
-      const secondAttempt = await expectPendingAttempt(afterBackoff, 2);
-      expect(dispatchMock).toHaveBeenCalledTimes(2);
-      await afterBackoff.stop();
+      const firstAttempt = await restart(now, 1, 1, false);
+      await restart(firstAttempt.lastAttemptAt + 999, firstAttempt, 1);
+      const secondAttempt = await restart(firstAttempt.lastAttemptAt + 1_001, 2, 2);
 
       for (let attempt = 3; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
         const claim = await queue.claim("activity-abandon", { ownerId: `seed-${attempt}` });
@@ -290,36 +226,18 @@ describe("Microsoft Teams drain claim ownership", () => {
           releasedAt: secondAttempt.lastAttemptAt,
         });
       }
-      vi.setSystemTime(secondAttempt.lastAttemptAt + 64_001);
-      const threshold = createIntegratedIngress();
-      threshold.start();
-      await threshold.accept(incoming);
-      const thresholdAttempt = await expectPendingAttempt(
-        threshold,
+      const thresholdAttempt = await restart(
+        secondAttempt.lastAttemptAt + 64_001,
         DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+        3,
       );
-      expect(dispatchMock).toHaveBeenCalledTimes(3);
-      await threshold.stop();
 
-      vi.setSystemTime(thresholdAttempt.lastAttemptAt + 128_001);
-      const beyond = createIntegratedIngress();
-      beyond.start();
-      await beyond.accept(incoming);
-      const beyondAttempt = await expectPendingAttempt(
-        beyond,
+      const beyondAttempt = await restart(
+        thresholdAttempt.lastAttemptAt + 128_001,
         DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1,
+        4,
       );
-      expect(dispatchMock).toHaveBeenCalledTimes(4);
-      await beyond.stop();
-
-      vi.setSystemTime(beyondAttempt.lastAttemptAt + 1_000);
-      const blockedRestart = createIntegratedIngress();
-      blockedRestart.start();
-      await blockedRestart.accept(incoming);
-      await blockedRestart.waitForIdle();
-      expect(dispatchMock).toHaveBeenCalledTimes(4);
-      expect(await queue.listPending({ limit: "all" })).toEqual([beyondAttempt]);
-      await blockedRestart.stop();
+      await restart(beyondAttempt.lastAttemptAt + 1_000, beyondAttempt, 4);
     } finally {
       try {
         await stopCurrent?.();

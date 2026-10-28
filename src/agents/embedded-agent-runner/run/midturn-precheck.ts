@@ -1,6 +1,3 @@
-/**
- * Signals mid-turn prechecks that require preemptive compaction routing.
- */
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 

@@ -1,4 +1,3 @@
-/** Coordinates provider OAuth flows exposed by plugin-owned auth integrations. */
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 

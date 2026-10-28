@@ -1,3 +1,5 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+
 // Schema-bearing containers shared by the draft-07 through 2020-12 walkers.
 export const SCHEMA_MAP_KEYS = new Set([
   "$defs",
@@ -28,35 +30,17 @@ export const SCHEMA_OBJECT_KEYS = new Set([
 
 /** Containers whose value is a list of nested schemas. */
 export const SCHEMA_ARRAY_KEYS = new Set(["allOf", "anyOf", "items", "oneOf", "prefixItems"]);
+export const SCHEMA_NESTED_KEYS = new Set([...SCHEMA_OBJECT_KEYS, ...SCHEMA_ARRAY_KEYS].toSorted());
 
-export type SchemaWalk = Generator<SchemaWalk, unknown, unknown>;
-
-/** Resume child schema walks on a heap stack, never through recursive yield delegation. */
-export function evaluateSchemaWalk(walk: SchemaWalk): unknown {
-  const parents: SchemaWalk[] = [];
-  let current = walk;
-  let value: unknown;
-  try {
-    while (true) {
-      const step = current.next(value);
-      if (!step.done) {
-        parents.push(current);
-        current = step.value;
-        value = undefined;
-        continue;
-      }
-      value = step.value;
-      const parent = parents.pop();
-      if (!parent) {
-        return value;
-      }
-      current = parent;
-    }
-  } finally {
-    // Unwind path-local cycle tracking if a child rejects the schema.
-    let parent: SchemaWalk | undefined;
-    while ((parent = parents.pop())) {
-      parent.return(undefined);
-    }
+/** Callers bound schema depth before walking; ordinary recursion stays within that budget. */
+export function walkSchemaValue(
+  schema: unknown,
+  visitObject: (schema: Record<string, unknown>) => unknown,
+): unknown {
+  if (!schema || typeof schema !== "object") {
+    return schema;
   }
+  return Array.isArray(schema)
+    ? schema.map((entry) => walkSchemaValue(entry, visitObject))
+    : visitObject(asRecord(schema));
 }

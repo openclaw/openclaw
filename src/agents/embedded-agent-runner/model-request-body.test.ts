@@ -1,4 +1,7 @@
-import { hash } from "node:crypto";
+import crypto, { hash } from "node:crypto";
+import { syncBuiltinESMExports } from "node:module";
+import { serialize } from "node:v8";
+import { serializeModelRequestBody } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../packages/ai/src/host.js";
@@ -11,6 +14,7 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
 import {
   markLastProviderPromptContextRejected,
   wrapStreamFnWithProviderPromptState,
@@ -19,6 +23,7 @@ import {
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
 
 const originalHost = getAiTransportHost();
+const digest = (value: unknown) => hash("sha256", JSON.stringify(value));
 afterEach(() => {
   configureAiTransportHost(originalHost);
   resetDiagnosticEventsForTest();
@@ -36,46 +41,40 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
     type: "function",
     function: { name, parameters: { type: "object", properties: {} } },
   }));
-  const messages = Array.from({ length: 100 }, (_, index) => ({
-    role: index % 2 === 0 ? "user" : "assistant",
-    content: [
-      { type: "text", text: `${index}: " \\ \n 🦞\ud800 ${"x".repeat(4_000)}` },
-      ...(index < 12 && index % 2 === 0
-        ? [
-            {
-              type: "image_url",
-              image_url: { url: `data:image/png;base64,${"A".repeat(32_768)}` },
-            },
-          ]
-        : []),
-    ],
-  }));
-  const replacement = {
+  const messages = [{ role: "user", content: '" \\ \n 🦞\ud800' }];
+  const parameters = {
     model: model.id,
-    messages,
+    prompt_cache_key: "private-affinity",
+    previous_response_id: "private-response",
     stream: true,
+  };
+  const replacement = {
+    ...parameters,
+    messages,
     tools: [...allowedTools, { type: "function", function: { name: "hidden" } }],
   };
   const expectedPayload = { ...replacement, tools: allowedTools };
   const padding = 600 * 1_024 - Buffer.byteLength(JSON.stringify(expectedPayload));
-  const finalContent = messages[99]!.content[0]!;
-  if (!("text" in finalContent)) {
-    throw new Error("Expected the fixture's final text part");
-  }
-  finalContent.text += "x".repeat(padding);
+  messages[0]!.content += "x".repeat(padding);
   const expectedWire = JSON.stringify(expectedPayload);
   expect(Buffer.byteLength(expectedWire)).toBe(614_400);
-  const sse = `data: ${JSON.stringify({
-    id: "fixture-response",
-    object: "chat.completion.chunk",
-    created: 0,
-    model: model.id,
-    choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
-  })}\n\ndata: [DONE]\n\n`;
+  const sse =
+    'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
   let wire: string | undefined;
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     wire = await new Request(input, init).text();
-    return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+    return new Response(sse, {
+      headers: {
+        "content-type": "text/event-stream",
+        "openai-processing-ms": "12.5",
+        "openai-model": "private-model",
+        "openai-organization": "private-account",
+        "x-openai-route": "private-route",
+        "x-openai-region": "private-region",
+        "x-request-id": "private-request",
+        "set-cookie": "private-cookie",
+      },
+    });
   });
   configureAiTransportHost({ ...originalHost, buildModelFetch: () => fetchMock });
   const state: ProviderPromptState = {};
@@ -135,7 +134,36 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
       scopeDigest: expect.any(String),
       digest: hash("sha256", expectedWire),
       byteWeight: 614_400,
+      wire: {
+        requestBytes: 614_400,
+        prefixBytes: 4096,
+        prefixHash: hash("sha256", Buffer.from(expectedWire).subarray(0, 4096)),
+        cacheKeyPresent: true,
+        cacheKeyHash: hash("sha256", '"private-affinity"').slice(0, 16),
+        previousResponseIdPresent: true,
+        modelHash: digest(model.id).slice(0, 16),
+        routeHash: hash("sha256", model.baseUrl).slice(0, 16),
+        attempts: 1,
+        retried: false,
+        response: {
+          status: 200,
+          headers: {
+            "openai-processing-ms": 12.5,
+            "openai-model": hash("sha256", "private-model").slice(0, 16),
+            "openai-organization": hash("sha256", "private-account").slice(0, 16),
+            "x-openai-route": hash("sha256", "private-route").slice(0, 16),
+            "x-openai-region": hash("sha256", "private-region").slice(0, 16),
+            "x-request-id": hash("sha256", "private-request").slice(0, 16),
+          },
+        },
+      },
+      cachePrefix: expect.objectContaining({
+        messageField: "messages",
+        messageCount: messages.length,
+        continuation: true,
+      }),
     });
+    expect(JSON.stringify(state)).not.toContain("private-");
     expect(await completed.promise).toMatchObject({ requestPayloadBytes: 614_400 });
 
     markLastProviderPromptContextRejected(state);
@@ -147,5 +175,115 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   } finally {
     unsubscribe();
+  }
+});
+
+it("observes serialized values without letting the observer change request bytes or stream behavior", () => {
+  const toJSON = vi.fn(() => ({ stream: true, input: ["fixture"], omitted: undefined }));
+  const observer = vi.fn((value: unknown) => {
+    expect(value).toEqual({ stream: true, input: ["fixture"] });
+    if (typeof value !== "object" || value === null) {
+      throw new Error("Expected the serialized request object");
+    }
+    Object.assign(value, { stream: false, input: ["changed"] });
+  });
+  const encoded = serializeModelRequestBody({ toJSON }, observer);
+  expect(observer).toHaveBeenCalledTimes(1);
+  expect(toJSON).toHaveBeenCalledTimes(1);
+  expect(new TextDecoder().decode(encoded.body)).toBe('{"stream":true,"input":["fixture"]}');
+  expect(encoded.stream).toBe(true);
+});
+
+it.each([
+  [undefined, "", false],
+  [null, "null", false],
+  [[{ stream: true }], '[{"stream":true}]', false],
+  [
+    { input: ['"\\', { nested: [false, null, 123] }], stream: true },
+    '{"input":["\\\"\\\\",{"nested":[false,null,123]}],"stream":true}',
+    true,
+  ],
+  [
+    { 'quoted"key': { stream: true }, stream: "true" },
+    '{"quoted\\\"key":{"stream":true},"stream":"true"}',
+    false,
+  ],
+])("preserves wire bytes and top-level stream for %j", (payload, wire, stream) => {
+  const encoded = serializeModelRequestBody(payload);
+  expect(new TextDecoder().decode(encoded.body)).toBe(wire);
+  expect(encoded.stream).toBe(stream);
+});
+
+it("fingerprints serialized prompt segments with bounded, content-free history metadata", () => {
+  const message = {
+    role: "user",
+    content: 'private history content " \\ \\\" 🦞\ud800',
+    'private-"\\key': { nested: [false, null, [123, "[,]:{}"]] },
+    ...Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`private-${index}`, index])),
+  };
+  const input = Array.from({ length: 514 }, () => message);
+  let serializations = 0;
+  const payload = {
+    instructions: {
+      toJSON() {
+        serializations += 1;
+        return "private instructions";
+      },
+    },
+    tools: [{ type: "function", name: "private_tool_name" }],
+    input,
+    private_parameter_name: "private parameter value",
+    omitted: undefined,
+  };
+  const first = prepareProviderPrompt({ payload, encode: true });
+  expect(serializations).toBe(1);
+  expect(first.cachePrefix).toEqual({
+    system: hash("sha256", '{"instructions":"private instructions"}'),
+    tools: hash("sha256", '{"tools":[{"type":"function","name":"private_tool_name"}]}'),
+    messageDigests: hash("sha256", JSON.stringify(message), "latin1").repeat(512),
+    messageFields: Array.from({ length: 32 }, () => ({
+      role: hash("sha256", '"user"'),
+      content: hash("sha256", JSON.stringify(message.content)),
+      other: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })),
+    messageField: "input",
+    messageCount: 514,
+    tail: hash("sha256", JSON.stringify([message, message])),
+    parameters: {
+      digest: hash("sha256", '{"private_parameter_name":"private parameter value"}', "latin1"),
+      fields: { other: expect.stringMatching(/^[a-f0-9]{64}$/) },
+    },
+    continuation: false,
+  });
+  expect(JSON.stringify(first.cachePrefix)).not.toContain("private");
+  expect(serialize(first.cachePrefix).byteLength).toBeLessThan(32 * 1024);
+
+  input[513] = { ...message, content: "changed private history" };
+  const changed = prepareProviderPrompt({ payload, encode: true });
+  expect(changed.cachePrefix?.messageDigests).toEqual(first.cachePrefix?.messageDigests);
+  expect(changed.cachePrefix?.tail).not.toBe(first.cachePrefix?.tail);
+  expect(prepareProviderPrompt({ payload: {}, encode: false }).cachePrefix).toBeUndefined();
+});
+
+it("hashes prompt prefixes without assembling copies of their serialized fields", () => {
+  const payload = {
+    system: "synthetic system 🦞".repeat(4_000),
+    tools: [{ name: "synthetic_tool", description: "synthetic tool ".repeat(8_000) }],
+    instructions: "synthetic instructions ".repeat(4_000),
+    input: [],
+  };
+  const system = JSON.stringify({ instructions: payload.instructions, system: payload.system });
+  const tools = JSON.stringify({ tools: payload.tools });
+  const expected = { system: hash("sha256", system), tools: hash("sha256", tools) };
+  const spy = vi.spyOn(crypto, "hash").mockClear();
+  syncBuiltinESMExports();
+  try {
+    const result = prepareProviderPrompt({ payload, encode: true });
+    expect(result.cachePrefix).toMatchObject(expected);
+    expect(new TextDecoder().decode(result.encoded!.body)).toBe(JSON.stringify(payload));
+    expect(spy.mock.calls.some(([, data]) => data === system || data === tools)).toBe(false);
+  } finally {
+    spy.mockRestore();
+    syncBuiltinESMExports();
   }
 });

@@ -61,17 +61,28 @@ export const sessionMaintenanceHandlers: GatewayRequestHandlers = {
   "sessions.cleanup": defineValidatedGatewayHandler(
     "sessions.cleanup",
     validateSessionsCleanupParams,
-    async ({ params, respond, context }) => {
+    async ({
+      params,
+      respond,
+      context,
+      signal,
+      hasCurrentClientAuthority,
+      sessionMutationAuthorization,
+      sessionMutationCommitGuard,
+    }) => {
+      const assertCurrent = () => {
+        signal?.throwIfAborted();
+        sessionMutationAuthorization?.assertCurrent();
+        if (hasCurrentClientAuthority?.() === false) {
+          throw new Error("Session cleanup requester is no longer authorized");
+        }
+      };
+      assertCurrent();
       const { mode, appliedSummaries, failure } = await runSessionsCleanup({
         cfg: context.getRuntimeConfig(),
-        opts: {
-          agent: params.agent,
-          allAgents: params.allAgents,
-          enforce: params.enforce,
-          activeKey: params.activeKey,
-          fixMissing: params.fixMissing,
-          fixDmScope: params.fixDmScope,
-        },
+        assertCurrent,
+        commitGuard: sessionMutationCommitGuard,
+        opts: params,
       });
       const result = serializeSessionCleanupResult({
         mode,

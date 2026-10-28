@@ -17,8 +17,5 @@ export function resolveAgentOutboundIdentity(
   const avatarUrl = normalizeOptionalString(avatar.kind === "remote" ? avatar.url : undefined);
   const emoji = normalizeOptionalString(identity?.emoji);
   const theme = normalizeOptionalString(identity?.theme);
-  if (!name && !avatarUrl && !emoji && !theme) {
-    return undefined;
-  }
-  return { name, avatarUrl, emoji, theme };
+  return name || avatarUrl || emoji || theme ? { name, avatarUrl, emoji, theme } : undefined;
 }

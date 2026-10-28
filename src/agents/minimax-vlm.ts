@@ -1,8 +1,5 @@
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { readResponseBodySnippet } from "../infra/http-error-body.js";
-/**
- * Adapts MiniMax VLM image-understanding requests for agent image inputs.
- */
 import {
   postJsonRequest,
   resolveProviderHttpRequestConfigWithOriginTrust,
@@ -13,8 +10,8 @@ import {
   createProviderErrorTextRedactor,
   readProviderJsonResponse,
 } from "./provider-http-errors.js";
+import { resolveProviderTransportSsrFPolicy } from "./provider-network-policy.js";
 import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.types.js";
-import { resolveProviderTransportSsrFPolicy } from "./provider-transport-fetch.js";
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -27,12 +24,7 @@ const DEFAULT_MINIMAX_VLM_TIMEOUT_MS = 60_000;
 
 export function isMinimaxVlmProvider(provider: string): boolean {
   const normalized = provider.trim().toLowerCase();
-  return (
-    normalized === "minimax" ||
-    normalized === "minimax-cn" ||
-    normalized === "minimax-portal" ||
-    normalized === "minimax-portal-cn"
-  );
+  return ["minimax", "minimax-cn", "minimax-portal", "minimax-portal-cn"].includes(normalized);
 }
 
 export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
@@ -46,19 +38,9 @@ function resolveDefaultApiHost(provider: string | undefined): string {
     : "https://api.minimax.io";
 }
 
-function coerceApiHost(params: {
-  apiHost?: string;
-  modelBaseUrl?: string;
-  provider?: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  const env = params.env ?? process.env;
+function coerceApiHost(params: { modelBaseUrl?: string; provider?: string }): string {
   const defaultHost = resolveDefaultApiHost(params.provider);
-  const raw =
-    params.apiHost?.trim() ||
-    env.MINIMAX_API_HOST?.trim() ||
-    params.modelBaseUrl?.trim() ||
-    defaultHost;
+  const raw = process.env.MINIMAX_API_HOST?.trim() || params.modelBaseUrl?.trim() || defaultHost;
 
   const url = URL.parse(raw);
   if (url) {
@@ -76,7 +58,6 @@ export async function minimaxUnderstandImage(params: {
   apiKey: string;
   prompt: string;
   imageDataUrl: string;
-  apiHost?: string;
   modelBaseUrl?: string;
   provider?: string;
   timeoutMs?: number;
@@ -102,11 +83,7 @@ export async function minimaxUnderstandImage(params: {
     throw new Error("MiniMax VLM: imageDataUrl must be a base64 data:image/(png|jpeg|webp) URL");
   }
 
-  const configuredHost = coerceApiHost({
-    apiHost: params.apiHost,
-    modelBaseUrl: params.modelBaseUrl,
-    provider: params.provider,
-  });
+  const configuredHost = coerceApiHost(params);
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
     resolveProviderHttpRequestConfigWithOriginTrust({
       baseUrl: configuredHost,
@@ -160,13 +137,13 @@ export async function minimaxUnderstandImage(params: {
     // All response fields below are provider-controlled and may reflect the
     // authenticated request, so sanitize them before any error branch uses them.
     const traceId = redactErrorText(res.headers.get("Trace-Id") ?? "");
+    const trace = traceId ? ` Trace-Id: ${traceId}` : "";
     if (!res.ok) {
       const body = await readResponseBodySnippet(res, {
         maxBytes: MINIMAX_VLM_ERROR_BODY_MAX_BYTES,
         maxChars: MINIMAX_VLM_ERROR_BODY_MAX_CHARS,
         redact: redactErrorText,
       });
-      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(
         `MiniMax VLM request failed (${res.status} ${redactErrorText(res.statusText)}).${trace}${
           body ? ` Body: ${body}` : ""
@@ -179,7 +156,6 @@ export async function minimaxUnderstandImage(params: {
       : "MiniMax VLM response";
     const json = await readProviderJsonResponse<unknown>(res, responseLabel);
     if (!isRecord(json)) {
-      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(`MiniMax VLM response was not JSON.${trace}`);
     }
 
@@ -187,13 +163,11 @@ export async function minimaxUnderstandImage(params: {
     const code = typeof baseResp.status_code === "number" ? baseResp.status_code : -1;
     if (code !== 0) {
       const msg = redactErrorText((baseResp.status_msg ?? "").trim());
-      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(`MiniMax VLM API error (${code})${msg ? `: ${msg}` : ""}.${trace}`);
     }
 
     const content = typeof json.content === "string" ? json.content.trim() : "";
     if (!content) {
-      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(`MiniMax VLM returned no content.${trace}`);
     }
 

@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.js";
+import { afterAll, afterEach, expect, it } from "vitest";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -11,6 +10,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture, nativeFixtureEnv } from "../plugins/native-resource.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -18,33 +18,27 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { generateImage, type GenerateImageParams } from "./runtime.js";
 import type { ImageGenerationRequest } from "./types.js";
 
-const png = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQVDL+DwACFAFmBODefwAAAABJRU5ErkJggg==",
-  "base64",
-);
+const png = Buffer.from("synthetic-image");
+const cleanups: Array<() => Promise<void>> = [];
 
 function createNativeImageFixture(id = "native-image-owner", rejectGeneration = false) {
+  useNoBundledPlugins();
   const dir = makePluginLoaderTempDir();
   const key = `__openclaw_image_resources_${path.basename(dir)}`;
   const started = createDeferredCore();
   const resume = createDeferredCore();
+  let pending: ReturnType<typeof settle> | undefined;
   const connections: Array<{
     database: DatabaseSync;
     disposals: number;
     reads: number[];
     requests: ImageGenerationRequest[];
   }> = [];
-  Object.defineProperty(globalThis, key, {
-    configurable: true,
-    value: { connections, started, resume, png },
-  });
+  Reflect.set(globalThis, key, { connections, started, resume, png });
   const plugin = writePlugin({
     dir,
     id,
-    body: `const { DatabaseSync } = require("node:sqlite");
-module.exports = {
-  id: ${JSON.stringify(id)},
-  register(api) {
+    registration: `const { DatabaseSync } = require("node:sqlite");
     const state = globalThis[${JSON.stringify(key)}];
     const database = new DatabaseSync(":memory:");
     const connection = { database, disposals: 0, reads: [], requests: [] };
@@ -80,8 +74,7 @@ module.exports = {
         };
       },
     });
-  },
-};`,
+`,
   });
   fs.writeFileSync(
     path.join(dir, "openclaw.plugin.json"),
@@ -91,7 +84,7 @@ module.exports = {
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     }),
   );
-  const config: OpenClawConfig = {
+  const config = {
     plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
   };
   const params: GenerateImageParams = {
@@ -104,197 +97,127 @@ module.exports = {
     providerOptions: { fixture: "kept" },
     ssrfPolicy: { allowRfc2544BenchmarkRange: true },
   };
+  cleanups.push(async () => {
+    resume.resolve();
+    await pending;
+    cleanupNativeFixture(key, connections);
+  });
   return {
     plugin,
     connections,
-    started,
     resume,
     config,
     params,
-    run: () => generateImage(params),
-    withEnvironment: (run: () => Promise<void>) =>
-      withEnvAsync(
-        {
-          OPENCLAW_HOME: dir,
-          OPENCLAW_STATE_DIR: dir,
-          OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-        },
-        run,
-      ),
-    cleanup() {
-      resume.resolve();
-      for (const { database } of connections) {
-        if (database.isOpen) {
-          database.close();
-        }
-      }
-      Reflect.deleteProperty(globalThis, key);
+    async start(operation = generateImage(params)) {
+      pending = settle(operation);
+      await Promise.race([
+        started.promise,
+        pending.then(() => {
+          throw new Error("Image operation settled before invoking the native provider");
+        }),
+      ]);
+      expect(connections).toHaveLength(1);
+      return connections[0]!;
     },
+    async finish() {
+      resume.resolve();
+      return await pending!;
+    },
+    env: nativeFixtureEnv(dir),
   };
 }
 
-function settle<T>(operation: Promise<T>) {
+function settle(operation: ReturnType<typeof generateImage>) {
   return operation.then(
     (value) => ({ value, error: undefined }),
     (error: unknown) => ({ value: undefined, error }),
   );
 }
 
-async function waitForProviderStart(started: Promise<void>, operation: Promise<unknown>) {
-  await Promise.race([
-    started,
-    operation.then(() => {
-      throw new Error("Image operation settled before invoking the native provider");
-    }),
-  ]);
-}
-
-afterEach(() => {
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    await cleanup();
+  }
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-describe("image generation registration resources", () => {
-  it.each([false, true])(
-    "releases cold image resources after settlement (reject=%s)",
-    async (reject) => {
-      const fixture = createNativeImageFixture("native-image-owner", reject);
-      try {
-        await fixture.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const outcome = settle(fixture.run());
-          try {
-            await waitForProviderStart(fixture.started.promise, outcome);
-            expect(fixture.connections).toHaveLength(1);
-            const connection = fixture.connections[0]!;
-            expect(connection.database.isOpen).toBe(true);
-            expect(connection.disposals).toBe(0);
-            fixture.resume.resolve();
-            const result = await outcome;
-            if (reject) {
-              expect(String(result.error)).toContain("native image generation failed");
-            } else {
-              expect(result.error).toBeUndefined();
-              expect(result.value?.images[0]?.buffer).toEqual(png);
-              expect(result.value?.metadata).toEqual({ nativeValue: 42 });
-            }
-            expect(connection.requests[0]).toMatchObject({
-              provider: "native-image-owner-alias",
-              timeoutMs: 12_345,
-              inputImages: fixture.params.inputImages,
-              providerOptions: fixture.params.providerOptions,
-              ssrfPolicy: fixture.params.ssrfPolicy,
-            });
-            expect(connection.database.isOpen).toBe(false);
-            expect(connection.disposals).toBe(1);
-            expect(connection.reads).toEqual(reject ? [42, 42, 42] : [42, 42, 42, 42]);
-          } finally {
-            fixture.resume.resolve();
-            await outcome;
+it.each(["cold", "managed", "raw", "fallback"] as const)(
+  "settles %s registration resources",
+  async (owner) => {
+    const first =
+      owner === "fallback" ? createNativeImageFixture("first-image-owner", true) : undefined;
+    const fixture = createNativeImageFixture(
+      owner === "fallback" ? "second-image-owner" : "native-image-owner",
+      owner === "cold",
+    );
+    first?.resume.resolve();
+    await withEnvAsync(fixture.env, async () => {
+      const image = first
+        ? {
+            primary: "first-image-owner/fixture-model",
+            fallbacks: ["second-image-owner-alias/fixture-model"],
           }
-        });
-      } finally {
-        fixture.cleanup();
+        : undefined;
+      const cfg = { ...fixture.config, agents: { defaults: { mediaModels: { image } } } };
+      if (first) {
+        cfg.plugins.allow.unshift(first.plugin.id);
+        cfg.plugins.load.paths.unshift(first.plugin.file);
       }
-    },
-  );
-
-  it.each(["managed", "raw"] as const)(
-    "preserves the %s host owner through image generation",
-    async (owner) => {
-      const fixture = createNativeImageFixture();
-      try {
-        await fixture.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const inspection =
-            owner === "managed"
-              ? await acquirePluginRegistryForInspection({ config: fixture.config })
-              : undefined;
-          const registry =
-            inspection?.registry ?? loadPluginRegistryHandle({ config: fixture.config });
-          const outcome = settle(withPluginRuntimeRegistryScope(registry, fixture.run));
-          try {
-            await waitForProviderStart(fixture.started.promise, outcome);
-            expect(fixture.connections).toHaveLength(1);
-            await inspection?.release();
-            expect(fixture.connections[0]!.database.isOpen).toBe(true);
-            fixture.resume.resolve();
-            const result = await outcome;
-            expect(result.error).toBeUndefined();
-            expect(result.value?.images[0]?.buffer).toEqual(png);
-            expect(result.value?.metadata).toEqual({ nativeValue: 42 });
-            expect(fixture.connections[0]!.database.isOpen).toBe(owner === "raw");
-            expect(fixture.connections[0]!.disposals).toBe(owner === "raw" ? 0 : 1);
-          } finally {
-            fixture.resume.resolve();
-            await outcome;
-            await inspection?.release();
-          }
+      const inspection =
+        owner === "managed" ? await acquirePluginRegistryForInspection({ config: cfg }) : undefined;
+      const run = () =>
+        generateImage({
+          ...fixture.params,
+          cfg,
+          modelOverride: first ? undefined : fixture.params.modelOverride,
         });
-      } finally {
-        fixture.cleanup();
-      }
-    },
-  );
-
-  it.each(["override", "fallback"] as const)(
-    "retains both eligible registrations for %s selection",
-    async (selection) => {
-      const first = createNativeImageFixture("first-image-owner", true);
-      const second = createNativeImageFixture("second-image-owner");
-      first.resume.resolve();
       try {
-        await second.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const outcome = settle(
-            generateImage({
-              ...second.params,
-              cfg: {
-                agents: {
-                  defaults: {
-                    mediaModels: {
-                      image: {
-                        primary: "first-image-owner/fixture-model",
-                        fallbacks: ["second-image-owner-alias/fixture-model"],
-                      },
-                    },
-                  },
-                },
-                plugins: {
-                  allow: [first.plugin.id, second.plugin.id],
-                  load: { paths: [first.plugin.file, second.plugin.file] },
-                  slots: { memory: "none" },
-                },
-              },
-              modelOverride: selection === "override" ? second.params.modelOverride : undefined,
-            }),
-          );
-          try {
-            await waitForProviderStart(second.started.promise, outcome);
-            expect(first.connections).toHaveLength(1);
-            expect(second.connections).toHaveLength(1);
-            expect(first.connections[0]!.requests).toHaveLength(selection === "override" ? 0 : 1);
-            expect(first.connections[0]!.database.isOpen).toBe(true);
-            second.resume.resolve();
-            const result = await outcome;
-            expect(result.error).toBeUndefined();
+        const operation =
+          owner === "managed" || owner === "raw"
+            ? withPluginRuntimeRegistryScope(
+                inspection?.registry ?? loadPluginRegistryHandle({ config: cfg }),
+                run,
+              )
+            : run();
+        const connection = await fixture.start(operation);
+        await inspection?.release();
+        expect(connection.database.isOpen).toBe(true);
+        expect(connection.disposals).toBe(0);
+        if (first) {
+          expect(first.connections).toHaveLength(1);
+          expect(first.connections[0]!.requests).toHaveLength(1);
+          expect(first.connections[0]!.database.isOpen).toBe(true);
+        }
+        const result = await fixture.finish();
+        if (owner === "cold") {
+          expect(String(result.error)).toContain("native image generation failed");
+          expect(connection.requests[0]).toMatchObject({
+            provider: "native-image-owner-alias",
+            timeoutMs: 12_345,
+            inputImages: fixture.params.inputImages,
+            providerOptions: fixture.params.providerOptions,
+            ssrfPolicy: fixture.params.ssrfPolicy,
+          });
+          expect(connection.reads).toEqual([42, 42, 42]);
+        } else {
+          expect(result.error).toBeUndefined();
+          expect(result.value?.images[0]?.buffer).toEqual(png);
+          expect(result.value?.metadata).toEqual({ nativeValue: 42 });
+          if (first) {
             expect(result.value?.provider).toBe("second-image-owner-alias");
-            expect(result.value?.images[0]?.buffer).toEqual(png);
-            expect(result.value?.attempts).toHaveLength(selection === "override" ? 0 : 1);
-            for (const connection of [...first.connections, ...second.connections]) {
-              expect(connection.database.isOpen).toBe(false);
-              expect(connection.disposals).toBe(1);
-            }
-          } finally {
-            second.resume.resolve();
-            await outcome;
+            expect(result.value?.attempts).toHaveLength(1);
           }
-        });
+        }
+        for (const resource of [...(first?.connections ?? []), connection]) {
+          expect(resource.database.isOpen).toBe(owner === "raw");
+          expect(resource.disposals).toBe(owner === "raw" ? 0 : 1);
+        }
       } finally {
-        first.cleanup();
-        second.cleanup();
+        await fixture.finish();
+        await inspection?.release();
       }
-    },
-  );
-});
+    });
+  },
+);

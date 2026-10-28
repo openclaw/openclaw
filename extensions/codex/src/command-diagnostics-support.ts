@@ -54,16 +54,8 @@ export function parseDiagnosticsArgs(args: string): ParsedDiagnosticsArgs {
   return { action: "request", note: args };
 }
 
-export function formatDiagnosticsUsage(commandPrefix: string): string {
-  return [
-    `Usage: ${commandPrefix} [note]`,
-    `Usage: ${commandPrefix} confirm <token>`,
-    `Usage: ${commandPrefix} cancel <token>`,
-  ].join("\n");
-}
-
 export function createCodexDiagnosticsConfirmation(
-  params: Omit<PendingCodexDiagnosticsConfirmation, "token" | "createdAt"> & { now: number },
+  params: Omit<PendingCodexDiagnosticsConfirmation, "createdAt"> & { now: number },
 ): string {
   prunePendingCodexDiagnosticsConfirmations(params.now);
   if (
@@ -71,9 +63,13 @@ export function createCodexDiagnosticsConfirmation(
     pendingCodexDiagnosticsConfirmationTokensByScope.size >=
       CODEX_DIAGNOSTICS_CONFIRMATION_MAX_SCOPES
   ) {
-    const oldestScopeKey = pendingCodexDiagnosticsConfirmationTokensByScope.keys().next().value;
-    if (typeof oldestScopeKey === "string") {
-      deletePendingCodexDiagnosticsConfirmationScope(oldestScopeKey);
+    for (const oldestScopeKey of pendingCodexDiagnosticsConfirmationTokensByScope.keys()) {
+      for (const token of pendingCodexDiagnosticsConfirmationTokensByScope.get(oldestScopeKey) ??
+        []) {
+        pendingCodexDiagnosticsConfirmations.delete(token);
+      }
+      pendingCodexDiagnosticsConfirmationTokensByScope.delete(oldestScopeKey);
+      break;
     }
   }
   const scopeTokens = pendingCodexDiagnosticsConfirmationTokensByScope.get(params.scopeKey) ?? [];
@@ -90,7 +86,6 @@ export function createCodexDiagnosticsConfirmation(
   const { now, ...confirmation } = params;
   pendingCodexDiagnosticsConfirmations.set(token, {
     ...confirmation,
-    token,
     createdAt: now,
   });
   return token;
@@ -173,14 +168,6 @@ function prunePendingCodexDiagnosticsConfirmations(now: number): void {
       deletePendingCodexDiagnosticsConfirmation(token);
     }
   }
-}
-
-function deletePendingCodexDiagnosticsConfirmationScope(scopeKey: string): void {
-  const scopeTokens = pendingCodexDiagnosticsConfirmationTokensByScope.get(scopeKey) ?? [];
-  for (const token of scopeTokens) {
-    pendingCodexDiagnosticsConfirmations.delete(token);
-  }
-  pendingCodexDiagnosticsConfirmationTokensByScope.delete(scopeKey);
 }
 
 export function codexDiagnosticsTargetsMatch(
@@ -280,13 +267,11 @@ export function readCodexDiagnosticsTargetsCooldownMessage(
       now,
     );
     if (cooldownMs > 0) {
-      if (options.includeThreadId === false) {
-        return `Codex diagnostics were already sent for one of these Codex threads recently. Try again in ${Math.ceil(
-          cooldownMs / 1000,
-        )}s.`;
-      }
-      const displayThreadId = formatCodexDisplayText(target.threadId);
-      return `Codex diagnostics were already sent for thread ${displayThreadId} recently. Try again in ${Math.ceil(
+      const subject =
+        options.includeThreadId === false
+          ? "one of these Codex threads"
+          : `thread ${formatCodexDisplayText(target.threadId)}`;
+      return `Codex diagnostics were already sent for ${subject} recently. Try again in ${Math.ceil(
         cooldownMs / 1000,
       )}s.`;
     }

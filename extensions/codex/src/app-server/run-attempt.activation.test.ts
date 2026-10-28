@@ -1,6 +1,10 @@
 import { resolveActiveEmbeddedRunSessionId } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
   createStartedThreadHarness,
@@ -10,6 +14,7 @@ import {
 } from "./run-attempt-test-harness.js";
 
 setupRunAttemptTestHooks();
+afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("runCodexAppServerAttempt activation ownership", () => {
   it("observes accepted requests without spending the execution budget", async () => {
@@ -17,6 +22,7 @@ describe("runCodexAppServerAttempt activation ownership", () => {
     const harness = createStartedThreadHarness();
     const turnAccepted = createDeferred<void>();
     const params = createTestParams();
+    setRuntimeConfigSnapshot(params.config ?? {});
     params.timeoutMs = 1;
     params.onExecutionPhase = ({ phase }) => {
       if (phase === "turn_accepted") {
@@ -39,6 +45,7 @@ describe("runCodexAppServerAttempt activation ownership", () => {
   it("stops accepted native work when published-backend activation fails", async () => {
     const harness = createStartedThreadHarness();
     const params = createTestParams();
+    setRuntimeConfigSnapshot(params.config ?? {});
     params.permissionChange = {
       owner: {},
       baseExecOverrides: {},

@@ -4,7 +4,6 @@ import { normalizeVoiceWakeTriggers } from "../server-utils.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
-/** Gateway request handlers for reading and updating voice wake triggers. */
 export const voicewakeHandlers: GatewayRequestHandlers = {
   "voicewake.get": async ({ respond }) => {
     await respondUnavailableOnThrow(respond, async () => {

@@ -1,17 +1,15 @@
+import { listAgentIds } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronSessionTargetSessionKey } from "../../cron/session-target.js";
 import type { CronJob } from "../../cron/types.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { getCronManagementAuthority } from "../cron-creator-authority-grant.js";
-import type { PreparedSessionMutationFacts } from "../session-sharing-policy.js";
-import {
-  prepareSessionMutationFacts,
-  type SessionFactsRead,
-} from "../session-sharing-preparation.js";
+import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { prepareProjectedSessionSharing } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { resolveCronJobOwnerAgentId } from "./cron-caller-scope.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type CronSessionVisibility = (sessionKey: string, agentId?: string) => boolean;
 
@@ -24,73 +22,57 @@ function resolveCronEntryFilter(client: GatewayClient | null, cfg: OpenClawConfi
   return sharing.sessionCap === "none" ? sharing.entryFilter : undefined;
 }
 
-type CronVisibilityTarget = { sessionKey: string; agentId?: string };
-
-/** Request custody belongs to the existing exact sharing reader, including after awaits. */
+/** The Gateway projection owns sharing facts and consumes committed write receipts. */
 export function createCronSessionVisibility(
   client: GatewayClient | null,
-  getConfig: () => OpenClawConfig,
+  context: Pick<GatewayRequestContext, "getRuntimeConfig" | "sessionRowProjectionOwner">,
 ) {
-  const reads = new Map<string, SessionFactsRead<PreparedSessionMutationFacts>>();
-  const keyFor = (target: CronVisibilityTarget, cfg: OpenClawConfig) => {
-    const identity = resolveSessionStoreIdentity({ ...target, cfg });
-    return { ...identity, key: `${identity.agentId}\0${identity.canonicalKey}` };
-  };
   return {
-    prepare(targets: readonly (CronVisibilityTarget | undefined)[]): Promise<void> | undefined {
-      const cfg = getConfig();
-      if (
-        !resolveCronEntryFilter(client, cfg) ||
-        !targets.some((target) => target && !reads.has(keyFor(target, cfg).key))
-      ) {
+    prepare(): Promise<void> | undefined {
+      if (!resolveCronEntryFilter(client, context.getRuntimeConfig())) {
         return undefined;
       }
-      // Only new facts yield; ready consumers can select and publish in one frame.
-      return (async () => {
-        for (const target of targets) {
-          if (!target) {
-            continue;
-          }
-          const { key, agentId } = keyFor(target, cfg);
-          if (!reads.has(key)) {
-            reads.set(
-              key,
-              await prepareSessionMutationFacts({
-                cfg,
-                sessionKey: target.sessionKey,
-                agentId,
-                allowMissing: true,
-              }),
-            );
-          }
-        }
-      })();
+      return requireSessionRowProjection(context).prepareSelection({ metadataOnly: true });
     },
     resolve(): CronSessionVisibility | undefined {
-      if (!resolveCronEntryFilter(client, getConfig())) {
+      if (!resolveCronEntryFilter(client, context.getRuntimeConfig())) {
         return undefined;
       }
       return (sessionKey, agentId) => {
-        const cfg = getConfig();
+        const cfg = context.getRuntimeConfig();
         const filter = resolveCronEntryFilter(client, cfg);
         if (!filter) {
           return true;
         }
-        const { key } = keyFor({ sessionKey, agentId }, cfg);
-        const target = reads.get(key)?.readCurrent(cfg).target;
+        const identity = resolveSessionStoreIdentity({ sessionKey, agentId, cfg });
+        const projection = requireSessionRowProjection(context);
+        let query = {
+          agentId: identity.agentId,
+          key: identity.canonicalKey,
+        };
+        const parsed = parseAgentSessionKey(sessionKey);
+        if (
+          parsed?.agentId === "main" &&
+          !isIncognitoSessionKey(sessionKey) &&
+          !listAgentIds(cfg).includes(parsed.agentId)
+        ) {
+          const retained = {
+            agentId: parsed.agentId,
+            key: `agent:${parsed.agentId}:${parsed.rest}`,
+          };
+          // Retained deleted-main rows win over replacement aliases, even while sharing is pending.
+          if (projection.capture(retained)) {
+            query = retained;
+          }
+        }
+        const target = projection.sharingTarget(query);
         return Boolean(target && filter(target.canonicalKey, target.entry));
       };
-    },
-    release() {
-      for (const read of reads.values()) {
-        read.release();
-      }
-      reads.clear();
     },
   };
 }
 
-export function cronJobVisibilityTarget(job: CronJob | undefined, defaultAgentId?: string) {
+function cronJobVisibilityTarget(job: CronJob | undefined, defaultAgentId?: string) {
   if (!job) {
     return undefined;
   }

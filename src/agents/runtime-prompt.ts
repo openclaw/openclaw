@@ -1,30 +1,18 @@
 import os from "node:os";
 import type { ChatType } from "../channels/chat-type.js";
+import type { InternalSessionEntry, SessionDeliveryState } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareActiveNodeContext } from "../infra/active-node-context.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../infra/os-summary.js";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { resolveChannelMessageToolHints, resolveChannelReactionGuidance } from "./channel-tools.js";
-import { prepareEmbeddedSessionActiveProjectKeys } from "./embedded-agent-runner/session-prompt-state.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
-import { resolveProjectKey } from "./project-memory-scope.js";
-import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
+import { resolveRuntimeChannelPromptContext } from "./runtime-capabilities.js";
 import { detectRuntimeShell } from "./shell-utils.js";
-import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
-
-export async function prepareAgentPromptProjects(
-  params: Parameters<typeof resolveSystemPromptRepoRoot>[0] & { sessionId: string },
-) {
-  const repoRoot = resolveSystemPromptRepoRoot(params) ?? null;
-  const projectKey = repoRoot ? await resolveProjectKey(repoRoot) : null;
-  return {
-    repoRoot,
-    projectKey,
-    activeProjectKeys: prepareEmbeddedSessionActiveProjectKeys(params.sessionId, projectKey),
-  };
-}
+import type { SpawnRequesterConversationSource } from "./spawn-requester-origin.js";
+import { buildSystemPromptParams } from "./system-prompt-params.js";
 
 export async function resolveAgentRuntimePrompt(params: {
   config?: OpenClawConfig;
@@ -33,29 +21,39 @@ export async function resolveAgentRuntimePrompt(params: {
   cwd?: string;
   preparedRepoRoot?: string | null;
   preparedGitCoauthorPrompt?: string | null;
+  preparedSessionEntry?: InternalSessionEntry;
+  sessionPromptDelivery?: SessionDeliveryState;
   sessionKey?: string;
   sessionId?: string;
   model: string;
   channel?: string;
   accountId?: string | null;
+  requester?: SpawnRequesterConversationSource;
   chatType?: ChatType;
   requesterProfileId?: string;
   remoteWorkspace?: boolean;
+  /** Blind spawned child: the rendered prompt omits its model, identity and workspace path. */
+  blind?: boolean;
 }) {
-  const runtimeChannel = normalizeMessageChannel(params.channel);
-  const channelPromptContext = {
+  const delivery = params.sessionPromptDelivery ?? params.preparedSessionEntry?.delivery;
+  const external = delivery?.kind === "external" ? delivery : undefined;
+  // Presentation follows the session; current-turn routing and authority stay separate.
+  const promptChannel = external
+    ? external.context.channel
+    : delivery?.kind === "internal"
+      ? INTERNAL_MESSAGE_CHANNEL
+      : delivery
+        ? undefined
+        : params.channel;
+  const channelPromptContext = resolveRuntimeChannelPromptContext({
     cfg: params.config,
-    channel: runtimeChannel,
-    accountId: params.accountId,
-  };
-  const runtimeCapabilities = collectRuntimeChannelCapabilities(channelPromptContext);
-  const reactionGuidance =
-    runtimeChannel && params.config
-      ? resolveChannelReactionGuidance(channelPromptContext)
-      : undefined;
-  const messageToolHints = runtimeChannel
-    ? resolveChannelMessageToolHints(channelPromptContext)
-    : undefined;
+    channel: promptChannel,
+    accountId: external ? external.context.accountId : params.accountId,
+    requester: external
+      ? { agentTo: external.context.to, agentThreadId: external.context.threadId }
+      : params.requester,
+  });
+  const { runtimeChannel, runtimeCapabilities } = channelPromptContext;
   const defaultModel = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
     agentId: params.agentId,
@@ -80,6 +78,7 @@ export async function resolveAgentRuntimePrompt(params: {
         ? { preparedRepoRoot: params.preparedRepoRoot }
         : {}),
     preparedGitCoauthorPrompt,
+    preparedSessionEntry: params.preparedSessionEntry,
     requesterProfileId: params.requesterProfileId,
     runtime: {
       sessionKey: params.sessionKey,
@@ -92,16 +91,16 @@ export async function resolveAgentRuntimePrompt(params: {
       defaultModel: `${defaultModel.provider}/${defaultModel.model}`,
       shell: params.remoteWorkspace ? undefined : detectRuntimeShell(),
       channel: runtimeChannel,
-      chatType: params.chatType,
+      chatType: external ? external.origin.chatType : params.chatType,
       capabilities: runtimeCapabilities,
+      customInlineButtonHint: channelPromptContext.customInlineButtonHint,
+      blind: params.blind,
     },
   });
 
   return {
     ...systemPromptParams,
-    runtimeChannel,
-    runtimeCapabilities,
-    reactionGuidance,
-    messageToolHints,
+    ...channelPromptContext,
+    runtimeChannel: normalizeMessageChannel(params.channel),
   };
 }

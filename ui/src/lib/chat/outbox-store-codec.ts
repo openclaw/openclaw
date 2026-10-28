@@ -4,6 +4,7 @@ import { readNonBlankString as normalizeOptionalString } from "@openclaw/normali
 import { normalizeQueueMode } from "../../../../src/auto-reply/reply/queue/normalize.js";
 import { readChatWorkContext } from "../../../../src/chat/work-context.js";
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import { normalizeAgentId } from "../sessions/session-key.ts";
 import type {
@@ -18,6 +19,8 @@ import { readHumanMentions } from "./human-mentions.ts";
 import { isChatReplyTarget } from "./reply-target.ts";
 import { readChatSelectionAnnotation } from "./selection-annotation.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
+
+registerChatComposerEnglish();
 
 registerChatMessageMetadataEnglish();
 
@@ -75,11 +78,10 @@ export function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueI
   );
 }
 
-function normalizeChatAttachment(value: unknown): ChatAttachment | null {
-  if (!isRecord(value)) {
+function normalizeChatAttachment(entry: unknown): ChatAttachment | null {
+  if (!isRecord(entry)) {
     return null;
   }
-  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const mimeType = normalizeOptionalString(entry.mimeType);
   if (!id || !mimeType) {
@@ -107,11 +109,10 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
   return restored;
 }
 
-export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
-  if (!isRecord(value)) {
+export function normalizeStoredQueueItem(entry: unknown): ChatQueueItem | null {
+  if (!isRecord(entry)) {
     return null;
   }
-  const entry = value;
   const id = normalizeOptionalString(entry.id);
   const text = typeof entry.text === "string" ? entry.text : "";
   const createdAt = asFiniteNumber(entry.createdAt) ?? Date.now();
@@ -229,15 +230,20 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   if (replyToId) {
     item.replyToId = replyToId;
   }
-  if (entry.sendState === "steering" || entry.sendState === "executing-command") {
-    item.sendState = "unconfirmed";
+  if (
+    entry.sendState === "executing-command" ||
+    (entry.sendState === "unconfirmed" && normalizeOptionalString(entry.localCommandName))
+  ) {
+    item.sendState = "failed";
+    item.sendError = "Command was interrupted. Review the conversation before retrying.";
+  } else if (entry.sendState === "steering") {
+    item.sendState = "waiting-reconnect";
   } else if (entry.sendState === "submitting") {
     item.sendState = "waiting-idle";
   } else if (entry.sendState === "sending") {
     item.sendState = "waiting-reconnect";
   } else if (
     entry.sendState === "failed" ||
-    entry.sendState === "unconfirmed" ||
     entry.sendState === "held" ||
     entry.sendState === "waiting-idle" ||
     entry.sendState === "waiting-reconnect"
@@ -268,6 +274,17 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
     item.agentId = normalizeAgentId(agentId);
   }
   if (
+    item.sendRunId &&
+    ((item.sendAttempts ?? 0) > 0 || entry.sendRequestStartedAtMs !== undefined) &&
+    item.sendState !== "failed" &&
+    !item.sessionId &&
+    !item.localCommandName &&
+    !item.intent
+  ) {
+    // Unsettled attempts need a physical target before automatic replay.
+    item.sendState = "held";
+  }
+  if (
     entry.mentions !== undefined &&
     (!Array.isArray(entry.mentions) || entry.mentions.length !== (mentions?.length ?? 0))
   ) {
@@ -283,11 +300,10 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   return item;
 }
 
-export function normalizeStoredSession(value: unknown): StoredComposerSession | null {
-  if (!isRecord(value)) {
+export function normalizeStoredSession(entry: unknown): StoredComposerSession | null {
+  if (!isRecord(entry)) {
     return null;
   }
-  const entry = value;
   const draft = typeof entry.draft === "string" ? entry.draft : undefined;
   const draftMentions = draft ? readHumanMentions(draft, entry.draftMentions) : undefined;
   if (entry.goalMode !== undefined && !isChatGoalDraftMode(entry.goalMode)) {
@@ -338,7 +354,7 @@ export function normalizeStoredSession(value: unknown): StoredComposerSession | 
     ...(draft ? { draft } : {}),
     ...(draftMentions ? { draftMentions } : {}),
     ...(goalMode ? { goalMode } : {}),
-    ...(replyTarget ? { replyTarget: { ...replyTarget } } : {}),
+    ...(replyTarget ? { replyTarget } : {}),
     ...(draftRevision !== undefined ? { draftRevision } : {}),
     ...(queue && queue.length > 0 ? { queue } : {}),
     updatedAt,

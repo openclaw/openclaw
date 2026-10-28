@@ -16,7 +16,7 @@ Install the Matrix plugin, point it at a homeserver, and choose how invites, all
 openclaw plugins install @openclaw/matrix
 ```
 
-`@openclaw/matrix` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
+`@openclaw/matrix` installs from ClawHub by default. Use `npm:@openclaw/matrix` to install directly from npm. From a local checkout: `openclaw plugins install ./path/to/local/matrix-plugin`.
 
 `plugins install` registers and enables the plugin; no separate `enable` step is needed. The channel still does nothing until configured below. See [Plugins](/tools/plugin) for general install rules.
 
@@ -78,7 +78,7 @@ Token and password SecretRefs follow the shared [source-specific provider-alias 
 <Warning>
 Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invites, or `autoJoin: "always"` to accept every invite.
 
-`autoJoinAllowlist` accepts only a literal room ID (`!roomId:server`, or the suffixless `!roomId` form used by [room version 12](https://spec.matrix.org/latest/rooms/v12/) and later), `#alias:server`, or `*`. Plain room names are rejected; aliases resolve against the homeserver, not against state the invited room claims.
+`autoJoinAllowlist` accepts only a literal room ID (`!roomId:server`, or the suffixless `!roomId` form used by [room version 12](https://spec.matrix.org/latest/rooms/v12/) and later), `#alias:server`, or `*`. Plain room names and Matrix user IDs (`@user:server`) are not room targets: the setup wizard rejects them, and the runtime logs a warning naming any such saved entry while ignoring it. Authorize senders with `dm.allowFrom` or `groupAllowFrom` instead. Aliases resolve against the homeserver, not against state the invited room claims.
 </Warning>
 
 ```json5
@@ -94,6 +94,10 @@ Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invite
   },
 }
 ```
+
+When an account stops or reloads, Matrix stops waiting for background tasks after
+30 seconds without task progress. A delayed task from the retired monitor cannot
+start a join or send through a client that is still serving another monitor.
 
 ### Group join introductions
 
@@ -120,7 +124,7 @@ Matrix user IDs are case-sensitive. Copy the exact `@user:server` value Matrix r
 - DMs (`dm.allowFrom`, `groupAllowFrom`, `groups.<room>.users`): use `@user:server`. Display names are ignored by default (mutable); set `dangerouslyAllowNameMatching: true` only for explicit display-name compatibility.
 - Approval forwarding (`approvals.exec.targets[].to` with `channel: "matrix"`): use `user:@user:server` with the exact Matrix casing.
 - Room allowlist keys (`groups`, legacy alias `rooms`): use `!room:server` (or the suffixless `!room` form on room version 12+) or `#alias:server`. Plain names are ignored unless `dangerouslyAllowNameMatching: true`.
-- Invite allowlists (`autoJoinAllowlist`): use `!room:server` (or suffixless `!room` on room version 12+), `#alias:server`, or `*`. Plain names are always rejected.
+- Invite allowlists (`autoJoinAllowlist`): use `!room:server` (or suffixless `!room` on room version 12+), `#alias:server`, or `*`. Plain names and user IDs cannot match a room; the runtime warns about and ignores them, so use `dm.allowFrom` for sender matching.
 
 ### Account ID normalization
 

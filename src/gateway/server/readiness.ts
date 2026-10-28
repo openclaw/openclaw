@@ -1,21 +1,20 @@
-// Gateway readiness checker for channel health and startup sidecar state.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import type { AgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
   type ChannelHealthPolicy,
-  type ChannelHealthEvaluation,
 } from "../channel-health-policy.js";
 import type { ChannelManager } from "../server-channels.js";
-import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
+import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
-/** Snapshot returned by the gateway readiness probe. */
 type ReadinessResult = {
   ready: boolean;
+  coreReady: boolean;
   failing: string[];
   suppressed?: string[];
   uptimeMs: number;
@@ -25,7 +24,6 @@ type ReadinessResult = {
   stateDatabase?: { reason: string };
 };
 
-/** Function form used by HTTP readiness endpoints and tests. */
 export type ReadinessChecker = () => ReadinessResult;
 
 export type StartupResult =
@@ -33,7 +31,6 @@ export type StartupResult =
   | { ok: false; status: "starting"; uptimeMs: number; pendingReason: string }
   | { ok: false; status: "draining"; uptimeMs: number };
 
-/** Function form used by HTTP startup endpoints and tests. */
 export type StartupChecker = () => StartupResult;
 
 type GatewayStartupStateDeps = {
@@ -76,7 +73,7 @@ export function createStartupChecker(
 
 function shouldIgnoreReadinessFailure(
   accountSnapshot: ChannelAccountSnapshot,
-  health: ChannelHealthEvaluation,
+  health: ReturnType<typeof evaluateChannelHealth>,
 ): boolean {
   if (health.reason === "unmanaged" || health.reason === "stale-socket") {
     return true;
@@ -94,7 +91,6 @@ function shouldIgnoreReadinessFailure(
   return restartableReason && inRestartHandoff;
 }
 
-/** Create a cached readiness checker over channel runtime health. */
 export function createReadinessChecker(
   deps: GatewayStartupStateDeps & {
     channelManager: Pick<
@@ -104,15 +100,13 @@ export function createReadinessChecker(
     getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
     getStateDatabaseFailure?: () => Error | undefined;
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
-    allowPendingAgentDatabases?: boolean;
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
+    isChatSendAvailable?: () => boolean;
     shouldSkipChannelReadiness?: () => boolean;
-    cacheTtlMs?: number;
   },
 ): ReadinessChecker {
   const { channelManager, startedAt } = deps;
   const getStartup = createStartupChecker(deps);
-  const cacheTtlMs = Math.max(0, deps.cacheTtlMs ?? DEFAULT_READINESS_CACHE_TTL_MS);
   let cachedAt = 0;
   let cachedState: Omit<ReadinessResult, "uptimeMs"> | null = null;
 
@@ -123,48 +117,52 @@ export function createReadinessChecker(
     const uptimeMs = startup.uptimeMs;
     const now = startedAt + uptimeMs;
     if (startup.status === "starting") {
-      return { ready: false, failing: [startup.pendingReason], uptimeMs };
+      return { ready: false, coreReady: false, failing: [startup.pendingReason], uptimeMs };
     }
     if (startup.status === "draining") {
-      return { ready: false, failing: ["gateway-draining"], uptimeMs };
+      return { ready: false, coreReady: false, failing: ["gateway-draining"], uptimeMs };
+    }
+    if (!readChildRuntimeViability().available) {
+      return { ready: false, coreReady: false, failing: ["child-runtime"], uptimeMs };
     }
     const stateDatabaseFailure = deps.getStateDatabaseFailure?.();
     if (stateDatabaseFailure) {
       cachedState = null;
       return {
         ready: false,
+        coreReady: false,
         failing: ["state-database"],
         stateDatabase: { reason: stateDatabaseFailure.message },
         uptimeMs,
       };
     }
-    const failedAgents = agentDatabases?.filter(
-      (refusal) =>
-        deps.allowPendingAgentDatabases === false ||
-        refusal.code !== "agent-database-inspection-pending",
-    );
-    if (failedAgents?.length) {
+    if (agentDatabases?.length) {
       cachedState = null;
       return {
         ready: false,
-        failing: failedAgents.map(({ agentId }) => `agent-database:${agentId}`),
+        coreReady: false,
+        failing: agentDatabases.map(({ agentId }) => `agent-database:${agentId}`),
         uptimeMs,
       };
     }
     const pluginReload = deps.getPluginReloadStatus?.();
     if (pluginReload) {
       cachedState = null;
-      return { ready: false, failing: ["plugin-reload"], pluginReload, uptimeMs };
+      return { ready: false, coreReady: false, failing: ["plugin-reload"], pluginReload, uptimeMs };
+    }
+    if (deps.isChatSendAvailable?.() === false) {
+      cachedState = null;
+      return { ready: false, coreReady: false, failing: ["chat-startup"], uptimeMs };
     }
     if (
       cachedState &&
       !isFutureDateTimestampMs(cachedAt, { nowMs: now }) &&
-      now - cachedAt < cacheTtlMs
+      now - cachedAt < DEFAULT_READINESS_CACHE_TTL_MS
     ) {
       return { ...cachedState, uptimeMs };
     }
     if (deps.shouldSkipChannelReadiness?.()) {
-      return { ready: true, failing: [], uptimeMs };
+      return { ready: true, coreReady: true, failing: [], uptimeMs };
     }
 
     const snapshot = channelManager.getRuntimeSnapshot();
@@ -205,6 +203,7 @@ export function createReadinessChecker(
     cachedAt = now;
     cachedState = {
       ready: failing.length === 0,
+      coreReady: true,
       failing,
       ...(suppressed.length > 0 ? { suppressed } : {}),
     };

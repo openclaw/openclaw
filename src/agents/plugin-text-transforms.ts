@@ -5,7 +5,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
  * Provider and CLI plugins can rewrite prompt/event text without owning the transport implementation.
  */
 import type { AssistantMessage, AssistantMessageEvent } from "../llm/types.js";
+import { mapAssistantMessageStream } from "../llm/utils/stream-wrapper.js";
 import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/cli-backend.types.js";
+import { mapNestedStrings } from "../shared/map-nested-strings.js";
 import type { StreamFn } from "./runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "./stream-compat.js";
 import { createStreamIteratorWrapper } from "./stream-iterator-wrapper.js";
@@ -38,62 +40,40 @@ export function applyPluginTextReplacements(
   return next;
 }
 
-function transformContentText(content: unknown, replacements?: PluginTextReplacement[]): unknown {
+function transformContentText(
+  content: unknown,
+  replacements?: PluginTextReplacement[],
+  mode: "content" | "arguments" | "message" = "content",
+): unknown {
+  if (mode === "arguments") {
+    return mapNestedStrings(content, (value) => applyPluginTextReplacements(value, replacements));
+  }
+  if (mode === "message" && !isRecord(content)) {
+    return content;
+  }
   if (typeof content === "string") {
     return applyPluginTextReplacements(content, replacements);
   }
   if (Array.isArray(content)) {
-    return content.map((entry) => transformContentText(entry, replacements));
+    return content.map((entry) => transformContentText(entry, replacements, mode));
   }
   if (!isRecord(content)) {
     return content;
   }
   const next = { ...content };
-  if (typeof next.text === "string") {
+  if (mode === "content" && typeof next.text === "string") {
     next.text = applyPluginTextReplacements(next.text, replacements);
   }
   if (Object.hasOwn(next, "content")) {
     next.content = transformContentText(next.content, replacements);
   }
-  if (next.type === "toolCall" && Object.hasOwn(next, "arguments")) {
-    next.arguments = transformToolCallArgumentText(next.arguments, replacements);
+  if (mode === "content" && next.type === "toolCall" && Object.hasOwn(next, "arguments")) {
+    next.arguments = transformContentText(next.arguments, replacements, "arguments");
   }
-  return next;
-}
-
-function transformMessageText(message: unknown, replacements?: PluginTextReplacement[]): unknown {
-  if (!isRecord(message)) {
-    return message;
-  }
-  const next = { ...message };
-  if (Object.hasOwn(next, "content")) {
-    next.content = transformContentText(next.content, replacements);
-  }
-  if (typeof next.errorMessage === "string") {
+  if (mode === "message" && typeof next.errorMessage === "string") {
     next.errorMessage = applyPluginTextReplacements(next.errorMessage, replacements);
   }
   return next;
-}
-
-function transformToolCallArgumentText(
-  value: unknown,
-  replacements?: PluginTextReplacement[],
-): unknown {
-  if (typeof value === "string") {
-    return applyPluginTextReplacements(value, replacements);
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => transformToolCallArgumentText(entry, replacements));
-  }
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [
-      key,
-      transformToolCallArgumentText(entry, replacements),
-    ]),
-  );
 }
 
 function transformAssistantEventText(
@@ -118,12 +98,12 @@ function transformAssistantEventText(
     // Tool names are routing identifiers; only argument values are text.
     next.toolCall = {
       ...next.toolCall,
-      arguments: transformToolCallArgumentText(next.toolCall.arguments, replacements),
+      arguments: transformContentText(next.toolCall.arguments, replacements, "arguments"),
     };
   }
   for (const field of ["partial", "message", "error"]) {
     if (Object.hasOwn(next, field)) {
-      next[field] = transformMessageText(next[field], replacements);
+      next[field] = transformContentText(next[field], replacements, "message");
     }
   }
   return next as AssistantMessageEvent;
@@ -138,7 +118,7 @@ function wrapStreamTextTransforms(
   }
   const originalResult = stream.result.bind(stream);
   stream.result = async () =>
-    transformMessageText(await originalResult(), replacements) as AssistantMessage;
+    transformContentText(await originalResult(), replacements, "message") as AssistantMessage;
 
   // Wrap async iteration so streamed deltas and the final result receive the
   // same output replacement policy.
@@ -171,20 +151,16 @@ export function wrapStreamFnTextTransforms(params: {
       ? ({
           ...context,
           systemPrompt:
-            params.transformSystemPrompt !== false && typeof context.systemPrompt === "string"
+            params.transformSystemPrompt !== false && context.systemPrompt !== undefined
               ? applyPluginTextReplacements(context.systemPrompt, params.input)
               : context.systemPrompt,
-          messages: Array.isArray(context.messages)
-            ? context.messages.map((message) => transformMessageText(message, params.input))
-            : context.messages,
+          messages: context.messages.map((message) =>
+            transformContentText(message, params.input, "message"),
+          ),
         } as Parameters<StreamFn>[1])
       : context;
-    const maybeStream = params.streamFn(model, nextContext, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamTextTransforms(stream, params.output),
-      );
-    }
-    return wrapStreamTextTransforms(maybeStream, params.output);
+    return mapAssistantMessageStream(params.streamFn(model, nextContext, options), (stream) =>
+      wrapStreamTextTransforms(stream, params.output),
+    );
   };
 }

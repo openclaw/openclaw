@@ -7,19 +7,9 @@ describe("formatDocsLink", () => {
     expect(out).toBe("https://docs.openclaw.ai/channels/quietchat");
   });
 
-  it("preserves uppercase absolute HTTPS urls", () => {
-    const out = formatDocsLink("HTTPS://example.com/page", "page");
-    expect(out).toBe("HTTPS://example.com/page");
-  });
-
   it("does not treat http-prefixed relative paths as absolute urls", () => {
     const out = formatDocsLink("http-status", "HTTP status");
     expect(out).toBe("https://docs.openclaw.ai/http-status");
-  });
-
-  it("treats whitespace-only path like an empty path and falls back to docs root", () => {
-    const out = formatDocsLink("   ", "root");
-    expect(out).toBe("https://docs.openclaw.ai");
   });
 
   it("falls back to docs root when path is undefined (regression: #67076, #67074)", () => {

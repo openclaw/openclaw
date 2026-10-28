@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applyChatFontSmoothing,
   applyTypefaceOverrides,
   loadTypefaceSpecimens,
+  loadTypefaceStylesheet,
   normalizeTypefaceOverride,
   resolveTypefaces,
   syncTypefaceStylesheets,
@@ -15,13 +16,28 @@ const fontLinks = () => [
 const hrefs = () => fontLinks().map((link) => link.getAttribute("href"));
 
 describe("typeface presentation", () => {
-  afterEach(() => {
-    for (const link of fontLinks()) {
+  it("removes a failed stylesheet so a later selection can retry", () => {
+    const failed = loadTypefaceStylesheet("geist");
+    failed?.dispatchEvent(new Event("error"));
+    expect(failed?.isConnected).toBe(false);
+    const retried = loadTypefaceStylesheet("geist");
+    expect(retried?.isConnected).toBe(true);
+    expect(retried).not.toBe(failed);
+  });
+  function resetTypefacePresentation() {
+    for (const link of [
+      ...fontLinks(),
+      ...document.querySelectorAll('link[id^="openclaw-font-preload-"]'),
+    ]) {
       link.remove();
     }
     applyTypefaceOverrides();
     applyChatFontSmoothing("system");
-  });
+  }
+
+  // Shared UI workers preserve document.head between files.
+  beforeEach(resetTypefacePresentation);
+  afterEach(resetTypefacePresentation);
 
   it.each([
     ["claw", ["instrument-sans", "instrument-sans"]],
@@ -44,9 +60,15 @@ describe("typeface presentation", () => {
   it("loads overrides once, retaining them without fetching for system or custom defaults", () => {
     syncTypefaceStylesheets(resolveTypefaces("dash", "system", "system"));
     expect(hrefs()).toEqual(["/fonts/jetbrains-mono.css"]);
+    expect(document.querySelectorAll('link[rel="preload"]')).toHaveLength(0);
     const faces = resolveTypefaces("dash", "geist", "lora");
     expect(faces).toEqual({ ui: "geist", chat: "lora" });
     syncTypefaceStylesheets(faces);
+    expect(
+      [...document.querySelectorAll<HTMLLinkElement>('link[rel="preload"]')].map((link) =>
+        link.getAttribute("href"),
+      ),
+    ).toEqual(["/fonts/geist-latin.woff2", "/fonts/lora-latin.woff2"]);
     expect(hrefs()).toEqual(["/fonts/jetbrains-mono.css", "/fonts/geist.css", "/fonts/lora.css"]);
     expect(resolveTypefaces("custom", "lora")).toEqual({ ui: "lora", chat: "system" });
     const loaded = fontLinks();

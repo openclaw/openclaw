@@ -6,6 +6,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   FunctionTool,
+  Response as OpenAIResponse,
   ResponseCreateParamsStreaming,
   ResponseCompactionItem,
   ResponseInput,
@@ -29,6 +30,8 @@ export const RESPONSE_FAILED_NO_DETAILS_MESSAGE = "Unknown error (no error detai
 export const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 export const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 export const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
+// Projection-only provenance: symbols survive option/object spreads but never enter provider JSON.
+export const RESPONSES_RETAINED_USER = Symbol("responsesRetainedUser");
 export const OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE = "openai-responses-compaction";
 export const OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE =
   "openai-responses-retained-compaction";
@@ -40,6 +43,18 @@ export const OPENAI_RESPONSES_APIS: ReadonlySet<Api> = new Set([
   "openclaw-openai-chatgpt-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
+export const OPENAI_RESPONSES_TOOL_CALL_PROVIDERS: ReadonlySet<string> = new Set([
+  "openai",
+  "opencode",
+  "azure-openai-responses",
+  "github-copilot",
+]);
+
+export function isResponsesTerminalEventType(value: unknown): boolean {
+  return (
+    value === "response.completed" || value === "response.incomplete" || value === "response.failed"
+  );
+}
 
 export class OpenAIResponsesWebSocketPreDispatchError extends Error {
   constructor(cause: unknown) {
@@ -200,7 +215,15 @@ export const responsesPromptObserver = {
 
 const SERVICE_TIER_OBSERVER = Symbol("openaiResponsesServiceTierObserver");
 export type ResponsesServiceTierObservation =
-  | { requestedTier: string; responseTier: string; rejected?: false }
+  | {
+      requestedTier: string;
+      responseTier: string;
+      rejected?: false;
+      responseId?: string;
+      responseModel?: string;
+      inputTokens?: number;
+      cachedTokens?: number;
+    }
   | { requestedTier: string; rejected: true };
 type ResponsesServiceTierObserver = (observation: ResponsesServiceTierObservation) => void;
 
@@ -222,7 +245,12 @@ export const responsesServiceTierObserver = {
     const observer = options && responsesServiceTierObserver.get(options);
     observer?.({ requestedTier, rejected: true });
   },
-  observe(options: object | undefined, requestedTier: unknown, responseTier: unknown): void {
+  observe(
+    options: object | undefined,
+    requestedTier: unknown,
+    responseTier: unknown,
+    response?: Pick<OpenAIResponse, "id" | "model" | "usage">,
+  ): void {
     const observer = options && responsesServiceTierObserver.get(options);
     if (
       observer &&
@@ -231,7 +259,16 @@ export const responsesServiceTierObserver = {
       typeof responseTier === "string" &&
       /^[a-z0-9_-]{1,64}$/i.test(responseTier)
     ) {
-      observer({ requestedTier, responseTier });
+      observer({
+        requestedTier,
+        responseTier,
+        ...(response && {
+          responseId: response.id,
+          responseModel: response.model,
+          inputTokens: response.usage?.input_tokens,
+          cachedTokens: response.usage?.input_tokens_details?.cached_tokens,
+        }),
+      });
     }
   },
 };
@@ -243,7 +280,7 @@ export type OpenAIResponsesRequestParams = {
   instructions?: string;
   prompt_cache_key?: string;
   prompt_cache_retention?: "24h";
-  prompt_cache_options?: { ttl: "30m" };
+  prompt_cache_options?: { ttl?: "30m" | "12h" };
   metadata?: Record<string, string>;
   previous_response_id?: string;
   store?: boolean;

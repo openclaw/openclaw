@@ -48,16 +48,15 @@ const collectDiscordSecurityWarnings =
         'Set channels.discord.groupPolicy="allowlist" and configure channels.discord.guilds.<id>.channels',
     },
   });
-const collectDiscordSecurityFindings = createConditionalWarningCollector.findings({
-  collectWarnings: collectDiscordSecurityWarnings,
-  checkId: "channels.discord.groups.open",
-  severity: "warn",
-  title: "Discord security warning",
-});
 
 export const discordSecurityAdapter = {
   resolveDmPolicy: resolveDiscordDmPolicy,
-  collectWarnings: collectDiscordSecurityFindings,
+  collectWarnings: createConditionalWarningCollector.findings({
+    collectWarnings: collectDiscordSecurityWarnings,
+    checkId: "channels.discord.groups.open",
+    severity: "warn",
+    title: "Discord security warning",
+  }),
   collectAuditFindings: async (params) =>
     (await import("./security-audit.js")).collectDiscordSecurityAuditFindings(params),
 } satisfies NonNullable<ChannelPlugin<ResolvedDiscordAccount>["security"]>;

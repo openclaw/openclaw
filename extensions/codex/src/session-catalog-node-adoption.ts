@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
@@ -16,6 +17,10 @@ import { CatalogParamsError, MAX_SESSION_ID_LENGTH } from "./session-catalog-par
 import type { CodexSessionCatalogSession } from "./session-catalog-types.js";
 
 export const CODEX_NODE_SESSION_KEY_PREFIX = "harness:codex:node-session:";
+
+const loadTranscriptMirror = createLazyRuntimeModule(
+  () => import("./app-server/transcript-mirror.js"),
+);
 
 type CatalogSessionEntry = ReturnType<
   PluginRuntime["agent"]["session"]["listSessionEntries"]
@@ -213,60 +218,40 @@ export async function finalizeNodeAdoptedSession(params: {
 }): Promise<void> {
   const changedError = () =>
     new CatalogParamsError("Codex OpenClaw session changed before it could be bound. Retry.");
-  let finalized: CatalogSessionEntry | null;
-  try {
-    finalized = await params.api.runtime.agent.session.patchSessionEntry({
-      sessionKey: params.adopted.key,
-      readConsistency: "latest",
-      preserveActivity: true,
-      update: (entry) => {
-        const current = readNodeSessionMarker(entry);
-        if (
-          entry.sessionId?.trim() !== params.adopted.sessionId ||
-          entry.initializationPending === true ||
-          entry.agentHarnessId !== "codex" ||
-          entry.modelSelectionLocked !== true ||
-          !current ||
-          current.sourceHostId !== params.marker.sourceHostId ||
-          current.sourceThreadId !== params.marker.sourceThreadId ||
-          current.sourceHomeId !== params.marker.sourceHomeId ||
-          current.nodeId !== params.marker.nodeId
-        ) {
-          throw changedError();
-        }
-        if (current.initializing !== true) {
-          return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
-        }
-        const codex = isRecord(entry.pluginExtensions?.codex) ? entry.pluginExtensions.codex : {};
-        return {
-          archivedAt: undefined,
-          archivedBy: undefined,
-          archiveReason: undefined,
-          pluginExtensions: {
-            ...entry.pluginExtensions,
-            codex: { ...codex, sessionCatalog: params.marker },
-          },
-        };
-      },
-    });
-  } catch (error) {
-    const currentEntry = params.api.runtime.agent.session.getSessionEntry({
-      sessionKey: params.adopted.key,
-      readConsistency: "latest",
-    });
-    const current = currentEntry ? readNodeSessionMarker(currentEntry) : undefined;
-    if (
-      currentEntry?.sessionId?.trim() === params.adopted.sessionId &&
-      current?.initializing !== true &&
-      current?.sourceHostId === params.marker.sourceHostId &&
-      current.sourceThreadId === params.marker.sourceThreadId &&
-      current.sourceHomeId === params.marker.sourceHomeId &&
-      current.nodeId === params.marker.nodeId
-    ) {
-      return;
-    }
-    throw error;
-  }
+  const finalized = await params.api.runtime.agent.session.prepareSessionEntryPatch({
+    sessionKey: params.adopted.key,
+    readConsistency: "latest",
+    preserveActivity: true,
+    prepare: (entry) => {
+      const current = readNodeSessionMarker(entry);
+      if (
+        entry.sessionId?.trim() !== params.adopted.sessionId ||
+        entry.initializationPending === true ||
+        entry.agentHarnessId !== "codex" ||
+        entry.modelSelectionLocked !== true ||
+        !current ||
+        current.sourceHostId !== params.marker.sourceHostId ||
+        current.sourceThreadId !== params.marker.sourceThreadId ||
+        current.sourceHomeId !== params.marker.sourceHomeId ||
+        current.nodeId !== params.marker.nodeId
+      ) {
+        throw changedError();
+      }
+      if (current.initializing !== true) {
+        return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
+      }
+      const codex = isRecord(entry.pluginExtensions?.codex) ? entry.pluginExtensions.codex : {};
+      return {
+        archivedAt: undefined,
+        archivedBy: undefined,
+        archiveReason: undefined,
+        pluginExtensions: {
+          ...entry.pluginExtensions,
+          codex: { ...codex, sessionCatalog: params.marker },
+        },
+      };
+    },
+  });
   if (!finalized) {
     throw changedError();
   }
@@ -323,8 +308,7 @@ export async function createOrReuseNodeAdoptedSession(params: {
         const storePath = resolveStorePath(params.config.session?.store, {
           agentId: entry.agentId,
         });
-        const { importCodexThreadHistoryToTranscript } =
-          await import("./app-server/transcript-mirror.js");
+        const { importCodexThreadHistoryToTranscript } = await loadTranscriptMirror();
         await importCodexThreadHistoryToTranscript({
           thread: params.history.thread,
           throughTurnId: params.history.throughTurnId,

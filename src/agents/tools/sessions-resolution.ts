@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -6,7 +7,6 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import {
   listSpawnedSessionKeysWithResult,
   logSessionOwnershipLookupFailure,
@@ -46,6 +46,10 @@ export function resolveMainSessionAlias(cfg: OpenClawConfig) {
 
 export function resolveDisplaySessionKey(params: { key: string; alias: string; mainKey: string }) {
   return params.key === params.alias || params.key === params.mainKey ? "main" : params.key;
+}
+
+export function isSessionToolMainAlias(key: string, context: { mainKey: string; alias: string }) {
+  return key === "main" || key === "global" || key === context.mainKey || key === context.alias;
 }
 
 export function resolveInternalSessionKey(params: {
@@ -119,7 +123,11 @@ export async function lookupRequesterSessionOwnership(params: {
       },
       gatewayCall,
     );
-    return ok(resolved?.key === params.targetSessionKey);
+    return ok(
+      resolved?.key === params.targetSessionKey &&
+        (resolved.agentId ?? parseAgentSessionKey(resolved.key)?.agentId) ===
+          (params.targetAgentId ?? params.requesterAgentId),
+    );
   } catch (error) {
     if (isExpectedSessionLookupMiss(error)) {
       return ok(false);
@@ -176,22 +184,6 @@ type SessionReferenceResolution =
   | { ok: false; status: "error" | "forbidden"; error: string; notFound?: boolean };
 
 type SessionReferenceAction = "history" | "send" | "status" | "list" | "search";
-
-type VisibleSessionReferenceResolution =
-  | {
-      ok: true;
-      agentId?: string;
-      key: string;
-      displayKey: string;
-      missing?: true;
-      requesterOwned: boolean;
-    }
-  | {
-      ok: false;
-      status: "error" | "forbidden";
-      error: string;
-      displayKey: string;
-    };
 
 async function requestResolvedSession(
   params: Record<string, unknown> & { allowMissing?: boolean },
@@ -372,22 +364,23 @@ export async function resolveVisibleSessionReference(params: {
   allowMissingKey?: boolean;
   concealResolutionError?: string;
   callGateway?: GatewayCaller;
-}): Promise<VisibleSessionReferenceResolution> {
+}) {
   let resolvedKey = params.resolvedSession.key;
   let resolvedAgentId =
     params.resolvedSession.agentId ?? parseAgentSessionKey(resolvedKey)?.agentId;
   let displayKey = params.resolvedSession.displayKey;
   let missing = false;
   const requesterOwnedByResolution = params.resolvedSession.requesterOwned;
+  const invisible = () => ({
+    ok: false as const,
+    status: "forbidden" as const,
+    error: `Session not visible from session tools: ${params.visibilitySessionKey}`,
+    displayKey,
+  });
   // Cross-session tools persist their results into the caller transcript; an
   // incognito target must remain unreachable even from an incognito requester.
   if (isIncognitoSessionKey(resolvedKey)) {
-    return {
-      ok: false,
-      status: "forbidden",
-      error: `Session not visible from session tools: ${params.visibilitySessionKey}`,
-      displayKey,
-    };
+    return invisible();
   }
   const input = params.visibilitySessionKey.trim();
   const isExplicitKey =
@@ -422,18 +415,11 @@ export async function resolveVisibleSessionReference(params: {
         missing = true;
       }
     } catch (error) {
-      if (params.concealResolutionError) {
-        return {
-          ok: false,
-          status: "forbidden",
-          error: params.concealResolutionError,
-          displayKey,
-        };
-      }
       return {
-        ok: false,
-        status: "error",
+        ok: false as const,
+        status: params.concealResolutionError ? ("forbidden" as const) : ("error" as const),
         error:
+          params.concealResolutionError ||
           formatErrorMessage(error) ||
           `Session not found: ${params.visibilitySessionKey} (use the full sessionKey from sessions_list)`,
         displayKey,
@@ -441,21 +427,16 @@ export async function resolveVisibleSessionReference(params: {
     }
   }
   if (isIncognitoSessionKey(resolvedKey)) {
-    return {
-      ok: false,
-      status: "forbidden",
-      error: `Session not visible from session tools: ${params.visibilitySessionKey}`,
-      displayKey,
-    };
+    return invisible();
   }
   return {
-    ok: true,
+    ok: true as const,
     ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
     key: resolvedKey,
     displayKey,
     requesterOwned:
       requesterOwnedByResolution ||
       (params.requesterSessionKey === resolvedKey && resolvedAgentId === params.requesterAgentId),
-    ...(missing ? { missing: true } : {}),
+    ...(missing ? { missing: true as const } : {}),
   };
 }

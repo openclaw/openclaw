@@ -1,10 +1,18 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import { mediaModels } from "./media-config.test-support.js";
+import { runMediaFixture } from "./runner-case.test-support.js";
+import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 import { runCapability } from "./runner.js";
 import { withVideoFixture } from "./runner.test-utils.js";
 import type { MediaUnderstandingProvider } from "./types.js";
+
+const nativeModel = { provider: "lmstudio", model: "video-model" };
+const handoff = "handed-to-native-vision";
+type RunParams = Parameters<typeof runCapability>[0];
 
 vi.mock("../media/channel-inbound-roots.js", () => ({
   resolveChannelInboundAttachmentRoots: () => undefined,
@@ -39,64 +47,122 @@ function videoConfig(models?: MediaUnderstandingModelConfig[]): OpenClawConfig {
   };
 }
 
-async function runVideo(
+function nativeVideoConfig(
+  input: ModelDefinitionConfig["input"] = ["text", "video"],
+  api: ModelProviderConfig["api"] = "openai-completions",
+): OpenClawConfig {
+  return {
+    models: mediaModels("lmstudio", "video-model", input, {
+      api,
+      baseUrl: "http://127.0.0.1:1234/v1",
+    }),
+  };
+}
+
+function runVideo(
   provider: MediaUnderstandingProvider,
   cfg: OpenClawConfig,
-  activeModel?: Parameters<typeof runCapability>[0]["activeModel"],
+  activeModel?: RunParams["activeModel"],
 ) {
-  let result: Awaited<ReturnType<typeof runCapability>> | undefined;
-  await withVideoFixture("openclaw-video", async ({ ctx, media, cache }) => {
-    result = await runCapability({
+  return runMediaFixture("video", "openclaw-video", {
+    cfg,
+    providerRegistry: new Map([[provider.id, provider]]),
+    activeModel,
+  });
+}
+
+async function runNativeVideo(ctx: RunParams["ctx"]) {
+  const media = normalizeMediaAttachments(ctx);
+  const cache = createMediaAttachmentCache(media);
+  try {
+    return await runCapability({
       capability: "video",
-      cfg,
+      cfg: nativeVideoConfig(),
       ctx,
       attachments: cache,
       media,
-      providerRegistry: new Map([[provider.id, provider]]),
-      activeModel,
+      providerRegistry: new Map(),
+      activeModel: nativeModel,
     });
-  });
-  return expectDefined(result, "video result");
+  } finally {
+    await cache.cleanup();
+  }
 }
 
 describe("runCapability video", () => {
-  it("truncates provider output without splitting a boundary emoji", async () => {
-    const prefix = "v".repeat(79);
-    const result = await runVideo(
-      {
-        id: "moonshot",
-        capabilities: ["video"],
-        describeVideo: async (req) => ({
-          text: `${prefix}${String.fromCodePoint(0x1f600)}tail`,
-          model: req.model,
-        }),
-      },
-      videoConfig([{ provider: "moonshot", model: "kimi-k2.5", maxChars: 80 }]),
-    );
-    const output = expectDefined(result.outputs[0], "media output 0");
-    expect(output.text).toBe(prefix);
-    expect(output.text).not.toContain(String.fromCharCode(0xd83d));
+  it.each<[string, OpenClawConfig, string, ModelProviderConfig["api"]?]>([
+    ["configured video", nativeVideoConfig(), handoff],
+    ["text-only model", nativeVideoConfig(["text"]), "no-model"],
+    ["another API", nativeVideoConfig(["text", "video"], "openai-responses"), "no-model"],
+    ["prepared completions", nativeVideoConfig(), handoff, "openai-completions"],
+    ["prepared responses", nativeVideoConfig(), "no-model", "openai-responses"],
+  ])("native video handoff: %s", async (_name, cfg, kind, api) => {
+    if (api) {
+      delete expectDefined(cfg.models?.providers?.lmstudio, "provider").api;
+    }
+    const result = await runVideo({ id: "lmstudio" }, cfg, {
+      ...nativeModel,
+      ...(api ? { api } : {}),
+    });
+    expect(result.outputs).toEqual([]);
+    expect(result.decision.attachmentDispositions).toEqual({ 0: { kind } });
   });
 
-  it("resolves active video provider defaults", async () => {
-    let seenModel: string | undefined;
-    const result = await runVideo(
-      {
-        id: "moonshot",
-        capabilities: ["video"],
-        describeVideo: async (req) => {
-          seenModel = req.model;
-          return { text: "moonshot", model: req.model ?? "provider-default" };
-        },
-      },
-      videoConfig(),
-      { provider: "moonshot" },
-    );
-    expect(result.decision.outcome).toBe("success");
-    expect(result.outputs[0]).toMatchObject({
-      provider: "moonshot",
-      model: "provider-default",
+  it("hands off every local video despite the default understanding attachment limit", async () => {
+    await withVideoFixture("openclaw-video-first", async (first) => {
+      await withVideoFixture("openclaw-video-second", async (second) => {
+        const ctx = { media: [...first.ctx.media, ...second.ctx.media] };
+        const result = await runNativeVideo(ctx);
+        expect(result.decision.attachmentDispositions).toEqual({
+          0: { kind: handoff },
+          1: { kind: handoff },
+        });
+      });
     });
-    expect(seenModel).toBeUndefined();
   });
+
+  it("does not claim native handoff for a remote video URL", async () => {
+    const result = await runNativeVideo({
+      media: [{ url: "https://cdn.example.test/video.mp4", contentType: "video/mp4" }],
+    });
+    expect(result.decision.attachmentDispositions).toEqual({
+      0: { kind: "failed", reason: "remote-url video is not natively deliverable" },
+    });
+  });
+
+  const prefix = "v".repeat(79);
+  const text = `${prefix}${String.fromCodePoint(0x1f600)}tail`;
+  it.each([
+    [
+      videoConfig([{ provider: "moonshot", model: "kimi-k2.5", maxChars: 80 }]),
+      undefined,
+      "kimi-k2.5",
+      prefix,
+    ],
+    [videoConfig(), { provider: "moonshot" }, undefined, text],
+  ] as const)(
+    "resolves video models and output limits: %#",
+    async (cfg, activeModel, model, expectedText) => {
+      let seenModel: string | undefined;
+      const result = await runVideo(
+        {
+          id: "moonshot",
+          capabilities: ["video"],
+          describeVideo: async (req) => {
+            seenModel = req.model;
+            return { text, model: req.model ?? "provider-default" };
+          },
+        },
+        cfg,
+        activeModel,
+      );
+      expect(result.decision.outcome).toBe("success");
+      expect(result.outputs[0]).toMatchObject({
+        provider: "moonshot",
+        model: model ?? "provider-default",
+        text: expectedText,
+      });
+      expect(seenModel).toBe(model);
+    },
+  );
 });

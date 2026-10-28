@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
-import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
+import { listSessionBindingsBySessionsAsync } from "../../../infra/outbound/session-binding-service.js";
 import { resolveChannelAccountId, resolveCommandSurfaceChannel } from "../channel-context.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
@@ -17,32 +17,27 @@ function supportsConversationBindings(channel: string): boolean {
   );
 }
 
-export function handleSubagentsAgentsAction(ctx: SubagentsCommandContext): CommandHandlerResult {
+export async function handleSubagentsAgentsAction(
+  ctx: SubagentsCommandContext,
+): Promise<CommandHandlerResult> {
   const { params, requesterKey, readContext } = ctx;
   const channel = resolveCommandSurfaceChannel(params);
   const accountId = resolveChannelAccountId(params);
   const currentConversationBindingsSupported = supportsConversationBindings(channel);
-  const bindingService = getSessionBindingService();
-  const bindingsBySession = new Map<string, ReturnType<typeof bindingService.listBySession>>();
-
-  const resolveSessionBindings = (sessionKey: string) => {
-    const cached = bindingsBySession.get(sessionKey);
-    if (cached) {
-      return cached;
-    }
-    const resolved = bindingService
-      .listBySession(sessionKey)
-      .filter(
-        (entry) =>
-          entry.status === "active" &&
-          entry.conversation.channel === channel &&
-          entry.conversation.accountId === accountId,
-      );
-    bindingsBySession.set(sessionKey, resolved);
-    return resolved;
-  };
-
   const { latest, active, recent } = readContext.list.view;
+  const bindingsBySession = await listSessionBindingsBySessionsAsync([
+    requesterKey,
+    ...latest.map((entry) => entry.childSessionKey),
+  ]);
+  params.command.assertOwnerCurrent?.();
+  const resolveSessionBindings = (sessionKey: string) =>
+    (bindingsBySession.get(sessionKey) ?? []).filter(
+      (entry) =>
+        entry.status === "active" &&
+        entry.conversation.channel === channel &&
+        entry.conversation.accountId === accountId,
+    );
+
   const indexByChildSessionKey = new Map(
     [...active, ...recent].map((entry, idx) => [entry.childSessionKey, idx + 1] as const),
   );

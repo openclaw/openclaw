@@ -1,143 +1,116 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { afterEach, expect, it, vi } from "vitest";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
-  createComposerProps as props,
+  createComposerQuestionPrompt as questionPrompt,
+  createComposerControlsFixture,
   renderComposerFixture as renderComposer,
   resetComposerFixture,
+  renderComposerInto,
 } from "./chat-composer.test-support.ts";
-import { renderChatComposer } from "./components/chat-composer.ts";
 import { questionPanelIn } from "./components/chat-question-card.test-support.ts";
-
-function questionPrompt(id: string, question: string): QuestionPrompt {
-  return {
-    id,
-    questions: [
-      {
-        questionId: "choice",
-        header: "Choice",
-        question,
-        options: [{ label: "Yes" }, { label: "No" }],
-        isOther: false,
-      },
-    ],
-    sessionKey: "queue-test",
-    createdAtMs: 1_000,
-    expiresAtMs: Date.now() + 60_000,
-    status: "pending",
-    answeredElsewhere: false,
-    localResolutionConfirmed: false,
-    locallyExpired: false,
-    submitting: false,
-    error: null,
-    drafts: new Map(),
-    revision: 1,
-  };
-}
 
 afterEach(() => resetComposerFixture());
 
-describe("composer question takeover", () => {
-  it.each([true, false])(
-    "swaps the expanded question with the composer and restores its draft, focus, and progress (open=%s)",
-    async (progressOpen) => {
-      const container = document.createElement("div");
-      document.body.append(container);
-      const prompt = questionPrompt("question-swap", "Choose a release target");
-      const composerProps = props({
-        paneId: `question-swap-pane-${progressOpen}`,
-        collapseTaskProgress: progressOpen,
-        progressCard: {
-          sessionKey: "queue-test",
-          revision: 1,
-          updatedAt: Date.now(),
-          markdown: "Release preparation",
-          steps: [{ step: "Choose a target", status: "in_progress" }],
-        },
-        sessionKey: "queue-test",
-        draft: "Keep this draft",
-        gatewayQuestionPrompts: [],
-        composerControls: html`<button type="button">Model</button>`,
-        onRequestUpdate: vi.fn(),
-      });
-      composerProps.onDraftChange = (next) => {
-        composerProps.draft = next;
-      };
-      const draw = () => render(renderChatComposer(composerProps), container);
-
-      draw();
-      const progress = container.querySelector<HTMLDetailsElement>(
-        ".session-progress-card--composer",
-      )!;
-      progress.querySelector("summary")!.click();
-      expect(progress.open).toBe(progressOpen);
-      const progressWrapper = progress.parentElement!;
-      expect(progressWrapper.hidden).toBe(false);
-      const initialTextarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-      initialTextarea.focus();
-      expect(document.activeElement).toBe(initialTextarea);
-      initialTextarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-      initialTextarea.value = "Keep this draft while composing";
-      initialTextarea.dispatchEvent(
+it.each([
+  { progressOpen: true, takeover: "expand" },
+  { progressOpen: false, takeover: "next" },
+])(
+  "restores the composer after $takeover (progress=$progressOpen)",
+  async ({ progressOpen, takeover }) => {
+    const prompt = questionPrompt("question-swap", "Choose a release target");
+    const nextPrompt = questionPrompt("question-next", "Choose a release format");
+    const { container, props: composerProps } = renderComposer({
+      collapseTaskProgress: progressOpen,
+      progressCard: { sessionKey: "queue-test", revision: 1, updatedAt: 1, markdown: "Progress" },
+      sessionKey: "queue-test",
+      draft: "Keep this draft",
+      composerControls: createComposerControlsFixture(),
+    });
+    document.body.append(container);
+    const draw = () => renderComposerInto(container, composerProps);
+    const editor = () => container.querySelector<HTMLTextAreaElement>("textarea")!;
+    const compose = (value: string) => {
+      editor().dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      editor().value = value;
+      editor().dispatchEvent(
         new InputEvent("input", { bubbles: true, inputType: "insertCompositionText" }),
       );
+    };
 
-      composerProps.gatewayQuestionPrompts = [prompt];
-      draw();
-      let panel = await questionPanelIn(container);
-      expect(container.querySelector(".agent-chat__input")).toBeNull();
-      expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
-      expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
-      expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
-      expect(composerProps.draft).toBe("Keep this draft while composing");
-      expect(progressWrapper.hidden).toBe(true);
-      expect(progress.open).toBe(progressOpen);
-
-      composerProps.draft = "Host updated this draft while the question was open";
-
-      panel.props!.onCollapsedChange!(true);
-      draw();
-      await Promise.resolve();
-      let textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(container.querySelector(".session-progress-card--composer")).not.toBeNull(),
+    );
+    const progress = container.querySelector<HTMLDetailsElement>(
+      ".session-progress-card--composer",
+    )!;
+    progress.querySelector("summary")!.click();
+    const progressWrapper = progress.closest<HTMLElement>(".agent-chat__progress-float")!;
+    expect(progressWrapper.hidden).toBe(false);
+    const expectRestored = (draft: string) => {
       expect(container.querySelector(".session-progress-card--composer")).toBe(progress);
       expect(progressWrapper.hidden).toBe(false);
       expect(progress.open).toBe(progressOpen);
-      expect(textarea.value).toBe("Host updated this draft while the question was open");
-      expect(document.activeElement).toBe(textarea);
+      expect(editor().value).toBe(draft);
+      expect(document.activeElement).toBe(editor());
+    };
+    const expectQuestion = (panel: Element, draft: string) => {
+      expect(
+        container.querySelector(
+          ".agent-chat__input, .agent-chat__composer-footer, .agent-chat__typing-indicator--outside",
+        ),
+      ).toBeNull();
+      expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
+      expect(composerProps.draft).toBe(draft);
+      expect(progressWrapper.hidden).toBe(true);
+    };
+    const initialTextarea = editor();
+    initialTextarea.focus();
+    expect(document.activeElement).toBe(initialTextarea);
+    compose("Keep this draft while composing");
 
-      panel = await questionPanelIn(container);
+    composerProps.gatewayQuestionPrompts = [prompt, nextPrompt];
+    draw();
+    let panel = await questionPanelIn(container);
+    expectQuestion(panel, "Keep this draft while composing");
+    expect(progress.open).toBe(progressOpen);
+
+    composerProps.draft = "Host updated this draft while the question was open";
+
+    panel.props!.onCollapsedChange!(true);
+    draw();
+    await Promise.resolve();
+    expectRestored("Host updated this draft while the question was open");
+
+    const composedDraft = `Draft composed before ${takeover}`;
+    compose(composedDraft);
+    panel = await questionPanelIn(container);
+    if (takeover === "expand") {
       panel.props!.onCollapsedChange!(false);
-      draw();
-      await questionPanelIn(container);
-      expect(container.querySelector(".agent-chat__input")).toBeNull();
-      expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
+    } else {
+      panel.props!.onNextRequest!();
+    }
+    draw();
+    await questionPanelIn(container);
+    expectQuestion(panel, composedDraft);
+    prompt.status = "answered";
+    nextPrompt.status = "answered";
+    draw();
+    await Promise.resolve();
+    expectRestored(composedDraft);
+    expect(container.querySelector("openclaw-chat-question-panel")).toBeNull();
+  },
+);
 
-      expect(progressWrapper.hidden).toBe(true);
-      prompt.status = "answered";
-      draw();
-      await Promise.resolve();
-      textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-      expect(container.querySelector(".session-progress-card--composer")).toBe(progress);
-      expect(progressWrapper.hidden).toBe(false);
-      expect(progress.open).toBe(progressOpen);
-      expect(textarea.value).toBe("Host updated this draft while the question was open");
-      expect(document.activeElement).toBe(textarea);
-      expect(container.querySelector("openclaw-chat-question-panel")).toBeNull();
-
-      container.remove();
-    },
-  );
-
-  it("hides the pending progress slot during question takeover", () => {
-    const view = renderComposer({
-      sessionKey: "queue-test",
-      progressCardInitialLoading: true,
-      gatewayQuestionPrompts: [questionPrompt("loading-progress", "Continue?")],
-    });
-    const slot = view.container.querySelector<HTMLElement>(".agent-chat__progress-float--loading")!;
-    expect(slot.hidden).toBe(true);
-    expect(view.container.querySelector(".agent-chat__input")).toBeNull();
+it("hides the pending progress slot during question takeover", () => {
+  const view = renderComposer({
+    sessionKey: "queue-test",
+    progressCardInitialLoading: true,
+    gatewayQuestionPrompts: [questionPrompt("loading-progress", "Continue?")],
   });
+  const slot = view.container.querySelector<HTMLElement>(".agent-chat__progress-float--loading")!;
+  expect(slot.hidden).toBe(true);
+  expect(view.container.querySelector(".agent-chat__input")).toBeNull();
 });

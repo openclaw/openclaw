@@ -1,29 +1,24 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isSessionTranscriptProjectionUnavailableError,
-  loadSessionEntry,
   patchSessionEntryCore,
   readSessionTranscriptBoundedMessageTailPage,
   readSessionTranscriptMessageEventPage,
-  readSessionTranscriptWatermark,
   scanDoctorSessionEntriesTolerant,
 } from "../config/sessions/session-accessor.js";
-import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import { SessionTranscriptColdError } from "../config/sessions/session-transcript-cold-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deriveGoalSessionTitle } from "../gateway/derive-goal-session-title.js";
 import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
-import { hasExplicitSessionName, sessionTitleRequests } from "../gateway/session-title-state.js";
-import { sqliteMessageEventWithSeq } from "../gateway/session-transcript-entry-message.js";
+import { hasExplicitSessionName } from "../gateway/session-title-state.js";
 import {
   listExistingAgentDatabaseTargets,
   type ExistingAgentDatabaseTarget,
 } from "../infra/session-sqlite-migration-readers.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
-
-export type SessionTitleRepairReport = Awaited<ReturnType<typeof repairLegacySessionTitles>>;
 
 function readLegacySessionTitle(
   scope: Parameters<typeof readSessionTranscriptBoundedMessageTailPage>[0],
@@ -46,13 +41,11 @@ function readLegacySessionTitle(
       return undefined;
     }
     for (const event of head.events) {
-      const message = asOptionalRecord(sqliteMessageEventWithSeq(event));
+      const message = asOptionalRecord(asOptionalRecord(event.event)?.message);
       const projected = projectSessionDisplayMessage(message);
       if (projected?.role === "user" && !hasInterSessionUserProvenance(message)) {
         const displayName = deriveGoalSessionTitle(projected.text);
-        return displayName
-          ? { displayName, generation: head.snapshot.generation ?? null }
-          : undefined;
+        return displayName || undefined;
       }
     }
     return undefined;
@@ -102,7 +95,7 @@ export async function repairLegacySessionTitles(params: {
       agentId: target.agentId,
       path: target.sqlitePath,
       run: () => {
-        const keys: string[] = [];
+        const sessions: Array<{ sessionKey: string; sessionId: string }> = [];
         scanDoctorSessionEntriesTolerant(
           scope,
           ({ entry, sessionKey, recoveredFromProjections }) => {
@@ -110,37 +103,26 @@ export async function repairLegacySessionTitles(params: {
               !recoveredFromProjections &&
               !entry.incognito &&
               !isIncognitoSessionKey(sessionKey) &&
-              entry.status !== "running" &&
+              // Spawn owns child labels; its first user message is a runtime task envelope.
+              !isSubagentSessionKey(sessionKey) &&
               !hasExplicitSessionName(entry)
             ) {
-              keys.push(sessionKey);
+              sessions.push({ sessionKey, sessionId: entry.sessionId });
             }
           },
         );
-        return keys;
+        return sessions;
       },
     });
     if (!scan.ok) {
       continue;
     }
-    for (const sessionKey of scan.value) {
+    for (const { sessionKey, sessionId } of scan.value) {
       if (params.apply) {
         assertRepairAuthority();
       }
       try {
-        const entry = loadSessionEntry({ ...scope, sessionKey });
-        if (
-          !entry ||
-          entry.incognito ||
-          entry.status === "running" ||
-          hasExplicitSessionName(entry)
-        ) {
-          continue;
-        }
-        const session = { ...scope, sessionKey, sessionId: entry.sessionId, sessionEntry: entry };
-        if (sessionTitleRequests.get(session)) {
-          continue;
-        }
+        const session = { ...scope, sessionKey, sessionId };
         const title = readLegacySessionTitle(session);
         if (!title) {
           continue;
@@ -149,28 +131,15 @@ export async function repairLegacySessionTitles(params: {
         if (!params.apply) {
           continue;
         }
-        await patchSessionEntryCore(
-          session,
-          (current) =>
-            current.sessionId === entry.sessionId &&
-            current.lifecycleRevision === entry.lifecycleRevision &&
-            current.status !== "running" &&
-            !current.incognito &&
-            !hasExplicitSessionName(current)
-              ? { displayName: Buffer.from(title.displayName, "utf16le").toString("utf16le") }
-              : null,
-          {
-            preserveActivity: true,
-            skipMaintenance: true,
-            assertCommitAllowed: assertRepairAuthority,
-            shouldCommit: () =>
-              !sessionTitleRequests.get(session) &&
-              readSessionTranscriptWatermark(session).generation === title.generation,
-            onCommitted: () => {
-              report.repaired++;
-            },
+        // Offline Doctor owns these stores; concurrent title changes are best effort.
+        await patchSessionEntryCore(session, () => ({ displayName: title }), {
+          preserveActivity: true,
+          skipMaintenance: true,
+          assertCommitAllowed: assertRepairAuthority,
+          onCommitted: () => {
+            report.repaired++;
           },
-        );
+        });
         assertRepairAuthority();
       } catch (error) {
         if (params.apply) {

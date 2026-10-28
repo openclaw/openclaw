@@ -6,6 +6,12 @@ import type {
   PreparedModelRuntimeReplacement,
 } from "./prepared-model-runtime.types.js";
 
+export class PreparedModelRuntimeClosedError extends Error {
+  constructor() {
+    super("prepared model runtime process lifetime closed");
+  }
+}
+
 /** Notifications supplement the owner's generation and registration checks. */
 export function capturePreparedModelRuntimeGeneration(
   owner: Pick<PreparedModelRuntimeOwner, "generationRetirement">,
@@ -19,6 +25,10 @@ export function retirePreparedModelRuntimeGeneration(
   const retirement = owner.generationRetirement;
   owner.generationRetirement = undefined;
   retirement?.abort();
+  if (retirement?.signal.reason instanceof Error) {
+    // Retained signals must not keep the retiring caller's lazy stack frames alive.
+    void retirement.signal.reason.stack;
+  }
 }
 
 type ModelRuntimeClose = (error: Error) => Promise<void>;
@@ -39,7 +49,7 @@ export function capturePreparedModelRuntimeLifetime(): () => void {
   const epoch = lifetimes.epoch;
   const assertCurrent = () => {
     if (lifetimes.closing || epoch !== lifetimes.epoch) {
-      throw new Error("prepared model runtime process lifetime closed");
+      throw new PreparedModelRuntimeClosedError();
     }
   };
   assertCurrent();
@@ -66,7 +76,7 @@ export function closePreparedModelRuntimeSnapshots(): Promise<void> {
   const closed = createDeferredCore();
   lifetimes.closing = closed.promise;
   lifetimes.epoch += 1;
-  const error = new Error("prepared model runtime process lifetime closed");
+  const error = new PreparedModelRuntimeClosedError();
   void Promise.allSettled(
     [...lifetimes.closeCallbacks].map(async (close) => await close(error)),
   ).then(async (results) => {
@@ -89,12 +99,20 @@ export function closePreparedModelRuntimeSnapshots(): Promise<void> {
   return closed.promise;
 }
 
-export function createPreparedModelRuntimeReplacement(): PreparedModelRuntimeReplacement {
+export function createPreparedModelRuntimeReplacement(
+  agentIds?: ReadonlySet<string>,
+): PreparedModelRuntimeReplacement {
   const { promise, resolve, reject } = createDeferredCore();
   // Readers await the original promise. This handler only prevents an unobserved rejected gate
   // when a reload fails before any request reaches the stale generation.
   void promise.catch(() => undefined);
-  return { gateId: Symbol("prepared-model-runtime-replacement"), promise, resolve, reject };
+  return {
+    agentIds,
+    gateId: Symbol("prepared-model-runtime-replacement"),
+    promise,
+    resolve,
+    reject,
+  };
 }
 
 /** Execution waits for plugin replacement while the active publication remains readable. */
@@ -138,27 +156,13 @@ export function createPreparedModelRuntimePluginDrain(
       run: () => Promise<void>,
     ): Promise<void> {
       const assertCurrent = capturePreparedModelRuntimeLifetime();
-      for (;;) {
-        const reservation = pending;
-        if (reservation) {
-          await reservation.promise;
-          continue;
-        }
+      // A reload starting after this wait is best effort; its own publication owns recovery.
+      await pending?.promise;
+      assertCurrent();
+      await queue.enqueue(async () => {
         assertCurrent();
-        let started = false;
-        await queue.enqueue(async () => {
-          assertCurrent();
-          if (pending) {
-            return;
-          }
-          started = true;
-          await run();
-        });
-        if (started) {
-          return;
-        }
-        // A newer reservation must release the queue before waiting for its drain.
-      }
+        await run();
+      });
     },
   };
 }

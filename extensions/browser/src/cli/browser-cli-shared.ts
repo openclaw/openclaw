@@ -46,8 +46,8 @@ export async function runBrowserCliCommand(
     await runCommandWithRuntime(defaultRuntime, action, reportError);
     return;
   }
-  // These older commands report even expected/JSON-mode errors locally. Keep
-  // that public CLI behavior distinct from runCommandWithRuntime's rethrow path.
+  // Older commands retain local human-mode diagnostics. JSON requests select
+  // the runtime policy below so the host can render their failure envelope.
   try {
     await action();
   } catch (error) {
@@ -95,7 +95,8 @@ export async function runBrowserCliRequest<T = unknown>(params: {
       );
     }
   };
-  await runBrowserCliCommand(action, params.errorPolicy);
+  const errorPolicy = params.parent.json ? "runtime" : params.errorPolicy;
+  await runBrowserCliCommand(action, errorPolicy);
 }
 
 export function printBrowserJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
@@ -104,6 +105,22 @@ export function printBrowserJsonResult(parent: BrowserParentOpts, payload: unkno
   }
   defaultRuntime.writeJson(payload);
   return true;
+}
+
+export function printBrowserList<T>(
+  entries: T[],
+  emptyMessage: string,
+  format: (entry: T, index: number) => string,
+  header?: string,
+): void {
+  if (entries.length === 0) {
+    defaultRuntime.log(emptyMessage);
+    return;
+  }
+  if (header !== undefined) {
+    defaultRuntime.log(header);
+  }
+  defaultRuntime.log(entries.map(format).join("\n"));
 }
 
 export function resolveBrowserProfileQuery(
@@ -147,7 +164,7 @@ export function parseBrowserNonNegativeIntegerOption(raw: string, flag: string):
 export async function callBrowserRequest<T>(
   opts: BrowserParentOpts,
   params: BrowserRequestParams,
-  extra?: { timeoutMs?: number; progress?: boolean },
+  extra?: { timeoutMs?: number },
 ): Promise<T> {
   const resolvedTimeout =
     typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
@@ -167,7 +184,7 @@ export async function callBrowserRequest<T>(
       body: params.body,
       timeoutMs: budgets?.proxyTimeoutMs,
     },
-    { progress: extra?.progress, scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES] },
+    { scopes: [...BROWSER_REQUEST_GATEWAY_SCOPES] },
   );
   if (payload === undefined) {
     throw new Error("Unexpected browser.request response");

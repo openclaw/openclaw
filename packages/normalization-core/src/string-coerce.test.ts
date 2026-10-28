@@ -11,6 +11,8 @@ import { describe, expect, it } from "vitest";
 describe("normalization-core/string-coerce", () => {
   it.each([
     [" Ultrafast ", "ultrafast"],
+    [" Ultra ", "ultrafast"],
+    ["ultra-fast", undefined],
     ["fast", true],
     ["off", false],
     ["auto", "auto"],

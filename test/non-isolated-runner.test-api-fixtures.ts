@@ -12,12 +12,12 @@ export function testApiLifecycleFixtureFiles(repoRoot: string): Record<string, s
         ? `
 // Check during collection before imports can overwrite the previous generation.
 const remainingKeys = [
-  "openclaw.staleAuthOrderTestApi",
+  "openclaw.codexRouteSessionRepairTestApi",
   "openclaw.bashProcessRegistryTestApi",
   "openclaw.diagnosticRunActivityTestApi",
 ].filter((key) => Object.hasOwn(globalThis, Symbol.for(key)));
 expect(remainingKeys, "completed-file test API publications").toEqual([]);
-for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.staleAuthOrderTestApi"]) {
+for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.codexRouteSessionRepairTestApi"]) {
   expect(Reflect.get(globalThis, key)).toBe("foreign");
   Reflect.deleteProperty(globalThis, key);
 }
@@ -30,7 +30,7 @@ expect(redactPriorValues(priorError, () => "***")).toBe(priorError);
 import { createRequire } from "node:module";
 import { afterAll, describe, expect, it } from "vitest";
 ${observeCleanup}
-const { repairStaleConfiguredAuthOrders } = await import(${sourcePath("commands/doctor/shared/stale-auth-order.test-support.ts")});
+const { repairCodexSessionStoreRoutes } = await import(${sourcePath("commands/doctor/shared/codex-route-session-repair.test-support.ts")});
 const registry = await import(${sourcePath("agents/bash-process-registry.ts")});
 const { resetProcessRegistryForTests } = await import(${sourcePath("agents/bash-process-registry.test-support.ts")});
 const { createProcessSessionFixture } = await import(${sourcePath("agents/bash-process-registry.test-helpers.ts")});
@@ -39,8 +39,8 @@ const capturedRegistryApi = Reflect.get(globalThis, registryKey);
 const replacement = await import(${sourcePath("agents/bash-process-registry.ts?lifetime-replacement")});
 const replacementApi = Reflect.get(globalThis, registryKey);
 expect(replacementApi).not.toBe(capturedRegistryApi);
-const nativeCron = await import(${sourcePath("cron/service/active-run-cancellation.ts")});
 const native = createRequire(import.meta.url)("./native-cron.cjs");
+const nativeCron = await import(${sourcePath("cron/service/active-run-cancellation.ts")});
 expect(Reflect.get(globalThis, Symbol.for("openclaw.activeCronTaskRunTestApi"))).toBe(native.api);
 expect(nativeCron.registerActiveCronTaskRun).toBe(native.register);
 const { resetDiagnosticRunActivityForTest, getDiagnosticSessionActivitySnapshot } = await import(${sourcePath("logging/diagnostic-run-activity.ts")});
@@ -66,11 +66,7 @@ describe("${generation} test API consumers", () => {
     native.api.resetActiveCronTaskRunsForTests();
     expect(nativeCron.abortActiveCronTaskRuns()).toBe(0);
     expect(controller.signal.aborted).toBe(false);
-    const cfg = { auth: { order: { "fixture-provider": [] } } };
-    expect(repairStaleConfiguredAuthOrders({ cfg, stores: [] })).toEqual({
-      config: cfg,
-      changes: [],
-    });
+    expect(repairCodexSessionStoreRoutes({ store: {} })).toEqual([]);
   }
   it.each(["first test", "second test"])("keeps test API consumers usable in %s", async () => {
     await verifyConsumers();
@@ -101,23 +97,58 @@ ${generation === "producer" ? 'await import("./foreign/extensions/google/vertex-
 `;
   }
   files["native-cron.cjs"] = `
-const cron = require(${sourcePath("cron/service/active-run-cancellation.ts")});
-module.exports = { register: cron.registerActiveCronTaskRun, api: globalThis[Symbol.for("openclaw.activeCronTaskRunTestApi")] };
+const { existsSync } = require("node:fs");
+const { registerHooks } = require("node:module");
+const { pathToFileURL } = require("node:url");
+const sourceRoot = pathToFileURL(${JSON.stringify(`${repoRoot}${path.sep}`)}).href;
+const sourcePaths = require(${JSON.stringify(path.join(repoRoot, "tsconfig.json"))}).compilerOptions.paths;
+// Keep Node's native cache identity; the hook only resolves this synchronous source load.
+const hooks = registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (context.parentURL?.startsWith(sourceRoot)) {
+      // Workspace packages are source aliases in this fixture, not built dependencies.
+      const source = sourcePaths[specifier]?.[0];
+      if (source) return nextResolve(new URL(source, sourceRoot).href, context);
+    }
+    if (context.parentURL?.startsWith(sourceRoot) && specifier.startsWith(".") && specifier.endsWith(".js")) {
+      const source = new URL(specifier.slice(0, -3) + ".ts", context.parentURL);
+      if (existsSync(source)) return nextResolve(source.href, context);
+    }
+    return nextResolve(specifier, context);
+  },
+});
+try {
+  const cron = require(${sourcePath("cron/service/active-run-cancellation.ts")});
+  module.exports = { register: cron.registerActiveCronTaskRun, api: globalThis[Symbol.for("openclaw.activeCronTaskRunTestApi")] };
+} finally {
+  hooks.deregister();
+}
 `;
   files["foreign/extensions/google/vertex-adc.ts"] = `
-for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.staleAuthOrderTestApi"]) {
+for (const key of [Symbol.for("fixture.foreignTestApi"), Symbol.for("openclaw.google.vertexAdcTestApi"), "openclaw.codexRouteSessionRepairTestApi"]) {
   Reflect.set(globalThis, key, "foreign");
 }
 `;
+  const collectedPublisherKeys = [
+    "openclaw.diagnosticRunActivityTestApi",
+    "openclaw.runtimeAuthSnapshotsTestApi",
+    "openclaw.execApprovalsStoreTestApi",
+  ];
   files["09-f-test-api-skipped.test.ts"] = `
 import ${sourcePath("logging/diagnostic-run-activity.ts")};
-import { it } from "vitest";
-it.skip("collects a publisher without running its suite", () => {});
+import ${sourcePath("agents/auth-profiles/mutation-lineage.ts")};
+import ${sourcePath("infra/exec-approvals-sqlite.ts")};
+import { expect, it } from "vitest";
+for (const key of ${JSON.stringify(collectedPublisherKeys)}) {
+  expect(Object.hasOwn(globalThis, Symbol.for(key)), key).toBe(true);
+}
+it.skip("collects publishers without running its suite", () => {});
 `;
   files["09-g-test-api-skipped-observer.test.ts"] = `
 import { expect, it } from "vitest";
-it("retires the skipped file publication", () => {
-  expect(Object.hasOwn(globalThis, Symbol.for("openclaw.diagnosticRunActivityTestApi"))).toBe(false);
+it("retires the skipped file publications", () => {
+  const remaining = ${JSON.stringify(collectedPublisherKeys)}.filter((key) => Object.hasOwn(globalThis, Symbol.for(key)));
+  expect(remaining).toEqual([]);
 });
 `;
   files["09-h-test-api-partial-mock.test.ts"] = `
@@ -130,11 +161,11 @@ vi.mock(${sourcePath("agents/workspace-legacy-state.ts")}, async () => ({
 vi.mock(${sourcePath("cron/service/active-run-cancellation.ts")}, async () => ({
   ...await vi.importActual(${sourcePath("cron/service/active-run-cancellation.ts")}),
 }));
+const native = createRequire(import.meta.url)("./native-cron.cjs");
 const nativeCron = await import(${sourcePath("cron/service/active-run-cancellation.ts")});
 // The second import replaces native metadata with a manual-mock placeholder;
 // the execution record must still identify the retained native generation.
 await import(${sourcePath("cron/service/active-run-cancellation.ts")});
-const native = createRequire(import.meta.url)("./native-cron.cjs");
 const workspace = await import(${sourcePath("agents/workspace-legacy-state.ts")});
 const { resetLegacyWorkspaceStateCheckForTest } = await import(${sourcePath("agents/workspace-legacy-state.test-support.ts")});
 function verifyPartialMock() {
@@ -161,13 +192,19 @@ it("loads a fresh real source after the partial mock retires", () => {
   expect(Reflect.get(globalThis, Symbol.for("openclaw.activeCronTaskRunTestApi"))).toBe(native.api);
 });
 `;
+  files["09-j-import-element.ts"] = `
+export class ImportElement extends HTMLElement {}
+customElements.define("openclaw-import-order-probe", ImportElement);
+`;
   files["09-j-test-api-mock-only.test.ts"] = `
 /* @vitest-environment jsdom */
 import { expect, it, vi } from "vitest";
+import { ImportElement } from "./09-j-import-element.ts";
 vi.mock(${sourcePath("agents/workspace-legacy-state.ts")}, () => ({ LEGACY_WORKSPACE_ATTESTATION_DIRNAME: "mock-only" }));
 const workspace = await import(${sourcePath("agents/workspace-legacy-state.ts")});
 it("does not execute the source behind a mock-only import", () => {
   expect(workspace.LEGACY_WORKSPACE_ATTESTATION_DIRNAME).toBe("mock-only");
+  expect(document.createElement("openclaw-import-order-probe")).toBeInstanceOf(ImportElement);
   const key = Symbol.for("openclaw.workspaceLegacyStateTestApi");
   expect(Object.hasOwn(globalThis, key)).toBe(false);
   Reflect.set(globalThis, key, "foreign");
@@ -176,10 +213,12 @@ it("does not execute the source behind a mock-only import", () => {
   files["09-k-test-api-mock-only-observer.test.ts"] = `
 /* @vitest-environment jsdom */
 import { expect, it } from "vitest";
+import { ImportElement } from "./09-j-import-element.ts";
 it("preserves a foreign slot when only a prior generation executed its known source", () => {
   const key = Symbol.for("openclaw.workspaceLegacyStateTestApi");
   expect(Reflect.get(globalThis, key)).toBe("foreign");
   Reflect.deleteProperty(globalThis, key);
+  expect(document.createElement("openclaw-import-order-probe")).toBeInstanceOf(ImportElement);
 });
 `;
   return files;

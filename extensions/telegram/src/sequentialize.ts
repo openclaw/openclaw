@@ -10,10 +10,7 @@ export function createTelegramSequentializer() {
     const keys = Array.isArray(constraints) ? constraints : [constraints];
     const previous = keys.map((key) => tails.get(key)).filter((tail) => tail !== undefined);
     const task = Promise.all(previous).then(next);
-    const tail = task.then(
-      () => undefined,
-      () => undefined,
-    );
+    const tail = task.catch(() => undefined);
     // Reserve all keys before yielding, including keys whose previous work is still waiting.
     for (const key of keys) {
       tails.set(key, tail);

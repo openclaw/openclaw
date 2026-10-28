@@ -27,13 +27,6 @@ export const MATRIX_QA_SYNC_STATE_AFTER_PARAM = "org.matrix.msc4222.use_state_af
 
 type MatrixQaE2eeBootstrapResult = Awaited<ReturnType<typeof runMatrixQaE2eeBootstrap>>;
 
-export function requireMatrixQaE2eeOutputDir(context: MatrixQaScenarioContext) {
-  if (!context.outputDir) {
-    throw new Error("Matrix E2EE QA scenarios require an output directory");
-  }
-  return context.outputDir;
-}
-
 export function requireMatrixQaCliRuntimeEnv(context: MatrixQaScenarioContext) {
   if (!context.gatewayRuntimeEnv) {
     throw new Error("Matrix CLI QA scenarios require the gateway runtime environment");
@@ -49,10 +42,14 @@ export function requireMatrixQaGatewayConfigPath(context: MatrixQaScenarioContex
   return configPath;
 }
 
-export function requireMatrixQaRegistrationToken(context: MatrixQaScenarioContext) {
+function requireMatrixQaRegistrationToken(context: MatrixQaScenarioContext, destructive: boolean) {
   const token = context.registrationToken?.trim();
   if (!token) {
-    throw new Error("Matrix CLI QA scenarios require the homeserver registration token");
+    throw new Error(
+      destructive
+        ? "Matrix E2EE destructive QA scenarios require a registration token"
+        : "Matrix CLI QA scenarios require the homeserver registration token",
+    );
   }
   return token;
 }
@@ -82,11 +79,19 @@ export function resolveMatrixQaE2eeScenarioGroupRoom(
 export async function registerMatrixQaE2eeScenarioAccount(params: {
   context: MatrixQaScenarioContext;
   deviceName: string;
-  localpartPrefix: string;
+  kind: "cli" | "destructive" | "isolated-driver";
   scenarioId: MatrixQaE2eeScenarioId;
 }) {
+  const destructive = params.kind === "destructive";
+  const cli = params.kind === "cli";
+  const localpartPrefix = cli ? "qa-cli" : destructive ? "qa-destructive" : "qa-e2ee-driver";
+  const registrationLabel = cli
+    ? "Matrix CLI QA"
+    : destructive
+      ? "Matrix destructive QA"
+      : "Matrix E2EE QA";
   const localpartSuffix = params.scenarioId
-    .replace(/^matrix-e2ee-/, "")
+    .replace(cli ? /^matrix-e2ee-cli-/ : /^matrix-e2ee-/, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 24);
@@ -94,16 +99,16 @@ export async function registerMatrixQaE2eeScenarioAccount(params: {
     baseUrl: params.context.baseUrl,
   }).registerWithToken({
     deviceName: params.deviceName,
-    localpart: `${params.localpartPrefix}-${localpartSuffix}-${randomUUID().replaceAll("-", "").slice(0, 8)}`,
+    localpart: `${localpartPrefix}-${localpartSuffix}-${randomUUID().replaceAll("-", "").slice(0, 8)}`,
     password: `matrix-qa-${randomUUID()}`,
-    registrationToken: requireMatrixQaRegistrationToken(params.context),
+    registrationToken: requireMatrixQaRegistrationToken(params.context, destructive),
   });
   if (!account.deviceId) {
     throw new Error(
-      `Matrix E2EE QA registration for ${params.scenarioId} did not return a device id`,
+      `${registrationLabel} registration for ${params.scenarioId} did not return a device id`,
     );
   }
-  return account;
+  return { ...account, deviceId: account.deviceId };
 }
 
 export function assertMatrixQaBootstrapSucceeded(
@@ -312,7 +317,7 @@ export async function createMatrixQaE2eeAccountClient(
     ...account,
     baseUrl: context.baseUrl,
     observedEvents: context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(context),
+    outputDir: context.outputDir,
     timeoutMs: context.timeoutMs,
   });
 }

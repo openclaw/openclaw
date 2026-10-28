@@ -39,9 +39,7 @@ func LoadTranslationMemory(path string) (*TranslationMemory, error) {
 		}
 		return nil, err
 	}
-	defer func() {
-		_ = file.Close()
-	}()
+	defer file.Close()
 
 	reader := bufio.NewReader(file)
 	for {

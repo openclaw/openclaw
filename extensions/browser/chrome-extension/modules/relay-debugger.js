@@ -1,5 +1,13 @@
 /** Physical debugger attachments and cleanup debt belong to exact native acquisitions. */
 export function createRelayDebugger({ policy, requireAutomationAllowed }) {
+  function throwCleanupErrors(errors) {
+    if (errors.length) {
+      throw new AggregateError(
+        errors,
+        `Debugger cleanup incomplete: ${errors.map(String).join("; ")}`,
+      );
+    }
+  }
   const attachments = new Map();
   const owners = new Set();
   let admission = 0;
@@ -60,9 +68,7 @@ export function createRelayDebugger({ policy, requireAutomationAllowed }) {
     record.cleaning = cleaning;
     void cleaning
       .finally(() => {
-        if (record.cleaning === cleaning) {
-          record.cleaning = undefined;
-        }
+        record.cleaning = undefined;
       })
       .catch(() => {});
     return cleaning;
@@ -102,10 +108,9 @@ export function createRelayDebugger({ policy, requireAutomationAllowed }) {
       if (!record?.epoch || record.retired || record.owner !== isCurrent) {
         throw new Error("Debugger is not attached");
       }
-      const native = record.native;
       return () => {
         assertCurrent();
-        if (record.retired || attachments.get(tabId) !== record || record.native !== native) {
+        if (record.retired || attachments.get(tabId) !== record) {
           throw new Error("Debugger attachment retired");
         }
       };
@@ -198,9 +203,7 @@ export function createRelayDebugger({ policy, requireAutomationAllowed }) {
         }
         throw error;
       } finally {
-        if (record.pending === pending) {
-          record.pending = undefined;
-        }
+        record.pending = undefined;
       }
     }
     const owner = {
@@ -226,12 +229,7 @@ export function createRelayDebugger({ policy, requireAutomationAllowed }) {
         const errors = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
-        if (errors.length) {
-          throw new AggregateError(
-            errors,
-            `Debugger cleanup incomplete: ${errors.map(String).join("; ")}`,
-          );
-        }
+        throwCleanupErrors(errors);
       },
     };
     owners.add(owner);
@@ -281,12 +279,7 @@ export function createRelayDebugger({ policy, requireAutomationAllowed }) {
           errors.push(error);
         }
       }
-      if (errors.length) {
-        throw new AggregateError(
-          errors,
-          `Debugger cleanup incomplete: ${errors.map(String).join("; ")}`,
-        );
-      }
+      throwCleanupErrors(errors);
     },
   };
 }

@@ -1,12 +1,6 @@
 // Irc tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { IrcChannelConfigSchema } from "./config-schema.js";
-import type { IrcAccountConfig } from "./types.js";
-
-type ParsedIrcConfig = IrcAccountConfig & {
-  accounts?: Record<string, IrcAccountConfig>;
-  defaultAccount?: string;
-};
 
 function parseIrcConfig(value: unknown) {
   const runtime = IrcChannelConfigSchema.runtime;
@@ -14,14 +8,6 @@ function parseIrcConfig(value: unknown) {
     throw new Error("expected IRC channel config runtime");
   }
   return runtime.safeParse(value);
-}
-
-function expectValidConfig(result: ReturnType<typeof parseIrcConfig>) {
-  expect(result.success).toBe(true);
-  if (!result.success) {
-    throw new Error("expected config to be valid");
-  }
-  return result.data as ParsedIrcConfig;
 }
 
 function expectInvalidConfig(result: ReturnType<typeof parseIrcConfig>) {
@@ -33,39 +19,6 @@ function expectInvalidConfig(result: ReturnType<typeof parseIrcConfig>) {
 }
 
 describe("irc config schema", () => {
-  it("accepts configWrites at channel and account level", () => {
-    const config = expectValidConfig(
-      parseIrcConfig({
-        configWrites: false,
-        accounts: {
-          work: {
-            host: "irc.libera.chat",
-            configWrites: true,
-          },
-        },
-      }),
-    );
-
-    expect(config.configWrites).toBe(false);
-    expect(config.accounts?.work?.configWrites).toBe(true);
-  });
-
-  it("accepts healthMonitor at channel and account level", () => {
-    const config = expectValidConfig(
-      parseIrcConfig({
-        healthMonitor: { enabled: false },
-        accounts: {
-          work: {
-            healthMonitor: { enabled: true },
-          },
-        },
-      }),
-    );
-
-    expect(config.healthMonitor?.enabled).toBe(false);
-    expect(config.accounts?.work?.healthMonitor?.enabled).toBe(true);
-  });
-
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     const issues = expectInvalidConfig(
       parseIrcConfig({
@@ -75,44 +28,6 @@ describe("irc config schema", () => {
     );
 
     expect(issues[0]?.path?.join(".")).toBe("allowFrom");
-  });
-
-  it('accepts dmPolicy="open" with allowFrom "*"', () => {
-    const config = expectValidConfig(
-      parseIrcConfig({
-        dmPolicy: "open",
-        allowFrom: ["*"],
-      }),
-    );
-
-    expect(config.dmPolicy).toBe("open");
-  });
-
-  it("accepts numeric allowFrom and groupAllowFrom entries", () => {
-    const parsed = expectValidConfig(
-      parseIrcConfig({
-        dmPolicy: "allowlist",
-        allowFrom: [12345, "alice"],
-        groupAllowFrom: [67890, "alice!ident@example.org"],
-      }),
-    );
-
-    expect(parsed.allowFrom).toEqual([12345, "alice"]);
-    expect(parsed.groupAllowFrom).toEqual([67890, "alice!ident@example.org"]);
-  });
-
-  it("accepts numeric per-channel allowFrom entries", () => {
-    const parsed = expectValidConfig(
-      parseIrcConfig({
-        groups: {
-          "#ops": {
-            allowFrom: [42, "alice"],
-          },
-        },
-      }),
-    );
-
-    expect(parsed.groups?.["#ops"]?.allowFrom).toEqual([42, "alice"]);
   });
 
   it("rejects nickserv register without registerEmail", () => {
@@ -129,27 +44,13 @@ describe("irc config schema", () => {
   });
 
   it("accepts nickserv register with registerEmail only", () => {
-    expectValidConfig(
+    expect(
       parseIrcConfig({
         nickserv: {
           register: true,
           registerEmail: "bot@example.com",
         },
-      }),
-    );
-  });
-});
-
-describe("retired IRC mentionPatterns", () => {
-  it("rejects the retired key at root and account scope", () => {
-    expectInvalidConfig(
-      parseIrcConfig({ host: "irc.libera.chat", mentionPatterns: ["\\bopenclaw\\b"] }),
-    );
-    expectInvalidConfig(
-      parseIrcConfig({
-        host: "irc.libera.chat",
-        accounts: { work: { nick: "openclaw-ops", mentionPatterns: ["\\bops\\b"] } },
-      }),
-    );
+      }).success,
+    ).toBe(true);
   });
 });

@@ -1,12 +1,10 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { randomUUID } from "node:crypto";
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
-import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import {
+  isRequiredReplyExpectation,
+  resolveReplyCompletion,
+} from "../../agents/reply-completion.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
-import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
-import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
-import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
-import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { logVerbose } from "../../globals.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -14,69 +12,69 @@ import {
 } from "../../infra/agent-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
-import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import {
   getGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  claimSessionControllerInput,
+  releaseSessionControllerClaim,
+  submitSessionControllerInput,
+  type SessionControllerMailboxClaim,
+} from "../../sessions/session-controller.mailbox.js";
+import { hasReplySteeringRequesterMismatch } from "../../sessions/session-controller.message-join.js";
+import { captureReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
+import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
-import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
   BLOCK_REPLY_SEND_TIMEOUT_MS,
   cleanupReplyAgentRun,
   handleReplyAgentRunError,
-  resolveAdmittedRunSessionFile,
   type RunReplyAgentParams,
   scheduleFollowupDrainAfterReplyOperationClear,
 } from "./agent-runner-core.js";
 import {
   continueStalledReplyTurn,
-  createReplyAgentRestartRecoveryController,
   executePreparedReplyAgentRun,
+  prependCompactionNotices,
 } from "./agent-runner-execute.js";
+import { createShouldEmitToolOutput, createShouldEmitToolResult } from "./agent-runner-helpers.js";
 import {
-  createShouldEmitToolOutput,
-  createShouldEmitToolResult,
-  isAudioPayload,
-} from "./agent-runner-helpers.js";
-import { deliverPreparedBlockReply } from "./agent-runner-presentation.js";
+  prepareReplyRunOptions,
+  prepareReplyRunPresentation,
+} from "./agent-runner-presentation.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
+import { touchQueuedReplySessionActivity } from "./agent-runner-session-activity.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
-import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
-import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
-import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
-import {
-  type CompactionNoticePhase,
-  createCompactionNoticePayload,
-  shouldNotifyUserAboutCompaction,
-} from "./compaction-notice.js";
+import type { CompactionNoticePhase } from "./compaction-notice.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
-import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
-import { resolveFollowupAbortSignal } from "./queue/types.js";
-import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
-import { createReplyMediaContext } from "./reply-media-paths.js";
-import * as replyRunState from "./reply-operation-run-state.js";
-import { type ReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
-import { bindReplyOperationTyping } from "./reply-run-typing.js";
-import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
-import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
-import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import {
-  isDuplicateRestartRecoverySource,
-  retireTerminalRestartRecoverySourceClaim,
-} from "./restart-recovery-claim.js";
+  completeFollowupRunLifecycle,
+  enqueueFollowupRun,
+  scheduleFollowupDrain,
+} from "./queue.js";
+import { refuseCollaborativeSteering } from "./queue/lifecycle.js";
+import { bindReplyOperationQueueDisposition, resolveFollowupAbortSignal } from "./queue/types.js";
+import { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
+import { createReplyInputAdmission } from "./reply-input-admission.js";
+import * as replyRunState from "./reply-operation-run-state.js";
+import { bindReplyOperationTyping } from "./reply-run-typing.js";
+import { enqueueReplySourceAdmission } from "./reply-source-admission.js";
+import { bindReplySourceToFollowup, retireUnadoptedReplySource } from "./reply-source-binding.js";
+import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
+import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
+import { resolveReplyTurnKind } from "./reply-turn-kind.js";
+import { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler } from "./typing-mode.js";
 export async function runReplyAgent(
-  input: RunReplyAgentParams,
+  params: RunReplyAgentParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const params = { ...input };
   const {
     followupRun,
     queueKey,
@@ -91,611 +89,541 @@ export async function runReplyAgent(
     sessionEntry,
     sessionStore,
     sessionKey,
-    runtimePolicySessionKey,
     storePath,
     defaultModel,
     resolvedVerboseLevel,
     toolProgressDetail,
     isNewSession,
     blockStreamingEnabled,
-    blockReplyChunking,
     sessionCtx,
     typingMode,
-    resetTriggered,
+    resetTriggered = false,
     replyOperation: providedReplyOperation,
   } = params;
-  followupRun.operatorAuthority?.assertCurrent();
-  const resolveGatewayContext = providedReplyOperation
-    ? getGatewayContextResolver(providedReplyOperation)
-    : (readChannelContextGatewayContextResolver(sessionCtx) ??
-      getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext);
-  // One lifecycle for all adoption sites in this run.
-  const turnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
-  const releaseAdmissionTicket = () => opts?.[REPLY_ADMISSION_TICKET]?.release();
-  let activeSessionEntry = sessionEntry;
-  const activeSessionStore = sessionStore;
-  const effectiveResetTriggered = resetTriggered === true;
-
-  const isHeartbeat = opts?.isHeartbeat === true;
-  const replyExpectation = (followupRun.run.terminalReplyExpectation ??=
-    resolveSourceReplyExpectation({
-      ctx: {
-        ...sessionCtx,
-        InboundEventKind: followupRun.currentInboundEventKind ?? sessionCtx.InboundEventKind,
-        InputProvenance: followupRun.run.inputProvenance ?? sessionCtx.InputProvenance,
-      },
-      cfg: followupRun.run.config,
-      isHeartbeat,
-    }));
-  let didDeliverVisiblePartialReply = false;
-  const onPartialReply = opts?.onPartialReply;
-  const runOpts = onPartialReply
-    ? {
-        ...opts,
-        onPartialReply: async (payload: Parameters<NonNullable<typeof opts.onPartialReply>>[0]) => {
-          const observed = await settleProgressVisibilityCallbackResult(onPartialReply(payload));
-          if (observed.visible && hasOutboundReplyContent(payload, { trimText: true })) {
-            didDeliverVisiblePartialReply = true;
-          }
-          return observed.result;
-        },
-      }
-    : opts;
-  const replyOperationRunState = replyRunState.resolveReplyOperationRunState(opts);
-  if (replyOperationRunState) {
-    replyOperationRunState.replyCompletion = resolveReplyCompletion(
-      followupRun.run.terminalReplyExpectation,
-      "empty",
-    );
-  }
-  followupRun.replyOperationRunStates = replyOperationRunState
-    ? [replyOperationRunState]
-    : undefined;
-  const traceAttributes = {
-    provider: followupRun.run.provider,
-    hasSessionKey: Boolean(sessionKey ?? followupRun.run.sessionKey),
-    isHeartbeat,
-    queueMode: resolvedQueue.mode,
-    isActive,
-    blockStreamingEnabled,
-  };
-  const traceAgentPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
-    measureDiagnosticsTimelineSpan(name, run, {
-      phase: "agent-turn",
-      config: followupRun.run.config,
-      attributes: traceAttributes,
-    });
-  const readGeneration = getAgentEventLifecycleGeneration();
-  const assertReadCurrent = () => {
-    assertAgentRunLifecycleGenerationCurrent(readGeneration);
-    followupRun.operatorAuthority?.assertCurrent();
-  };
-  const restartRecoverySourceTurnId = readChannelSourceTurnId(sessionCtx);
-  let restartRecoveryEntry: typeof activeSessionEntry;
+  followupRun.run.agentId ??= resolveDefaultAgentId(followupRun.run.config);
+  followupRun.turnAdoptionLifecycle ??= opts?.turnAdoptionLifecycle;
+  bindReplySourceToFollowup(opts, followupRun);
+  const runId = opts?.runId ?? randomUUID();
+  const controllerInput = submitSessionControllerInput(queueKey, followupRun, resolvedQueue, {
+    protocolRunId: runId,
+    storePath,
+  });
+  let immediateClaim: SessionControllerMailboxClaim | undefined;
+  const upstreamSignals = [
+    controllerInput.abortSignal,
+    followupRun.abortSignal,
+    opts?.abortSignal,
+    followupRun.turnAdoptionLifecycle?.abortSignal,
+  ].filter((signal): signal is AbortSignal => signal !== undefined);
+  followupRun.abortSignal =
+    upstreamSignals.length > 1 ? AbortSignal.any(upstreamSignals) : upstreamSignals[0];
+  const preparationResources: { stopBlockReply?: () => void } = {};
+  const inputGeneration = getAgentEventLifecycleGeneration();
   try {
-    restartRecoveryEntry =
-      sessionKey && storePath
-        ? ((await readSessionEntryInWorker(
-            { agentId: followupRun.run.agentId, storePath, sessionKey },
-            assertReadCurrent,
-          )) ?? activeSessionEntry)
-        : activeSessionEntry;
-    assertReadCurrent();
-  } catch (error) {
-    releaseAdmissionTicket();
-    typing.cleanup();
-    throw error;
-  }
-  if (
-    restartRecoverySourceTurnId &&
-    isDuplicateRestartRecoverySource(restartRecoveryEntry, restartRecoverySourceTurnId)
-  ) {
-    // Durable source ownership identifies provider redelivery even if the run
-    // became terminal before its claim cleanup committed.
-    if (
-      restartRecoveryEntry?.status !== "running" &&
-      sessionKey &&
-      storePath &&
-      hasRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId)
-    ) {
-      const retired = await retireTerminalRestartRecoverySourceClaim({
-        agentId: followupRun.run.agentId,
-        sessionId: restartRecoveryEntry.sessionId,
-        sessionKey,
-        sourceTurnId: restartRecoverySourceTurnId,
-        storePath,
-      });
-      if (retired) {
-        activeSessionEntry = retired;
-        if (activeSessionStore) {
-          activeSessionStore[sessionKey] = retired;
-        }
-      }
+    followupRun.operatorAuthority?.assertCurrent();
+    const resolveGatewayContext = providedReplyOperation
+      ? getGatewayContextResolver(providedReplyOperation)
+      : (readChannelContextGatewayContextResolver(sessionCtx) ??
+        getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext);
+    let activeSessionEntry = sessionEntry;
+    let activeSessionStore = sessionStore;
+
+    const replyExpectation = (followupRun.run.terminalReplyExpectation ??=
+      resolveSourceReplyExpectation({
+        ctx: {
+          ...sessionCtx,
+          InboundEventKind: followupRun.currentInboundEventKind ?? sessionCtx.InboundEventKind,
+          InputProvenance: followupRun.run.inputProvenance ?? sessionCtx.InputProvenance,
+        },
+        cfg: followupRun.run.config,
+        scheduledAutomation: followupRun.run.scheduledAutomation !== undefined,
+      }));
+    const explicitFollowup = isExplicitFollowupCommandTurn(sessionCtx);
+    if (explicitFollowup) {
+      followupRun.disableCollectBatching = true;
     }
-    releaseAdmissionTicket();
-    typing.cleanup();
-    return undefined;
-  }
-
-  const effectiveShouldSteer = !isHeartbeat && !effectiveResetTriggered && shouldSteer;
-  const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
-  const messageInjectionDisposition = opts?.messageInjectionDisposition ?? "none";
-  const activeReplyOperation = sessionKey
-    ? replyRunRegistry.get(sessionKey)
-    : providedReplyOperation;
-  // A source-only reservation still owns completion, but is not a steering target.
-  const shouldQueueProvidedSteer =
-    effectiveShouldSteer &&
-    isActive &&
-    messageInjectionDisposition === "none" &&
-    !activeReplyOperation &&
-    Boolean(providedReplyOperation);
-  const typingSignals = createTypingSignaler({
-    typing,
-    mode: typingMode,
-    isHeartbeat,
-  });
-  // New steering must not reuse a terminal source claim. Compare the active
-  // source identity so unrelated retained tombstones still permit steering.
-  // The parked admission owner rechecks after any predecessor wait.
-  const activeSourceTurnId =
-    replyRunRegistry.getSourceTurnId(sessionKey ?? "") ??
-    normalizeOptionalString(restartRecoveryEntry?.restartRecoveryDeliverySourceRunId) ??
-    "";
-  const terminalDeliveryBlockReason = resolveRestartRecoverySteeringBlockReason(
-    restartRecoveryEntry,
-    activeReplyOperation?.sessionId ?? followupRun.run.sessionId,
-    activeSourceTurnId,
-  );
-  const shouldQueueTerminalReceiptSteer =
-    effectiveShouldSteer &&
-    isActive &&
-    messageInjectionDisposition === "none" &&
-    terminalDeliveryBlockReason !== undefined;
-
-  const questionInput = await runReplyQuestionInput(input);
-  if (questionInput.handled) {
-    releaseAdmissionTicket();
-    typing.cleanup();
-    return questionInput.payload;
-  }
-
-  const baseShouldEmitToolResult = createShouldEmitToolResult({
-    sessionKey,
-    storePath,
-    resolvedVerboseLevel,
-    verboseLevelOverride: followupRun.run.verboseLevelOverride,
-  });
-  const channelProgressCanConsumeToolResults =
-    Boolean(opts?.forceToolResultProgress) && Boolean(opts?.onToolResult);
-  const shouldEmitToolResult = () =>
-    channelProgressCanConsumeToolResults || baseShouldEmitToolResult();
-  const shouldEmitToolOutput = createShouldEmitToolOutput({
-    sessionKey,
-    storePath,
-    resolvedVerboseLevel,
-    verboseLevelOverride: followupRun.run.verboseLevelOverride,
-  });
-
-  const pendingToolTasks = new Set<Promise<void>>();
-  const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
-  const touchActiveSessionEntry = async () => {
-    if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
-      return;
+    const replyOperationRunState = replyRunState.resolveReplyOperationRunState(opts);
+    const { runOptions: runOpts, hasVisiblePartialReply } = prepareReplyRunOptions({
+      opts,
+      runId: controllerInput.protocolRunId ?? runId,
+      abortSignal: followupRun.abortSignal,
+      onVisiblePartialReply: () =>
+        controllerInput.claim?.operation?.watchdog.progress(
+          "finalization",
+          "reply:partial_delivered",
+        ),
+    });
+    if (replyOperationRunState && isRequiredReplyExpectation(replyExpectation)) {
+      // Preparation has not transferred the accepted input into an executable turn yet.
+      replyOperationRunState.continueStalledTurn = () => false;
     }
-    // Keep the in-memory snapshot aligned with the pending-reset write boundary.
-    const updatedAt = activeSessionEntry.updatedAt === 0 ? 0 : Date.now();
-    activeSessionEntry.updatedAt = updatedAt;
-    activeSessionStore[sessionKey] = activeSessionEntry;
-    if (storePath) {
-      await updateSessionEntry(
-        { agentId: followupRun.run.agentId, storePath, sessionKey },
-        () => ({ updatedAt }),
-        { skipMaintenance: true, takeCacheOwnership: true },
+    if (replyOperationRunState) {
+      replyOperationRunState.replyCompletion = resolveReplyCompletion(
+        followupRun.run.terminalReplyExpectation,
+        "empty",
       );
     }
-  };
-
-  const queuedRunFollowupTurn = createFollowupRunner({
-    resolveGatewayContext,
-    opts,
-    typing,
-    typingMode,
-    sessionEntry: activeSessionEntry,
-    sessionStore: activeSessionStore,
-    sessionKey,
-    storePath,
-    defaultModel,
-    toolProgressDetail,
-  });
-
-  if (messageInjectionDisposition === "accepted") {
-    if (replyOperationRunState) {
-      replyOperationRunState.admission = { status: "accepted", mode: "steer" };
-    }
-    releaseAdmissionTicket();
-    typing.cleanup();
-    return undefined;
-  }
-
-  const bindQueueDisposition = () => {
-    const observe = followupRun.onQueueDisposition;
-    followupRun.onQueueDisposition = (disposition) => {
-      observe?.(disposition);
-      if (
-        replyOperationRunState &&
-        (disposition !== "queue-cap-old" || replyOperationRunState.admission?.status !== "accepted")
-      ) {
-        replyOperationRunState.admission = { status: "skipped", reason: "queue-cap" };
-      }
+    followupRun.replyOperationRunStates = replyOperationRunState
+      ? [replyOperationRunState]
+      : undefined;
+    const traceAttributes = {
+      provider: followupRun.run.provider,
+      hasSessionKey: Boolean(sessionKey ?? followupRun.run.sessionKey),
+      queueMode: resolvedQueue.mode,
+      isActive,
+      blockStreamingEnabled,
     };
-  };
-
-  if (
-    effectiveShouldSteer &&
-    isActive &&
-    !shouldQueueProvidedSteer &&
-    !shouldQueueTerminalReceiptSteer &&
-    messageInjectionDisposition === "none"
-  ) {
-    bindQueueDisposition();
-    const result = await runActiveReplySteer({
-      followupRun,
-      opts,
-      providedReplyOperation: activeReplyOperation,
-      queueKey,
-      releaseAdmissionTicket,
-      replyOperationRunState,
-      resolvedQueue,
-      restartRecoverySourceTurnId,
-      runFollowup: queuedRunFollowupTurn,
-      sessionCtx,
-      sessionKey,
-      sessionEntry: activeSessionEntry,
-      storePath,
-      touchActiveSessionEntry,
-      typing,
-      typingSignals,
-    });
-    return result === "handled" ? undefined : result;
-  }
-
-  const activeRunQueueAction = resolveActiveRunQueueAction({
-    hasQueuedFollowups,
-    isActive,
-    isHeartbeat,
-    shouldFollowup: effectiveShouldFollowup || shouldQueueProvidedSteer,
-    resetTriggered: effectiveResetTriggered,
-  });
-  if (activeRunQueueAction === "drop") {
-    if (replyOperationRunState) {
-      replyOperationRunState.admission = { status: "skipped", reason: "active-run" };
-    }
-    releaseAdmissionTicket();
-    typing.cleanup();
-    return undefined;
-  }
-
-  if (activeRunQueueAction === "enqueue-followup") {
-    bindQueueDisposition();
-    const enqueued = enqueueFollowupRun(
-      queueKey,
-      followupRun,
-      resolvedQueue,
-      "message-id",
-      queuedRunFollowupTurn,
-      false,
-    );
-    if (shouldQueueTerminalReceiptSteer || shouldQueueProvidedSteer) {
-      diagnosticLogger.warn("steering rejected; applying follow-up policy", {
-        reason: shouldQueueTerminalReceiptSteer
-          ? terminalDeliveryBlockReason
-          : "source-operation-pending",
-        disposition: enqueued
-          ? "followup-queued"
-          : replyOperationRunState?.admission?.status === "skipped" &&
-              replyOperationRunState.admission.reason === "queue-cap"
-            ? "skipped-queue-cap"
-            : "followup-not-enqueued",
-        channel:
-          followupRun.originatingChannel ?? followupRun.run.messageProvider ?? sessionCtx.Provider,
-        sessionId: activeReplyOperation?.sessionId ?? followupRun.run.sessionId,
-        runId: opts?.runId,
+    const traceAgentPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
+      measureDiagnosticsTimelineSpan(name, run, {
+        phase: "agent-turn",
+        config: followupRun.run.config,
+        attributes: traceAttributes,
       });
+    const sourceTurnId = readChannelSourceTurnId(sessionCtx);
+    const effectiveShouldSteer = !resetTriggered && shouldSteer;
+    const isActiveSteer = effectiveShouldSteer && isActive;
+    const messageInjectionDisposition = opts?.messageInjectionDisposition ?? "none";
+    const activeReplyOperation = controllerInput.mailbox.owner.active;
+    const steeringRequesterMismatch =
+      isActiveSteer && hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation);
+    const collaborationBlocked = messageInjectionDisposition === "collaborative-steering-disabled";
+    if (
+      collaborationBlocked &&
+      followupRun.run.config.messages?.queue?.collaborativeSteeringFallback === "reject"
+    ) {
+      try {
+        await refuseCollaborativeSteering(followupRun, replyOperationRunState);
+      } finally {
+        typing.cleanup();
+      }
+      return undefined;
     }
-    if (!enqueued) {
-      releaseAdmissionTicket();
+    // A rejected or vanished target leaves input with the follow-up queue,
+    // independently of whether the incoming requester could collaborate.
+    const shouldQueueUnavailableSteer =
+      isActiveSteer &&
+      (collaborationBlocked ||
+        messageInjectionDisposition === "rejected" ||
+        (messageInjectionDisposition === "none" && !activeReplyOperation));
+    const typingSignals = createTypingSignaler({
+      typing,
+      mode: typingMode,
+    });
+    // Direct question creators can attest their caller before publishing a reply operation.
+    const questionInput: Awaited<ReturnType<typeof runReplyQuestionInput>> =
+      steeringRequesterMismatch && activeReplyOperation
+        ? { handled: false }
+        : await runReplyQuestionInput(params);
+    if (questionInput.handled) {
+      typing.cleanup();
+      return questionInput.payload;
+    }
+
+    const questionRequesterMismatch = questionInput.requesterMismatch === true;
+
+    const toolResultOptions = {
+      getVerboseLevel: () =>
+        (sessionKey ? activeSessionStore?.[sessionKey]?.verboseLevel : undefined) ??
+        activeSessionEntry?.verboseLevel,
+      resolvedVerboseLevel,
+      verboseLevelOverride: followupRun.run.verboseLevelOverride,
+    };
+    const shouldEmitToolResult =
+      opts?.forceToolResultProgress && opts.onToolResult
+        ? () => true
+        : createShouldEmitToolResult(toolResultOptions);
+    const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
+    const touchActiveSessionEntry = () =>
+      touchQueuedReplySessionActivity(
+        { ...params, sessionStore: activeSessionStore },
+        activeSessionEntry,
+        (entry) => {
+          activeSessionEntry = entry;
+        },
+      );
+
+    const queuedRunFollowupTurn = createFollowupRunner({
+      resolveGatewayContext,
+      opts,
+      typing,
+      typingMode,
+      sessionEntry: activeSessionEntry,
+      sessionStore: activeSessionStore,
+      sessionKey,
+      storePath,
+      defaultModel,
+      toolProgressDetail,
+    });
+
+    if (messageInjectionDisposition === "accepted") {
+      if (replyOperationRunState) {
+        replyOperationRunState.admission = { status: "accepted", mode: "steer" };
+      }
       typing.cleanup();
       return undefined;
     }
-    if (replyOperationRunState) {
-      replyOperationRunState.admission = { status: "accepted", mode: "followup" };
-    }
-    // The queue must stay dormant while the active owner can still collect
-    // messages. Registering after enqueue closes the owner-clear race.
-    const queuedOperationOwner =
-      replyRunRegistry.get(queueKey) ?? activeReplyOperation ?? providedReplyOperation;
-    if (queuedOperationOwner) {
-      scheduleFollowupDrainAfterReplyOperationClear({
-        operation: queuedOperationOwner,
+
+    if (
+      isActiveSteer &&
+      !shouldQueueUnavailableSteer &&
+      !questionRequesterMismatch &&
+      messageInjectionDisposition === "none"
+    ) {
+      bindReplyOperationQueueDisposition(followupRun, replyOperationRunState);
+      const result = await runActiveReplySteer({
+        steeringIntent: params.steeringIntent,
+        followupRun,
+        opts,
+        providedReplyOperation: activeReplyOperation,
         queueKey,
+        replyOperationRunState,
+        resolvedQueue,
+        sourceTurnId,
         runFollowup: queuedRunFollowupTurn,
+        sessionCtx,
+        sessionKey,
+        sessionEntry: activeSessionEntry,
+        storePath,
+        touchActiveSessionEntry,
+        typingSignals,
       });
-    } else {
-      scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
-    }
-    releaseAdmissionTicket();
-    const queuedBehindActiveRun = isRunActive?.() === true;
-    await touchActiveSessionEntry();
-    if (queuedBehindActiveRun) {
-      await typingSignals.signalToolStart();
-    } else {
       typing.cleanup();
+      return result === "handled" ? undefined : result;
     }
-    return undefined;
-  }
 
-  followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config, {
-    originatingChannel: sessionCtx.OriginatingChannel,
-    messageProvider: followupRun.run.messageProvider,
-    originatingAccountId: followupRun.originatingAccountId,
-    agentAccountId: followupRun.run.agentAccountId,
-  });
-  followupRun.run.agentId ??= resolveDefaultAgentId(followupRun.run.config);
-
-  const replyToChannel = resolveOriginMessageProvider({
-    originatingChannel: sessionCtx.OriginatingChannel,
-    provider: sessionCtx.Surface ?? sessionCtx.Provider,
-  }) as OriginatingChannelType | undefined;
-  const replyToMode =
-    followupRun.originatingReplyToMode ??
-    resolveReplyToMode(
-      followupRun.run.config,
-      replyToChannel,
-      sessionCtx.AccountId,
-      sessionCtx.ChatType,
-    );
-  const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
-  const cfg = followupRun.run.config;
-  const replyMediaContext = createReplyMediaContext({
-    cfg,
-    agentId: followupRun.run.agentId,
-    sessionKey,
-    workspaceDir: followupRun.run.workspaceDir,
-    mediaNormalizationOwner: followupRun.run.mediaNormalizationOwner,
-    messageProvider: followupRun.run.messageProvider,
-    accountId: followupRun.originatingAccountId ?? followupRun.run.agentAccountId,
-    groupId: followupRun.run.groupId,
-    groupChannel: followupRun.run.groupChannel,
-    groupSpace: followupRun.run.groupSpace,
-    requesterSenderId: followupRun.run.senderId,
-    requesterSenderName: followupRun.run.senderName,
-    requesterSenderUsername: followupRun.run.senderUsername,
-    requesterSenderE164: followupRun.run.senderE164,
-  });
-  const compactionNoticeMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-  const sendDirectCompactionNotice = shouldNotifyUserAboutCompaction(cfg)
-    ? async (phase: CompactionNoticePhase, text?: string) => {
-        if (!opts?.onBlockReply) {
-          return;
-        }
-        const noticePayload = createCompactionNoticePayload({
-          phase,
-          text,
-          currentMessageId: compactionNoticeMessageId,
-          applyReplyToMode,
-        });
-        try {
-          await opts.onBlockReply(noticePayload);
-        } catch (err) {
-          logVerbose(`context maintenance notice delivery failed: ${String(err)}`);
-        }
-      }
-    : undefined;
-  const blockReplyPipeline =
-    blockStreamingEnabled && (opts?.onPreparedBlockReply || opts?.onBlockReply)
-      ? createBlockReplyPipeline({
-          onBlockReply: (payload, context) => deliverPreparedBlockReply(opts, payload, context),
-          timeoutMs: blockReplyTimeoutMs,
-          coalescing: resolveEffectiveBlockStreamingConfig({
-            cfg,
-            provider: sessionCtx.Provider,
-            accountId: sessionCtx.AccountId,
-            chunking: blockReplyChunking,
-          }).coalescing,
-          isAudioPayload,
-        })
-      : null;
-  const resolveVisibleReplyDelivery = async () => {
-    // Settle accepted or in-flight blocks before deciding whether a terminal failure may stay silent.
-    try {
-      await blockReplyPipeline?.flush({ force: true });
-    } catch (flushError) {
-      logVerbose(
-        `failed to flush streamed reply blocks before surfacing run failure: ${String(flushError)}`,
-      );
-    }
-    return didDeliverVisiblePartialReply || blockReplyPipeline?.didStream() === true;
-  };
-  const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
-  const replyRouteThreadId = resolveRoutedDeliveryThreadId({
-    ctx: sessionCtx,
-    sessionKey: replySessionKey,
-  });
-  let replyOperation: ReplyOperation;
-  if (providedReplyOperation) {
-    replyOperation = providedReplyOperation;
-    if (replyOperationRunState) {
-      replyOperationRunState.admission = { status: "owned" };
-    }
-    releaseAdmissionTicket();
-  } else {
-    const replyTurnKind = resolveReplyTurnKind(opts);
-    const admission = await admitReplyTurn({
-      providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
-      agentId: followupRun.run.agentId,
-      resolveGatewayContext,
-      sessionId: followupRun.run.sessionId,
-      sessionKey: replySessionKey ?? "",
-      expectedSessionId: activeSessionEntry?.sessionId,
-      storePath,
-      kind: replyTurnKind,
-      resetTriggered: effectiveResetTriggered,
-      routeThreadId: replyRouteThreadId,
-      originatingLeafEntryId: turnAdoptionLifecycle?.originatingLeafEntryId,
-      upstreamAbortSignal: resolveFollowupAbortSignal({
-        abortSignal: opts?.abortSignal,
-        operatorAuthority: followupRun.operatorAuthority,
-      }),
+    const activeRunQueueAction = resolveActiveRunQueueAction({
+      hasQueuedFollowups,
+      interrupt: resolvedQueue.mode === "interrupt",
+      isActive: isActive || questionRequesterMismatch,
+      shouldFollowup: shouldFollowup || shouldQueueUnavailableSteer || questionRequesterMismatch,
+      resetTriggered,
     });
-    if (replyOperationRunState) {
-      replyOperationRunState.admission =
-        admission.status === "owned"
-          ? { status: "owned" }
-          : { status: "skipped", reason: admission.reason };
+    if (activeRunQueueAction === "enqueue-followup") {
+      bindReplyOperationQueueDisposition(followupRun, replyOperationRunState);
+      const enqueued = await enqueueReplySourceAdmission({
+        options: explicitFollowup ? opts : undefined,
+        input: controllerInput,
+        followupRun,
+        runId,
+        assertCurrent: () => {
+          assertAgentRunLifecycleGenerationCurrent(inputGeneration);
+          followupRun.operatorAuthority?.assertCurrent();
+        },
+        enqueue: () =>
+          enqueueFollowupRun(
+            queueKey,
+            followupRun,
+            resolvedQueue,
+            "message-id",
+            queuedRunFollowupTurn,
+            false,
+          ),
+      });
+      if (shouldQueueUnavailableSteer) {
+        diagnosticLogger.warn("steering rejected; applying follow-up policy", {
+          reason:
+            messageInjectionDisposition === "rejected"
+              ? "runtime_rejected"
+              : providedReplyOperation
+                ? "source-operation-pending"
+                : "reply-owner-ended",
+          disposition: enqueued
+            ? "followup-queued"
+            : replyOperationRunState?.admission?.status === "skipped" &&
+                replyOperationRunState.admission.reason === "queue-cap"
+              ? "skipped-queue-cap"
+              : "followup-not-enqueued",
+          channel:
+            followupRun.originatingChannel ??
+            followupRun.run.messageProvider ??
+            sessionCtx.Provider,
+          sessionId: activeReplyOperation?.sessionId ?? followupRun.run.sessionId,
+          runId: opts?.runId,
+        });
+      }
+      if (!enqueued) {
+        typing.cleanup();
+        return undefined;
+      }
+      replyRunState.recordReplyFollowupAdmission(replyOperationRunState, {
+        explicitFollowup,
+        requesterMismatch: questionRequesterMismatch,
+        collaborationBlocked,
+        unavailableSteer:
+          effectiveShouldSteer && (isActive || messageInjectionDisposition === "rejected"),
+        followupRun,
+      });
+      // The queue must stay dormant while the active owner can still collect
+      // messages. Registering after enqueue closes the owner-clear race.
+      const queuedOperationOwner =
+        controllerInput.mailbox.owner.active ?? activeReplyOperation ?? providedReplyOperation;
+      if (queuedOperationOwner) {
+        scheduleFollowupDrainAfterReplyOperationClear({
+          operation: queuedOperationOwner,
+          queueKey,
+          runFollowup: queuedRunFollowupTurn,
+        });
+      } else {
+        scheduleFollowupDrain(queueKey, queuedRunFollowupTurn, controllerInput.mailbox.owner);
+      }
+      const queuedBehindActiveRun = (await isRunActive?.()) === true;
+      await touchActiveSessionEntry();
+      if (queuedBehindActiveRun) {
+        await typingSignals.signalToolStart();
+      } else {
+        typing.cleanup();
+      }
+      return undefined;
     }
-    if (admission.status === "skipped") {
-      releaseAdmissionTicket();
+
+    const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
+    const replyRouteThreadId = resolveRoutedDeliveryThreadId({
+      ctx: sessionCtx,
+      sessionKey: replySessionKey,
+    });
+    const replyTurnKind = resolveReplyTurnKind(opts);
+    const rotationEvidence = providedReplyOperation
+      ? undefined
+      : createReplyTurnRotationEvidence({
+          sessionKey: replySessionKey ?? "",
+          controller: controllerInput.mailbox.owner,
+        });
+    let callerOwnedReplyOperation = providedReplyOperation;
+    const pendingCompactionNotices: ReplyPayload[] = [];
+    let directCompactionNotice:
+      | ((phase: CompactionNoticePhase, text?: string) => Promise<void>)
+      | undefined;
+    const preparation = await prepareReplyAgentTurn({
+      queued: followupRun,
+      defaults: {
+        resolveGatewayContext,
+        opts: runOpts,
+        typing,
+        typingMode,
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        sessionKey,
+        storePath,
+        defaultModel,
+        toolProgressDetail,
+      },
+      kind: replyTurnKind,
+      resetTriggered,
+      routeThreadId: replyRouteThreadId,
+      providedReplyOperation,
+      rotationEvidence,
+      claimSource: providedReplyOperation
+        ? undefined
+        : async () => {
+            const observation = rotationEvidence?.observeAdmission();
+            try {
+              immediateClaim = await claimSessionControllerInput(followupRun);
+              return immediateClaim;
+            } catch (error) {
+              if (!resolveFollowupAbortSignal(followupRun)?.aborted) {
+                throw error;
+              }
+              return undefined;
+            } finally {
+              observation?.dispose();
+            }
+          },
+      onOperationOwned: (operation) => {
+        if (providedReplyOperation) {
+          immediateClaim = controllerInput.claim;
+        }
+        if (!providedReplyOperation && opts?.onReplyOperationOwned?.(operation) === true) {
+          callerOwnedReplyOperation = operation;
+          return true;
+        }
+        return Boolean(providedReplyOperation);
+      },
+      configure: (cfg) => {
+        const presentation = prepareReplyRunPresentation(
+          params,
+          cfg,
+          pendingCompactionNotices,
+          blockReplyTimeoutMs,
+        );
+        preparationResources.stopBlockReply = presentation.blockReplyPipeline?.stop;
+        directCompactionNotice = presentation.sendDirectCompactionNotice;
+        return presentation;
+      },
+      signalRunStart: typingSignals.signalRunStart,
+      trace: traceAgentPhase,
+      onCompactionNotice: async (phase, text) => await directCompactionNotice?.(phase, text),
+    });
+    if (preparation.kind === "skipped") {
+      if (preparation.operation && preparation.operation !== callerOwnedReplyOperation) {
+        preparation.operation.complete();
+      }
+      if (replyOperationRunState) {
+        replyOperationRunState.admission = {
+          status: "skipped",
+          reason:
+            preparation.reason === "goal-inactive" ? "lifecycle-invalidated" : preparation.reason,
+        };
+      }
+      preparationResources.stopBlockReply?.();
       typing.cleanup();
-      if (admission.reason !== "active-run" || replyTurnKind !== "visible") {
+      if (preparation.reason !== "active-run" || replyTurnKind !== "visible") {
         return undefined;
       }
       return markReplyPayloadForSourceSuppressionDelivery({
         text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
       });
     }
-    replyOperation = admission.operation;
-    releaseAdmissionTicket();
-    const previousRunSessionId = followupRun.run.sessionId;
-    followupRun.run.sessionId = replyOperation.sessionId;
-    if (replyOperation.sessionId !== previousRunSessionId) {
-      const admittedSessionEntry =
-        admission.sessionEntry ??
-        (replySessionKey
-          ? (activeSessionStore?.[replySessionKey] ?? activeSessionEntry)
-          : activeSessionEntry);
-      if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
-        activeSessionEntry = admittedSessionEntry;
-        if (admission.sessionEntry && activeSessionStore && replySessionKey) {
-          activeSessionStore[replySessionKey] = admission.sessionEntry;
-        }
-        const admittedSessionFile = resolveAdmittedRunSessionFile({
-          sessionFile: undefined,
-          sessionKey: replySessionKey,
-        });
-        if (admittedSessionFile) {
-          followupRun.run.sessionFile = admittedSessionFile;
-        }
-      }
+    if (replyOperationRunState) {
+      replyOperationRunState.admission = { status: "owned" };
     }
-  }
-  bindReplyOperationTyping(replyOperation, typing);
-  let runFollowupTurn = queuedRunFollowupTurn;
-  let shouldDrainQueuedFollowupsAfterClear = false;
-  const returnWithQueuedFollowupDrain = <T>(value: T): T => {
-    shouldDrainQueuedFollowupsAfterClear = true;
-    return value;
-  };
-  if (replyOperationRunState && !isHeartbeat && replyExpectation === "required") {
-    // Dispatch owns the stall notice; this owner holds the queue facts needed to answer
-    // instead. The same sender's next queued request inherits the guidance; otherwise one
-    // recovery run bound to this turn's route and authority is queued.
-    replyOperationRunState.continueStalledTurn = () =>
-      continueStalledReplyTurn({
-        followupRun,
-        queueKey,
-        resolvedQueue,
-        replyOperation,
-        runFollowupTurn,
-      });
-  }
-  const {
-    admitUserTurn,
-    beginBeforeAgentReply,
-    checkpointBeforeAgentReply,
-    clear: clearRestartRecoveryDeliveryClaim,
-    isArmed: isRestartRecoveryArmed,
-  } = createReplyAgentRestartRecoveryController({
-    activeSessionStore,
-    cfg,
-    followupRun,
-    getActiveSessionEntry: () => activeSessionEntry,
-    opts,
-    replyOperation,
-    restartRecoverySourceTurnId,
-    runtimePolicySessionKey,
-    sessionCtx,
-    sessionKey,
-    setActiveSessionEntry: (entry) => {
-      activeSessionEntry = entry;
-    },
-    storePath,
-  });
-  try {
-    await replyOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
-    return await executePreparedReplyAgentRun({
-      ...params,
-      activeSessionStore,
-      admitUserTurn,
-      applyReplyToMode,
-      beginBeforeAgentReply,
-      blockReplyPipeline,
+    const turn = preparation.turn;
+    Object.assign(followupRun, turn.queued);
+    activeSessionEntry = turn.session.current();
+    activeSessionStore = turn.sessionStore;
+    const replyOperation = turn.operation;
+    const {
       cfg,
-      checkpointBeforeAgentReply,
-      resolveVisibleReplyDelivery,
-      activeIsNewSession: isNewSession,
-      getActiveSessionEntry: () => activeSessionEntry,
-      isHeartbeat,
-      isRestartRecoveryArmed,
-      opts: runOpts,
-      pendingToolTasks,
-      replyMediaContext,
-      replyOperation,
-      replyRouteThreadId,
       replyToChannel,
       replyToMode,
-      returnWithQueuedFollowupDrain,
-      runFollowupTurn,
-      sendDirectCompactionNotice,
-      setActiveSessionEntry: (entry) => {
-        activeSessionEntry = entry;
-      },
-      setRunFollowupTurn: (runner) => {
-        runFollowupTurn = runner;
-      },
-      shouldEmitToolOutput,
-      shouldEmitToolResult,
-      traceAgentPhase,
-      turnAdoptionLifecycle,
-      typingSignals,
-    });
-  } catch (error) {
-    replyRunState.recordReplyOperationAgentTurn(
-      followupRun.replyOperationRunStates,
-      replyOperation,
-    );
-    return await handleReplyAgentRunError(error, {
-      resolveVisibleReplyDelivery,
-      isHeartbeat,
-      replyExpectation,
-      isRestartRecoveryArmed,
-      replyOperation,
-      resolvedVerboseLevel,
-      returnWithQueuedFollowupDrain,
-      sessionCtx,
-    });
-  } finally {
-    await cleanupReplyAgentRun({
+      applyReplyToMode,
+      replyMediaContext,
       blockReplyPipeline,
-      clearRestartRecoveryDeliveryClaim,
-      isHeartbeat,
-      providedReplyOperation,
-      queueKey,
+    } = preparation.configured;
+    const resolveVisibleReplyDelivery = async () => {
+      // Settle accepted blocks before deciding whether a terminal failure may stay silent.
+      try {
+        await blockReplyPipeline?.flush({ force: true });
+      } catch (flushError) {
+        logVerbose(
+          `failed to flush streamed reply blocks before surfacing run failure: ${String(flushError)}`,
+        );
+      }
+      return hasVisiblePartialReply() || blockReplyPipeline?.didStream() === true;
+    };
+    bindReplyOperationTyping(replyOperation, typing);
+    let runFollowupTurn = queuedRunFollowupTurn;
+    let shouldDrainQueuedFollowupsAfterClear = false;
+    const returnWithQueuedFollowupDrain = <T>(value: T): T => {
+      shouldDrainQueuedFollowupsAfterClear = true;
+      return value;
+    };
+    if (replyOperationRunState && isRequiredReplyExpectation(replyExpectation)) {
+      // Dispatch owns the stall notice; this owner holds the queue facts needed to answer
+      // instead. The same sender's next queued request inherits the guidance; otherwise one
+      // recovery run bound to this turn's route and authority is queued.
+      replyOperationRunState.continueStalledTurn = (guidance, owner = replyOperation) =>
+        owner === replyOperation &&
+        continueStalledReplyTurn({
+          followupRun,
+          queueKey,
+          resolvedQueue,
+          replyOperation,
+          runFollowupTurn,
+          guidance,
+        });
+    }
+    const { admitUserTurn, recordPendingDelivery } = createReplyInputAdmission({
+      followupRun,
       replyOperation,
-      runFollowupTurn,
+      sourceTurnId,
       sessionKey,
-      shouldDrainQueuedFollowupsAfterClear,
-      typing,
+      storePath,
+      setEntry: (entry) => {
+        activeSessionEntry = entry;
+        if (activeSessionStore && sessionKey) {
+          activeSessionStore[sessionKey] = entry;
+        }
+      },
     });
+    try {
+      if (turn.preflightError) {
+        throw turn.preflightError;
+      }
+      await replyOperation.bindToolAuthoritySnapshotAsync(
+        prepareReplyRunToolAuthority(
+          followupRun,
+          activeSessionEntry,
+          captureReplyOperationSessionReader(replyOperation),
+        ),
+      );
+      const executePrepared = () =>
+        executePreparedReplyAgentRun({
+          ...params,
+          activeSessionStore,
+          admitUserTurn,
+          recordPendingDelivery,
+          applyReplyToMode,
+          blockReplyPipeline,
+          cfg,
+          resolveVisibleReplyDelivery,
+          activeIsNewSession: isNewSession,
+          getActiveSessionEntry: () => activeSessionEntry,
+          opts: runOpts,
+          onCompactionNoticePayload: (payload) => {
+            pendingCompactionNotices.push(payload);
+          },
+          pendingToolTasks: new Set<Promise<void>>(),
+          replyMediaContext,
+          replyOperation,
+          replyRouteThreadId,
+          replyToChannel,
+          replyToMode,
+          returnWithQueuedFollowupDrain,
+          runFollowupTurn,
+          preflightCompactionApplied: turn.preflightCompactionApplied,
+          recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
+          setRunFollowupTurn: (runner) => {
+            runFollowupTurn = runner;
+          },
+          shouldEmitToolOutput: createShouldEmitToolOutput(toolResultOptions),
+          shouldEmitToolResult,
+          traceAgentPhase,
+          typingSignals,
+        });
+      // Direct callers also need the admitted owner during nested runtime admission.
+      const result = await runWithReplyOperationLifecycleAdmission(replyOperation, executePrepared);
+      return prependCompactionNotices(result, pendingCompactionNotices, replyOperation);
+    } catch (error) {
+      replyRunState.recordReplyOperationAgentTurn(
+        followupRun.replyOperationRunStates,
+        replyOperation,
+      );
+      const result = await handleReplyAgentRunError(error, {
+        resolveVisibleReplyDelivery,
+        userTurnAccepted: followupRun.userTurnTranscriptRecorder?.hasPersisted() === true,
+        replyExpectation,
+        replyOperation,
+        resolvedVerboseLevel,
+        returnWithQueuedFollowupDrain,
+        sessionCtx,
+      });
+      return prependCompactionNotices(result, pendingCompactionNotices, replyOperation);
+    } finally {
+      try {
+        await cleanupReplyAgentRun({
+          blockReplyPipeline,
+          releaseSourceAdmission: turn.releaseSourceAdmission,
+          providedReplyOperation: callerOwnedReplyOperation,
+          queueKey,
+          replyOperation,
+          runFollowupTurn,
+          sessionKey,
+          shouldDrainQueuedFollowupsAfterClear,
+          typing,
+        });
+      } finally {
+        completeFollowupRunLifecycle(followupRun);
+      }
+    }
+  } catch (error) {
+    preparationResources.stopBlockReply?.();
+    typing.cleanup();
+    throw error;
+  } finally {
+    // A queued fallback may already own this source by the time ingress returns.
+    if (immediateClaim) {
+      releaseSessionControllerClaim(immediateClaim);
+    }
+    retireUnadoptedReplySource(controllerInput);
   }
 }

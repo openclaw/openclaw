@@ -45,7 +45,6 @@ openclaw-chat-question-panel {
 @supports (backdrop-filter: blur(1px)) {
   .chat-question-panel {
     backdrop-filter: blur(18px) saturate(1.35);
-    -webkit-backdrop-filter: blur(18px) saturate(1.35);
   }
 }
 
@@ -68,7 +67,8 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__request-nav button,
-.chat-question-panel__collapse {
+.chat-question-panel__collapse,
+.chat-question-panel__secret-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -109,6 +109,14 @@ openclaw-chat-question-panel {
   gap: 8px;
 }
 
+.chat-question-panel__topline--prompt {
+  align-items: flex-start;
+}
+
+.chat-question-panel__topline--prompt .chat-question-panel__prompt {
+  flex: 1;
+}
+
 .chat-question-panel__title {
   min-width: 0;
   overflow: hidden;
@@ -121,6 +129,7 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__collapse {
+  flex-shrink: 0;
   width: 28px;
   height: 28px;
   color: var(--muted);
@@ -155,6 +164,7 @@ openclaw-chat-question-panel {
 
 .chat-question-panel__progress {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   min-width: 0;
@@ -334,6 +344,46 @@ openclaw-chat-question-panel {
   outline: none;
 }
 
+.chat-question-panel__secret {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-question-panel__secret input {
+  width: 100%;
+  min-width: 0;
+  padding-right: 42px;
+}
+
+.chat-question-panel__secret-toggle {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 40px;
+  color: var(--muted);
+}
+
+.chat-question-panel__secret-toggle:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--panel-hover);
+}
+
+.chat-question-panel__secret-toggle:focus-visible,
+.chat-question-panel__hosts:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.chat-question-panel__secret-toggle:disabled {
+  opacity: 0.5;
+}
+
+.chat-question-panel__secret-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
 .chat-question-panel textarea.chat-question-panel__textarea {
   /* Override the shared field textarea's tall, monospace editor defaults. */
   min-height: 24px;
@@ -343,12 +393,6 @@ openclaw-chat-question-panel {
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.chat-question-panel__input-hint {
-  margin-top: -6px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 /*
@@ -361,11 +405,6 @@ openclaw-chat-question-panel {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--panel);
-}
-
-.chat-question-panel__hosts:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -2px;
 }
 
 .chat-question-panel__option--other:has(.chat-question-panel__other:focus-visible) {
@@ -468,6 +507,15 @@ openclaw-chat-question-panel {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.4;
+}
+
+/* The live region wraps the question lines, so it has to keep participating in the parent
+   grid: as a plain block it would collapse every question into a single grid item and drop
+   the row gap between them. */
+.chat-question-summary__announcement {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
 .chat-question-summary__item {

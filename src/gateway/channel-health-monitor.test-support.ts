@@ -4,16 +4,32 @@ import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import type { ChannelManager } from "./server-channels.js";
 
 export function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
-  return {
+  const manager: ChannelManager = {
     getRuntimeSnapshot: vi.fn(() => ({ channels: {}, channelAccounts: {} })),
     pauseChannelStarts: vi.fn(() => () => {}),
     startChannels: vi.fn(async () => {}),
     startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
+    captureAccountRestart: vi.fn(
+      (channelId, accountId, reason, options) => async (shouldContinue: () => boolean) => {
+        if (!shouldContinue()) {
+          return false;
+        }
+        await manager.stopChannel(channelId, accountId, { manual: false });
+        if (!shouldContinue() || !manager.isAccountListed(channelId, accountId)) {
+          return false;
+        }
+        if (options?.resetRestartAttempts) {
+          manager.resetRestartAttempts(channelId, accountId);
+        }
+        await manager.startChannel(channelId, accountId, { reason, preserveManualStop: true });
+        return true;
+      },
+    ),
     releaseChannelRouteHandoffs: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
-    recoverAutostartSuppression: vi.fn(async () => false),
+    recoverAutostartSuppression: vi.fn(() => undefined),
     setAmbientAutostartSuppressedChannelIds: vi.fn(),
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
@@ -24,6 +40,7 @@ export function createMockChannelManager(overrides?: Partial<ChannelManager>): C
     resetRestartAttempts: vi.fn(),
     ...overrides,
   };
+  return manager;
 }
 
 export function snapshotWith(

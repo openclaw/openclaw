@@ -1,6 +1,9 @@
 /** Resolve setup runtime intent without turning automatic choices into persistent pins. */
 import { resolveRecordedDaemonRuntime } from "../daemon/runtime-paths.js";
-import { readDaemonRuntimePinForInstall } from "../daemon/runtime-pin-state.js";
+import {
+  withDaemonRuntimePinMigration,
+  readDaemonRuntimePinForInstall,
+} from "../daemon/runtime-pin-state.js";
 import {
   resolveManagedGatewayServiceCommand,
   type GatewayServiceCommandConfig,
@@ -14,10 +17,12 @@ export async function resolveGatewaySetupRuntime(params: {
   runtime?: GatewayDaemonRuntime;
   selectRuntime?: (suggested: GatewayDaemonRuntime) => Promise<GatewayDaemonRuntime>;
 }) {
-  const expected = readDaemonRuntimePinForInstall(
-    { kind: "gateway", env: params.env },
-    params.existingCommand,
-    params.runtime !== undefined,
+  const expected = await withDaemonRuntimePinMigration(params.env, () =>
+    readDaemonRuntimePinForInstall(
+      { kind: "gateway", env: params.env },
+      params.existingCommand,
+      params.runtime !== undefined,
+    ),
   );
   const pin = params.runtime === undefined ? expected.pin : undefined;
   const existing = resolveManagedGatewayServiceCommand(params.existingCommand);

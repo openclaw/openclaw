@@ -18,6 +18,7 @@ export {
 } from "../providers/openai-tool-projection.js";
 export {
   codeModeToolSurfaceObserver,
+  measuredRequestPressure,
   reasoningTagTextPolicy,
   type CodeModeToolSurfaceObservation,
 } from "../provider-options.js";
@@ -30,10 +31,12 @@ export type {
   ResponsesServiceTierObservation,
 } from "../transports/openai-responses-contracts.js";
 
-export { responsesRequestLifecycle } from "../transports/openai-responses-request-lifecycle.js";
+export {
+  independentResponsesRequest,
+  responsesRequestLifecycle,
+} from "../transports/openai-responses-request-lifecycle.js";
 export { bindResponsesInputMessage } from "../transports/openai-responses-replay-messages-internal.js";
 export {
   encodedModelRequestBodyStream,
   modelRequestBodyState,
-  serializeModelRequestBody,
 } from "../transports/model-request-body.js";

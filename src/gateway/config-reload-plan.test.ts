@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
+import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -13,6 +16,106 @@ import {
 describe("Gateway core reload policy", () => {
   beforeEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
   afterEach(() => resetPluginRuntimeStateForTest());
+
+  it("hot-applies DeepSeek search credentials without replacing plugin resources", async () => {
+    const { default: deepseek } = await loadBundledPluginFacade<{
+      default: OpenClawPluginDefinition;
+    }>({ pluginId: "deepseek", artifactBasename: "index.ts" });
+    const registry = createEmptyPluginRegistry();
+    deepseek.register?.(
+      createTestPluginApi({
+        id: "deepseek",
+        registerReload(registration) {
+          registry.reloads.push({ pluginId: "deepseek", source: "test", registration });
+        },
+      }),
+    );
+    setActivePluginRegistry(registry);
+    const keyPath = "plugins.entries.deepseek.config.webSearch.apiKey";
+    const config = (apiKey: unknown): OpenClawConfig => ({
+      plugins: { entries: { deepseek: { enabled: true, config: { webSearch: { apiKey } } } } },
+    });
+    const previous = config({ source: "env", provider: "default", id: "DEEPSEEK_API_KEY" });
+    const candidate = config({ source: "store", provider: "default", id: "DEEPSEEK_API_KEY" });
+    for (const [before, after] of [
+      [previous, candidate],
+      [config(undefined), candidate],
+      [candidate, config(undefined)],
+    ] as const) {
+      const paths = diffGatewayReloadPaths(before, after, listConfigReloadRefinementPrefixes());
+      const plan = buildGatewayReloadPlan(paths, {
+        previousConfig: before,
+        candidateConfig: after,
+      });
+      expect(
+        plan.hotReasons.some((path) => path === keyPath || path.startsWith(keyPath + ".")),
+      ).toBe(true);
+      expect(plan.reloadPlugins).toBe(false);
+      expect(plan.disposeMcpRuntimes).toBe(false);
+      expect(plan.restartGateway).toBe(false);
+    }
+    // Activation, code replacement, and undeclared settings still own normal settlement.
+    expect(
+      buildGatewayReloadPlan([keyPath + ".source", "plugins.entries.deepseek.enabled"])
+        .reloadPlugins,
+    ).toBe(true);
+    expect(buildGatewayReloadPlan(["plugins.entries.deepseek.config.other"]).reloadPlugins).toBe(
+      true,
+    );
+    expect(
+      buildGatewayReloadPlan([keyPath + ".source"], {
+        pluginLifecycle: {
+          pluginIds: ["deepseek"],
+          reason: "reload",
+          operationId: "explicit-reload",
+        },
+      }).reloadPlugins,
+    ).toBe(true);
+  });
+
+  it.each(["memory-core", "none"])(
+    "reloads the selected memory index service for provider changes (memory slot: %s)",
+    async (memorySlot) => {
+      const { default: memory } = await loadBundledPluginFacade<{
+        default: OpenClawPluginDefinition;
+      }>({ pluginId: "memory-core", artifactBasename: "index.ts" });
+      if (!memory.register) {
+        throw new Error("Memory plugin must expose its registration entry point");
+      }
+      const registry = createEmptyPluginRegistry();
+      memory.register(
+        createTestPluginApi({
+          id: "memory-core",
+          config: { plugins: { slots: { memory: memorySlot } } },
+          registerService(service) {
+            registry.services.push({
+              pluginId: "memory-core",
+              source: "test",
+              origin: "bundled",
+              id: service.id,
+              service,
+            });
+          },
+        }),
+      );
+      setActivePluginRegistry(registry);
+      for (const path of [
+        "models.providers.ollama.baseUrl",
+        "models.providers.ollama.apiKey",
+        "models.providers.ollama.headers",
+        "models.providers.ollama",
+        "models.providers",
+      ]) {
+        const plan = buildGatewayReloadPlan([path]);
+        expect(plan.restartGateway, path).toBe(false);
+        expect(plan.reloadPlugins, path).toBe(false);
+        expect(plan.restartServices, path).toEqual(
+          new Set(memorySlot === "memory-core" ? ["memory-core-index"] : []),
+        );
+      }
+      expect(buildGatewayReloadPlan(["models.mode"]).restartServices).toEqual(new Set());
+    },
+  );
 
   it.each([
     { change: "allow", mode: "noop" },
@@ -119,19 +222,22 @@ describe("Gateway core reload policy", () => {
       "discovery.wideArea.domain",
       "security.unknownPolicy",
       "secrets.egressProxy.enabled",
-    ].map((path) => ({ path, restart: true, heartbeat: false })),
-    ...["tools.codeMode.enabled", "gateway.controlUi.experimental.customPlugins"].map((path) => ({
+    ].map((path) => ({ path, restart: true })),
+    ...[
+      "tools.codeMode.enabled",
+      "gateway.controlUi.experimental.customPlugins",
+      "gateway.controlUi.experimental.templates",
+      "gateway.controlUi.experimental.chatBubbles",
+    ].map((path) => ({
       path,
       restart: false,
-      heartbeat: false,
     })),
-    { path: "agents.defaults.model", restart: false, heartbeat: true },
-  ])("classifies reload path: $path", ({ path, restart, heartbeat }) => {
+    { path: "agents.defaults.model", restart: false },
+  ])("classifies reload path: $path", ({ path, restart }) => {
     const plan = buildGatewayReloadPlan([path]);
     expect(plan.restartGateway).toBe(restart);
     expect(plan.restartReasons).toEqual(restart ? [path] : []);
     expect(plan.hotReasons).toEqual(restart ? [] : [path]);
-    expect(plan.restartHeartbeat).toBe(heartbeat);
     expect(resolveConfigReloadMetadata(path).kind).toBe(restart ? "restart" : "hot");
   });
 });

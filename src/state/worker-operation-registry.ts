@@ -1,14 +1,45 @@
+import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
 import type {
   SqliteWorkerCommand,
   SqliteWorkerOperations,
 } from "../infra/sqlite-worker-contract.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 
 export type WorkerOperationContext = {
   open: () => OpenClawStateDatabase;
   stateOptions: () => { path: string; env: NodeJS.ProcessEnv };
 };
+
+export type WorkerWriteOperationContext = WorkerOperationContext & {
+  write: <T>(
+    operation: (database: OpenClawStateDatabase) => T,
+    transactionOptions?: Pick<
+      SqliteTransactionOptions,
+      "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
+    > & { singleStatement?: true },
+  ) => T;
+  writeAdmitted: <T>(
+    operation: (database: OpenClawStateDatabase) => T,
+    options?: Parameters<WorkerWriteOperationContext["write"]>[1] & {
+      singleStatement?: never;
+      receipt?: "result";
+      /** Preserve worker-process ownership checks for native-default callers. */
+      transactionEnvironment?: "process";
+    },
+  ) => T;
+};
+
+export function createCommittedWorkerMutation<Input, Result extends boolean | number>(
+  type: string,
+  apply: (db: OpenClawStateDatabase["db"], input: Input) => Result,
+) {
+  return (input: Input, { writeAdmitted }: WorkerWriteOperationContext) =>
+    writeAdmitted(({ db }) => ({ type, result: apply(db, input) }), {
+      operationLabel: type,
+      receipt: "result",
+      transactionEnvironment: "process",
+    }).result;
+}
 
 export type WorkerOperationHandlers<Context = WorkerOperationContext> = Record<
   string,
@@ -21,6 +52,18 @@ export type WorkerOperations<Handlers extends WorkerOperationHandlers<never>> = 
     output: ReturnType<Handlers[Key]>;
   };
 };
+
+type IntersectUnion<T> = (T extends unknown ? (value: T) => void : never) extends (
+  value: infer Intersection,
+) => void
+  ? Intersection
+  : never;
+
+export type WorkerOperationsFromLoaders<
+  Loaders extends Record<string, () => Promise<WorkerOperationHandlers<never>>>,
+> = IntersectUnion<
+  { [Key in keyof Loaders]: WorkerOperations<Awaited<ReturnType<Loaders[Key]>>> }[keyof Loaders]
+>;
 
 type Namespace<Key> = Key extends `${infer Domain}.${string}` ? Domain : never;
 type DomainLoaders<Operations extends SqliteWorkerOperations, Context, Domains extends string> = {
@@ -42,11 +85,12 @@ export function createWorkerOperationRegistry<
     {
       load: () => Promise<WorkerOperationHandlers<Context>>;
       handlers?: WorkerOperationHandlers<Context>;
+      pending?: Promise<void>;
     }
   >(
     Object.entries<() => Promise<WorkerOperationHandlers<Context>>>(loaders).map(([name, load]) => [
       name,
-      { load: createLazyRuntimeModule(load) },
+      { load },
     ]),
   );
   const domainFor = (type: PropertyKey) =>
@@ -61,15 +105,17 @@ export function createWorkerOperationRegistry<
     prepare(type: PropertyKey): Promise<void> | undefined {
       const domain = domainFor(type);
       if (domain && !domain.handlers) {
-        return domain.load().then((handlers) => {
-          domain.handlers = handlers;
-        });
+        return (domain.pending ??= Promise.resolve()
+          .then(domain.load)
+          .then((handlers) => {
+            domain.handlers = handlers;
+          }));
       }
       return undefined;
     },
     has(command: {
       type: PropertyKey;
-      input: unknown;
+      input?: unknown;
     }): command is SqliteWorkerCommand<Operations> {
       return handlerFor(command.type) !== undefined;
     },

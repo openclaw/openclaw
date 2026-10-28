@@ -99,21 +99,13 @@ public struct NativeConversationCommand: Codable, Equatable, Sendable {
         try container.encode(1, forKey: .contract)
         try container.encode(self.documentId, forKey: .documentId)
         try container.encode(self.requestId, forKey: .requestId)
-        let kind: Kind
-        switch self.action {
-        case let .navigate(payload):
-            kind = .navigate
-            try container.encode(payload, forKey: .payload)
-        case let .presentation(payload):
-            kind = .presentation
-            try container.encode(payload, forKey: .payload)
-        case .focusComposer:
-            kind = .focusComposer
-            try container.encode([String: String](), forKey: .payload)
-        case let .openSessionActions(payload):
-            kind = .openSessionActions
-            try container.encode(payload, forKey: .payload)
+        let (kind, payload): (Kind, any Encodable) = switch self.action {
+        case let .navigate(payload): (.navigate, payload)
+        case let .presentation(payload): (.presentation, payload)
+        case .focusComposer: (.focusComposer, [String: String]())
+        case let .openSessionActions(payload): (.openSessionActions, payload)
         }
+        try container.encode(payload, forKey: .payload)
         try container.encode(kind, forKey: .type)
     }
 
@@ -263,27 +255,15 @@ public struct NativeConversationMessage: Codable, Equatable, Sendable {
         var container = encoder.container(keyedBy: NativeConversationContract.Keys.self)
         try container.encode(1, forKey: .contract)
         try container.encode(self.documentId, forKey: .documentId)
-        let kind: Kind
-        switch self.body {
-        case let .ready(payload):
-            kind = .ready
-            try payload.encode(to: encoder)
-        case let .state(payload):
-            kind = .state
-            try payload.encode(to: encoder)
-        case let .commandResult(payload):
-            kind = .commandResult
-            try payload.encode(to: encoder)
-        case let .routeChanged(payload):
-            kind = .routeChanged
-            try payload.encode(to: encoder)
-        case let .openDashboard(payload):
-            kind = .openDashboard
-            try payload.encode(to: encoder)
-        case let .sessionFacts(payload):
-            kind = .sessionFacts
-            try payload.encode(to: encoder)
+        let (kind, payload): (Kind, any Encodable) = switch self.body {
+        case let .ready(payload): (.ready, payload)
+        case let .state(payload): (.state, payload)
+        case let .commandResult(payload): (.commandResult, payload)
+        case let .routeChanged(payload): (.routeChanged, payload)
+        case let .openDashboard(payload): (.openDashboard, payload)
+        case let .sessionFacts(payload): (.sessionFacts, payload)
         }
+        try payload.encode(to: encoder)
         try container.encode(kind, forKey: .type)
     }
 }

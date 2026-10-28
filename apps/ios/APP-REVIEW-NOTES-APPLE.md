@@ -34,7 +34,7 @@ the supplied code into `Paste setup code` and tap `Connect`.
 
 1. Open the sidebar and tap the `Settings` gear.
 2. Open `This iPhone`.
-3. Ensure the `Notifications` switch is on.
+3. Check that the `Notifications` switch is on.
 4. Tap `Back`, then open `Permissions` in the `This iPhone` section of the
    Settings list. If `Notifications` shows `Not determined`, tap its `Grant…`
    button.

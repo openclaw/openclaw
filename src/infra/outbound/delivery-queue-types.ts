@@ -9,8 +9,10 @@ import type {
   RenderedMessageBatchPlan,
 } from "../../channels/message/types.js";
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
+import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript-mirror.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
+import type { BackgroundSessionResultProvenance } from "../../sessions/background-session-result.js";
 import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueEntryState,
@@ -18,9 +20,10 @@ import type {
 import type { IndexedOutboundAuditTerminal } from "./deliver-types.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
-import type { DeliveryMirror } from "./mirror.js";
 import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSessionContext } from "./session-context.js";
+
+export const FINAL_TEXT_RECOVERY_MAX_ATTEMPTS = 2;
 
 /** Serializable owner callback for a durable queue entry. */
 export type DurableDeliveryCompletion =
@@ -47,17 +50,16 @@ export type DurableDeliveryCompletion =
     };
 
 export function hasActiveDeliveryOwner(entry: DeliveryQueueEntryState, now: number): boolean {
-  return (
-    (typeof entry.completionRetention === "object" ||
-      entry.completionRetention === "permanent" ||
-      entry.requiresProducerClaim === true) &&
-    (entry.recoveryState === "producer_claimed" ||
-      ((entry.recoveryState === "send_attempt_started" ||
-        entry.recoveryState === "unknown_after_send") &&
-        entry.requiresProducerClaim === true)) &&
-    typeof entry.availableAt === "number" &&
-    entry.availableAt > now
-  );
+  if (typeof entry.availableAt !== "number" || !(entry.availableAt > now)) {
+    return false;
+  }
+  return entry.requiresProducerClaim === true
+    ? entry.recoveryState === "producer_claimed" ||
+        entry.recoveryState === "send_attempt_started" ||
+        entry.recoveryState === "unknown_after_send"
+    : (typeof entry.completionRetention === "object" ||
+        entry.completionRetention === "permanent") &&
+        entry.recoveryState === "producer_claimed";
 }
 
 export type QueuedReplyPayloadSendingHook = {
@@ -70,11 +72,15 @@ export type QueuedReplyPayloadSendingHook = {
 
 export type QueuedDeliveryPayload = {
   sessionGeneration?: SessionDeliveryGeneration;
+  transcriptProvenance?: BackgroundSessionResultProvenance;
   channel: string;
   to: string;
   accountId?: string;
   queuePolicy?: "required" | "best_effort";
   requireUnknownSendReconciliation?: boolean;
+  retryAmbiguousFinalText?: true;
+  /** Current failed attempt had a typed transport error and no accepted message. */
+  ambiguousTransportError?: true;
   requiresProducerClaim?: boolean;
   preparedBatch?: PreparedOutboundBatch;
   payloads?: ReplyPayload[];
@@ -87,7 +93,18 @@ export type QueuedDeliveryPayload = {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   silent?: boolean;
-  mirror?: DeliveryMirror;
+  /** Retained persisted metadata; never used for delivery, hooks, or transcript ownership. */
+  mirror?: {
+    sessionKey: string;
+    agentId?: string;
+    text?: string;
+    mediaUrls?: string[];
+    idempotencyKey?: string;
+    expectedSessionId?: string;
+    deliveryMirror?: SessionTranscriptDeliveryMirror;
+    isGroup?: boolean;
+    groupId?: string;
+  };
   session?: OutboundSessionContext;
   gatewayClientScopes?: readonly string[];
   preparedMessageId?: string;

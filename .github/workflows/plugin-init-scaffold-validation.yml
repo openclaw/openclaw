@@ -29,6 +29,7 @@ on:
       - "pnpm-workspace.yaml"
       - "patches/**"
       - "src/cli/plugins-*.ts"
+      - "!src/plugin-sdk/AGENTS.md"
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
     paths: *validation_paths

@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import type {
-  ErrorShape,
-  SessionsPatchParams,
+import {
+  ErrorCodes,
+  errorShape,
+  type ErrorShape,
+  type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -17,6 +19,7 @@ import {
   assertSessionPatchCommitAllowed,
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
+import { prepareSessionPatchSidebarAncestors } from "./sessions-patch-sidebar-ancestors.js";
 import type {
   MutationOutcome,
   MutationTarget,
@@ -62,6 +65,12 @@ export function resolveSessionPatchTargetError(
   const { fullPatch: patch, initialEntry } = target;
   const changed =
     (patch.expectedSessionId !== undefined && entry?.sessionId !== patch.expectedSessionId) ||
+    (patch.expectedSidebarRoot !== undefined &&
+      (entry?.sidebarRoot === true) !== patch.expectedSidebarRoot) ||
+    (patch.expectedCategory !== undefined &&
+      (entry?.category ?? null) !== patch.expectedCategory) ||
+    (patch.expectedArchived !== undefined &&
+      (entry?.archivedAt !== undefined) !== patch.expectedArchived) ||
     (patch.expectedLifecycleRevision !== undefined &&
       entry?.lifecycleRevision !== patch.expectedLifecycleRevision) ||
     (initialEntry !== undefined && entry === undefined) ||
@@ -82,74 +91,29 @@ export function resolveSessionPatchTargetError(
   return changed ? sessionChangedError(target.key) : undefined;
 }
 
-export function sessionPatchTargetIdentity(patch: SessionsPatchParams) {
-  return {
-    key: patch.key,
-    ...(patch.agentId ? { agentId: patch.agentId } : {}),
-    ...(patch.expectedSessionId !== undefined
-      ? { expectedSessionId: patch.expectedSessionId }
-      : {}),
-    ...(patch.expectedLifecycleRevision !== undefined
-      ? { expectedLifecycleRevision: patch.expectedLifecycleRevision }
-      : {}),
-    ...(patch.expectedPermissionMode !== undefined
-      ? { expectedPermissionMode: patch.expectedPermissionMode }
-      : {}),
-    ...(patch.expectedSandboxMode !== undefined
-      ? { expectedSandboxMode: patch.expectedSandboxMode }
-      : {}),
-    ...(patch.expectedNativeRuntimeConsent !== undefined
-      ? { expectedNativeRuntimeConsent: patch.expectedNativeRuntimeConsent }
-      : {}),
-    ...(patch.expectedToolOverrides !== undefined
-      ? { expectedToolOverrides: patch.expectedToolOverrides }
-      : {}),
-    expectedMarkedUnreadAt: patch.expectedMarkedUnreadAt,
-  };
-}
-
-/** The retained source and target keep the existing personal-account error boundary. */
-function bindPreparedSessionPatchTarget(params: {
-  key: string;
-  originalGuard: () => ErrorShape | undefined;
-  operatorAuthority: AdmittedRunOperatorAuthority | undefined;
-  personalModelSelection: UserModelAccountSelection | undefined;
-  preparation: { facts: { matchesCurrent: (cfg: OpenClawConfig) => boolean } } | { error: unknown };
-  getCurrentConfig: () => OpenClawConfig;
-}): () => ErrorShape | undefined {
-  return () => {
-    try {
-      assertSessionPatchCommitAllowed({
-        personalModelSelection: params.personalModelSelection,
-        guards: [params.originalGuard],
-        archiveTransitions: [],
-      });
-      params.operatorAuthority?.assertCurrent();
-      if ("error" in params.preparation) {
-        throw params.preparation.error instanceof Error
-          ? params.preparation.error
-          : new Error("Session target preparation failed", { cause: params.preparation.error });
-      }
-      return params.preparation.facts.matchesCurrent(params.getCurrentConfig())
-        ? undefined
-        : sessionChangedError(params.key);
-    } catch (error) {
-      return unexpectedPatchError(params.key, error);
-    }
-  };
-}
-
 /** Prepare original writers and bind their facts before patch projection can acquire admission. */
 export async function prepareSessionPatchTargets(params: {
   cfg: OpenClawConfig;
   getCurrentConfig: () => OpenClawConfig;
   prepared: readonly PreparedPatchTarget[];
-  mutationTargets: MutationTarget[];
+  targets: readonly MutationTarget[];
+  placementChecks: ReadonlyMap<number, { validate: () => string | undefined }>;
   outcomes: Array<MutationOutcome | undefined>;
-  originalCommitGuards: readonly (() => ErrorShape | undefined)[];
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
   personalModelSelection: UserModelAccountSelection | undefined;
 }) {
+  const mutationTargets = params.targets.map((target, index) => ({
+    ...target,
+    commitGuard: () => {
+      const error = target.commitGuard();
+      if (error) {
+        return error;
+      }
+      const placementError = params.placementChecks.get(index)?.validate();
+      return placementError ? errorShape(ErrorCodes.INVALID_REQUEST, placementError) : undefined;
+    },
+  }));
+  const originalCommitGuards = mutationTargets.map((target) => target.commitGuard);
   let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
   const ready = params.operatorAuthority
     ? params.operatorAuthority.then((captured) => {
@@ -169,7 +133,7 @@ export async function prepareSessionPatchTargets(params: {
       assertCurrent: () => {
         assertSessionPatchCommitAllowed({
           personalModelSelection: params.personalModelSelection,
-          guards: [params.originalCommitGuards[target.index]!],
+          guards: [originalCommitGuards[target.index]!],
           archiveTransitions: [],
         });
         operatorAuthority?.assertCurrent();
@@ -192,7 +156,11 @@ export async function prepareSessionPatchTargets(params: {
     ),
   );
   let targetCustody: ReturnType<typeof prepareGatewaySessionLifecycleTargets> | undefined;
+  const ancestorReads: Array<Awaited<ReturnType<typeof prepareSessionPatchSidebarAncestors>>> = [];
   const release = async () => {
+    for (const ancestors of ancestorReads.splice(0)) {
+      ancestors.release();
+    }
     const errors: unknown[] = [];
     try {
       await targetCustody?.[Symbol.asyncDispose]();
@@ -236,15 +204,28 @@ export async function prepareSessionPatchTargets(params: {
         (facts) => ({ facts }),
         (error: unknown) => ({ error }),
       );
-      const guard = bindPreparedSessionPatchTarget({
-        key: target.key,
-        originalGuard: params.originalCommitGuards[target.index]!,
-        operatorAuthority,
-        personalModelSelection: params.personalModelSelection,
-        preparation: result,
-        getCurrentConfig: params.getCurrentConfig,
-      });
-      params.mutationTargets[target.index]!.commitGuard = guard;
+      const originalGuard = originalCommitGuards[target.index]!;
+      const guard = () => {
+        try {
+          assertSessionPatchCommitAllowed({
+            personalModelSelection: params.personalModelSelection,
+            guards: [originalGuard],
+            archiveTransitions: [],
+          });
+          operatorAuthority?.assertCurrent();
+          if ("error" in result) {
+            throw result.error instanceof Error
+              ? result.error
+              : new Error("Session target preparation failed", { cause: result.error });
+          }
+          return result.facts.matchesCurrent(params.getCurrentConfig())
+            ? undefined
+            : sessionChangedError(target.key);
+        } catch (error) {
+          return unexpectedPatchError(target.key, error);
+        }
+      };
+      mutationTargets[target.index]!.commitGuard = guard;
       if ("error" in result) {
         // Original caller errors retain precedence; failed preparation never reaches a fallback open.
         params.outcomes[target.index] = {
@@ -253,7 +234,41 @@ export async function prepareSessionPatchTargets(params: {
         };
       }
     }
+    for (const target of params.prepared) {
+      const ancestors = target.fullPatch.expectedSidebarAncestors;
+      if (!ancestors?.length || params.outcomes[target.index] !== undefined) {
+        continue;
+      }
+      const originalGuard = mutationTargets[target.index]!.commitGuard;
+      try {
+        const read = await prepareSessionPatchSidebarAncestors({
+          cfg: params.cfg,
+          getCurrentConfig: params.getCurrentConfig,
+          key: target.canonicalKey,
+          agentId: target.targetAgentId,
+          ancestors,
+          assertCallerCurrent: () =>
+            assertSessionPatchCommitAllowed({ guards: [originalGuard], archiveTransitions: [] }),
+        });
+        ancestorReads.push(read);
+        mutationTargets[target.index]!.commitGuard = () => {
+          try {
+            read.assertCurrent();
+            return undefined;
+          } catch (error) {
+            return unexpectedPatchError(target.key, error);
+          }
+        };
+      } catch (error) {
+        params.outcomes[target.index] = {
+          ok: false,
+          error: unexpectedPatchError(target.key, error),
+        };
+      }
+    }
     return {
+      mutationTargets,
+      originalCommitGuards,
       operatorAuthority,
       prepared: params.prepared.filter((target) => params.outcomes[target.index] === undefined),
       storage,

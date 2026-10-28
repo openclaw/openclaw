@@ -3,8 +3,8 @@
 // Prevents local primitive-coercion helpers from regrowing after consolidation.
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import { API } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { API } from "typescript/sync";
 import { isCodeFile, listRepoFilesSync } from "./check-file-utils.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
@@ -62,9 +62,15 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     ],
   },
   {
+    file: "packages/normalization-core/src/session-key-comparison.ts",
+    kind: "function",
+    names: ["normalizeSessionKeyForComparison"],
+  },
+  {
     file: "packages/normalization-core/src/string-normalization.ts",
     kind: "function",
     names: [
+      "commonPrefixLength",
       "containsAsciiControlCharacter",
       "filterStringEntries",
       "normalizeArrayBackedTrimmedStringList",
@@ -96,12 +102,15 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "asFiniteNumber",
       "asFiniteNumberInRange",
       "asNonNegativeFiniteNumber",
+      "asNonNegativeInteger",
       "asPositiveFiniteNumber",
+      "asPositiveInteger",
       "asPositiveSafeInteger",
       "asSafeIntegerInRange",
       "clampTimerTimeoutMs",
       "clampPositiveTimerTimeoutMs",
       "finiteSecondsToTimerSafeMilliseconds",
+      "floorPositiveFiniteNumber",
       "isFutureDateTimestampMs",
       "nonNegativeSecondsToSafeMilliseconds",
       "parseDateFirstTimestampMs",
@@ -142,9 +151,12 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "asOptionalObjectRecord",
       "asOptionalRecord",
       "asRecord",
+      "ensureRecord",
       "filterStringRecord",
       "isRecord",
+      "isStringArray",
       "isStringRecord",
+      "omitUndefinedFields",
       "readStringField",
     ],
   },
@@ -161,6 +173,8 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "collectErrorGraphCandidates",
       "collectNestedErrorCandidates",
       "extractErrorCodeOrErrno",
+      "formatErrorStackWithMessage",
+      "mapErrorCauseChain",
       "readErrorCauses",
       "stringifyNonErrorCause",
       "toErrorObject",
@@ -196,6 +210,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
 export const CANONICAL_COERCION_MODULES = [
   "packages/normalization-core/src/agent-id.ts",
   "packages/normalization-core/src/string-coerce.ts",
+  "packages/normalization-core/src/session-key-comparison.ts",
   "packages/normalization-core/src/string-normalization.ts",
   "packages/normalization-core/src/number-coercion.ts",
   "packages/normalization-core/src/record-coerce.ts",
@@ -229,6 +244,12 @@ export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
     name: "formatErrorMessage",
     reason: "Dependency-light scripts retain a deliberately smaller formatting policy.",
   },
+  {
+    file: "scripts/lib/error-format.mts",
+    name: "formatErrorMessageWithCauses",
+    reason:
+      "Dependency-light release diagnostics need bounded cause-chain rendering before install.",
+  },
 ] as const satisfies readonly { file: string; name: string; reason: string }[];
 
 const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
@@ -249,12 +270,6 @@ const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
     name: "asStandaloneRecord",
     kind: "variable",
     reason: "Serialized standalone app closure cannot capture module imports.",
-  },
-  {
-    file: "extensions/diffs/src/viewer-payload.ts",
-    name: "isViewerRecord",
-    kind: "function",
-    reason: "Standalone browser asset build cannot resolve workspace package imports.",
   },
   {
     file: "scripts/lib/kova-report-gate.mts",
@@ -342,19 +357,15 @@ export type CoercionHelperCarveOut = {
   reason: string;
 };
 
-function canonicalOwnerCarveOuts(
-  owner: (typeof CANONICAL_COERCION_HELPER_OWNERS)[number],
-): CoercionHelperCarveOut[] {
-  return owner.names.map((name) => ({
-    file: owner.file,
-    kind: owner.kind,
-    name,
-    reason: "Canonical coercion helper owned by this module.",
-  }));
-}
-
 export const COERCION_HELPER_CARVE_OUTS: readonly CoercionHelperCarveOut[] = [
-  ...CANONICAL_COERCION_HELPER_OWNERS.flatMap(canonicalOwnerCarveOuts),
+  ...CANONICAL_COERCION_HELPER_OWNERS.flatMap(({ file, kind, names }) =>
+    names.map((name) => ({
+      file,
+      kind,
+      name,
+      reason: "Canonical coercion helper owned by this module.",
+    })),
+  ),
   ...EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS,
 ];
 
@@ -381,7 +392,6 @@ function carveOutKey(entry: Pick<CoercionHelperCarveOut, "file" | "kind" | "name
   return `${entry.file}\0${entry.name}\0${entry.kind}`;
 }
 
-/** Returns true for tracked source files governed by the declaration guard. */
 export function isGovernedCoercionHelperPath(filePath: string) {
   return (
     isCodeFile(filePath) &&
@@ -424,7 +434,6 @@ function isCallableOrDirectAlias(expression: ts.Expression) {
   );
 }
 
-/** Finds banned callable declarations in one source file. */
 export function findBannedCoercionHelperDeclarations(
   source: string,
   file: string,
@@ -620,7 +629,8 @@ function auditDefaultCanonicalExports(repoRoot: string, parser: API): CanonicalC
   const exportsByFile = new Map(
     auditedModules.map((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      const exportedNames = findExportedCallableNames(parser.createSourceFile(file, source));
+      using retainedSource = parser.createSourceFile(file, source);
+      const exportedNames = findExportedCallableNames(retainedSource.sourceFile);
       if (!mixedModules.has(file)) {
         return [file, exportedNames] as const;
       }
@@ -648,7 +658,6 @@ function auditDefaultCanonicalExports(repoRoot: string, parser: API): CanonicalC
   return auditCanonicalCoercionExports(exportsByFile, classifications);
 }
 
-/** Runs the full tracked-source declaration guard. */
 export async function runCoercionHelperDeclarationGuard(
   options: {
     carveOuts?: readonly CoercionHelperCarveOut[];
@@ -687,11 +696,12 @@ export async function runCoercionHelperDeclarationGuard(
         if (!BANNED_HELPER_NAME_PATTERN.test(result.value.source)) {
           continue;
         }
+        using retainedSource = parser.createSourceFile(result.value.file, result.value.source);
         declarations.push(
           ...findBannedCoercionHelperDeclarations(
             result.value.source,
             result.value.file,
-            parser.createSourceFile(result.value.file, result.value.source),
+            retainedSource.sourceFile,
           ),
         );
       }

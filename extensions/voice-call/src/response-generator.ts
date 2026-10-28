@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyModelOverrideWithAuthProfileCompatibility,
   ModelSelectionLockedError,
+  prepareAuthProfileProvider,
   resolvePersistedSessionRuntimeId,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import { isValidAgentHarnessSessionStoreEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -12,7 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveVoiceCallSessionKey, type VoiceCallConfig } from "./config.js";
 import { resolveCallAgentId } from "./resolve-call-agent-id.js";
@@ -21,9 +21,7 @@ import { resolveVoiceResponseModel } from "./response-model.js";
 type VoiceResponseParams = {
   voiceConfig: VoiceCallConfig;
   coreConfig: OpenClawConfig;
-  /** Injected host agent runtime */
   agentRuntime: OpenClawPluginApi["runtime"]["agent"];
-  /** Call ID for session tracking */
   callId: string;
   /** Persisted call session key */
   sessionKey?: string;
@@ -38,13 +36,6 @@ type VoiceResponseParams = {
   userMessage: string;
   /** Delivers completed reply blocks while post-turn work is still running. */
   onEarlyText?: (text: string) => Promise<boolean>;
-};
-
-type VoiceResponseResult = {
-  text: string | null;
-  /** Whether the complete response was handed to the transport before compaction. */
-  deliveredEarly: boolean;
-  error?: string;
 };
 
 type VoiceResponsePayload = {
@@ -147,15 +138,11 @@ function tryParseSpokenJson(text: string): string | null {
   }
 
   for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as { spoken?: unknown };
-      if (typeof parsed?.spoken !== "string") {
-        continue;
-      }
-      return normalizeSpokenText(parsed.spoken) ?? "";
-    } catch {
-      // Continue trying other candidates.
+    const parsed = safeParseJson<{ spoken?: unknown }>(candidate);
+    if (typeof parsed?.spoken !== "string") {
+      continue;
     }
+    return normalizeSpokenText(parsed.spoken) ?? "";
   }
 
   const inlineSpokenMatch = trimmed.match(/"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
@@ -163,12 +150,8 @@ function tryParseSpokenJson(text: string): string | null {
     return null;
   }
 
-  try {
-    const decoded = JSON.parse(`"${inlineSpokenMatch[1] ?? ""}"`) as string;
-    return normalizeSpokenText(decoded) ?? "";
-  } catch {
-    return null;
-  }
+  const decoded = safeParseJson<string>(`"${inlineSpokenMatch[1] ?? ""}"`);
+  return decoded === null ? null : (normalizeSpokenText(decoded) ?? "");
 }
 
 function isLikelyMetaReasoningParagraph(paragraph: string): boolean {
@@ -233,9 +216,7 @@ function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): str
   return `agent:${agentId}:${trimmed}`;
 }
 
-export async function generateVoiceResponse(
-  params: VoiceResponseParams,
-): Promise<VoiceResponseResult> {
+export async function generateVoiceResponse(params: VoiceResponseParams) {
   const {
     voiceConfig,
     callId,
@@ -258,7 +239,6 @@ export async function generateVoiceResponse(
     explicitSessionKey: sessionKey,
     coreSession: cfg.session,
   });
-  const toolsAllow = resolveAgentConfig(cfg, agentId)?.tools?.allow;
 
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
   try {
@@ -271,12 +251,17 @@ export async function generateVoiceResponse(
         await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
         const now = Date.now();
-        let sessionEntry = agentRuntime.session.getSessionEntry({
+        let sessionEntry = await agentRuntime.session.getSessionEntryAsync({
           storePath,
           sessionKey: resolvedSessionKey,
         });
 
-        const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
+        const { provider, model } = resolveVoiceResponseModel({
+          cfg,
+          agentId,
+          voiceConfig,
+          agentRuntime,
+        });
         const configuredModel = resolveDefaultModelForAgent({ cfg, agentId });
 
         if (sessionEntry?.modelSelectionLocked === true && voiceConfig.responseModel) {
@@ -284,7 +269,7 @@ export async function generateVoiceResponse(
         }
         if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
           sessionEntry =
-            (await agentRuntime.session.patchSessionEntry({
+            (await agentRuntime.session.prepareSessionEntryPatch({
               storePath,
               sessionKey: resolvedSessionKey,
               replaceEntry: true,
@@ -292,7 +277,7 @@ export async function generateVoiceResponse(
                 sessionId: crypto.randomUUID(),
                 updatedAt: now,
               },
-              update: (entry) => {
+              prepare: async (entry) => {
                 const next = entry.sessionId
                   ? { ...entry }
                   : {
@@ -301,10 +286,15 @@ export async function generateVoiceResponse(
                       updatedAt: now,
                     };
                 if (voiceConfig.responseModel) {
+                  const profileId = entry.authProfileOverride?.trim();
+                  const recordedProvider = profileId
+                    ? await prepareAuthProfileProvider({ agentDir, profileId })
+                    : undefined;
                   applyModelOverrideWithAuthProfileCompatibility({
                     cfg,
                     agentDir,
                     entry: next,
+                    recordedProvider,
                     currentProvider:
                       entry.providerOverride?.trim() ||
                       entry.modelProvider?.trim() ||
@@ -357,6 +347,7 @@ export async function generateVoiceResponse(
         const blockReplyPayloads: VoiceResponsePayload[] = [];
         let latestToolBoundaryMessageIndex: number | undefined;
         let blockReplyBoundariesReliable = true;
+        // Whether the complete response was handed to the transport before compaction.
         let deliveredEarly = false;
         let lastFlushedText: string | null = null;
 
@@ -393,7 +384,6 @@ export async function generateVoiceResponse(
           extraSystemPrompt,
           agentDir,
           senderIsOwner,
-          toolsAllow,
           abortSignal,
           blockReplyBreak: "text_end",
           resolveReplyDelivery: async (minimumAssistantMessageIndex = 0) =>

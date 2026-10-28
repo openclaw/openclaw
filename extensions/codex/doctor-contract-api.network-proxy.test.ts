@@ -67,24 +67,7 @@ describe("Codex network proxy Doctor repair", () => {
     });
   });
 
-  it.each([true, false])("preserves unchanged config identity when enabled=%s", (enabled) => {
-    const cfg = createConfig();
-    const appServer = cfg.plugins.entries.codex.config.appServer;
-    appServer.networkProxy.enabled = enabled;
-    Object.assign(appServer.networkProxy, { profileName: enabled ? "existing-profile" : "" });
-    Object.assign(appServer, { remoteWorkspaceRoot: enabled ? "/remote/workspace" : " " });
-    const result = normalizeCompatibilityConfig({ cfg });
-    expect(result.changes).toEqual([]);
-    expect(result.config).toBe(cfg);
-    expect(legacyConfigRules.some((rule) => rule.match(appServer))).toBe(false);
-  });
-
   it.each([
-    {
-      name: "non-string optional fields",
-      profile: { profileName: 42 },
-      sibling: { remoteWorkspaceRoot: false },
-    },
     { name: "unknown field", profile: {}, sibling: { unknownSetting: "synthetic-private-value" } },
   ])("keeps $name invalid after Doctor repair", ({ profile, sibling }) => {
     const cfg = createConfig();

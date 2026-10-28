@@ -108,6 +108,64 @@ The same thinking controls apply to agent turns and standalone model completions
 Baseten can add, remove, or change Model APIs independently of OpenClaw releases. The plugin refreshes model ids, context limits, output limits, and input, cached-input, and output pricing from the authenticated API. Current DeepSeek V4.1 Flash and V4 Pro 0813 retain their documented controls when otherwise populated catalog rows omit the corresponding feature flags.
 </Note>
 
+## Decision models
+
+The plugin also supports Base Labs' **elephant-1 (9B)** and **mammoth-1 (27B)**
+through Baseten's native [System One API](https://docs.baseten.co/reference/inference-api/system-one).
+These are decision-only models, not chat completions. Select them in the
+**Decision** picker or set the separate model role:
+
+```json5
+{
+  agents: {
+    defaults: {
+      decisionModel: "baseten/decision-models/baseten-elephant-9b-latest",
+    },
+  },
+}
+```
+
+| Model           | Decision model reference                             |
+| --------------- | ---------------------------------------------------- |
+| elephant-1 (9B) | `baseten/decision-models/baseten-elephant-9b-latest` |
+| mammoth-1 (27B) | `baseten/decision-models/baseten-mammoth-27b-latest` |
+
+They reuse your Baseten API key and support Boolean probabilities, multiple-choice
+questions, and ordered rubric scores. Text is sent directly; structured JSON
+state and rubric entries are serialized to text. Image input, sorting, tags,
+bounding boxes, and reasoning toggles are not supported by this adapter.
+Your primary chat model and the Baseten onboarding default are unchanged.
+
+Requests use `POST /v1/systemone`, not `/chat/completions`. The response preserves
+the backend model identity (which may differ from the public slug), per-option
+probabilities, fractional scores, and reported token usage. Baseten reports one
+output token per question. Its confidence field measures distribution concentration,
+not the probability that an answer is correct; use the selected option's
+probability when applying a probability threshold.
+
+As checked on October 21, 2026, Baseten's launch offer is free for one week,
+ending October 27, 2026 at 11:59 PM Pacific. This is not permanent free pricing.
+The public System One reference does not specify hosted token limits or
+post-promotion prices, so OpenClaw does not invent a context limit or a zero-cost
+billing estimate for these aliases. Check [current pricing](https://www.baseten.co/pricing)
+and the [provider documentation](https://docs.baseten.co/inference/model-apis/decision-models)
+before use. The aliases can move without an OpenClaw release.
+
+Selecting a decision model authorizes supported evaluation consumers to send their
+supplied evidence to Baseten; it does not start background work. This integration
+requires a host/plugin release containing the prepared Decision V2 interface.
+See [Decision models](/concepts/decision-models) for the role and evaluation tool.
+
+## Prompt caching
+
+For the native `https://inference.baseten.co/v1` endpoint, OpenClaw sends a stable
+`x-session-affinity` header for related requests to improve prefix cache reuse.
+It uses an explicit request cache key when present, otherwise the session ID.
+An explicitly configured affinity header takes precedence. Setting
+`cacheRetention: "none"` suppresses the generated header; it does not disable
+Baseten's automatic cache. Custom endpoints retain their configured behavior.
+See [Baseten session affinity](https://docs.baseten.co/inference/model-apis/pricing-and-limits#session-affinity).
+
 ## Manual config
 
 Most setups only need the API key. To pin the provider explicitly:

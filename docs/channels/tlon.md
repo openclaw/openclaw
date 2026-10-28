@@ -69,7 +69,9 @@ DM the bot or @ mention it in a group channel.
 
 OpenClaw persists accepted Tlon DM and group-chat events before agent dispatch. Pending or retryable turns survive a Gateway restart, and work remains serialized per group channel or direct peer. Stable Urbit message IDs also suppress a redelivered event while its queue record or retained completion record exists.
 
-Delivery is at least once across the queue-to-agent boundary: a crash during handoff can replay a turn. Agent actions that produce external side effects should therefore remain idempotent where practical.
+If the connection stops delivering data or heartbeats for about 60 seconds, OpenClaw reconnects to the same Eyre channel so unacknowledged events can replay. Time spent handling a received event does not count toward this idle timeout.
+
+Delivery is at least once across the queue-to-agent boundary: a crash during handoff can replay a turn. Agent actions that produce external side effects should therefore avoid duplicating those effects on retries where practical.
 
 ## Private/LAN ships
 
@@ -191,6 +193,16 @@ The owner ship is authorized everywhere: DM invites are always auto-accepted, gr
 always auto-accepted, and channel messages always pass authorization. The owner does not need to
 be in `dmAllowlist`, `defaultAuthorizedShips`, or `groupInviteAllowlist`.
 
+Group DMs are the exception. Tlon does not verify who wrote a group DM message, so group DM
+messages never carry owner authority: owner commands, approval replies, and admin commands only
+work in a 1:1 DM with the bot. A group DM message whose claimed author is on `dmAllowlist` is still
+answered, but as an ordinary unverified sender.
+
+Pending DM requests saved by versions before this behavior cannot be told apart from group DM
+claims. Approving one still adds the ship to `dmAllowlist`, but its stored message is not
+replayed. The approval confirmation tells the owner the message was not processed and that the
+sender has to send it again.
+
 When `ownerShip` is set, unauthorized requests do not just get dropped — they queue a pending
 approval and DM the owner:
 
@@ -201,14 +213,16 @@ approval and DM the owner:
 
 The owner replies in DM to act on a request:
 
-| Owner reply                  | Effect                                               |
-| ---------------------------- | ---------------------------------------------------- |
-| `approve` / `deny` / `block` | Acts on the most recent pending approval             |
-| `approve <id>` / `deny <id>` | Acts on a specific approval by id                    |
-| `block`                      | Also blocks the ship natively so it cannot reconnect |
-| `unblock ~ship`              | Reverses a native block                              |
-| `blocked`                    | Lists currently blocked ships                        |
-| `pending`                    | Lists pending approval requests                      |
+| Owner reply                                 | Effect                                                             |
+| ------------------------------------------- | ------------------------------------------------------------------ |
+| `approve` / `deny` / `block`                | Acts only when exactly one request is pending; otherwise lists IDs |
+| `approve <id>` / `deny <id>` / `block <id>` | Acts on a specific pending approval                                |
+| `unblock ~ship`                             | Reverses a native block                                            |
+| `blocked`                                   | Lists currently blocked ships                                      |
+| `pending`                                   | Lists pending approval requests                                    |
+
+Bare decisions keep the single-request workflow concise. When multiple requests are pending, the
+owner must include an ID so a newly queued request cannot change which request receives the action.
 
 Without `ownerShip` configured, unauthorized DMs and channel mentions are just dropped and logged;
 there is no approval prompt.
@@ -241,7 +255,7 @@ regardless of this flag):
 }
 ```
 
-Auto-accept group invites from an allowlist (fails closed: with `autoAcceptGroupInvites: true` and
+Auto-accept group invites from an allowlist (with `autoAcceptGroupInvites: true` and
 an empty `groupInviteAllowlist`, no non-owner invite is accepted):
 
 ```json5
@@ -298,6 +312,11 @@ size check or download fails the send instead of embedding an unchecked URL.
 Upload failures after a successful bounded download can still use the original URL.
 Without a configured cap, the existing link fallback remains available even when
 the image cannot be downloaded within that ceiling.
+
+Outbound image uploads preserve the downloaded filename, including names supplied
+by `Content-Disposition`. If no filename is available, Tlon uses the source URL
+basename or a generated name. Custom-S3 public URLs encode object-key path segments
+so filename characters such as `#` and `?` remain part of the object name.
 
 | Feature         | Status                                        |
 | --------------- | --------------------------------------------- |

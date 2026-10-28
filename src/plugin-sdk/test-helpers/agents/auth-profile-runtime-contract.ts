@@ -1,10 +1,6 @@
 /**
  * Shared contract fixtures for agent auth profile runtime behavior.
  */
-import {
-  resolveProviderIdForAuth,
-  type ProviderAuthAliasLookupParams,
-} from "../../../agents/provider-auth-aliases.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
 
 export const AUTH_PROFILE_RUNTIME_CONTRACT = {
@@ -57,19 +53,4 @@ export function createAuthAliasManifestRegistry(): PluginManifestRegistry {
     ],
     diagnostics: [],
   };
-}
-
-export function expectedForwardedAuthProfile(params: {
-  provider: string;
-  authProfileProvider: string;
-  aliasLookupParams: ProviderAuthAliasLookupParams;
-  sessionAuthProfileId: string | undefined;
-}): string | undefined {
-  return resolveProviderIdForAuth(params.provider, params.aliasLookupParams) ===
-    resolveProviderIdForAuth(params.authProfileProvider, {
-      ...params.aliasLookupParams,
-      storedCredential: true,
-    })
-    ? params.sessionAuthProfileId
-    : undefined;
 }

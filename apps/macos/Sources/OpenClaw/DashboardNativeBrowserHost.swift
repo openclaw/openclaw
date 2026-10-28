@@ -226,8 +226,6 @@ final class DashboardNativeBrowserHost {
     func navigationWillStart(_ url: URL, in webView: WKWebView) {
         guard let browser = self.browserTab(for: webView) else { return }
         browser.updateRepresentedURL(url)
-        browser.favicon = nil
-        browser.faviconGeneration &+= 1
         self.scheduleStatePush()
     }
 
@@ -235,6 +233,15 @@ final class DashboardNativeBrowserHost {
         if let navigation {
             self.tabs.first { $0.browser.webView === webView }?.browser.startNavigation(navigation)
         }
+        self.scheduleStatePush()
+    }
+
+    /// Fragment, failed, and response-cancelled navigations never commit, so the
+    /// displayed page keeps its icon until a new document replaces it.
+    func navigationDidCommit(in webView: WKWebView) {
+        guard let browser = self.browserTab(for: webView) else { return }
+        browser.favicon = nil
+        browser.faviconGeneration &+= 1
         self.scheduleStatePush()
     }
 

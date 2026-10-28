@@ -36,9 +36,9 @@ export class NewSessionAttachmentDraft {
     return attachments;
   }
 
-  reset(options: { release: boolean }) {
+  reset() {
     this.reads.abortReads();
-    this.clearAfterSubmit(options.release);
+    this.clearAfterSubmit(true);
   }
 
   clearAfterSubmit(release: boolean) {

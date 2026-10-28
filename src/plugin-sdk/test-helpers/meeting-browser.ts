@@ -145,11 +145,7 @@ export function createMeetingBrowserFixture(options: MeetingBrowserFixtureOption
       request: gatewayRequest,
     },
     system: {
-      runCommandWithTimeout: vi.fn(async () => ({
-        code: 0,
-        stdout: "BlackHole 2ch",
-        stderr: "",
-      })),
+      runCommandWithTimeout: vi.fn(async () => ({ code: 0, stdout: "BlackHole 2ch", stderr: "" })),
     },
   } as unknown as PluginRuntime;
   return { state, runtime, gatewayRequest, browserResult };

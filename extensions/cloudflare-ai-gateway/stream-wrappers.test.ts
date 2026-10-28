@@ -1,12 +1,14 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { wrapCloudflareAiGatewayProviderStream } from "./stream-wrappers.js";
+import plugin from "./index.js";
 
 const { warnMock } = vi.hoisted(() => ({
   warnMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   createSubsystemLogger: () => ({
     debug: vi.fn(),
     error: vi.fn(),
@@ -14,6 +16,12 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
     warn: warnMock,
   }),
 }));
+
+const wrapCloudflareAiGatewayProviderStream =
+  capturePluginRegistration(plugin).providers[0]?.wrapStreamFn;
+if (!wrapCloudflareAiGatewayProviderStream) {
+  throw new Error("expected Cloudflare AI Gateway stream wrapper");
+}
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/runtime-env");

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import type { MessagePresentationButton } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   addTestHook,
   initializeGlobalHookRunner,
@@ -13,6 +14,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -36,13 +38,73 @@ import {
 } from "./send.telegram-http.test-support.js";
 import { getTopicName } from "./topic-name-cache.js";
 
+const buttonPresentation = (...buttons: MessagePresentationButton[]) => ({
+  blocks: [{ type: "buttons" as const, buttons }],
+});
+const continueButton: MessagePresentationButton = {
+  label: "Continue",
+  action: { type: "command", command: "/continue" },
+};
+const pipelineTable = {
+  type: "table" as const,
+  caption: "Pipeline",
+  headers: ["Account", "Total"],
+  rows: [["Acme", 12]],
+};
+const replyMarkup = (...buttons: Array<Record<string, unknown>>) => ({
+  inline_keyboard: [buttons],
+});
+const telegramRegistry = () =>
+  createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]);
+const approveId = "plugin:123e4567-e89b-12d3-a456-426614174000";
+const location = { latitude: 48.858844, longitude: 2.294351 };
+const droppedButton = () => ({ label: "Copy manually", value: "x".repeat(65) });
+const uploadBytes = async (fields: Record<string, unknown>, key: string) =>
+  Buffer.from(await resolveTelegramTestUpload(fields, key).arrayBuffer());
+
 describe("Telegram registered adapter conformance over HTTP", () => {
   const fixture = useTelegramHttpFixture();
   const { cfg, requests, endpoints, rejections, runtime, telegramOutbound } = fixture;
+  const expectMethods = (...methods: string[]) =>
+    expect(requests.map(({ method }) => method)).toEqual(methods);
+  const requestFields = (index = 0) => requests[index]!.fields;
+  const expectFields = (expected: Record<string, unknown>, index = 0) =>
+    expect(requestFields(index)).toMatchObject(expected);
+  type TelegramConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>;
+  const accountConfig = (
+    name: string,
+    account: NonNullable<TelegramConfig["accounts"]>[string],
+    defaults: TelegramConfig = {},
+  ): OpenClawConfig => ({ channels: { telegram: { ...defaults, accounts: { [name]: account } } } });
+  const registeredSend = telegramPlugin.message!.send!.payload!;
+  type PayloadOptions = Parameters<typeof registeredSend>[0];
+  const sendPayload = (
+    body: PayloadOptions["payload"],
+    options: Partial<Omit<PayloadOptions, "payload">> = {},
+  ) => registeredSend({ cfg, to: "123", text: body.text ?? "", payload: body, ...options });
+  let actionCfg: OpenClawConfig;
+  const action = (
+    name: ChannelMessageActionContext["action"],
+    params: Record<string, unknown>,
+    options: Partial<ChannelMessageActionContext> = {},
+  ) =>
+    telegramPlugin.actions!.handleAction!({
+      channel: "telegram",
+      action: name,
+      params,
+      cfg: actionCfg,
+      conversationReadOrigin: "direct-operator",
+      ...options,
+    });
+  const send = (
+    params: Record<string, unknown>,
+    options: Partial<ChannelMessageActionContext> = {},
+  ) => action("send", { to: "123", ...params }, { skipQueue: true, ...options });
   let bot: typeof fixture.bot;
   let mediaDir: string;
   let photoPath: string;
   beforeEach(() => {
+    actionCfg = cfg;
     ({ bot, mediaDir, photoPath } = fixture);
     resetTelegramAccountThrottlersForTest();
     const { botToken } = cfg.channels.telegram;
@@ -55,65 +117,52 @@ describe("Telegram registered adapter conformance over HTTP", () => {
   });
   afterEach(resetTelegramAccountThrottlersForTest);
 
-  it.each([
-    { name: "rich", richMessages: true, html: false },
-    { name: "explicit HTML on rich", richMessages: true, html: true },
-    { name: "plain", richMessages: false, html: false },
-  ])(
-    "delivers complete registered $name presentations through the selected account",
-    async ({ richMessages, html }) => {
-      await telegramPlugin.message!.send!.payload!({
-        cfg: {
-          channels: {
-            telegram: {
-              ...cfg.channels.telegram,
-              richMessages: !richMessages,
-              linkPreview: false,
-              accounts: { selected: { botToken: cfg.channels.telegram.botToken, richMessages } },
-            },
-          },
+  it("rejects ambiguous account ownership before dispatch and sends with an explicit owner", async () => {
+    const ownerCfg: OpenClawConfig = {
+      ...cfg,
+      agents: { ownership: "explicit", entries: { main: {}, other: {} } },
+    };
+    const request = {
+      cfg: ownerCfg,
+      accountId: "default",
+      to: "123",
+      text: "Owner routing control",
+      payload: { text: "Owner routing control" },
+    };
+    await expect(registeredSend(request)).rejects.toMatchObject({
+      name: "PlatformMessageNotDispatchedError",
+      retryable: false,
+      message: expect.stringContaining("no explicit owner"),
+    });
+    expect(requests).toEqual([]);
+
+    ownerCfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }];
+    await registeredSend(request);
+    expectMethods("sendMessage");
+    expect(requests[0]!.fields.text).toBe("Owner routing control");
+  });
+
+  it.each([false, true])(
+    "delivers selected-account rich presentations with explicit HTML=%s",
+    async (html) => {
+      await sendPayload(
+        { presentation: { blocks: [pipelineTable, ...buttonPresentation(continueButton).blocks] } },
+        {
+          cfg: accountConfig(
+            "selected",
+            { botToken: cfg.channels.telegram.botToken, richMessages: true },
+            { ...cfg.channels.telegram, richMessages: false, linkPreview: false },
+          ),
+          accountId: "selected",
+          ...(html ? { formatting: { parseMode: "HTML" as const } } : {}),
         },
-        accountId: "selected",
-        to: "123",
-        text: "",
-        ...(html ? { formatting: { parseMode: "HTML" as const } } : {}),
-        payload: {
-          presentation: {
-            blocks: [
-              {
-                type: "table",
-                caption: "Pipeline",
-                headers: ["Account", "Total"],
-                rows: [["Acme", 12]],
-              },
-              {
-                type: "buttons",
-                buttons: [{ label: "Continue", action: { type: "command", command: "/continue" } }],
-              },
-            ],
-          },
-        },
-      });
-      expect(requests.map(({ method }) => method)).toEqual([
-        richMessages && !html ? "sendRichMessage" : "sendMessage",
-      ]);
+      );
+      expectMethods(html ? "sendMessage" : "sendRichMessage");
       const fields = requests[0]!.fields;
-      if (richMessages && !html) {
+      if (!html) {
         expect(fields.rich_message).toMatchObject({
           skip_entity_detection: true,
-          blocks: [
-            {
-              type: "table",
-              caption: "Pipeline",
-              cells: [
-                [
-                  { text: "Account", is_header: true },
-                  { text: "Total", is_header: true },
-                ],
-                [{ text: "Acme" }, { text: "12" }],
-              ],
-            },
-          ],
+          blocks: [{ type: "table", caption: "Pipeline" }],
         });
       } else {
         expect(fields.text).toContain("Pipeline");
@@ -122,247 +171,134 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         expect(fields.text).not.toContain("<table");
         expect(fields.link_preview_options).toEqual({ is_disabled: true });
       }
-      expect(fields.reply_markup).toEqual({
-        inline_keyboard: [[{ text: "Continue", callback_data: "tgcmd:/continue" }]],
-      });
+      expect(fields.reply_markup).toEqual(
+        replyMarkup({ text: "Continue", callback_data: "tgcmd:/continue" }),
+      );
     },
   );
 
-  it("delivers registered message payloads with host-owned media custody", async () => {
+  it.each(["host", "legacy", "album"])("keeps %s media under host custody", async (mode) => {
     await withOpenClawTestState({ prefix: "telegram-registered-media-" }, async () => {
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+      setActivePluginRegistry(telegramRegistry());
+      const selectedCfg = accountConfig(
+        "media",
+        { botToken: "654321:host-media", apiRoot: cfg.channels.telegram.apiRoot },
+        { botToken: "123456:wrong-account", apiRoot: "http://127.0.0.1:1" },
       );
-      const selectedCfg: OpenClawConfig = {
-        channels: {
-          telegram: {
-            botToken: "123456:wrong-account",
-            apiRoot: "http://127.0.0.1:1",
-            accounts: {
-              media: { botToken: "654321:host-media", apiRoot: cfg.channels.telegram.apiRoot },
-            },
-          },
-        },
-      };
-      const bytes = Buffer.concat([await fs.readFile(photoPath), Buffer.from("host-owned-media")]);
+      const bytes = Buffer.concat([await fs.readFile(photoPath), Buffer.from("host-custody")]);
       const mediaAccess = {
         localRoots: [mediaDir],
         workspaceDir: mediaDir,
         readFile: async () => bytes,
       };
+      const options = { cfg: selectedCfg, accountId: "media" };
+      const album = mode === "album";
+      const host = mode === "host";
       try {
-        await telegramPlugin.actions!.handleAction!({
-          channel: "telegram",
-          action: "send",
-          cfg: selectedCfg,
-          accountId: "media",
-          skipQueue: true,
-          params: {
-            to: "123",
-            message: "host caption",
-            mediaUrl: photoPath,
+        const albumResult = album
+          ? await sendPayload(
+              {
+                text: "album caption",
+                mediaUrls: ["", photoPath, "", path.join(mediaDir, "second.png")],
+                channelData: { telegram: { quoteText: "quoted caption" } },
+              },
+              {
+                ...options,
+                mediaAccess,
+                threadId: "77",
+                replyToId: "888",
+                replyToIdSource: "implicit",
+                replyToMode: "first",
+                silent: true,
+              },
+            )
+          : undefined;
+        if (!album) {
+          const hostParams = {
             replyToMessageId: 888,
             threadId: 77,
             silent: true,
-            presentation: {
-              blocks: [
-                {
-                  type: "buttons",
-                  buttons: [
-                    {
-                      label: "Continue",
-                      action: { type: "command", command: "/continue" },
-                      style: "primary",
-                    },
-                    {
-                      label: "Allow Always",
-                      action: {
-                        type: "command",
-                        command:
-                          "/approve plugin:123e4567-e89b-12d3-a456-426614174000 allow-always",
-                      },
-                    },
-                    {
-                      label: "Launch",
-                      web_app: { url: "https://example.com/app" },
-                      style: "success",
-                    },
-                  ],
-                },
-              ],
-            },
-            mediaAccess: {
-              localRoots: ["/model"],
-              readFile: async () => Buffer.from("model-owned"),
-            },
-          },
-          mediaAccess,
-          mediaReadFile: async () => Buffer.from("legacy-owned"),
-        });
-        const legacyBytes = Buffer.concat([
-          await fs.readFile(photoPath),
-          Buffer.from("legacy-host-media"),
-        ]);
-        await telegramPlugin.actions!.handleAction!({
-          channel: "telegram",
-          action: "send",
-          cfg: selectedCfg,
-          accountId: "media",
-          skipQueue: true,
-          params: { to: "123", message: "legacy caption", mediaUrl: photoPath },
-          mediaLocalRoots: [mediaDir],
-          mediaReadFile: async () => legacyBytes,
-        });
-        const result = await telegramPlugin.message!.send!.payload!({
-          cfg: selectedCfg,
-          accountId: "media",
-          to: "123",
-          text: "album caption",
-          payload: {
-            text: "album caption",
-            mediaUrls: ["", photoPath, "", path.join(mediaDir, "second.png")],
-            channelData: { telegram: { quoteText: "quoted caption" } },
-          },
-          mediaAccess,
-          threadId: "77",
-          replyToId: "888",
-          replyToIdSource: "implicit",
-          replyToMode: "first",
-          silent: true,
-        });
-        expect(requests.map(({ method }) => method)).toEqual([
-          "sendPhoto",
-          "sendPhoto",
-          "sendMediaGroup",
-        ]);
-        expect(endpoints).toEqual([
-          "/bot654321:host-media/sendPhoto",
-          "/bot654321:host-media/sendPhoto",
-          "/bot654321:host-media/sendMediaGroup",
-        ]);
-        const resolveUpload = (fields: Record<string, unknown>, reference: unknown) => {
-          const upload =
-            typeof reference === "string" && reference.startsWith("attach://")
-              ? fields[reference.slice("attach://".length)]
-              : reference;
-          if (!(upload instanceof File)) {
-            throw new Error(`Expected Telegram multipart file for ${String(reference)}`);
-          }
-          return upload;
-        };
-        const photo = resolveUpload(requests[0]!.fields, requests[0]!.fields.photo);
-        expect(photo.name).toBe("pixel.png");
-        expect(Buffer.from(await photo.arrayBuffer())).toEqual(bytes);
-        expect(requests[0]!.fields).toMatchObject({
-          reply_to_message_id: "888",
-          message_thread_id: "77",
-          disable_notification: "true",
-        });
-        expect(JSON.parse(String(requests[0]!.fields.reply_markup))).toEqual({
-          inline_keyboard: [
-            [
-              { text: "Continue", callback_data: "tgcmd:/continue", style: "primary" },
+            presentation: buttonPresentation(
+              { ...continueButton, style: "primary" },
               {
-                text: "Allow Always",
-                callback_data: "/approve plugin:123e4567-e89b-12d3-a456-426614174000 always",
+                label: "Allow Always",
+                action: { type: "command", command: `/approve ${approveId} allow-always` },
               },
-              { text: "Launch", web_app: { url: "https://example.com/app" }, style: "success" },
-            ],
-          ],
-        });
-        const legacyPhoto = resolveUpload(requests[1]!.fields, requests[1]!.fields.photo);
-        expect(legacyPhoto.name).toBe("pixel.png");
-        expect(Buffer.from(await legacyPhoto.arrayBuffer())).toEqual(legacyBytes);
-        const album = requests[2]!.fields;
-        expect(album.message_thread_id).toBe("77");
-        expect(album.disable_notification).toBe("true");
-        expect(JSON.parse(String(album.reply_parameters))).toMatchObject({ message_id: 888 });
-        const media = JSON.parse(String(album.media)) as Array<{ media: string; caption?: string }>;
-        expect(media.map((part) => part.caption ?? null)).toEqual(["album caption", null]);
-        const uploads = media.map((part) => resolveUpload(album, part.media));
-        expect(uploads.map((file) => file.name)).toEqual(["pixel.png", "second.png"]);
+              { label: "Launch", web_app: { url: "https://example.com/app" }, style: "success" },
+            ),
+            mediaAccess: { localRoots: ["/model"], readFile: async () => Buffer.from("model") },
+          };
+          await send(
+            { message: `${mode} caption`, mediaUrl: photoPath, ...(host ? hostParams : {}) },
+            {
+              ...options,
+              conversationReadOrigin: undefined,
+              ...(host
+                ? { mediaAccess, mediaReadFile: async () => Buffer.from("legacy-owned") }
+                : { mediaLocalRoots: [mediaDir], mediaReadFile: async () => bytes }),
+            },
+          );
+        }
+        const method = album ? "sendMediaGroup" : "sendPhoto";
+        expectMethods(method);
+        expect(endpoints).toEqual([`/bot654321:host-media/${method}`]);
+        const fields = requestFields();
+        const media: Array<{ media: string; caption?: string }> = album
+          ? (JSON.parse(String(fields.media)) as Array<{ media: string; caption?: string }>)
+          : [{ media: String(fields.photo) }];
+        const uploads = media.map((part) =>
+          resolveTelegramTestUpload({ ...fields, part: part.media }, "part"),
+        );
+        expect(uploads.map((file) => file.name)).toEqual(
+          album ? ["pixel.png", "second.png"] : ["pixel.png"],
+        );
         for (const upload of uploads) {
           expect(Buffer.from(await upload.arrayBuffer())).toEqual(bytes);
         }
-        expect(result.receipt.platformMessageIds).toEqual(["1001", "1002"]);
-        expect(result.receipt.primaryPlatformMessageId).toBe("1001");
-        expect(result.receipt.parts.map((part) => [part.platformMessageId, part.kind])).toEqual([
-          ["1001", "media"],
-          ["1002", "media"],
-        ]);
+        if (album) {
+          expect(media.map((part) => part.caption ?? null)).toEqual(["album caption", null]);
+          expect(JSON.parse(String(fields.reply_parameters))).toMatchObject({ message_id: 888 });
+          expect(albumResult!.receipt).toMatchObject({
+            platformMessageIds: ["1001", "1002"],
+            primaryPlatformMessageId: "1001",
+          });
+          expect(albumResult!.receipt.parts).toMatchObject([
+            { platformMessageId: "1001", kind: "media" },
+            { platformMessageId: "1002", kind: "media" },
+          ]);
+        }
+        if (host || album) {
+          expectFields({ message_thread_id: "77", disable_notification: "true" });
+        }
+        if (host) {
+          expectFields({ reply_to_message_id: "888" });
+          expect(JSON.parse(String(fields.reply_markup))).toEqual(
+            replyMarkup(
+              { text: "Continue", callback_data: "tgcmd:/continue", style: "primary" },
+              { text: "Allow Always", callback_data: `/approve ${approveId} always` },
+              { text: "Launch", web_app: { url: "https://example.com/app" }, style: "success" },
+            ),
+          );
+        }
       } finally {
         resetPluginRuntimeStateForTest();
       }
     });
   });
 
-  const reactionCases: Array<{
-    name: string;
-    entry: "adapter" | "stream";
-    text: string;
-    nested?: number | string;
-    target?: number;
-    mode?: "off" | "all";
-    failure?: "target" | "api";
-    media?: boolean;
-  }> = [
-    ...["answer", ""].map((text) => ({
-      name: `adapter nested target with ${JSON.stringify(text)}`,
-      entry: "adapter" as const,
-      text,
-      nested: "777",
-      target: 777,
-    })),
-    ...[0, 12.5, "invalid"].map((nested) => ({
-      name: `invalid adapter target ${nested}`,
-      entry: "adapter" as const,
-      text: "answer",
-      nested,
-      failure: "target" as const,
-      media: true,
-    })),
-    ...(["adapter", "stream"] as const).map((entry) => ({
-      name: `${entry} rejected reaction`,
-      entry,
-      text: "must not send",
-      nested: "777",
-      failure: "api" as const,
-      media: true,
-    })),
-    {
-      name: "stream nested target with threading off",
-      entry: "stream",
-      text: "answer",
-      mode: "off",
-      nested: 777,
-      target: 777,
-    },
-    {
-      name: "stream nested target with separate text reply",
-      entry: "stream",
-      text: "answer",
-      nested: "777",
-      target: 777,
-    },
-    { name: "stream outer reaction-only", entry: "stream", text: "", target: 888 },
-    {
-      name: "invalid explicit stream target",
-      entry: "stream",
-      text: "must not send",
-      nested: "0",
-      failure: "target",
-    },
-    {
-      name: "implicit stream target with threading off",
-      entry: "stream",
-      text: "must not send",
-      mode: "off",
-      failure: "target",
-    },
-  ];
-  it.each(reactionCases)(
-    "preserves reaction delivery for $name",
-    async ({ entry, text, nested, target, mode = "all", failure, media }) => {
+  it.each([
+    ["adapter", "answer", "777", 777, "all", undefined, false],
+    ["adapter", "", "777", 777, "all", undefined, false],
+    ["adapter", "answer", "invalid", undefined, "all", "target", true],
+    ["adapter", "must not send", "777", undefined, "all", "api", true],
+    ["stream", "must not send", "777", undefined, "all", "api", true],
+    ["stream", "answer", 777, 777, "off", undefined, false],
+    ["stream", "answer", "777", 777, "all", undefined, false],
+    ["stream", "", undefined, 888, "all", undefined, false],
+    ["stream", "must not send", "0", undefined, "all", "target", false],
+  ] as const)(
+    "delivers %s reaction text=%j nested=%s target=%s mode=%s failure=%s media=%s",
+    async (entry, text, nested, target, mode, failure, media) => {
       if (failure === "api") {
         rejections.push("Bad Request: REACTION_INVALID");
       }
@@ -408,10 +344,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         expect(requests.map(({ method }) => method)).toEqual(
           text ? ["setMessageReaction", "sendMessage"] : ["setMessageReaction"],
         );
-        expect(requests[0]!.fields).toMatchObject({
-          message_id: target,
-          reaction: [{ type: "emoji", emoji: "👍" }],
-        });
+        expectFields({ message_id: target, reaction: [{ type: "emoji", emoji: "👍" }] });
         if (text) {
           expect(requests[1]!.fields).toMatchObject({ text: "answer" });
           expect(requests[1]!.fields.reply_to_message_id).toBe(mode === "all" ? 888 : undefined);
@@ -456,41 +389,28 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps the native reply on the location after its origin marker (venue: %s)",
-    async (venue) => {
-      await telegramPlugin.message!.send!.payload!({
-        cfg,
-        to: "123",
+  it("keeps the native reply on the location after its origin marker", async () => {
+    await sendPayload(
+      {
         text: "[origin: another conversation]",
-        replyToId: "888",
-        payload: {
-          text: "[origin: another conversation]",
-          location: {
-            latitude: 48.858844,
-            longitude: 2.294351,
-            ...(venue ? { name: "  Eiffel Tower ", address: " Champ de Mars " } : { accuracy: 5 }),
-          },
-          channelData: { telegram: { quoteText: "exact quote" } },
-        },
-      });
-      expect(requests.map(({ method }) => method)).toEqual([
-        "sendMessage",
-        venue ? "sendVenue" : "sendLocation",
-      ]);
-      expect(requests[0]!.fields.text).toBe("[origin: another conversation]");
-      expect(requests[0]!.fields.reply_parameters).toBeUndefined();
-      expect(requests[0]!.fields.reply_to_message_id).toBeUndefined();
-      expect(requests[1]!.fields).toMatchObject({
-        latitude: 48.858844,
-        longitude: 2.294351,
+        location: { ...location, accuracy: 5 },
+        channelData: { telegram: { quoteText: "exact quote" } },
+      },
+      { replyToId: "888" },
+    );
+    expectMethods("sendMessage", "sendLocation");
+    expect(requests[0]!.fields.text).toBe("[origin: another conversation]");
+    expect(requests[0]!.fields.reply_parameters).toBeUndefined();
+    expect(requests[0]!.fields.reply_to_message_id).toBeUndefined();
+    expectFields(
+      {
+        ...location,
         reply_parameters: { message_id: 888, quote: "exact quote" },
-        ...(venue
-          ? { title: "Eiffel Tower", address: "Champ de Mars" }
-          : { horizontal_accuracy: 5 }),
-      });
-    },
-  );
+        horizontal_accuracy: 5,
+      },
+      1,
+    );
+  });
 
   it("routes a registered poll through a legacy topic destination", async () => {
     const result = await telegramOutbound.sendPoll!({
@@ -499,8 +419,8 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       poll: { question: "Ready?", options: ["Yes", "No"] },
       isAnonymous: true,
     });
-    expect(requests.map(({ method }) => method)).toEqual(["sendPoll"]);
-    expect(requests[0]!.fields).toMatchObject({
+    expectMethods("sendPoll");
+    expectFields({
       chat_id: "-1001",
       message_thread_id: 77,
       question: "Ready?",
@@ -511,34 +431,12 @@ describe("Telegram registered adapter conformance over HTTP", () => {
 
   describe("registered durable action delivery", () => {
     let state: OpenClawTestState;
-    let actionCfg: OpenClawConfig;
-    const action = (
-      name: ChannelMessageActionContext["action"],
-      params: Record<string, unknown>,
-      options: Partial<ChannelMessageActionContext> = {},
-    ) =>
-      telegramPlugin.actions!.handleAction!({
-        channel: "telegram",
-        action: name,
-        params,
-        cfg: actionCfg,
-        conversationReadOrigin: "direct-operator",
-        ...options,
-      });
     beforeEach(async () => {
-      state = await createOpenClawTestState({
-        layout: "state-only",
-        prefix: "telegram-action-delivery-",
-      });
-      actionCfg = {
-        ...cfg,
-        channels: { telegram: { ...cfg.channels.telegram } },
-        session: { store: path.join(state.stateDir, "{agentId}", "sessions.json") },
-      };
+      state = await createOpenClawTestState({ layout: "state-only", prefix: "telegram-actions-" });
+      actionCfg = structuredClone(cfg);
+      actionCfg.session = { store: path.join(state.stateDir, "{agentId}", "sessions.json") };
       setTelegramPluginStateRuntimeForTests();
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
-      );
+      setActivePluginRegistry(telegramRegistry());
     });
     afterEach(async () => {
       resetGlobalHookRunner();
@@ -548,47 +446,51 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       await state.cleanup();
     });
 
-    it("commits the registered action before HTTP and returns its actual reply receipt", async () => {
-      let queued: unknown;
-      const result = await action(
-        "send",
-        {
-          to: "-1001:topic:77",
-          message: "durable answer",
-          quoteText: " \nquoted text  ",
-        },
-        {
-          sessionKey: "agent:main:telegram:group:-1001:topic:77",
-          reply: { replyToId: "456", source: "implicit", mode: "first" },
-          onPlatformSendDispatch: async () => {
-            expect(requests).toEqual([]);
-            queued = readQueuedDeliveryEntriesForTest(state.stateDir);
+    it.each([
+      ["requested topic", 77, false, "77"],
+      ["non-forum reply chain", undefined, false, undefined],
+      ["forum topic reply", undefined, true, "99"],
+    ] as const)(
+      "commits a registered send before HTTP and preserves its provider receipt (%s)",
+      async (_name, requestedTopic, forum, observedThread) => {
+        const to = requestedTopic ? `-1001:topic:${requestedTopic}` : "-1001";
+        fixture.responseFor = (method) =>
+          method === "sendMessage"
+            ? {
+                message_id: 102,
+                date: 1_700_000_000,
+                chat: { id: -1001, type: "supergroup", title: "Fixture group" },
+                message_thread_id: requestedTopic ?? 99,
+                ...(forum ? { is_topic_message: true } : {}),
+              }
+            : undefined;
+        let queued: unknown;
+        const result = await action(
+          "send",
+          { to, message: "durable answer", quoteText: " \nquoted text  " },
+          {
+            sessionKey: `agent:main:telegram:group:${to}`,
+            reply: { replyToId: "456", source: "implicit", mode: "first" },
+            onPlatformSendDispatch: async () => {
+              expect(requests).toEqual([]);
+              queued = readQueuedDeliveryEntriesForTest(state.stateDir);
+            },
           },
-        },
-      );
-      expect(queued).toMatchObject([{ channel: "telegram", to: "-1001:topic:77", retryCount: 0 }]);
-      expect(requests).toEqual([
-        {
-          method: "sendMessage",
-          fields: expect.objectContaining({
-            chat_id: "-1001",
-            message_thread_id: 77,
-            text: "durable answer",
-            reply_parameters: expect.objectContaining({
-              message_id: 456,
-              quote: " \nquoted text  ",
-            }),
-          }),
-        },
-      ]);
-      expect(result.details).toMatchObject({
-        ok: true,
-        messageId: "1",
-        chatId: "-1001",
-        receipt: { threadId: "77", replyToId: "456" },
-      });
-      expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
-    });
+        );
+        expect(queued).toMatchObject([{ channel: "telegram", to, retryCount: 0 }]);
+        expectMethods("sendMessage");
+        expectFields({
+          chat_id: "-1001",
+          text: "durable answer",
+          reply_parameters: { message_id: 456, quote: " \nquoted text  " },
+        });
+        expect(requestFields().message_thread_id).toBe(requestedTopic);
+        expect(result.details).toMatchObject({ ok: true, messageId: "102", chatId: "-1001" });
+        const receipt = asNullableRecord(asNullableRecord(result.details)?.receipt);
+        expect([receipt?.threadId, receipt?.replyToId]).toEqual([observedThread, "456"]);
+        expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
+      },
+    );
 
     it.each([undefined, "caller"] as const)(
       "leaves exactly one retry owner after a proven pre-dispatch failure (%s)",
@@ -627,9 +529,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     );
 
     it("returns bounded cancellation rather than fake delivery or hook diagnostics", async () => {
-      const registry = createTestRegistry([
-        { pluginId: "telegram", source: "test", plugin: telegramPlugin },
-      ]);
+      const registry = telegramRegistry();
       addTestHook({
         registry,
         pluginId: "cancel",
@@ -647,57 +547,25 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
     });
 
-    it("renders supplemental data and exact callback values with a visible degradation result", async () => {
-      const result = await action(
-        "send",
-        {
-          to: "tg:123",
-          message: "Quarterly results",
-          presentation: {
-            blocks: [
-              { type: "text", text: "Do not duplicate this block" },
-              {
-                type: "chart",
-                chartType: "bar",
-                title: "Revenue",
-                categories: ["Q1"],
-                series: [{ name: "USD", values: [12] }],
-              },
-              {
-                type: "table",
-                caption: "Pipeline",
-                headers: ["Account", "Total"],
-                rows: [["Acme", 12]],
-              },
-              {
-                type: "buttons",
-                buttons: [
-                  { label: "Deploy", value: "env|prod" },
-                  { label: "Copy manually", value: "x".repeat(65) },
-                ],
-              },
-            ],
-          },
+    it("preserves exact callback values with a visible degradation result", async () => {
+      const result = await send({
+        to: "tg:123",
+        message: "Quarterly results",
+        presentation: {
+          blocks: [
+            { type: "text", text: "Do not duplicate this block" },
+            ...buttonPresentation({ label: "Deploy", value: "env|prod" }, droppedButton()).blocks,
+          ],
         },
-        { skipQueue: true },
-      );
+      });
       const text = String(requests[0]!.fields.text);
-      for (const content of [
-        "Quarterly results",
-        "Revenue",
-        "USD",
-        "Q1: 12",
-        "Pipeline",
-        "Account: Acme",
-        "Total: 12",
-        "Copy manually",
-      ]) {
+      for (const content of ["Quarterly results", "Copy manually"]) {
         expect(text).toContain(content);
       }
       expect(text).not.toContain("Do not duplicate this block");
-      expect(requests[0]!.fields.reply_markup).toEqual({
-        inline_keyboard: [[{ text: "Deploy", callback_data: "env|prod" }]],
-      });
+      expect(requests[0]!.fields.reply_markup).toEqual(
+        replyMarkup({ text: "Deploy", callback_data: "env|prod" }),
+      );
       expect(result.details).toMatchObject({
         ok: true,
         degradedDelivery: {
@@ -709,29 +577,14 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     });
 
     it("keeps degraded locations standalone and makes unencodable edits recoverable", async () => {
-      const dropped = {
-        blocks: [{ type: "buttons", buttons: [{ label: "Copy manually", value: "x".repeat(65) }] }],
-      };
-      await action(
-        "send",
-        {
-          to: "123",
-          location: {
-            latitude: 48.858844,
-            longitude: 2.294351,
-            name: " Eiffel Tower ",
-            address: " Champ de Mars ",
-          },
-          presentation: dropped,
-        },
-        { skipQueue: true },
-      );
-      expect(requests.map(({ method }) => method)).toEqual(["sendMessage", "sendVenue"]);
-      expect(requests[0]!.fields.text).toContain("Copy manually");
-      expect(requests[1]!.fields).toMatchObject({
-        title: "Eiffel Tower",
-        address: "Champ de Mars",
+      const dropped = buttonPresentation(droppedButton());
+      await send({
+        location: { ...location, name: " Eiffel Tower ", address: " Champ de Mars " },
+        presentation: dropped,
       });
+      expectMethods("sendMessage", "sendVenue");
+      expect(requests[0]!.fields.text).toContain("Copy manually");
+      expectFields({ title: "Eiffel Tower", address: "Champ de Mars" }, 1);
       const rejected = await action("edit", { chatId: "123", messageId: 1, presentation: dropped });
       expect(rejected.details).toMatchObject({
         ok: false,
@@ -741,22 +594,16 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       const edited = await action("edit", {
         chatId: "123",
         messageId: 1,
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Open", value: "env|prod" }, ...dropped.blocks[0]!.buttons],
-            },
-          ],
-        },
+        presentation: buttonPresentation(
+          { label: "Open", value: "env|prod" },
+          ...dropped.blocks[0]!.buttons,
+        ),
       });
-      expect(requests[2]).toEqual({
-        method: "editMessageReplyMarkup",
-        fields: {
-          chat_id: "123",
-          message_id: 1,
-          reply_markup: { inline_keyboard: [[{ text: "Open", callback_data: "env|prod" }]] },
-        },
+      expectMethods("sendMessage", "sendVenue", "editMessageReplyMarkup");
+      expect(requestFields(2)).toEqual({
+        chat_id: "123",
+        message_id: 1,
+        reply_markup: replyMarkup({ text: "Open", callback_data: "env|prod" }),
       });
       expect(edited.details).toMatchObject({
         ok: true,
@@ -764,73 +611,20 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       });
     });
 
-    it.each([
-      { to: "-1001:topic:271", threadId: 77, target: "-1001:topic:77" },
-      { to: "-1001:topic:271", threadId: 1, target: "-1001:topic:1" },
-      { to: "123:topic:7", threadId: 11, target: "123:topic:11" },
-      { to: "-1001:77", threadId: undefined, target: "-1001:topic:77" },
-    ])(
-      "acknowledges only the delivered room-event surface $target",
-      async ({ to, threadId, target }) => {
-        const acknowledgements: string[] = [];
-        const ends = [
-          telegramInboundEventDelivery.begin(
-            "action-session",
-            {
-              outboundTo: target,
-              markInboundEventDelivered: () => {
-                acknowledgements.push("room");
-              },
-            },
-            { inboundEventKind: "room_event" },
-          ),
-          telegramInboundEventDelivery.begin("action-session", {
-            outboundTo: target,
-            markInboundEventDelivered: () => {
-              acknowledgements.push("user");
-            },
-          }),
-        ];
-        try {
-          await action(
-            "send",
-            { to, threadId, message: "room answer" },
-            { skipQueue: true, sessionKey: "action-session", inboundEventKind: "room_event" },
-          );
-          expect(requests.map(({ method }) => method)).toEqual(["sendMessage"]);
-          expect(requests[0]!.fields.message_thread_id).toBe(
-            threadId === 1 ? undefined : (threadId ?? 77),
-          );
-          expect(acknowledgements).toEqual(["room"]);
-        } finally {
-          ends.forEach((end) => end());
-        }
-      },
-    );
-
     it("uploads all action attachment aliases instead of echoing their paths", async () => {
       const firstBytes = await fs.readFile(photoPath);
       const secondBytes = Buffer.concat([firstBytes, Buffer.from("second-attachment")]);
       const secondPath = path.join(state.stateDir, "second.png");
       await fs.writeFile(secondPath, secondBytes);
-      await action(
-        "send",
-        {
-          to: "123",
-          message: "album",
-          attachments: [{ path: photoPath }, { filePath: secondPath }],
-        },
-        { skipQueue: true, mediaLocalRoots: [mediaDir, state.stateDir] },
+      await send(
+        { message: "album", attachments: [{ path: photoPath }, { filePath: secondPath }] },
+        { mediaLocalRoots: [mediaDir, state.stateDir] },
       );
-      expect(requests.map(({ method }) => method)).toEqual(["sendMediaGroup"]);
+      expectMethods("sendMediaGroup");
       const fields = requests[0]!.fields;
       const media = JSON.parse(String(fields.media)) as Array<{ media: string }>;
       const uploads = await Promise.all(
-        media.map(async (part) => {
-          const file = fields[part.media.slice("attach://".length)];
-          expect(file).toBeInstanceOf(File);
-          return Buffer.from(await (file as File).arrayBuffer());
-        }),
+        media.map((part) => uploadBytes({ ...fields, part: part.media }, "part")),
       );
       expect(uploads).toEqual([firstBytes, secondBytes]);
     });
@@ -839,93 +633,86 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       const notePath = path.join(state.stateDir, "note.mp4");
       const video = Buffer.from("00000018667479706d703432000000006d70343269736f6d", "hex");
       await fs.writeFile(notePath, video);
-      const options = { skipQueue: true, mediaLocalRoots: [state.stateDir, mediaDir] };
+      const options = { mediaLocalRoots: [state.stateDir, mediaDir] };
       for (const params of [{ mediaUrl: photoPath }, { mediaUrl: notePath, forceDocument: true }]) {
-        await expect(
-          action("send", { to: "123", asVideoNote: true, ...params }, options),
-        ).rejects.toThrow("Telegram video notes require video media.");
+        await expect(send({ asVideoNote: true, ...params }, options)).rejects.toThrow(
+          "Telegram video notes require video media.",
+        );
       }
       expect(requests).toEqual([]);
-      await action("send", { to: "123", mediaUrl: notePath, asVideoNote: true }, options);
-      expect(requests.map(({ method }) => method)).toEqual(["sendVideoNote"]);
-      const upload = resolveTelegramTestUpload(requests[0]!.fields, "video_note");
-      expect(Buffer.from(await upload.arrayBuffer())).toEqual(video);
+      await send({ mediaUrl: notePath, asVideoNote: true }, options);
+      expectMethods("sendVideoNote");
+      expect(await uploadBytes(requestFields(), "video_note")).toEqual(video);
     });
 
-    it("accepts external poll and sticker aliases on the requested topic", async () => {
-      actionCfg.channels!.telegram!.actions = { sticker: true };
-      actionCfg.channels!.telegram!.groupPolicy = "disabled";
-      let delivered = 0;
-      const event = {
-        outboundTo: "-1001:topic:77",
-        markInboundEventDelivered: () => {
-          delivered += 1;
-        },
-      };
-      let end = telegramInboundEventDelivery.begin("action-session", event, {
-        inboundEventKind: "room_event",
-      });
-      try {
-        const options: Partial<ChannelMessageActionContext> = {
-          sessionKey: "action-session",
-          inboundEventKind: "room_event",
-        };
-        const poll = await action(
-          "poll",
+    it.each(["poll", "sticker"] as const)(
+      "accepts external %s aliases on the requested topic",
+      async (kind) => {
+        actionCfg.channels!.telegram!.actions = { sticker: true };
+        actionCfg.channels!.telegram!.groupPolicy = "disabled";
+        let delivered = 0;
+        const end = telegramInboundEventDelivery.begin(
+          "action-session",
           {
-            to: "-1001",
-            pollQuestion: "Ready?",
-            pollOption: ["Yes", "No"],
-            pollMulti: "true",
-            pollPublic: "true",
-            pollDurationSeconds: 60,
-            replyTo: 55,
-            threadId: 77,
-            silent: "true",
+            outboundTo: "-1001:topic:77",
+            markInboundEventDelivered: () => {
+              delivered += 1;
+            },
           },
-          options,
+          { inboundEventKind: "room_event" },
         );
-        expect(delivered).toBe(1);
-        end();
-        end = telegramInboundEventDelivery.begin("action-session", event, {
-          inboundEventKind: "room_event",
-        });
-        await action(
-          "sticker",
-          {
-            target: "-1001",
-            stickerId: ["sticker"],
-            replyToMessageId: null,
-            replyTo: 9,
-            messageThreadId: null,
-            threadId: 77,
-          },
-          options,
-        );
-        expect(delivered).toBe(2);
-        expect(requests.map(({ method }) => method)).toEqual(["sendPoll", "sendSticker"]);
-        expect(requests[0]!.fields).toMatchObject({
-          question: "Ready?",
-          is_anonymous: false,
-          allows_multiple_answers: true,
-          open_period: 60,
-          reply_to_message_id: 55,
-          message_thread_id: 77,
-          disable_notification: true,
-        });
-        expect(requests[1]!.fields).toMatchObject({
-          sticker: "sticker",
-          reply_to_message_id: 9,
-          message_thread_id: 77,
-        });
-        expect(poll.details).toMatchObject({
-          pollAnswerRouting: "unavailable",
-          warning: expect.stringMatching(/inbound messages are disabled/),
-        });
-      } finally {
-        end();
-      }
-    });
+        try {
+          const poll = kind === "poll";
+          const result = await action(
+            kind,
+            poll
+              ? {
+                  to: "-1001",
+                  pollQuestion: "Ready?",
+                  pollOption: ["Yes", "No"],
+                  pollMulti: "true",
+                  pollPublic: "true",
+                  pollDurationSeconds: 60,
+                  replyTo: 55,
+                  threadId: 77,
+                  silent: "true",
+                }
+              : {
+                  target: "-1001",
+                  stickerId: ["sticker"],
+                  replyToMessageId: null,
+                  replyTo: 9,
+                  messageThreadId: null,
+                  threadId: 77,
+                },
+            { sessionKey: "action-session", inboundEventKind: "room_event" },
+          );
+          expect(delivered).toBe(1);
+          expectMethods(poll ? "sendPoll" : "sendSticker");
+          expect(requests[0]!.fields).toMatchObject(
+            poll
+              ? {
+                  question: "Ready?",
+                  is_anonymous: false,
+                  allows_multiple_answers: true,
+                  open_period: 60,
+                  reply_to_message_id: 55,
+                  message_thread_id: 77,
+                  disable_notification: true,
+                }
+              : { sticker: "sticker", reply_to_message_id: 9, message_thread_id: 77 },
+          );
+          if (poll) {
+            expect(result.details).toMatchObject({
+              pollAnswerRouting: "unavailable",
+              warning: expect.stringMatching(/inbound messages are disabled/),
+            });
+          }
+        } finally {
+          end();
+        }
+      },
+    );
 
     it("persists forum names from real topic responses in the routed account store", async () => {
       actionCfg.agents = { ownership: "explicit", entries: { main: {}, ops: {} } };
@@ -936,31 +723,14 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         method === "createForumTopic"
           ? { message_thread_id: 99, name: "Primary", icon_color: 7322096 }
           : undefined;
-      await action(
-        "topic-create",
-        { chatId: "-1001", name: "Primary", threadName: "Alias" },
-        { accountId: "work" },
-      );
-      await action(
-        "topic-edit",
-        { chatId: "-1001", threadId: 99, threadName: "Renamed" },
-        { accountId: "work" },
-      );
-      await action(
-        "topic-edit",
-        { chatId: "-1001", threadId: 99, iconCustomEmojiId: "5231419410191111111" },
-        { accountId: "work" },
-      );
-      expect(requests.map(({ method }) => method)).toEqual([
-        "createForumTopic",
-        "editForumTopic",
-        "editForumTopic",
-      ]);
+      const topic = (name: "topic-create" | "topic-edit", params: Record<string, unknown>) =>
+        action(name, { chatId: "-1001", ...params }, { accountId: "work" });
+      await topic("topic-create", { name: "Primary", threadName: "Alias" });
+      await topic("topic-edit", { threadId: 99, threadName: "Renamed" });
+      await topic("topic-edit", { threadId: 99, iconCustomEmojiId: "5231419410191111111" });
+      expectMethods("createForumTopic", "editForumTopic", "editForumTopic");
       expect(requests[0]!.fields.name).toBe("Primary");
-      expect(requests[2]!.fields).toMatchObject({
-        message_thread_id: 99,
-        icon_custom_emoji_id: "5231419410191111111",
-      });
+      expectFields({ message_thread_id: 99, icon_custom_emoji_id: "5231419410191111111" }, 2);
       resetTelegramTopicNameCacheForTest();
       await expect(
         getTopicName("-1001", 99, resolveStorePath(actionCfg.session?.store, { agentId: "ops" })),

@@ -1,18 +1,28 @@
-import { createHash, randomUUID } from "node:crypto";
+import { isUtf8 } from "node:buffer";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { readRegularFile, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
   isRecord,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isFsSafeErrorCode,
+  moveTargetToRecovery,
+  recoverySlotPrefix,
+  removeEmptyRecoverySlot,
+  resolveContainedImportPath,
+  type ChatGptRecoverySlot,
+  type ChatGptRollbackEntryRef,
+  type ChatGptRollbackRoot,
+} from "./chatgpt-import-recovery.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
@@ -23,7 +33,11 @@ import {
 } from "./import-runs-state.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
+  decodeWikiPageUtf8,
+  HUMAN_START_MARKER,
+  HUMAN_END_MARKER,
   parseWikiMarkdown,
+  preserveHumanNotesBlock,
   renderWikiMarkdown,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
@@ -35,8 +49,6 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const CHATGPT_PREFERENCE_SIGNAL_RE =
   /\b(prefer|prefers|preference|want|wants|need|needs|avoid|avoids|hate|hates|love|loves|default to|should default to|always use|don't want|does not want|likes|dislikes)\b/i;
-const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
-const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
 const MAX_ROLLBACK_RECREATE_ATTEMPTS = 32;
 
 const CHATGPT_RISK_RULES: Array<{ label: string; pattern: RegExp }> = [
@@ -102,8 +114,13 @@ async function loadConversations(exportInputPath: string): Promise<{
   const conversationsPath = exportPath.endsWith(".json")
     ? exportPath
     : path.join(exportPath, "conversations.json");
-  const raw = await fs.readFile(conversationsPath, "utf8");
-  const parsed = JSON.parse(raw) as unknown;
+  const { buffer: raw } = await readRegularFile({ filePath: await fs.realpath(conversationsPath) });
+  if (!isUtf8(raw)) {
+    throw new Error(
+      `ChatGPT conversations export must be valid UTF-8: ${conversationsPath}. Download a fresh ChatGPT export and retry the import.`,
+    );
+  }
+  const parsed = JSON.parse(raw.toString("utf8")) as unknown;
   const conversations = Array.isArray(parsed)
     ? parsed
     : Object.values(asNullableRecord(parsed) ?? {}).find(Array.isArray);
@@ -126,25 +143,19 @@ function isoFromUnix(raw: unknown): string | undefined {
 
 function cleanMessageText(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (
-    (trimmed.includes("asset_pointer") ||
-      trimmed.includes("image_asset_pointer") ||
-      trimmed.includes("dalle") ||
-      trimmed.includes("file_service")) &&
-    trimmed.length > 40
-  ) {
-    return "";
-  }
-  if (
-    trimmed.startsWith("{") &&
-    trimmed.length > 80 &&
-    (trimmed.includes(":") || trimmed.includes("content_type"))
-  ) {
-    const textMatch = trimmed.match(/["']text["']\s*:\s*(["'])(.+?)\1/s);
-    return textMatch?.[2] ? normalizeWhitespace(textMatch[2]) : "";
+  if (trimmed.startsWith("{")) {
+    let part: Record<string, unknown> | null;
+    try {
+      part = asNullableRecord(JSON.parse(trimmed));
+    } catch {
+      return trimmed;
+    }
+    if (part?.content_type === "text" && typeof part.text === "string") {
+      return part.text.trim();
+    }
+    if (part?.content_type === "image_asset_pointer") {
+      return "";
+    }
   }
   return trimmed;
 }
@@ -448,7 +459,6 @@ function renderConversationPage(record: ChatGptConversationRecord): string {
   });
 }
 
-const HUMAN_BLOCK_PATTERN = new RegExp(`${HUMAN_START_MARKER}[\\s\\S]*?${HUMAN_END_MARKER}`);
 const RELATED_BLOCK_BODY_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}\\n?([\\s\\S]*?)\\n?${WIKI_RELATED_END_MARKER}`,
 );
@@ -459,12 +469,7 @@ function preserveExistingPageBlocks(rendered: string, existing: string): string 
   }
   const parsedExisting = parseWikiMarkdown(existing);
   const parsedRendered = parseWikiMarkdown(rendered);
-  let nextBody = parsedRendered.body;
-
-  const humanBlock = parsedExisting.body.match(HUMAN_BLOCK_PATTERN)?.[0];
-  if (humanBlock) {
-    nextBody = nextBody.replace(HUMAN_BLOCK_PATTERN, () => humanBlock);
-  }
+  let nextBody = preserveHumanNotesBlock(parsedRendered.body, parsedExisting.body);
 
   const relatedBody = parsedExisting.body.match(RELATED_BLOCK_BODY_PATTERN)?.[1]?.trim();
   if (relatedBody) {
@@ -557,10 +562,10 @@ export async function importChatGptConversations(params: {
   nowMs?: number;
 }) {
   return await withMemoryWikiVaultMutation(params.config.vault.path, async () => {
-    await initializeMemoryWikiVault(params.config, { nowMs: params.nowMs });
     const { exportPath, conversationsPath, conversations } = await loadConversations(
       params.exportPath,
     );
+    await initializeMemoryWikiVault(params.config, { nowMs: params.nowMs });
     const records = conversations
       .map((conversation) => toConversationRecord(conversation, conversationsPath))
       .filter((entry): entry is ChatGptConversationRecord => entry !== null)
@@ -580,7 +585,11 @@ export async function importChatGptConversations(params: {
       const rendered = renderConversationPage(record);
       const absolutePath = path.join(params.config.vault.path, record.pagePath);
       const existing = await readExistingWikiPage(
-        () => fs.readFile(absolutePath, "utf8"),
+        async () =>
+          decodeWikiPageUtf8(
+            (await readRegularFile({ filePath: await fs.realpath(absolutePath) })).buffer,
+            absolutePath,
+          ),
         (error) => asNullableRecord(error)?.code === "ENOENT",
       );
       const stabilized = preserveExistingPageBlocks(rendered, existing);
@@ -685,37 +694,8 @@ export async function importChatGptConversations(params: {
   });
 }
 
-type ChatGptImportRunEntry = ChatGptImportRunRecord["createdPaths"][number];
-type ChatGptRollbackEntryRef = {
-  entry: ChatGptImportRunEntry;
-  kind: "created" | "updated";
-  index: number;
-};
-type ChatGptRecoverySlot = {
-  ref: ChatGptRollbackEntryRef;
-  slotRelativePath: string;
-  contentRelativePath: string;
-};
-type ChatGptRollbackRoot = Awaited<ReturnType<typeof fsRoot>>;
-
 function toVaultRelativePath(vaultRoot: string, absolutePath: string): string {
   return path.relative(vaultRoot, absolutePath).replace(/\\/g, "/");
-}
-
-function recoverySlotPrefix(ref: ChatGptRollbackEntryRef): string {
-  return `${ref.kind}-${ref.index}-${createHash("sha256").update(ref.entry.path).digest("hex")}-`;
-}
-
-function resolveContainedImportPath(root: string, relativePath: string, label: string): string {
-  if (!relativePath || path.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath)) {
-    throw new Error(`${label} must be a relative path: ${relativePath}`);
-  }
-  const resolvedRoot = path.resolve(root);
-  const resolvedPath = path.resolve(resolvedRoot, relativePath);
-  if (!isPathInside(resolvedRoot, resolvedPath)) {
-    throw new Error(`${label} must stay inside ${resolvedRoot}: ${relativePath}`);
-  }
-  return resolvedPath;
 }
 
 function buildRollbackEntryRefs(record: ChatGptImportRunRecord): ChatGptRollbackEntryRef[] {
@@ -732,76 +712,6 @@ function listPreservedPaths(record: ChatGptImportRunRecord): ChatGptRollbackPres
       recoveryPath,
     })),
   );
-}
-
-function isFsSafeErrorCode(error: unknown, code: FsSafeError["code"]): boolean {
-  return error instanceof FsSafeError && error.code === code;
-}
-
-async function reserveRecoverySlot(
-  runRoot: ChatGptRollbackRoot,
-  ref: ChatGptRollbackEntryRef,
-): Promise<{ slotRelativePath: string; contentRelativePath: string }> {
-  await runRoot.mkdir("recovered");
-  const slotRelativePath = path.posix.join(
-    "recovered",
-    `${recoverySlotPrefix(ref)}${randomUUID()}`,
-  );
-  await runRoot.mkdir(slotRelativePath);
-  return {
-    slotRelativePath,
-    contentRelativePath: path.posix.join(slotRelativePath, "content"),
-  };
-}
-
-async function removeEmptyRecoverySlot(
-  runRoot: ChatGptRollbackRoot,
-  slotRelativePath: string,
-): Promise<void> {
-  try {
-    if ((await runRoot.list(slotRelativePath)).length > 0) {
-      return;
-    }
-    await runRoot.remove(slotRelativePath);
-  } catch (error) {
-    if (isFsSafeErrorCode(error, "not-found")) {
-      return;
-    }
-    throw error;
-  }
-}
-
-async function moveTargetToRecovery(params: {
-  vaultRoot: ChatGptRollbackRoot;
-  runRoot: ChatGptRollbackRoot;
-  runRelativePath: string;
-  ref: ChatGptRollbackEntryRef;
-}): Promise<ChatGptRecoverySlot | null> {
-  resolveContainedImportPath(
-    params.vaultRoot.rootDir,
-    params.ref.entry.path,
-    "Memory Wiki import page path",
-  );
-  for (;;) {
-    const slot = await reserveRecoverySlot(params.runRoot, params.ref);
-    const recoveryVaultRelativePath = path.posix.join(
-      params.runRelativePath,
-      slot.contentRelativePath,
-    );
-    try {
-      await params.vaultRoot.move(params.ref.entry.path, recoveryVaultRelativePath);
-      return { ref: params.ref, ...slot };
-    } catch (error) {
-      await removeEmptyRecoverySlot(params.runRoot, slot.slotRelativePath);
-      if (isFsSafeErrorCode(error, "not-found")) {
-        return null;
-      }
-      if (isFsSafeErrorCode(error, "already-exists")) {
-        continue;
-      }
-      throw error;
-    }
-  }
 }
 
 async function scanRecoverySlots(params: {

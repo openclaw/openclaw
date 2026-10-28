@@ -7,7 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createWikiPageFilename, extractHumanNotesBlock } from "./markdown.js";
+import { createWikiPageFilename, decodeWikiPageUtf8, extractHumanNotesBlock } from "./markdown.js";
 
 export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
 
@@ -227,9 +227,10 @@ async function readImportedSourcePageForNotes(
   pagePath: string,
 ): Promise<string> {
   try {
-    return await vault.readText(pagePath, {
-      maxBytes: MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES,
-    });
+    return decodeWikiPageUtf8(
+      await vault.readBytes(pagePath, { maxBytes: MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES }),
+      pagePath,
+    );
   } catch (error) {
     if (!(error instanceof FsSafeError && error.code === "too-large")) {
       throw error;
@@ -245,7 +246,8 @@ async function readImportedSourcePageForNotes(
     if ((await readFileWindowFully(opened.handle, headerBuffer, 0)) !== headerBytes) {
       throw new Error("Memory Wiki source page changed during bounded Notes recovery");
     }
-    const header = headerBuffer.toString("utf8");
+    const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+    const header = decoder.decode(headerBuffer, { stream: true });
 
     const contentFence = /(?:^|\r?\n)## Content\r?\n(`+)[^\r\n]*(?=\r?\n|$)/u.exec(header);
     if (!contentFence) {
@@ -258,7 +260,6 @@ async function readImportedSourcePageForNotes(
       `\\r?\\n${fence}\\r?\\n(?:[\\t ]*\\r?\\n)*## Notes\\r?\\n<!-- openclaw:human:start -->(?=\\r?\\n|$)`,
       "u",
     );
-    const decoder = new TextDecoder();
     let pending = "";
     let notes = "";
     let notesBytes = 0;
@@ -346,6 +347,7 @@ export async function pruneImportedSourceEntries(params: {
       pageContent = await readImportedSourcePageForNotes(vault, entry.pagePath);
     } catch (error) {
       if (!(error instanceof FsSafeError && error.code === "not-found")) {
+        // Keep pages we cannot decode or read safely: their human Notes are not recovered.
         continue;
       }
     }

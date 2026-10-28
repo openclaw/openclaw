@@ -36,7 +36,9 @@ it.runIf(available)(
       requireProcessTreeExit: true,
       signal,
     });
-    expect(code).toBe(137);
+    // systemd can deliver SIGTERM after an OOM before the kernel's group SIGKILL.
+    // A nonbinding limit still times out; cancellation also rejects above.
+    expect([signalExitCode("SIGKILL"), signalExitCode("SIGTERM")]).toContain(code);
     const state = spawnSync("systemctl", ["--user", "show", "--property=LoadState", memoryScope], {
       encoding: "utf8",
       timeout: 5_000,

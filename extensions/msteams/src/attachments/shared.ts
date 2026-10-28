@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { lookup } from "node:dns/promises";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
@@ -12,6 +11,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { GRAPH_HOSTS, SHAREPOINT_HOSTS } from "../microsoft-hosts.js";
 import type { MSTeamsMonitorLogger } from "../monitor-types.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
 import type { MSTeamsAttachmentLike, MSTeamsInboundMedia } from "./types.js";
@@ -33,8 +33,58 @@ type InlineImageReference =
 
 const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
 
-export const IMG_SRC_RE = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
-export const ATTACHMENT_TAG_RE = /<attachment[^>]+id=["']([^"']+)["'][^>]*>/gi;
+/**
+ * Values of `attr` on each `<tag ...>` in document order, matching the captures of
+ * `/<tag[^>]+attr=["']([^"']+)["'][^>]*>/gi`: the last attribute spelling inside the
+ * tag wins, and a quoted value may contain `>`. Each `<tag` start is resolved from
+ * precomputed next-`>` and next-quote positions in one forward pass.
+ */
+export function htmlTagAttributeValues(
+  html: string,
+  tag: "img" | "attachment",
+  attr: "src" | "id",
+): string[] {
+  const length = html.length;
+  const nextGt = new Int32Array(length + 1).fill(length);
+  const nextQuote = new Int32Array(length + 1).fill(length);
+  for (let index = length - 1; index >= 0; index -= 1) {
+    const char = html[index];
+    nextGt[index] = char === ">" ? index : nextGt[index + 1]!;
+    nextQuote[index] = char === '"' || char === "'" ? index : nextQuote[index + 1]!;
+  }
+  // An attribute spelling is usable when a non-empty value, a closing quote and a
+  // later `>` follow it, whichever tag it ends up inside.
+  const candidates: Array<{ start: number; valueStart: number; valueEnd: number; end: number }> =
+    [];
+  for (const match of html.matchAll(new RegExp(`${attr}=["']`, "gi"))) {
+    const valueStart = match.index + match[0].length;
+    const valueEnd = nextQuote[valueStart]!;
+    if (valueEnd > valueStart && valueEnd < length && nextGt[valueEnd + 1]! < length) {
+      candidates.push({ start: match.index, valueStart, valueEnd, end: nextGt[valueEnd + 1]! + 1 });
+    }
+  }
+  const values: string[] = [];
+  let resumeAt = 0;
+  let pastWindow = 0;
+  for (const open of html.matchAll(new RegExp(`<${tag}`, "gi"))) {
+    if (open.index < resumeAt) {
+      continue;
+    }
+    // The attribute starts at least one character after the tag name (`[^>]+` is
+    // non-empty) and no later than the first `>`, so the window only moves forward.
+    const nameEnd = open.index + open[0].length;
+    const lastStart = nextGt[nameEnd]!;
+    while (pastWindow < candidates.length && candidates[pastWindow]!.start <= lastStart) {
+      pastWindow += 1;
+    }
+    const candidate = candidates[pastWindow - 1];
+    if (candidate && candidate.start > nameEnd) {
+      values.push(html.slice(candidate.valueStart, candidate.valueEnd));
+      resumeAt = candidate.end;
+    }
+  }
+  return values;
+}
 const GRAPH_HOSTED_CONTENT_SRC_RE = /\/hostedContents\/([^/?#]+)/i;
 
 function resolveInlineImageSourceId(src: string): string {
@@ -52,15 +102,8 @@ function resolveInlineImageSourceId(src: string): string {
 }
 
 const DEFAULT_MEDIA_HOST_ALLOWLIST = [
-  "graph.microsoft.com",
-  "graph.microsoft.us",
-  "graph.microsoft.de",
-  "graph.microsoft.cn",
-  "sharepoint.com",
-  "sharepoint.us",
-  "sharepoint.de",
-  "sharepoint.cn",
-  "sharepoint-df.com",
+  ...GRAPH_HOSTS,
+  ...SHAREPOINT_HOSTS,
   "1drv.ms",
   "onedrive.com",
   "teams.microsoft.com",
@@ -87,10 +130,7 @@ const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
   // replies and inbound attachment downloads (clipboard-pasted images).
   "smba.trafficmanager.net",
   "botframework.azure.cn",
-  "graph.microsoft.com",
-  "graph.microsoft.us",
-  "graph.microsoft.de",
-  "graph.microsoft.cn",
+  ...GRAPH_HOSTS,
 ] as const;
 
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
@@ -104,11 +144,7 @@ export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
  * https://learn.microsoft.com/en-us/graph/api/shares-get for the encoding.
  */
 const GRAPH_SHARED_LINK_HOST_SUFFIXES = [
-  ".sharepoint.com",
-  ".sharepoint.us",
-  ".sharepoint.de",
-  ".sharepoint.cn",
-  ".sharepoint-df.com",
+  ...SHAREPOINT_HOSTS.map((host) => `.${host}`),
   "1drv.ms",
   "onedrive.live.com",
   "onedrive.com",
@@ -164,9 +200,9 @@ export function resolveMSTeamsMediaKind(params: {
   fileName?: string;
   fileType?: string;
 }): MSTeamsInboundMedia["kind"] {
-  const mime = normalizeLowercaseStringOrEmpty(params.contentType ?? "");
-  const name = normalizeLowercaseStringOrEmpty(params.fileName ?? "");
-  const fileType = normalizeLowercaseStringOrEmpty(params.fileType ?? "");
+  const mime = normalizeLowercaseStringOrEmpty(params.contentType);
+  const name = normalizeLowercaseStringOrEmpty(params.fileName);
+  const fileType = normalizeLowercaseStringOrEmpty(params.fileType);
 
   const looksLikeImage =
     mime.startsWith("image/") || IMAGE_EXT_RE.test(name) || IMAGE_EXT_RE.test(`x.${fileType}`);
@@ -271,9 +307,8 @@ export function extractInlineImageReferences(
     if (!html) {
       continue;
     }
-    IMG_SRC_RE.lastIndex = 0;
-    for (const match of html.matchAll(IMG_SRC_RE)) {
-      const src = match[1]?.trim();
+    for (const value of htmlTagAttributeValues(html, "img", "src")) {
+      const src = value.trim();
       if (src) {
         if (src.startsWith("data:")) {
           out.push({ kind: "data", src });
@@ -312,25 +347,6 @@ export type MSTeamsAttachmentFetchPolicy = {
 export type MSTeamsAttachmentDownloadLogger = Partial<
   Pick<MSTeamsMonitorLogger, "debug" | "warn" | "error">
 >;
-
-export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
-
-function isMockFetchFn(fetchFn: typeof fetch): boolean {
-  const candidate = fetchFn as unknown as { mock?: unknown };
-  return Boolean(candidate.mock || Object.hasOwn(candidate, "_isMockFunction"));
-}
-
-function resolveGuardedFetchImpl(fetchFn?: typeof fetch): typeof fetch | undefined {
-  if (!fetchFn) {
-    return undefined;
-  }
-  if (fetchFn === fetch || fetchFn === globalThis.fetch || isMockFetchFn(fetchFn)) {
-    return fetchFn;
-  }
-  throw new Error(
-    "MSTeams attachment fetchFn must set fetchFnSupportsDispatcher to use guarded DNS pinning",
-  );
-}
 
 function resolveRetainedAuthorizationRedirectHostnameAllowlist(
   input?: string[],
@@ -377,22 +393,20 @@ export function isRedirectStatus(status: number): boolean {
 
 /**
  * Fetch a URL with redirect: "manual", validating each redirect target
- * against the hostname allowlist and optional DNS-resolved IP (anti-SSRF).
+ * against the hostname allowlist and DNS-resolved IP (anti-SSRF).
  *
  * This prevents:
  * - Auto-following redirects to non-allowlisted hosts
- * - DNS rebinding attacks when a lookup function is provided
+ * - DNS rebinding attacks through the pinned DNS lookup
  */
 export async function safeFetchWithPolicy(params: {
   url: string;
   policy: MSTeamsAttachmentFetchPolicy;
-  fetchFn?: typeof fetch;
+  resolveFn: (hostname: string) => Promise<{ address: string }>;
   requestInit?: RequestInit;
-  resolveFn?: MSTeamsAttachmentResolveFn;
   timeoutMs?: number;
 }): Promise<Response> {
   const { allowHosts, authAllowHosts } = params.policy;
-  const resolveFn = params.resolveFn ?? lookup;
   const currentHeaders = new Headers(params.requestInit?.headers);
   const currentUrl = params.url;
 
@@ -407,12 +421,11 @@ export async function safeFetchWithPolicy(params: {
   }
 
   const lookupFn: LookupFn = async (hostname) => {
-    const resolved = await resolveFn(hostname);
+    const resolved = await params.resolveFn(hostname);
     return [{ ...resolved, family: resolved.address.includes(":") ? 6 : 4 }];
   };
   const guarded = await fetchWithSsrFGuard({
     url: currentUrl,
-    fetchImpl: resolveGuardedFetchImpl(params.fetchFn),
     init: {
       ...params.requestInit,
       headers: currentHeaders,

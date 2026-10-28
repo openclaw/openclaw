@@ -14,11 +14,16 @@ import {
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { isRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
-import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import {
+  type ReplyOperation,
+  runAfterReplyOperationClear,
+} from "../../sessions/session-controller.js";
+import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   type DeliveryContext,
@@ -33,32 +38,28 @@ import {
 } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { RuntimeFallbackAttempt } from "./agent-runner-execution.types.js";
+import type { ReplyPayload } from "../types.js";
+import type {
+  ReplyAgentTurnContext,
+  RuntimeFallbackAttempt,
+} from "./agent-runner-execution.types.js";
 import {
   buildKnownAgentRunFailureReplyPayload,
   buildTerminalAgentRunFailureReplyPayload,
 } from "./agent-runner-failure-reply.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
-import type { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
-import {
-  type FollowupRun,
-  kickFollowupDrainIfIdle,
-  type QueueSettings,
-  scheduleFollowupDrain,
-} from "./queue.js";
+import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
 import {
   buildRestartLifecycleReplyText,
   isReplyOperationSuperseded,
   resolveReplyOperationAbortReason,
 } from "./reply-operation-abort.js";
-import { type ReplyOperation, runAfterReplyOperationClear } from "./reply-run-registry.js";
+import type { ReplySteeringIntent } from "./reply-steering-intent.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
@@ -71,16 +72,15 @@ export function scheduleFollowupDrainAfterReplyOperationClear(params: {
 }): void {
   runAfterReplyOperationClear(params.operation, (admissionSessionId) => {
     const completedSessionId = params.operation.sessionId;
-    const runFollowupAfterClear =
+    // Same-key sessions in other physical stores may retain their own dedupe mailbox.
+    scheduleFollowupDrain(
+      params.queueKey,
+      params.runFollowup,
+      getSessionControllerEntryForOperation(params.operation),
       admissionSessionId === completedSessionId
-        ? params.runFollowup
-        : (queued: FollowupRun) =>
-            params.runFollowup(
-              queued.run.sessionId === completedSessionId
-                ? { ...queued, admissionSessionId }
-                : queued,
-            );
-    scheduleFollowupDrain(params.queueKey, runFollowupAfterClear);
+        ? undefined
+        : { from: completedSessionId, to: admissionSessionId },
+    );
   });
 }
 
@@ -143,7 +143,7 @@ export function resolveSourceReplyPolicy(params: {
   sessionEntry?: SessionEntry;
   sessionKey: string;
   runtimePolicySessionKey?: string;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
 }): ReturnType<typeof resolveSourceReplyVisibilityPolicy> {
   const sendPolicy = resolveSendPolicy({
     cfg: params.cfg,
@@ -159,6 +159,7 @@ export function resolveSourceReplyPolicy(params: {
   return resolveSourceReplyVisibilityPolicy({
     cfg: params.cfg,
     ctx: params.sessionCtx,
+    scheduledAutomation: params.opts?.scheduledAutomation !== undefined,
     requested: params.opts?.sourceReplyDeliveryMode,
     sendPolicy,
   });
@@ -224,9 +225,11 @@ export async function resolveTerminalReplyDelivery(params: {
     minimumAssistantMessageIndex,
     (error) => logVerbose(`reply delivery observation failed; retaining custody: ${String(error)}`),
   );
-  if (sourceDelivery === "delivered" || params.sourceReplyDeliveryState !== undefined) {
+  if (sourceDelivery === "delivered") {
     return sourceDelivery;
   }
+  // Runtime facts can miss host-owned block/direct sends. Their terminal
+  // receipts still confirm delivery or retain custody before recovery.
   let pending =
     sourceDelivery === "pending" ||
     blockReplyPipeline?.hasRetryBlockedTerminalDelivery?.(minimumAssistantMessageIndex) === true;
@@ -294,24 +297,27 @@ export async function refreshSessionEntryFromStore(params: {
   fallbackEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
   expectedGeneration?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+  reader?: SessionEntryCohortReader;
 }): Promise<SessionEntry | undefined> {
   const { storePath, sessionKey, fallbackEntry, activeSessionStore } = params;
   if (!storePath || !sessionKey) {
     return fallbackEntry;
   }
   try {
-    const latestEntry = await readSessionEntryReadOnlyInWorker({
-      storePath,
-      sessionKey,
-    });
-    if (!latestEntry) {
-      return fallbackEntry;
-    }
+    const latestEntry = await readSessionEntryReadOnlyInWorker(
+      {
+        storePath,
+        sessionKey,
+      },
+      undefined,
+      params.reader,
+    );
     // Completion may refresh facts, but only admission can adopt a replacement generation.
     if (
-      params.expectedGeneration &&
-      (latestEntry.sessionId !== params.expectedGeneration.sessionId ||
-        latestEntry.lifecycleRevision !== params.expectedGeneration.lifecycleRevision)
+      !latestEntry ||
+      (params.expectedGeneration &&
+        (latestEntry.sessionId !== params.expectedGeneration.sessionId ||
+          latestEntry.lifecycleRevision !== params.expectedGeneration.lifecycleRevision))
     ) {
       return fallbackEntry;
     }
@@ -319,25 +325,20 @@ export async function refreshSessionEntryFromStore(params: {
       activeSessionStore[sessionKey] = latestEntry;
     }
     return latestEntry;
-  } catch {
+  } catch (error) {
+    if (params.reader) {
+      throw error;
+    }
     return fallbackEntry;
   }
-}
-
-export function resolveAdmittedRunSessionFile(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-}): string | undefined {
-  return normalizeOptionalString(params.sessionKey) ?? params.sessionFile;
 }
 
 export async function handleReplyAgentRunError(
   error: unknown,
   context: {
     resolveVisibleReplyDelivery: () => Promise<boolean>;
-    isHeartbeat: boolean;
     replyExpectation: ReplyExpectation;
-    isRestartRecoveryArmed: () => Promise<boolean>;
+    userTurnAccepted?: boolean;
     replyOperation: ReplyOperation;
     resolvedVerboseLevel: VerboseLevel;
     returnWithQueuedFollowupDrain: <T>(value: T) => T;
@@ -346,9 +347,7 @@ export async function handleReplyAgentRunError(
 ): Promise<ReplyPayload | undefined> {
   const {
     resolveVisibleReplyDelivery,
-    isHeartbeat,
     replyExpectation,
-    isRestartRecoveryArmed,
     replyOperation,
     resolvedVerboseLevel,
     returnWithQueuedFollowupDrain,
@@ -356,49 +355,24 @@ export async function handleReplyAgentRunError(
   } = context;
 
   if (isReplyOperationSuperseded(replyOperation)) {
-    return { text: SILENT_REPLY_TOKEN };
+    return {};
   }
   if (
     replyOperation.result?.kind === "aborted" &&
     replyOperation.result.code === "aborted_by_user"
   ) {
-    return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+    return returnWithQueuedFollowupDrain({});
   }
-  if (
-    replyOperation.result?.kind === "aborted" &&
-    replyOperation.result.code === "aborted_for_restart"
-  ) {
-    if (
-      (await isRestartRecoveryArmed()) ||
-      isReplyOperationSuperseded(replyOperation) ||
-      resolveReplyOperationAbortReason(replyOperation) === "user"
-    ) {
-      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
-    }
-    return returnWithQueuedFollowupDrain(
-      markReplyPayloadForSourceSuppressionDelivery({
-        text: buildRestartLifecycleReplyText(),
-      }),
-    );
+  if (resolveReplyOperationAbortReason(replyOperation, error) === "restart") {
+    replyOperation.abortForRestart();
+    return returnWithQueuedFollowupDrain({});
   }
-  if (error instanceof GatewayDrainingError || error instanceof CommandLaneClearedError) {
-    replyOperation.fail(
-      error instanceof GatewayDrainingError ? "gateway_draining" : "command_lane_cleared",
-      error,
-    );
-    return returnWithQueuedFollowupDrain(
-      markReplyPayloadForSourceSuppressionDelivery({
-        text: buildRestartLifecycleReplyText(),
-      }),
-    );
-  }
-  if (isRestartRecoveryClaimChangedError(error)) {
+  if (error instanceof GatewayDrainingError) {
     replyOperation.fail("run_failed", error);
-    return returnWithQueuedFollowupDrain(
-      markReplyPayloadForSourceSuppressionDelivery({
-        text: "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.",
-      }),
-    );
+    return returnWithQueuedFollowupDrain({
+      text: buildRestartLifecycleReplyText(),
+      isError: true,
+    });
   }
   const knownFailurePayload = buildKnownAgentRunFailureReplyPayload({
     err: error,
@@ -410,7 +384,7 @@ export async function handleReplyAgentRunError(
     return returnWithQueuedFollowupDrain(knownFailurePayload);
   }
   const visibleReplyDelivered = await resolveVisibleReplyDelivery();
-  if (!isHeartbeat && visibleReplyDelivered && !replyOperation.abortSignal.aborted) {
+  if ((visibleReplyDelivered || context.userTurnAccepted) && !replyOperation.abortSignal.aborted) {
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       buildTerminalAgentRunFailureReplyPayload({ replyExpectation, visibleReplyDelivered }),
@@ -425,8 +399,7 @@ export async function handleReplyAgentRunError(
 
 export async function cleanupReplyAgentRun(context: {
   blockReplyPipeline: BlockReplyPipeline | null;
-  clearRestartRecoveryDeliveryClaim: () => Promise<void>;
-  isHeartbeat: boolean;
+  releaseSourceAdmission?: () => Promise<void>;
   providedReplyOperation: ReplyOperation | undefined;
   queueKey: string;
   replyOperation: ReplyOperation;
@@ -437,8 +410,7 @@ export async function cleanupReplyAgentRun(context: {
 }): Promise<void> {
   const {
     blockReplyPipeline,
-    clearRestartRecoveryDeliveryClaim,
-    isHeartbeat,
+    releaseSourceAdmission,
     providedReplyOperation,
     queueKey,
     replyOperation,
@@ -449,69 +421,46 @@ export async function cleanupReplyAgentRun(context: {
   } = context;
 
   try {
-    await clearRestartRecoveryDeliveryClaim();
+    await releaseSourceAdmission?.();
   } catch (error) {
     logVerbose(
-      `failed to clear restart recovery delivery context for ${sessionKey ?? "unknown"}: ${String(
-        error,
-      )}`,
+      `failed to release reply admission for ${sessionKey ?? "unknown"}: ${String(error)}`,
     );
   }
   if (shouldDrainQueuedFollowupsAfterClear) {
-    if (isHeartbeat) {
-      // Heartbeat-scoped options and dispatch must never run queued user turns after a restart.
-      runAfterReplyOperationClear(replyOperation, () => kickFollowupDrainIfIdle(queueKey));
-    } else {
-      scheduleFollowupDrainAfterReplyOperationClear({
-        operation: replyOperation,
-        queueKey,
-        runFollowup: runFollowupTurn,
-      });
-    }
+    scheduleFollowupDrainAfterReplyOperationClear({
+      operation: replyOperation,
+      queueKey,
+      runFollowup: runFollowupTurn,
+    });
   }
   if (!providedReplyOperation) {
     replyOperation.complete();
   }
   blockReplyPipeline?.stop();
   typing.markRunComplete();
-  // Safety net: the dispatcher's onIdle callback normally fires
-  // markDispatchIdle(), but if the dispatcher exits early, errors,
-  // or the reply path doesn't go through it cleanly, the second
-  // signal never fires and the typing keepalive loop runs forever.
-  // Repeated completion signals are harmless: cleanup() is guarded by
-  // the typing controller's sealed flag.
+  // Early exits may never reach dispatcher onIdle, leaving typing's other half open.
+  // The typing controller seals cleanup, so repeated completion is safe.
   typing.markDispatchIdle();
 }
 
-export type RunReplyAgentParams = {
-  commandBody: string;
-  transcriptCommandBody?: string;
-  followupRun: FollowupRun;
+export type RunReplyAgentParams = ReplyAgentTurnContext & {
+  /** Absent only for legacy callers, which retain fresh incoming-policy checks. */
+  steeringIntent?: ReplySteeringIntent;
   queueKey: string;
   resolvedQueue: QueueSettings;
   shouldSteer: boolean;
   shouldFollowup: boolean;
   hasQueuedFollowups?: boolean;
   isActive: boolean;
-  isRunActive?: () => boolean;
-  opts?: InternalGetReplyOptions;
+  isRunActive?: () => boolean | Promise<boolean>;
   typing: TypingController;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
-  runtimePolicySessionKey?: string;
-  storePath?: string;
   defaultModel: string;
-  resolvedVerboseLevel: VerboseLevel;
-  toolProgressDetail?: "explain" | "raw";
   isNewSession: boolean;
-  blockStreamingEnabled: boolean;
-  blockReplyChunking?: ReturnType<typeof resolveBlockStreamingChunking>;
-  resolvedBlockStreamingBreak: "text_end" | "message_end";
-  sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
   resetTriggered?: boolean;
   replyThreadingOverride?: TemplateContext["ReplyThreading"];
-  replyOperation?: ReplyOperation;
 };

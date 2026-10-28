@@ -1,10 +1,14 @@
+import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
-import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
+import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import {
   hasSessionReadAccessChanged,
   hiddenSessionNotFound,
   sharingIdentity,
 } from "../session-sharing-policy.js";
+import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
+import { prepareSessionSharingRead } from "../session-sharing-target-read.js";
 import {
   createSessionListEntryFilter,
   SessionMutationAuthorizationChangedError,
@@ -14,38 +18,68 @@ import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.j
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Person-owned reads retain visibility, row generation and the physical store through I/O. */
-export function retainSessionScopedRead(
+export async function retainSessionScopedRead(
   options: GatewayRequestHandlerOptions,
   sessionKey: string,
   agentId: string,
-  readOptions: { requireMaterialized?: boolean; allowMetadataChanges?: boolean } = {},
+  readOptions: {
+    requireMaterialized?: boolean;
+    allowMetadataChanges?: boolean;
+    retain?: boolean;
+    projection?: SessionEntryReadScope["projection"];
+    entryMatches?: NonNullable<Parameters<typeof retainGatewaySessionEntryReadOnly>[2]>;
+    prepared?: {
+      cfg: OpenClawConfig;
+      pending: ReturnType<typeof retainGatewaySessionEntryReadOnly>;
+    };
+  } = {},
 ) {
   const authority = readGatewayRequestMutationAuthority(options);
   const actor = resolveGatewayOperatorRoleActor(options.client);
   const profileId = sharingIdentity(options.client, actor)?.id;
   const operatorProfileId = actor?.kind === "operator" ? actor.profileId : undefined;
   const narrow = authority.sessionScope === "operator.sessions.read";
+  const getConfig = options.context.getCommittedRuntimeConfig ?? options.context.getRuntimeConfig;
+  const cfg = getConfig();
   // Canonical solo owner, admin and system exemptions keep their existing workspace access.
   const initialVisibility = createSessionListEntryFilter({
     client: options.client,
-    cfg: (options.context.getCommittedRuntimeConfig ?? options.context.getRuntimeConfig)(),
+    cfg,
   });
-  if (!narrow && !initialVisibility) {
+  if (!readOptions.retain && !narrow && !initialVisibility) {
     return undefined;
   }
-  const read = retainGatewaySessionEntryReadOnly(
-    sessionKey,
-    agentId,
-    readOptions.allowMetadataChanges
-      ? (previous, current) => !hasSessionReadAccessChanged(previous, current)
-      : undefined,
-  );
+  const assertRoutingCurrent = captureSessionMutationRouting(cfg, undefined, [
+    { sessionKey, agentId },
+  ]);
+  const borrowed = readOptions.prepared?.cfg === cfg ? readOptions.prepared.pending : undefined;
+  const read = await (borrowed ??
+    retainGatewaySessionEntryReadOnly(
+      sessionKey,
+      agentId,
+      readOptions.entryMatches ??
+        (readOptions.allowMetadataChanges
+          ? (previous, current) => !hasSessionReadAccessChanged(previous, current)
+          : undefined),
+      cfg,
+      { projection: readOptions.projection },
+    ));
+  let sharing: Awaited<ReturnType<typeof prepareSessionSharingRead>> | undefined;
+  const release = () => {
+    sharing?.release();
+    if (!borrowed) {
+      read.release();
+    }
+  };
   const assertCurrent = () => {
     authority.assertCurrent();
+    const currentCfg = getConfig();
+    assertRoutingCurrent(currentCfg);
     const currentActor = resolveGatewayOperatorRoleActor(options.client);
     const visible = createSessionListEntryFilter({
       client: options.client,
-      cfg: (options.context.getCommittedRuntimeConfig ?? options.context.getRuntimeConfig)(),
+      cfg: currentCfg,
+      membership: sharing?.readCurrent(currentCfg).membership,
     });
     if (
       (narrow &&
@@ -63,10 +97,13 @@ export function retainSessionScopedRead(
     }
   };
   try {
+    if (operatorSessionCap(options.client, cfg) === "invited") {
+      sharing = await prepareSessionSharingRead({ cfg, sessionKey, agentId });
+    }
     assertCurrent();
-    return { assertCurrent, release: read.release };
+    return { assertCurrent, release, prepared: read };
   } catch (error) {
-    read.release();
+    release();
     throw error;
   }
 }

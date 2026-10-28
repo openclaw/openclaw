@@ -44,7 +44,7 @@ function normalizeAnnounceRouteTarget(
   if (!rawTo) {
     return undefined;
   }
-  const channel = context?.channel ?? fallbackChannel;
+  const channel = context.channel ?? fallbackChannel;
   const messaging = channel
     ? getLoadedChannelPluginForRead(channel as ChannelId)?.messaging
     : undefined;
@@ -84,7 +84,7 @@ function shouldStripThreadFromAnnounceFallback(
   }
   const requesterTarget = normalizeAnnounceRouteTarget(
     normalizedRequester,
-    normalizedEntry?.channel,
+    normalizedEntry.channel,
   );
   const entryTarget = normalizeAnnounceRouteTarget(normalizedEntry, normalizedRequester.channel);
   if (requesterTarget && entryTarget) {
@@ -120,15 +120,8 @@ export function resolveAnnounceOrigin(
 ): DeliveryContext | undefined {
   const normalizedRequester = normalizeDeliveryContext(requesterOrigin);
   const normalizedEntry = deliveryContextFromSession(entry);
-  if (normalizedRequester?.channel && isInternalMessageChannel(normalizedRequester.channel)) {
-    return mergeDeliveryContext(
-      {
-        accountId: normalizedRequester.accountId,
-        threadId: normalizedRequester.threadId,
-      },
-      normalizedEntry,
-    );
-  }
+  // The captured turn owns completion routing, including an explicit WebChat
+  // origin. Stored outbound history is a fallback, not permission to redirect it.
   return mergeAnnounceDeliveryContext(normalizedRequester, normalizedEntry);
 }
 
@@ -140,7 +133,7 @@ function resolveBoundConversationOrigin(params: {
   const conversation = params.bindingConversation;
   const conversationId = conversation.conversationId?.trim() ?? "";
   const parentConversationId = conversation.parentConversationId?.trim() ?? "";
-  const requesterConversationId = params.requesterConversation?.conversationId?.trim() ?? "";
+  const requesterConversationId = params.requesterConversation?.conversationId.trim() ?? "";
   const requesterTo = params.requesterOrigin?.to?.trim();
   const boundTarget = deliveryContextFromConversation(conversation);
   const inferredThreadId =
@@ -176,7 +169,7 @@ export async function resolveSubagentCompletionOrigin(params: {
   const accountId = normalizeAccountId(requesterOrigin?.accountId);
   const conversationId =
     stringifyRouteThreadId(requesterOrigin?.threadId) ||
-    resolveConversationIdFromTargets({ targets: [to] }) ||
+    resolveConversationIdFromTargets([to]) ||
     "";
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
@@ -228,10 +221,7 @@ export async function resolveSubagentCompletionOrigin(params: {
 
 function stripNonDeliverableChannel(context?: DeliveryContext): DeliveryContext | undefined {
   const normalized = normalizeDeliveryContext(context);
-  if (!normalized?.channel) {
-    return normalized;
-  }
-  if (isDeliverableMessageChannel(normalized.channel)) {
+  if (!normalized?.channel || isDeliverableMessageChannel(normalized.channel)) {
     return normalized;
   }
   const { channel: _channel, ...rest } = normalized;
@@ -310,15 +300,14 @@ export function resolveGeneratedMediaSessionDeliveryRoute(params: {
   const inferredRouteChatType = inferDeliveryTargetChatType({ channel, to });
   const derivedChatType = deriveSessionChatTypeFromKey(params.sessionKey);
   const chatType =
-    inferredRouteChatType ??
-    (!derivedChatType || derivedChatType === "unknown" ? "direct" : derivedChatType);
+    inferredRouteChatType ?? (derivedChatType === "unknown" ? "direct" : derivedChatType);
   if (channel && isGatewayMessageChannel(channel) && to) {
     return {
       route: {
         channel,
         to,
-        ...(deliveryContext?.accountId ? { accountId: deliveryContext.accountId } : {}),
-        ...(deliveryContext?.threadId != null
+        ...(deliveryContext.accountId ? { accountId: deliveryContext.accountId } : {}),
+        ...(deliveryContext.threadId != null
           ? { threadId: stringifyRouteThreadId(deliveryContext.threadId) }
           : {}),
         chatType,

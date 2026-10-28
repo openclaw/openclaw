@@ -1,4 +1,3 @@
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { parseMattermostQuestionContext } from "../normalize.js";
 import {
@@ -6,101 +5,12 @@ import {
   type MattermostInteractionResponse,
 } from "./interactions.js";
 import { authorizeMattermostCommandInvocation } from "./monitor-auth.js";
-import {
-  buildMattermostButtonInteractionMessageSid,
-  resolveMattermostInteractionReplyRootId,
-} from "./monitor-context.js";
+import { buildMattermostButtonInteractionMessageSid } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
+import { dispatchMattermostInteractionReply } from "./monitor-interaction-dispatch.js";
 import type { MattermostModelPickerInteractionHandler } from "./monitor-model-picker.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
-import { deliverMattermostReplyPayload } from "./reply-delivery.js";
-import type { ReplyPayload } from "./runtime-api.js";
 import { registerPluginHttpRoute } from "./runtime-api.js";
-import { sendMessageMattermost } from "./send.js";
-
-type MattermostInteractionDispatch = NonNullable<
-  Parameters<typeof createMattermostInteractionHandler>[0]["handleInteraction"]
->;
-
-/**
- * Answer an ask_user question from the button its own prompt offered.
- *
- * The Gateway owns the answer, so this consumes the click instead of letting it
- * fall through to the synthetic `[Button click: ...]` message the generic path
- * sends; that message would reach the agent as prose while the question stayed
- * open.
- */
-function createMattermostQuestionInteractionHandler(
-  monitor: MattermostMonitorContext,
-): MattermostInteractionDispatch {
-  const { account, cfg, core, pairing, resources, runtime } = monitor;
-  return async (interaction) => {
-    const selection = parseMattermostQuestionContext(interaction.context);
-    if (!selection) {
-      return null;
-    }
-    // Resolving the question is a privileged Gateway write, so it takes its own
-    // current-policy decision at the point of effect, the same way the
-    // model-picker handler does, instead of leaning on the transport's earlier
-    // check.
-    const channelInfo = await resources.resolveChannelInfo(interaction.payload.channel_id);
-    const decide = async () =>
-      await authorizeMattermostCommandInvocation({
-        account,
-        cfg,
-        senderId: interaction.payload.user_id,
-        senderName: interaction.userName,
-        channelId: interaction.payload.channel_id,
-        channelInfo,
-        readStoreAllowFrom: pairing.readAllowFromStore,
-        allowTextCommands: core.channel.commands.shouldHandleTextCommands({
-          cfg,
-          surface: "mattermost",
-        }),
-        hasControlCommand: false,
-      });
-    const auth = await decide();
-    if (!auth.ok) {
-      // No Gateway I/O for a click current policy refuses; the prompt stays usable.
-      return { ephemeral_text: `OpenClaw ignored this action for ${auth.roomLabel}.` };
-    }
-    try {
-      const result = await questionGatewayRuntime.resolveOption({
-        cfg,
-        questionId: selection.questionId,
-        optionIndex: selection.optionIndex,
-        senderId: interaction.payload.user_id,
-        clientDisplayName: `Mattermost question (${account.accountId})`,
-        // The resolver awaits a read before it writes; access is re-checked
-        // inside that window so a revoked click cannot still answer.
-        authorize: async () => (await decide()).ok,
-      });
-      if (result.status === "denied") {
-        return { ephemeral_text: `OpenClaw ignored this action for ${auth.roomLabel}.` };
-      }
-      if (result.status !== "answered") {
-        return { ephemeral_text: "This question was already answered." };
-      }
-    } catch (err) {
-      runtime.error?.(`mattermost question interaction failed: ${String(err)}`);
-      // The buttons survive an unaccepted click so it can be retried.
-      return { ephemeral_text: "Could not submit this answer." };
-    }
-    // Only an accepted answer retires the prompt.
-    const response: MattermostInteractionResponse = {
-      update: {
-        message: interaction.post.message ?? "",
-        props: {
-          attachments: [
-            { text: `✓ **${interaction.actionName}** selected by @${interaction.userName}` },
-          ],
-        },
-      },
-      ephemeral_text: "Answer submitted.",
-    };
-    return response;
-  };
-}
 
 export function registerMattermostInteractions(params: {
   monitor: MattermostMonitorContext;
@@ -111,7 +21,6 @@ export function registerMattermostInteractions(params: {
   const { monitor } = params;
   const { account, cfg, client, core, pairing, resources, runtime } = monitor;
   const { resolveChannelInfo } = resources;
-  const handleQuestionInteraction = createMattermostQuestionInteractionHandler(monitor);
   return registerPluginHttpRoute({
     path: params.interactionPath,
     fallbackPath: "/mattermost/interactions/default",
@@ -122,9 +31,80 @@ export function registerMattermostInteractions(params: {
       allowedSourceIps: params.allowedSourceIps,
       trustedProxies: cfg.gateway?.trustedProxies,
       allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
-      handleInteraction: async (interaction) =>
-        (await handleQuestionInteraction(interaction)) ??
-        (await params.handleModelPickerInteraction(interaction)),
+      /**
+       * Answer an ask_user question from the button its own prompt offered.
+       *
+       * The Gateway owns the answer, so this consumes the click instead of letting it
+       * fall through to the synthetic `[Button click: ...]` message the generic path
+       * sends; that message would reach the agent as prose while the question stayed
+       * open.
+       */
+      handleInteraction: async (interaction) => {
+        const selection = parseMattermostQuestionContext(interaction.context);
+        if (!selection) {
+          return await params.handleModelPickerInteraction(interaction);
+        }
+        // Resolving the question is a privileged Gateway write, so it takes its own
+        // current-policy decision at the point of effect, the same way the
+        // model-picker handler does, instead of leaning on the transport's earlier
+        // check.
+        const channelInfo = await resources.resolveChannelInfo(interaction.payload.channel_id);
+        const decide = async () =>
+          await authorizeMattermostCommandInvocation({
+            account,
+            cfg,
+            senderId: interaction.payload.user_id,
+            senderName: interaction.userName,
+            channelId: interaction.payload.channel_id,
+            channelInfo,
+            readStoreAllowFrom: pairing.readAllowFromStore,
+            allowTextCommands: core.channel.commands.shouldHandleTextCommands({
+              cfg,
+              surface: "mattermost",
+            }),
+            hasControlCommand: false,
+          });
+        const auth = await decide();
+        if (!auth.ok) {
+          // No Gateway I/O for a click current policy refuses; the prompt stays usable.
+          return { ephemeral_text: `OpenClaw ignored this action for ${auth.roomLabel}.` };
+        }
+        try {
+          const result = await questionGatewayRuntime.resolveOption({
+            cfg,
+            questionId: selection.questionId,
+            optionIndex: selection.optionIndex,
+            senderId: interaction.payload.user_id,
+            clientDisplayName: `Mattermost question (${account.accountId})`,
+            // The resolver awaits a read before it writes; access is re-checked
+            // inside that window so a revoked click cannot still answer.
+            authorize: async () => (await decide()).ok,
+          });
+          if (result.status === "denied") {
+            return { ephemeral_text: `OpenClaw ignored this action for ${auth.roomLabel}.` };
+          }
+          if (result.status !== "answered") {
+            return { ephemeral_text: "This question was already answered." };
+          }
+        } catch (err) {
+          runtime.error?.(`mattermost question interaction failed: ${String(err)}`);
+          // The buttons survive an unaccepted click so it can be retried.
+          return { ephemeral_text: "Could not submit this answer." };
+        }
+        // Only an accepted answer retires the prompt.
+        const response: MattermostInteractionResponse = {
+          update: {
+            message: interaction.post.message ?? "",
+            props: {
+              attachments: [
+                { text: `✓ **${interaction.actionName}** selected by @${interaction.userName}` },
+              ],
+            },
+          },
+          ephemeral_text: "Answer submitted.",
+        };
+        return response;
+      },
       authorizeButtonClick: async ({ payload }) => {
         const channelInfo = await resolveChannelInfo(payload.channel_id);
         const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
@@ -185,7 +165,7 @@ export function registerMattermostInteractions(params: {
         if (!eventPlan) {
           return;
         }
-        const { channelDisplay, channelId, kind, route, thread, to } = eventPlan;
+        const { channelDisplay, kind } = eventPlan;
         const bodyText = `[Button click: user @${button.userName} selected "${button.actionName}"]`;
         const ctxPayload = eventPlan.finalizeContext({
           Body: bodyText,
@@ -199,52 +179,11 @@ export function registerMattermostInteractions(params: {
           WasMentioned: true,
           CommandAuthorized: false,
         });
-        const { replyOptions, replyPipeline, tableMode, textLimit } = eventPlan.createReplyPlan();
-        await core.channel.inbound.dispatch({
-          cfg,
-          channel: "mattermost",
-          accountId: account.accountId,
-          route: {
-            agentId: route.agentId,
-            dmScope: route.dmScope,
-            sessionKey: thread.sessionKey,
-          },
+        await dispatchMattermostInteractionReply(monitor, eventPlan, {
           ctxPayload,
-          delivery: {
-            observeMessageSent: true,
-            deliver: async (payload: ReplyPayload) => {
-              const result = await deliverMattermostReplyPayload({
-                core,
-                cfg,
-                payload,
-                channelId,
-                accountId: account.accountId,
-                agentId: route.agentId,
-                replyToId: resolveMattermostInteractionReplyRootId({
-                  kind,
-                  threadRootId: thread.effectiveReplyToId,
-                  replyToId: payload.replyToId,
-                  interactionMessageSid,
-                  sourcePostId,
-                }),
-                textLimit,
-                tableMode,
-                sendMessage: sendMessageMattermost,
-              });
-              if (result.visibleReplySent) {
-                runtime.log?.(`delivered button-click reply to ${to}`);
-              }
-              return result;
-            },
-            onError: (err, info) => {
-              runtime.error?.(`mattermost button-click ${info.kind} reply failed: ${String(err)}`);
-            },
-          },
-          replyPipeline,
-          dispatcherOptions: {
-            humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-          },
-          replyOptions,
+          interactionMessageSid,
+          sourcePostId,
+          kind: "button-click",
         });
       },
       log: (message) => runtime.log?.(message),

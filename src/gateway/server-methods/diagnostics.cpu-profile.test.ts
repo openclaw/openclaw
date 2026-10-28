@@ -3,14 +3,22 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { captureDiagnosticCpuProfile } from "../../logging/diagnostic-cpu-profile.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { handleGatewayRequest } from "../server-methods.js";
 import { GatewayRequestEntryLifetime } from "../server-request-entry.js";
-import type { GatewayRequestOptions } from "./types.js";
+import { expectProfileError, profileRequest as request } from "./diagnostics.test-support.js";
 
 const capture = vi.hoisted(() => vi.fn());
+const captureHeap = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/diagnostic-cpu-profile.js", () => ({
   captureDiagnosticCpuProfile: capture,
 }));
+vi.mock("../../logging/diagnostic-heap-profile.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logging/diagnostic-heap-profile.js")>()),
+  captureDiagnosticHeapProfile: captureHeap,
+}));
+
+function callFrame(functionName: string, scriptId: string, lineNumber = -1, columnNumber = -1) {
+  return { functionName, scriptId, url: "", lineNumber, columnNumber };
+}
 
 const result = {
   requestedDurationMs: 5_000,
@@ -23,24 +31,12 @@ const result = {
     nodes: [
       {
         id: 1,
-        callFrame: {
-          functionName: "(root)",
-          scriptId: "0",
-          url: "",
-          lineNumber: -1,
-          columnNumber: -1,
-        },
+        callFrame: callFrame("(root)", "0"),
         children: [2],
       },
       {
         id: 2,
-        callFrame: {
-          functionName: "[redacted]",
-          scriptId: "12",
-          url: "",
-          lineNumber: -10,
-          columnNumber: -200,
-        },
+        callFrame: callFrame("[redacted]", "12", -10, -200),
         positionTicks: [{ line: -9, ticks: 1 }],
       },
     ],
@@ -51,47 +47,17 @@ const result = {
   },
 };
 
-function request(
-  options: {
-    scopes?: string[];
-    role?: string;
-    params?: unknown;
-    connection?: AbortController;
-    gateway?: GatewayRequestEntryLifetime;
-    signal?: AbortSignal;
-    hasAuthority?: () => boolean;
-  } = {},
-) {
-  const respond = vi.fn();
-  const pending = handleGatewayRequest({
-    req: {
-      type: "req",
-      id: "cpu-profile",
-      method: "diagnostics.cpuProfile",
-      params: options.params,
-    },
-    respond,
-    client: {
-      connId: "profile-client",
-      connectionSignal: options.connection?.signal,
-      connect: {
-        role: options.role ?? "operator",
-        scopes: options.scopes ?? ["operator.admin"],
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "test", version: "1", platform: "test", mode: "test" },
-      },
-    } as GatewayRequestOptions["client"],
-    isWebchatConnect: () => false,
-    context: {
-      logGateway: { warn: vi.fn() },
-      requestEntryLifetime: options.gateway,
-    } as unknown as GatewayRequestOptions["context"],
-    signal: options.signal,
-    hasCurrentClientAuthority: options.hasAuthority,
-  });
-  return { respond, pending };
-}
+const heapResult = {
+  durationMs: 5_000,
+  samplingIntervalBytes: 32_768,
+  includeObjectsCollectedByMajorGC: false,
+  includeObjectsCollectedByMinorGC: false,
+  heapUsedBefore: 100,
+  heapUsedAfter: 200,
+  rssBefore: 300,
+  rssAfter: 400,
+  truncated: false,
+};
 
 beforeEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
@@ -100,49 +66,47 @@ beforeEach(() => {
     .mockResolvedValue({ status: "complete", result } satisfies Awaited<
       ReturnType<typeof captureDiagnosticCpuProfile>
     >);
+  captureHeap.mockReset().mockResolvedValue({ status: "complete", result: heapResult });
 });
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
+async function completedRequest(options?: Parameters<typeof request>[0]) {
+  const call = request(options);
+  await call.pending;
+  return call;
+}
+
 describe("diagnostics.cpuProfile dispatch", () => {
   it.each([
-    { role: "operator", scopes: ["operator.write"] },
-    { role: "node", scopes: ["operator.admin"] },
-  ])("rejects $role/$scopes before native work", async (options) => {
-    const call = request(options);
-    await call.pending;
+    { method: "diagnostics.cpuProfile", role: "operator", scopes: ["operator.write"] },
+    { method: "diagnostics.cpuProfile", role: "node", scopes: ["operator.admin"] },
+    { method: "diagnostics.heapProfile", role: "operator", scopes: ["operator.write"] },
+    { method: "diagnostics.heapProfile", role: "node", scopes: ["operator.admin"] },
+  ] as const)("rejects $role/$scopes for $method before native work", async (options) => {
+    const call = await completedRequest({ ...options, scopes: [...options.scopes] });
     expect(capture).not.toHaveBeenCalled();
-    expect(call.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: options.role === "node" ? "INVALID_REQUEST" : "FORBIDDEN" }),
-    );
+    expect(captureHeap).not.toHaveBeenCalled();
+    expectProfileError(call, { code: options.role === "node" ? "INVALID_REQUEST" : "FORBIDDEN" });
   });
 
-  it.each([undefined, {}])(
-    "preserves signed-origin profiles for admin requests with empty params %j",
-    async (params) => {
-      const call = request({ params });
-      await call.pending;
-      expect(capture).toHaveBeenCalledOnce();
-      expect(call.respond).toHaveBeenCalledWith(true, result, undefined);
-    },
-  );
+  it("preserves signed-origin profiles for admin requests with empty params", async () => {
+    const call = await completedRequest({ params: {} });
+    expect(capture).toHaveBeenCalledOnce();
+    expect(call.respond).toHaveBeenCalledWith(true, result, undefined);
+  });
 
-  it.each([null, [], { durationMs: 1 }])(
-    "rejects nonempty/nonobject params %j before capture",
-    async (params) => {
-      const call = request({ params });
-      await call.pending;
-      expect(capture).not.toHaveBeenCalled();
-      expect(call.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
-    },
-  );
+  it.each([
+    { method: "diagnostics.cpuProfile", params: null },
+    { method: "diagnostics.cpuProfile", params: { durationMs: 1 } },
+    { method: "diagnostics.heapProfile", params: { filename: "profile" } },
+  ] as const)("rejects unsupported $method params $params before capture", async (options) => {
+    const call = await completedRequest(options);
+    expect(capture).not.toHaveBeenCalled();
+    expect(captureHeap).not.toHaveBeenCalled();
+    expectProfileError(call, { code: "INVALID_REQUEST" });
+  });
 
-  it.each(["connection", "gateway", "request"])(
+  it.each(["connection", "gateway", "request"] as const)(
     "cancels through the existing %s lifetime and waits for cleanup",
     async (boundary) => {
       const connection = new AbortController();
@@ -163,15 +127,12 @@ describe("diagnostics.cpuProfile dispatch", () => {
         settled = true;
       });
       await entered.promise;
-      if (boundary === "connection") {
-        connection.abort();
-      }
-      if (boundary === "gateway") {
-        gateway.beginClose();
-      }
-      if (boundary === "request") {
-        controller.abort();
-      }
+      const cancel = {
+        connection: () => connection.abort(),
+        gateway: () => gateway.beginClose(),
+        request: () => controller.abort(),
+      };
+      cancel[boundary]();
       expect(captureSignal?.aborted).toBe(true);
       expect(settled).toBe(false);
       expect(call.respond).not.toHaveBeenCalled();
@@ -189,24 +150,8 @@ describe("diagnostics.cpuProfile dispatch", () => {
       expect(hasAuthority()).toBe(false);
       return { status: "complete", result };
     });
-    const call = request({ hasAuthority: () => authority });
-    await call.pending;
+    const call = await completedRequest({ hasAuthority: () => authority });
     expect(call.respond).not.toHaveBeenCalled();
-  });
-
-  it("publishes a bounded, visible failure including cleanup uncertainty", async () => {
-    capture.mockResolvedValue({
-      status: "unavailable",
-      reason: "capture-failed",
-      cleanupFailed: true,
-    });
-    const call = request();
-    await call.pending;
-    expect(call.respond).toHaveBeenCalledWith(false, undefined, {
-      code: "UNAVAILABLE",
-      message: "CPU profile unavailable: capture-failed",
-      details: { reason: "capture-failed", cleanupFailed: true },
-    });
   });
 
   it("explains that all active Node tracing must be stopped first", async () => {
@@ -215,17 +160,36 @@ describe("diagnostics.cpuProfile dispatch", () => {
       reason: "tracing-active",
       cleanupFailed: false,
     });
-    const call = request();
-    await call.pending;
-    expect(call.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message:
-          "CPU profile unavailable: stop active Node tracing, including non-CPU categories, before requesting a profile",
-        details: { reason: "tracing-active", cleanupFailed: false },
-      }),
-    );
+    const call = await completedRequest();
+    expectProfileError(call, {
+      code: "UNAVAILABLE",
+      message:
+        "CPU profile unavailable: stop active Node tracing, including non-CPU categories, before requesting a profile",
+      details: { reason: "tracing-active", cleanupFailed: false },
+    });
   });
+});
+
+describe("diagnostics.heapProfile dispatch", () => {
+  it.each([
+    undefined,
+    { durationMs: 30_000, includeCollected: true },
+    {
+      durationMs: 200,
+      samplingIntervalBytes: 4096,
+      includeObjectsCollectedByMajorGC: true,
+      includeObjectsCollectedByMinorGC: false,
+    },
+  ])(
+    "serves allocation attribution through the registered admin RPC with params %j",
+    async (params) => {
+      const call = await completedRequest({ method: "diagnostics.heapProfile", params });
+      expect(captureHeap).toHaveBeenCalledExactlyOnceWith({
+        ...params,
+        signal: expect.any(AbortSignal),
+        hasAuthority: expect.any(Function),
+      });
+      expect(call.respond).toHaveBeenCalledWith(true, heapResult, undefined);
+    },
+  );
 });

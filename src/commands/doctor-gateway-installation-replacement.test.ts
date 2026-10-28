@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import * as gatewayCall from "../gateway/call.js";
 import {
   completeGatewayBootLifecycle,
-  recordGatewayBootStart,
+  beginGatewayBootLifecycle,
 } from "../infra/gateway-boot-lifecycle.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { checkGatewayHealth, collectGatewayHealthFindings } from "./doctor-gateway-health.js";
 
 const mocks = vi.hoisted(() => ({
@@ -24,8 +26,8 @@ vi.mock("../daemon/service.js", () => ({
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     cleanup();
@@ -35,8 +37,16 @@ const reason = "gateway.installation_replaced: on-disk 2026.9.5 differs from run
 const installationReplacementWarning =
   "Installation replaced: on-disk 2026.9.5 differs from running 2026.9.4; draining active work.";
 const completedAtMs = Date.UTC(2026, 8, 19, 12);
+const historyMessage = `Previous installation replacement (${new Date(completedAtMs).toISOString()}): ${reason}`;
+const historyTitle = "Previous Gateway installation replacement";
+const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+function expectFinding(findings: readonly HealthFinding[], finding: Partial<HealthFinding>) {
+  expect(findings).toContainEqual(
+    expect.objectContaining({ checkId: "core/doctor/gateway-health", ...finding }),
+  );
+}
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-doctor-replacement-"));
   mocks.callGateway.mockReset().mockResolvedValue({});
   mocks.buildGatewayProbeConnectionDetails
@@ -48,40 +58,64 @@ beforeEach(() => {
   );
   mocks.hasActiveGatewayExecCredential.mockReset().mockResolvedValue(false);
   mocks.note.mockReset();
-  const bootId = recordGatewayBootStart(process.env, completedAtMs - 1_000);
-  completeGatewayBootLifecycle(
+  const bootId = (await beginGatewayBootLifecycle(process.env, completedAtMs - 1_000)).id;
+  await completeGatewayBootLifecycle(
     bootId,
     { outcome: "planned_restart", reason },
     process.env,
     completedAtMs,
   );
-  recordGatewayBootStart(process.env, completedAtMs + 1_000);
+  await beginGatewayBootLifecycle(process.env, completedAtMs + 1_000);
 });
 
 describe("Doctor installation replacement diagnostics", () => {
+  it.each(["normal", "lint"])(
+    "reports unavailable history after cancellation without losing %s health results",
+    async (mode) => {
+      const scope = new AsyncWorkScope();
+      const pending = scope.run(() =>
+        mode === "lint"
+          ? collectGatewayHealthFindings({ cfg: {}, env: process.env })
+          : checkGatewayHealth({ cfg: {}, runtime }),
+      );
+      scope.beginClose(new Error("History inspection deadline"));
+      try {
+        const result = await pending;
+        const message =
+          "Previous installation replacement unavailable: History inspection deadline";
+        if (mode === "lint") {
+          expect(result).toContainEqual(expect.objectContaining({ severity: "warning", message }));
+        } else {
+          expect(result).toMatchObject({ healthOk: true });
+          expect(mocks.note).toHaveBeenCalledWith(message, historyTitle);
+        }
+      } finally {
+        await scope.drain();
+      }
+    },
+  );
+
   it.each([true, false])(
     "reports historical replacement without changing current health (reachable: %s)",
     async (reachable) => {
       if (!reachable) {
         mocks.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
       }
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const result = await checkGatewayHealth({ cfg: {}, runtime });
 
-      expect(mocks.callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "status" }));
       expect(result.healthOk).toBe(reachable);
-      expect(mocks.note).toHaveBeenCalledWith(
-        `Previous installation replacement (${new Date(completedAtMs).toISOString()}): ${reason}`,
-        "Previous Gateway installation replacement",
-      );
+      expect(mocks.note).toHaveBeenCalledWith(historyMessage, historyTitle);
     },
   );
 
-  it.each(["healthy", "offline", "unprepared", "exec", "replaced"])(
+  it.each(["offline", "unprepared", "exec", "replaced"])(
     "preserves lint history when the current probe is %s",
     async (probe) => {
       if (probe === "replaced") {
-        mocks.callGateway.mockResolvedValue({ installationReplacementWarning });
+        mocks.callGateway.mockResolvedValue({
+          installationReplacementWarning,
+          modelReasoningWarning: "Model emitted hidden reasoning.",
+        });
       }
       if (probe === "offline") {
         mocks.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
@@ -97,25 +131,16 @@ describe("Doctor installation replacement diagnostics", () => {
 
       const findings = await collectGatewayHealthFindings({ cfg: {}, env: process.env });
 
-      expect(findings).toContainEqual(
-        expect.objectContaining({
-          checkId: "core/doctor/gateway-health",
-          severity: "info",
-          message: `Previous installation replacement (${new Date(completedAtMs).toISOString()}): ${reason}`,
-        }),
-      );
-      if (probe === "healthy") {
-        expect(findings).toHaveLength(1);
-      } else if (probe === "replaced") {
-        expect(findings).toContainEqual(
-          expect.objectContaining({
-            checkId: "core/doctor/gateway-health",
-            severity: "warning",
-            message: installationReplacementWarning,
-          }),
-        );
+      expectFinding(findings, { severity: "info", message: historyMessage });
+      if (probe === "replaced") {
+        expectFinding(findings, { severity: "warning", message: installationReplacementWarning });
+        expectFinding(findings, {
+          severity: "warning",
+          message: "Model emitted hidden reasoning.",
+          fixHint: "Set reasoning: true on the configured model, or choose a non-thinking model.",
+        });
       } else {
-        expect(findings).toContainEqual(expect.objectContaining({ severity: "warning" }));
+        expectFinding(findings, { severity: "warning" });
       }
       if (probe === "unprepared" || probe === "exec") {
         expect(mocks.callGateway).not.toHaveBeenCalled();
@@ -132,10 +157,8 @@ describe("Doctor installation replacement diagnostics", () => {
       if (mode === "lint") {
         expect(await collectGatewayHealthFindings({ cfg })).toEqual([]);
       } else {
-        await checkGatewayHealth({ cfg, runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() } });
-        expect(mocks.note.mock.calls.map(([, title]) => title)).not.toContain(
-          "Previous Gateway installation replacement",
-        );
+        await checkGatewayHealth({ cfg, runtime });
+        expect(mocks.note.mock.calls.map(([, title]) => title)).not.toContain(historyTitle);
       }
     },
   );

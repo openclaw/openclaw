@@ -87,6 +87,16 @@ type AgentRunAuditEventInput = AuditEventInputBase &
   AgentAuditAttribution &
   AgentRunAuditLifecycle & { kind: "agent_run" };
 
+export type AgentRunStartedAuditEventInput = Extract<
+  AgentRunAuditEventInput,
+  { action: "agent.run.started" }
+>;
+
+export type AgentRunFinishedAuditEventInput = Extract<
+  AgentRunAuditEventInput,
+  { action: "agent.run.finished" }
+>;
+
 type ToolActionFinishedAuditTerminal =
   | { status: "succeeded"; errorCode?: never }
   | { status: "failed"; errorCode: "tool_failed" }

@@ -20,7 +20,10 @@ import {
   NODE_WORKER_PRIVATE_COMMANDS,
   isPrivateNodeInvokeCommand,
 } from "../infra/node-commands.js";
-import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime-state.js";
+import {
+  getActivePluginGatewayNodePolicyRegistry,
+  getPluginRegistryVersion,
+} from "../plugins/runtime-state.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 
 const MOBILE_NODE_COMMANDS = {
@@ -53,24 +56,13 @@ const ANDROID_DEVICE_COMMANDS = [
   NODE_DEVICE_APPS_COMMAND,
 ];
 
-const CONTACTS_COMMANDS = ["contacts.search"];
-const CONTACTS_DANGEROUS_COMMANDS = ["contacts.add"];
-
-const CALENDAR_COMMANDS = ["calendar.events"];
-const CALENDAR_DANGEROUS_COMMANDS = ["calendar.add"];
-
-const CALL_LOG_COMMANDS = ["callLog.search"];
-
-const REMINDERS_COMMANDS = ["reminders.list"];
-const REMINDERS_DANGEROUS_COMMANDS = ["reminders.add"];
-
-const PHOTOS_COMMANDS = ["photos.latest"];
-
-const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
-
-const HEALTH_DANGEROUS_COMMANDS = ["health.summary"];
-
-const SMS_DANGEROUS_COMMANDS = ["sms.send", "sms.search"];
+const CONTACTS_CALENDAR_COMMANDS = ["contacts.search", "calendar.events"];
+const PERSONAL_DATA_COMMANDS = [
+  "reminders.list",
+  "photos.latest",
+  "motion.activity",
+  "motion.pedometer",
+];
 
 export const TALK_PTT_COMMANDS = [
   "talk.ptt.start",
@@ -83,9 +75,6 @@ export const TALK_PTT_COMMANDS = [
 // out of the direct watchOS node surface, which has a separate fixed policy.
 export const IOS_WATCH_RELAY_COMMANDS = ["watch.status", "watch.notify"];
 
-// iOS nodes don't implement system.run/which, but they do support notifications.
-const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
-
 const SYSTEM_COMMANDS = [
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
@@ -96,31 +85,22 @@ const SYSTEM_COMMANDS = [
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
 ];
 const DESKTOP_HOST_COMMANDS = new Set<string>([
-  ...NODE_SYSTEM_RUN_COMMANDS,
-  ...NODE_EXEC_APPROVALS_COMMANDS,
-  ...NODE_FILE_COMMANDS,
-  ...NODE_BROWSER_PROXY_COMMANDS,
-  NODE_MCP_TOOLS_CALL_COMMAND,
-  NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
-  ...SCREEN_COMMANDS,
-  NODE_DESKTOP_STREAM_COMMAND,
+  ...SYSTEM_COMMANDS.filter((command) => command !== NODE_SYSTEM_NOTIFY_COMMAND),
+  ...DESKTOP_SCREEN_COMMANDS,
 ]);
-const UNKNOWN_PLATFORM_COMMANDS = [
-  ...CAMERA_COMMANDS,
-  ...MOBILE_NODE_COMMANDS.location,
-  NODE_SYSTEM_NOTIFY_COMMAND,
-];
+const DESKTOP_COMMANDS = [...SYSTEM_COMMANDS, ...DESKTOP_SCREEN_COMMANDS, ...COMPUTER_COMMANDS];
 
 // "High risk" node commands. These can be enabled by explicitly adding them to
 // `gateway.nodes.commands.allow` (and ensuring they're not blocked by commands.deny).
 export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...CAMERA_DANGEROUS_COMMANDS,
   ...SCREEN_DANGEROUS_COMMANDS,
-  ...CONTACTS_DANGEROUS_COMMANDS,
-  ...CALENDAR_DANGEROUS_COMMANDS,
-  ...REMINDERS_DANGEROUS_COMMANDS,
-  ...SMS_DANGEROUS_COMMANDS,
-  ...HEALTH_DANGEROUS_COMMANDS,
+  "contacts.add",
+  "calendar.add",
+  "reminders.add",
+  "sms.send",
+  "sms.search",
+  "health.summary",
 ];
 
 export const PLATFORM_DEFAULTS: Record<PlatformId, string[]> = {
@@ -128,26 +108,20 @@ export const PLATFORM_DEFAULTS: Record<PlatformId, string[]> = {
     ...CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,
     ...MOBILE_NODE_COMMANDS.device,
-    ...CONTACTS_COMMANDS,
-    ...CALENDAR_COMMANDS,
-    ...REMINDERS_COMMANDS,
-    ...PHOTOS_COMMANDS,
-    ...MOTION_COMMANDS,
-    ...IOS_SYSTEM_COMMANDS,
+    ...CONTACTS_CALENDAR_COMMANDS,
+    ...PERSONAL_DATA_COMMANDS,
+    NODE_SYSTEM_NOTIFY_COMMAND,
   ],
-  watchos: [...MOBILE_NODE_COMMANDS.device, ...IOS_SYSTEM_COMMANDS],
+  watchos: [...MOBILE_NODE_COMMANDS.device, NODE_SYSTEM_NOTIFY_COMMAND],
   android: [
     ...CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,
     ...MOBILE_NODE_COMMANDS.androidNotification,
     NODE_SYSTEM_NOTIFY_COMMAND,
     ...ANDROID_DEVICE_COMMANDS,
-    ...CONTACTS_COMMANDS,
-    ...CALENDAR_COMMANDS,
-    ...CALL_LOG_COMMANDS,
-    ...REMINDERS_COMMANDS,
-    ...PHOTOS_COMMANDS,
-    ...MOTION_COMMANDS,
+    ...CONTACTS_CALENDAR_COMMANDS,
+    "callLog.search",
+    ...PERSONAL_DATA_COMMANDS,
     ...MOBILE_UI_COMMANDS,
   ],
   macos: [
@@ -156,26 +130,19 @@ export const PLATFORM_DEFAULTS: Record<PlatformId, string[]> = {
     ...MOBILE_NODE_COMMANDS.location,
     ...MOBILE_NODE_COMMANDS.device,
     NODE_DEVICE_APPS_COMMAND,
-    ...CONTACTS_COMMANDS,
-    ...CALENDAR_COMMANDS,
-    ...REMINDERS_COMMANDS,
-    ...PHOTOS_COMMANDS,
-    ...MOTION_COMMANDS,
-    ...SYSTEM_COMMANDS,
-    ...DESKTOP_SCREEN_COMMANDS,
-    ...COMPUTER_COMMANDS,
+    ...CONTACTS_CALENDAR_COMMANDS,
+    ...PERSONAL_DATA_COMMANDS,
+    ...DESKTOP_COMMANDS,
   ],
-  linux: [...SYSTEM_COMMANDS, ...DESKTOP_SCREEN_COMMANDS, ...COMPUTER_COMMANDS],
+  linux: [...DESKTOP_COMMANDS],
   windows: [
     ...CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,
     ...MOBILE_NODE_COMMANDS.device,
-    ...SYSTEM_COMMANDS,
-    ...DESKTOP_SCREEN_COMMANDS,
-    ...COMPUTER_COMMANDS,
+    ...DESKTOP_COMMANDS,
   ],
   // Fail-safe: unknown metadata should not receive host exec defaults.
-  unknown: [...UNKNOWN_PLATFORM_COMMANDS],
+  unknown: [...CAMERA_COMMANDS, ...MOBILE_NODE_COMMANDS.location, NODE_SYSTEM_NOTIFY_COMMAND],
 };
 type PlatformId = "ios" | "watchos" | "android" | "macos" | "windows" | "linux" | "unknown";
 
@@ -243,53 +210,84 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
   );
 }
 
-export function listDangerousPluginNodeCommands(): string[] {
-  const registry = getActivePluginGatewayNodePolicyRegistry();
-  if (!registry) {
-    return [];
-  }
-  return normalizeUniqueStringEntries([
-    ...registry.nodeHostCommands.flatMap(({ command }) =>
-      command.dangerous === true ? [command.command] : [],
-    ),
-    ...registry.nodeInvokePolicies.flatMap(({ policy }) =>
-      policy.dangerous === true ? policy.commands : [],
-    ),
-  ]);
-}
+type PreparedPluginNodePolicy = {
+  version: number | undefined;
+  dangerous: Set<string>;
+  defaults: Map<PlatformId, string[]>;
+  foregroundRestricted: Set<string>;
+};
+const pluginPolicies = new WeakMap<
+  NonNullable<ReturnType<typeof getActivePluginGatewayNodePolicyRegistry>>,
+  PreparedPluginNodePolicy
+>();
 
-function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
-  // The direct watch transport has a fixed, minimal command surface. Do not let
-  // generic plugin defaults silently expand it when plugins are installed.
-  if (platformId === "watchos") {
-    return [];
-  }
+function getPreparedPluginNodePolicy(): PreparedPluginNodePolicy | undefined {
   const registry = getActivePluginGatewayNodePolicyRegistry();
   if (!registry) {
-    return [];
+    return undefined;
   }
-  return normalizeUniqueStringEntries([
-    ...registry.nodeInvokePolicies.flatMap(({ policy }) =>
-      policy.dangerous !== true && policy.defaultPlatforms?.includes(platformId)
-        ? policy.commands
+  const version = getPluginRegistryVersion(registry);
+  const existing = pluginPolicies.get(registry);
+  if (existing && existing.version === version) {
+    return existing;
+  }
+  // Descriptor metadata belongs to a published registry generation. Node approvals
+  // and config grants remain live inputs below, independent of this prepared fact.
+  const dangerous = new Set(
+    normalizeUniqueStringEntries([
+      ...registry.nodeHostCommands.flatMap(({ command }) =>
+        command.dangerous === true ? [command.command] : [],
+      ),
+      ...registry.nodeInvokePolicies.flatMap(({ policy }) =>
+        policy.dangerous === true ? policy.commands : [],
+      ),
+    ]),
+  );
+  const defaults = new Map<PlatformId, string[]>();
+  const platforms: PlatformId[] = ["unknown", ...PLATFORM_RULES.map(({ id }) => id)];
+  for (const platformId of platforms) {
+    // Direct Watch transport never inherits generic plugin defaults.
+    if (platformId === "watchos") {
+      continue;
+    }
+    defaults.set(
+      platformId,
+      normalizeUniqueStringEntries([
+        ...registry.nodeInvokePolicies.flatMap(({ policy }) =>
+          policy.dangerous !== true && policy.defaultPlatforms?.includes(platformId)
+            ? policy.commands
+            : [],
+        ),
+        ...registry.nodeHostCommands.flatMap(
+          ({ command: { dangerous: isDangerous, agentTool, command } }) =>
+            isDangerous !== true && agentTool?.defaultPlatforms?.includes(platformId)
+              ? [command]
+              : [],
+        ),
+      ]),
+    );
+  }
+  const foregroundRestricted = new Set(
+    registry.nodeInvokePolicies.flatMap(({ policy }) =>
+      policy.foregroundRestrictedOnIos === true
+        ? policy.commands.map((command) => command.trim())
         : [],
     ),
-    ...registry.nodeHostCommands.flatMap(({ command: { dangerous, agentTool, command } }) =>
-      dangerous !== true && agentTool?.defaultPlatforms?.includes(platformId) ? [command] : [],
-    ),
-  ]);
+  );
+  const prepared = { version, dangerous, defaults, foregroundRestricted };
+  pluginPolicies.set(registry, prepared);
+  return prepared;
+}
+
+export function listDangerousPluginNodeCommands(): string[] {
+  return [...(getPreparedPluginNodePolicy()?.dangerous ?? [])];
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
-  const registry = getActivePluginGatewayNodePolicyRegistry();
   const normalized = command.trim();
-  if (!registry || !normalized) {
-    return false;
-  }
-  return registry.nodeInvokePolicies.some(
-    (entry) =>
-      entry.policy.foregroundRestrictedOnIos === true &&
-      entry.policy.commands.some((policyCommand) => policyCommand.trim() === normalized),
+  return (
+    normalized !== "" &&
+    (getPreparedPluginNodePolicy()?.foregroundRestricted.has(normalized) ?? false)
   );
 }
 type NodeCommandPolicyNode = {
@@ -337,7 +335,8 @@ function resolveNodeCommandAllowlistInternal(
       ? IOS_WATCH_RELAY_COMMANDS
       : [];
   const talkCommands = hasTalkSurface(node) ? TALK_PTT_COMMANDS : [];
-  const pluginDefaults = listDefaultPluginNodeCommands(platformId);
+  const pluginPolicy = getPreparedPluginNodePolicy();
+  const pluginDefaults = pluginPolicy?.defaults.get(platformId) ?? [];
   // Desktop host commands need pairing approval instead of ordinary session defaults.
   const approved = desktop
     ? (node?.approvedCommands ?? (isLiveNodeSession(node) ? (node?.commands ?? []) : [])).filter(
@@ -347,15 +346,11 @@ function resolveNodeCommandAllowlistInternal(
   const extra = cfg.gateway?.nodes?.commands?.allow ?? [];
   const deny = new Set(cfg.gateway?.nodes?.commands?.deny ?? []);
   // A plugin `dangerous` flag governs the surface that plugin contributes
-  // (listDefaultPluginNodeCommands) and forces a registered invoke policy. It is
+  // (prepared plugin defaults) and forces a registered invoke policy. It is
   // not authority to revoke a command core itself declares in PLATFORM_DEFAULTS,
   // whose grant chain is node-local enablement plus pairing approval. Letting it
   // do so disabled desktop `computer.act` on every Gateway that auto-starts a
   // bundled computer-use provider plugin.
-  const baseCommands = new Set(base);
-  const dangerousPluginCommands = new Set(
-    listDangerousPluginNodeCommands().filter((command) => !baseCommands.has(command)),
-  );
   // Dangerous built-ins that also appear in PLATFORM_DEFAULTS stay declarable
   // at pairing but do not enter the runtime allowlist by default.
   const dangerousBuiltinCommands = new Set(DEFAULT_DANGEROUS_NODE_COMMANDS);
@@ -367,7 +362,7 @@ function resolveNodeCommandAllowlistInternal(
       .filter(
         (cmd) =>
           cmd &&
-          !dangerousPluginCommands.has(cmd) &&
+          (!pluginPolicy?.dangerous.has(cmd) || base.includes(cmd)) &&
           (pairing || !dangerousBuiltinCommands.has(cmd)),
       ),
   );
@@ -484,8 +479,11 @@ function formatRequiredNodeCommandUnavailable(
     const pluginId = getActivePluginGatewayNodePolicyRegistry()?.nodeHostCommands.find(
       (entry) => entry.command.command === command,
     )?.pluginId;
+    if (pluginId === "codex") {
+      return "This model uses the Codex harness, which is unavailable on this device. Install it on that node (openclaw plugins install @openclaw/codex), or enable an existing install (openclaw plugins enable codex). Then restart the node (openclaw node restart) and approve its updated command surface, or choose a model using the OpenClaw harness.";
+    }
     const enable = pluginId
-      ? `${pluginId === "codex" ? "install the codex plugin on that node if missing (openclaw plugins install @openclaw/codex), then " : ""}enable the ${pluginId} plugin on that node (openclaw plugins enable ${pluginId})`
+      ? `enable the ${pluginId} plugin on that node (openclaw plugins enable ${pluginId})`
       : "enable the plugin or node capability that provides this command on that node";
     return `${prefix} is not advertised by node ${nodeId}; ${enable}, then restart the node (openclaw node restart) and approve its updated command surface`;
   }

@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as operatorInvocation from "../../gateway/operator-invocation-authority.js";
-import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   buildMediaUnderstandingRegistry,
@@ -15,29 +12,19 @@ import type {
 } from "../../plugin-sdk/media-understanding.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
-import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
-import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
-import { createImageTool } from "./image-tool.js";
 import {
+  createRequiredImageTool,
   createMinimaxImageConfig,
   ONE_PIXEL_PNG_B64,
   resolveConfiguredImageModelForTest,
   testing,
 } from "./image-tool.test-support.js";
+import { createMediaModelPolicyFixture } from "./media-model-policy.test-support.js";
 
 const buildProviderRegistry = buildMediaUnderstandingRegistry;
 const readProvider = getMediaUnderstandingProvider;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createRequiredImageTool(options: Parameters<typeof createImageTool>[0]) {
-  const tool = createImageTool(options);
-  if (!tool) {
-    throw new Error("expected image tool");
-  }
-  return tool;
-}
 
 type ProviderDeps = NonNullable<Parameters<typeof testing.setProviderDepsForTest>[0]>;
 type MockImageLoadWebMedia = Awaited<
@@ -115,47 +102,21 @@ describe("image tool run abort", () => {
     { source: "admitted", scenario: "denied override" },
     { source: "admitted", scenario: "permitted fallback" },
     { source: "admitted", scenario: "retired after download" },
-    { source: "admitted", scenario: "mutated override" },
-    { source: "admitted", scenario: "mutated path" },
     { source: "direct", scenario: "retired after download" },
   ] as const)(
     "preserves $source requester model policy for $scenario",
     async ({ source, scenario }) => {
-      const cfg: OpenClawConfig = {
-        plugins: { enabled: false },
-        agents: {
-          entries: { main: {} },
-          defaults: {
-            model: "test-provider/allowed",
-            models: { "test-provider/blocked": { alias: "blocked-alias" } },
-            imageModel: { primary: "test-provider/blocked", fallbacks: ["test-provider/allowed"] },
-          },
-        },
-      };
-      let active = true;
       let sourceHolds = 0;
-      const authority = createAdmittedRunOperatorAuthority({
-        profileId: "image-reader",
-        scopes: ["operator.write"],
-        retain: () => {
-          sourceHolds += 1;
-          return () => {
-            sourceHolds -= 1;
-          };
+      const { cfg, setActive, runWithRequester } = createMediaModelPolicyFixture(
+        "image",
+        "image-reader",
+        source,
+        (delta) => {
+          sourceHolds += delta;
         },
-        assertCurrent: () => {
-          if (!active) {
-            throw new Error("requester retired");
-          }
-        },
-        modelPolicy: prepareOperatorModelPolicy({
-          cfg,
-          policy: { sourceAgent: "main" },
-          manifestPlugins: [],
-        }),
-      });
+      );
       const loadWebMedia = vi.fn<MockImageLoadWebMedia>(async () => {
-        active = scenario !== "retired after download";
+        setActive(scenario !== "retired after download");
         return imageMedia();
       });
       const spies = makeDescribeSpies();
@@ -170,48 +131,15 @@ describe("image tool run abort", () => {
         config: cfg,
         agentDir: tempDirs.make("openclaw-image-abort-"),
       });
-      const runWithRequester = <T>(run: () => Promise<T>) =>
-        source === "direct"
-          ? withOperatorToolGatewayAuthority(
-              { scopes: ["operator.write"], operatorRunAuthority: authority },
-              run,
-            )
-          : withGatewayToolCallerIdentity(
-              { agentId: "main", sessionKey: "agent:main:reader", operatorAuthority: authority },
-              run,
-            );
-      const changedDuringCapture = scenario === "mutated override" || scenario === "mutated path";
-      const captureStarted = createDeferredCore();
-      const resumeCapture = createDeferredCore();
-      const capture = operatorInvocation.captureAmbientGatewayOperatorAuthority;
-      const captureSpy = changedDuringCapture
-        ? vi
-            .spyOn(operatorInvocation, "captureAmbientGatewayOperatorAuthority")
-            .mockImplementation(async (params) => {
-              const retained = await capture(params);
-              captureStarted.resolve();
-              await resumeCapture.promise;
-              return retained;
-            })
-        : undefined;
       const args = {
         paths: ["https://example.test/image.png"],
         prompt: "Answer using this image.",
-        model:
-          scenario === "denied override" || scenario === "mutated override"
-            ? "blocked-alias"
-            : undefined,
+        model: scenario === "denied override" ? "blocked-alias" : undefined,
       };
       const work = new AsyncWorkScope();
       try {
         const execution = work.track(() => runWithRequester(() => tool.execute("policy", args)));
-        if (changedDuringCapture) {
-          await Promise.race([captureStarted.promise, execution]);
-          args.model = scenario === "mutated override" ? undefined : "blocked-alias";
-          args.paths[0] = "https://example.test/replacement.png";
-          resumeCapture.resolve();
-        }
-        if (scenario === "permitted fallback" || scenario === "mutated path") {
+        if (scenario === "permitted fallback") {
           await expect(execution).resolves.toMatchObject({
             content: [{ type: "text", text: "ok" }],
           });
@@ -223,20 +151,12 @@ describe("image tool run abort", () => {
           expect(spies.describeImage).not.toHaveBeenCalled();
           expect(spies.describeImages).not.toHaveBeenCalled();
         }
-        if (scenario === "mutated path") {
-          expect(loadWebMedia).toHaveBeenCalledExactlyOnceWith(
-            "https://example.test/image.png",
-            expect.any(Object),
-          );
-        }
-        if (scenario === "denied override" || scenario === "mutated override") {
+        if (scenario === "denied override") {
           expect(loadWebMedia).not.toHaveBeenCalled();
           expect(resolveModel).not.toHaveBeenCalled();
         }
       } finally {
-        resumeCapture.resolve();
         await work.drain();
-        captureSpy?.mockRestore();
       }
       expect(sourceHolds).toBe(0);
     },

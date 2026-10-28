@@ -79,13 +79,16 @@ export async function failPromptContextSequence(
 }
 
 export function isTelegramSkippableChunkSendError(error: unknown): boolean {
+  if (
+    isTelegramBadRequestError(error) &&
+    TELEGRAM_TERMINAL_BAD_REQUEST_RE.test(formatErrorMessage(error))
+  ) {
+    return false;
+  }
   if (isSafeToRetrySendError(error)) {
     return true;
   }
   // A structured Telegram 400 is a definite rejection, so later chunks cannot
   // duplicate this one. HTTP/5xx failures remain ambiguous and stop immediately.
-  return (
-    isTelegramBadRequestError(error) &&
-    !TELEGRAM_TERMINAL_BAD_REQUEST_RE.test(formatErrorMessage(error))
-  );
+  return isTelegramBadRequestError(error);
 }

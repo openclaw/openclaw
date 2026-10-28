@@ -2,16 +2,17 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import type { RealtimeVoiceBridge } from "../../talk/provider-types.js";
+import {
+  activate,
+  controlOptions,
+  createControlFixture,
+  type ControlOwner,
+} from "./client-control-fixture.test-support.js";
 import {
   closeTalkClientGatewayControlSession,
   createTalkClientGatewayControlOwner,
 } from "./client-gateway-control.js";
-import {
-  sessionTarget,
-  controlContext,
-  controlBridge,
-} from "./client-gateway-control.test-support.js";
+import { sessionTarget, controlContext } from "./client-gateway-control.test-support.js";
 import { cleanupTalkConnection } from "./session-registry.js";
 
 describe("Talk client Gateway control teardown", () => {
@@ -25,19 +26,13 @@ describe("Talk client Gateway control teardown", () => {
       started.resolve();
       return await result.promise;
     });
-    const owner = createTalkClientGatewayControlOwner({
+    const { owner } = createControlFixture({
       voiceSessionId: "voice-delegation-detach",
-      sessionTarget,
       connId: "conn-delegation-detach",
-      context: controlContext(),
       runToolAgentConsult: runAgentConsult,
       runAgentConsult,
-      appendTranscript: vi.fn(async () => undefined),
-      flushTranscript: vi.fn(async () => undefined),
-      closeLogicalSession: vi.fn(async () => undefined),
     });
-    await owner.adoptProvider(vi.fn(async () => undefined));
-    owner.activate();
+    await activate(owner);
     const accepted = owner.runAgentConsult({
       prompt: "accepted task",
       signal: providerController.signal,
@@ -59,11 +54,18 @@ describe("Talk client Gateway control teardown", () => {
     }
   });
 
-  it.each([false, true])(
-    "joins provider and logical cleanup when the owning client disconnects (provider rejects: %s)",
-    async (rejectProvider) => {
+  it.each([
+    { transition: "disconnect", rejectProvider: false },
+    { transition: "disconnect", rejectProvider: true },
+    { transition: "close", rejectProvider: false },
+    { transition: "replacement", rejectProvider: false },
+  ] as const)(
+    "joins $transition teardown (provider rejects: $rejectProvider)",
+    async ({ transition, rejectProvider }) => {
       const providerStarted = createDeferred();
       const finishProvider = createDeferred();
+      const writeStarted = createDeferred();
+      const finishWrite = createDeferred();
       const failure = new Error("provider close failed");
       const closeProvider = vi.fn(async () => {
         providerStarted.resolve();
@@ -72,25 +74,34 @@ describe("Talk client Gateway control teardown", () => {
           throw failure;
         }
       });
-      const closeLogicalSession = vi.fn(async () => undefined);
       const ownerWarn = vi.fn();
-      const context = controlContext(ownerWarn);
       const log = { warn: vi.fn() };
-      const owner = createTalkClientGatewayControlOwner({
+      const common = controlOptions({
         voiceSessionId: "voice-disconnect",
-        sessionTarget,
         connId: "conn-disconnect",
-        context,
-        runToolAgentConsult: vi.fn(async () => ({ text: "done" })),
-        runAgentConsult: vi.fn(async () => ({ text: "done" })),
-        appendTranscript: vi.fn(async () => undefined),
-        flushTranscript: vi.fn(async () => undefined),
-        closeLogicalSession,
+        context: controlContext(ownerWarn),
       });
-      await owner.adoptProvider(closeProvider);
-      owner.activate();
-
-      cleanupTalkConnection("conn-disconnect", log);
+      const owner = createTalkClientGatewayControlOwner({
+        ...common,
+        flushTranscript: async () => {
+          writeStarted.resolve();
+          if (transition !== "disconnect") {
+            await finishWrite.promise;
+          }
+        },
+      });
+      await activate(owner, closeProvider);
+      let replacement: ControlOwner | undefined;
+      if (transition === "replacement") {
+        replacement = createTalkClientGatewayControlOwner(common);
+        await activate(replacement);
+      } else if (transition === "close") {
+        void owner.close();
+      }
+      if (transition !== "disconnect") {
+        await providerStarted.promise;
+      }
+      cleanupTalkConnection(common.connId, log);
       await providerStarted.promise;
       let drained = false;
       const draining = drainGlobalSingletonLifecycleState("restart").then(() => {
@@ -98,12 +109,22 @@ describe("Talk client Gateway control teardown", () => {
       });
       try {
         expect(() => owner.assertOpen()).toThrow("closed");
+        await expect(owner.runAgentConsult({ prompt: "late task" })).rejects.toThrow("closed");
         await nextEventLoopTurn();
         expect(drained).toBe(false);
-        expect(closeLogicalSession).not.toHaveBeenCalled();
+        if (transition === "disconnect") {
+          expect(common.closeLogicalSession).not.toHaveBeenCalled();
+        }
         finishProvider.resolve();
+        await writeStarted.promise;
+        if (transition !== "disconnect") {
+          await nextEventLoopTurn();
+          expect(drained).toBe(false);
+          finishWrite.resolve();
+        }
         await draining;
-        expect(closeLogicalSession).toHaveBeenCalledOnce();
+        expect(common.closeLogicalSession).toHaveBeenCalledOnce();
+        expect(common.runToolAgentConsult).not.toHaveBeenCalled();
         expect(closeProvider).toHaveBeenCalledOnce();
         if (rejectProvider) {
           expect(ownerWarn).toHaveBeenCalledWith(
@@ -114,74 +135,9 @@ describe("Talk client Gateway control teardown", () => {
           expect(ownerWarn).not.toHaveBeenCalled();
         }
         expect(log.warn).not.toHaveBeenCalled();
-        cleanupTalkConnection("conn-disconnect", log);
+        cleanupTalkConnection(common.connId, log);
         await nextEventLoopTurn();
         expect(closeProvider).toHaveBeenCalledOnce();
-      } finally {
-        finishProvider.resolve();
-        await Promise.allSettled([owner.close(), draining]);
-      }
-    },
-  );
-
-  it.each(["close", "replacement"] as const)(
-    "joins teardown already started by %s when the connection disconnects",
-    async (transition) => {
-      const providerStarted = createDeferred();
-      const finishProvider = createDeferred();
-      const writeStarted = createDeferred();
-      const finishWrite = createDeferred();
-      const common = {
-        voiceSessionId: `voice-pending-close-${transition}`,
-        sessionTarget,
-        connId: `conn-pending-close-${transition}`,
-        context: controlContext(),
-        runToolAgentConsult: vi.fn(async () => ({ text: "unused" })),
-        runAgentConsult: vi.fn(async () => ({ text: "unused" })),
-        appendTranscript: vi.fn(async () => undefined),
-        closeLogicalSession: vi.fn(async () => undefined),
-      };
-      const owner = createTalkClientGatewayControlOwner({
-        ...common,
-        flushTranscript: async () => {
-          writeStarted.resolve();
-          await finishWrite.promise;
-        },
-      });
-      await owner.adoptProvider(async () => {
-        providerStarted.resolve();
-        await finishProvider.promise;
-      });
-      owner.activate();
-      let replacement: ReturnType<typeof createTalkClientGatewayControlOwner> | undefined;
-      if (transition === "replacement") {
-        replacement = createTalkClientGatewayControlOwner({
-          ...common,
-          flushTranscript: async () => {},
-        });
-        await replacement.adoptProvider(async () => {});
-        replacement.activate();
-      } else {
-        void owner.close();
-      }
-      await providerStarted.promise;
-      cleanupTalkConnection(common.connId, { warn: vi.fn() });
-      let drained = false;
-      const draining = drainGlobalSingletonLifecycleState("restart").then(() => {
-        drained = true;
-      });
-      try {
-        await expect(owner.runAgentConsult({ prompt: "late task" })).rejects.toThrow("closed");
-        await nextEventLoopTurn();
-        expect(drained).toBe(false);
-        finishProvider.resolve();
-        await writeStarted.promise;
-        await nextEventLoopTurn();
-        expect(drained).toBe(false);
-        finishWrite.resolve();
-        await draining;
-        expect(common.closeLogicalSession).toHaveBeenCalledOnce();
-        expect(common.runToolAgentConsult).not.toHaveBeenCalled();
         await expect(
           closeTalkClientGatewayControlSession({
             voiceSessionId: common.voiceSessionId,
@@ -206,32 +162,23 @@ describe("Talk client Gateway control teardown", () => {
       runStarted.resolve();
       return await consult.promise;
     });
-    const appendTranscript = vi.fn(
-      async (_entry: { entryId: string; role: "user" | "assistant"; text: string }) => undefined,
-    );
-    const closeLogicalSession = vi.fn(async () => undefined);
-    const common = {
+    const {
+      owner: first,
+      bridge: firstBridge,
+      closeProvider: closeFirst,
+      options: common,
+      appendTranscript,
+      closeLogicalSession,
+    } = createControlFixture({
       voiceSessionId: "voice-replacement",
-      sessionTarget,
       connId: "conn-replacement",
-      context: controlContext(),
       runToolAgentConsult: runAgentConsult,
       runAgentConsult,
-      appendTranscript,
-      flushTranscript: vi.fn(async () => undefined),
-      closeLogicalSession,
-    };
-    const firstBridge = controlBridge();
-    const secondBridge = {
-      ...firstBridge,
-      submitToolResult: vi.fn(),
-    } satisfies RealtimeVoiceBridge;
-    const closeFirst = vi.fn(async () => undefined);
+    });
+    const secondBridge = { ...firstBridge, submitToolResult: vi.fn() };
     const closeSecond = vi.fn(async () => undefined);
-    const first = createTalkClientGatewayControlOwner(common);
     first.control.bindBridge(firstBridge);
-    await first.adoptProvider(closeFirst);
-    first.activate();
+    await activate(first, closeFirst);
     first.control.onTranscript?.("user", "first transport", true);
     first.control.onToolCall?.({
       itemId: "item-replacement",
@@ -243,8 +190,7 @@ describe("Talk client Gateway control teardown", () => {
 
     const second = createTalkClientGatewayControlOwner(common);
     second.control.bindBridge(secondBridge);
-    await second.adoptProvider(closeSecond);
-    second.activate();
+    await activate(second, closeSecond);
     await vi.waitFor(() => expect(closeFirst).toHaveBeenCalledOnce());
     expect(() => first.control.bindControl?.({ sendUserMessage: vi.fn() })).toThrow("closed");
     first.control.onClose?.("completed");
@@ -255,9 +201,10 @@ describe("Talk client Gateway control teardown", () => {
     expect(closeLogicalSession).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(appendTranscript).toHaveBeenCalledTimes(2));
     const entryIds = appendTranscript.mock.calls.map(([entry]) => entry.entryId);
-    expect(entryIds).toHaveLength(2);
-    expect(entryIds[0]).toMatch(/^gateway-[0-9a-f-]+-1$/);
-    expect(entryIds[1]).toMatch(/^gateway-[0-9a-f-]+-1$/);
+    expect(entryIds).toEqual([
+      expect.stringMatching(/^gateway-[0-9a-f-]+-1$/),
+      expect.stringMatching(/^gateway-[0-9a-f-]+-1$/),
+    ]);
     expect(entryIds[0]).not.toBe(entryIds[1]);
 
     consult.resolve({ text: "done" });

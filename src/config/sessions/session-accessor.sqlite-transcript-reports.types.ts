@@ -7,48 +7,6 @@ import type {
 import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
 import type { InternalSessionEntry } from "./types.js";
 
-/** Selection and commit share the predecessor predicate; age alone never proves lost ownership. */
-export function isStartupSessionSettlementCandidate(
-  entry: InternalSessionEntry,
-  processStartedAt: number,
-): boolean {
-  return (
-    entry.status === "running" &&
-    !entry.incognito &&
-    Number.isFinite(entry.updatedAt) &&
-    entry.updatedAt < processStartedAt &&
-    (entry.archivedAt !== undefined ||
-      (typeof entry.startedAt === "number" &&
-        Number.isFinite(entry.startedAt) &&
-        entry.startedAt < processStartedAt &&
-        !entry.restartRecoveryRuns?.length &&
-        !entry.subagentRecovery &&
-        !entry.mainRestartRecovery &&
-        !entry.pendingFinalDelivery &&
-        !entry.pendingDeliveryNotice &&
-        !entry.initializationPending &&
-        !entry.restartRecoveryBeforeAgentReplyState &&
-        !entry.restartRecoveryDeliveryReceiptState &&
-        !entry.restartRecoveryDeliveryRunId &&
-        !entry.restartRecoveryDeliverySourceRunId))
-  );
-}
-
-export type StartupSessionObservation = {
-  expected: Pick<
-    InternalSessionEntry,
-    "sessionId" | "lifecycleRevision" | "lifecycleRunId" | "updatedAt" | "startedAt" | "archivedAt"
-  >;
-  processStartedAt: number;
-  endedAt: number;
-  gatewayOwner: { owner: string; pid: number };
-};
-export type StartupSessionSettlement = { observation: StartupSessionObservation } & (
-  | { kind: "archive" }
-  | { kind: "interrupt"; runId: string; error: string; report: CustomMessageReportAppend }
-);
-export type StartupSessionSettlementOutcome = "archived" | "interrupted" | "retained" | "unchanged";
-
 export type AbortedSessionTranscriptPartial = {
   runId: string;
   message: Record<string, unknown>;
@@ -70,6 +28,7 @@ export type CustomMessageReportAppend = {
   customType: string;
   content: string;
   display: boolean;
+  excludeFromContext?: boolean;
   details?: unknown;
 };
 export type TranscriptReport =
@@ -77,7 +36,6 @@ export type TranscriptReport =
   | {
       kind: "custom";
       customTypes: readonly string[];
-      suppressWhenAssistantRun?: string;
       /** Pure selection; a definite concurrent transcript change may repeat it. */
       selectReport: (
         latest: CustomMessageReport | undefined,
@@ -90,10 +48,7 @@ export type SelectedTranscriptReport =
 
 export type TranscriptReportSelection =
   | { kind: "assistant"; responseId: string }
-  | Pick<
-      Extract<TranscriptReport, { kind: "custom" }>,
-      "kind" | "customTypes" | "suppressWhenAssistantRun"
-    >;
+  | Pick<Extract<TranscriptReport, { kind: "custom" }>, "kind" | "customTypes">;
 
 export type PreparedTranscriptReport = {
   appendParentId: string | null;
@@ -107,16 +62,11 @@ export type TranscriptReportCommit = {
   cliHistoryChanged?: boolean;
   abortedPartial?: AbortedSessionTranscriptPartialResult;
   sessionEntryChanged?: boolean;
+  entry?: InternalSessionEntry;
+  fullEntry?: InternalSessionEntry;
 };
 
 export type TranscriptReportWorkerOperations = {
-  startupSettlement: {
-    input: StartupSessionSettlement;
-    output: Result<
-      TranscriptReportCommit & { outcome: StartupSessionSettlementOutcome },
-      TranscriptAppendRefusal
-    >;
-  };
   abortedPartial: {
     input: AbortedSessionTranscriptPartial & {
       preparedMessage: PreparedTranscriptMessageAppend<Record<string, unknown>>;

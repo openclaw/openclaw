@@ -7,7 +7,13 @@ import { join } from "node:path";
 export const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 /** List git-tracked test files below a root, falling back to recursive filesystem discovery. */
-export function listTrackedTestFiles(rootDir: string, suffix = ".test.ts"): string[] {
+export function listTrackedTestFiles(rootDir: string, suffix?: string): string[] {
+  const matches = (file: string) =>
+    suffix
+      ? file.endsWith(suffix)
+      : file.endsWith(".test.ts") ||
+        (file.endsWith(".test.tsx") &&
+          /(?:^|\/)(?:ui\/src\/|extensions\/[^/]+\/browser\/)/u.test(file));
   const result = spawnSync("git", ["ls-files", "--", rootDir], {
     encoding: "utf8",
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
@@ -17,7 +23,7 @@ export function listTrackedTestFiles(rootDir: string, suffix = ".test.ts"): stri
     return result.stdout
       .split("\n")
       .map((line) => line.trim().replaceAll("\\", "/"))
-      .filter((line) => line.endsWith(suffix))
+      .filter(matches)
       .toSorted((a, b) => a.localeCompare(b));
   }
 
@@ -33,7 +39,7 @@ export function listTrackedTestFiles(rootDir: string, suffix = ".test.ts"): stri
         visit(path);
         continue;
       }
-      if (entry.isFile() && entry.name.endsWith(suffix)) {
+      if (entry.isFile() && matches(path.replaceAll("\\", "/"))) {
         files.push(path.replaceAll("\\", "/"));
       }
     }
@@ -47,7 +53,5 @@ export function isStripeEligibleTestFile(
   file: string,
   unitFastFiles: ReadonlySet<string>,
 ): boolean {
-  return (
-    !unitFastFiles.has(file) && !file.endsWith(".e2e.test.ts") && !file.endsWith(".live.test.ts")
-  );
+  return !unitFastFiles.has(file) && !/\.(?:e2e|live)\.test\.tsx?$/u.test(file);
 }

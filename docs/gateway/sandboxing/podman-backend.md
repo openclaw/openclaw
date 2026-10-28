@@ -26,7 +26,7 @@ Rootless Podman defaults to `--userns=keep-id` for writable workspace mounts. A 
         scope: "session",
         workspaceAccess: "rw",
         docker: {
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
           network: "none",
           readOnlyRoot: true,
           capDrop: ["ALL"],
@@ -40,7 +40,7 @@ Rootless Podman defaults to `--userns=keep-id` for writable workspace mounts. A 
 Build or pull the sandbox image into the selected Podman store before enabling the backend. From a source checkout, build the same sandbox Dockerfile with Podman:
 
 ```bash
-podman build -t openclaw-sandbox:bookworm-slim -f scripts/docker/sandbox/Dockerfile .
+podman build -t openclaw-sandbox:trixie-slim -f scripts/docker/sandbox/Dockerfile .
 ```
 
 ## Changing connections and upgrading existing sandboxes
@@ -75,7 +75,7 @@ Retire the old sandbox through its recorded endpoint before switching:
    `openclaw sandbox recreate --session "<sessionKey>"`. Review the preview before
    confirming. This removes the selected container; mounted workspace files remain.
 5. Set the intended `CONTAINER_CONNECTION` and unset the unused `CONTAINER_HOST`
-   and `CONTAINER_SSHKEY`. Apply that environment to the Gateway as well. Ensure the
+   and `CONTAINER_SSHKEY`. Apply that environment to the Gateway as well. Check that the
    sandbox image and workspace are available on the selected engine. The next use
    creates a new sandbox there; it does not transfer the old container's writable layer.
 
@@ -108,7 +108,9 @@ Podman notes:
 A containerized Gateway creates sibling sandboxes through the host's local Podman engine or Podman Machine.
 
 - **Use host paths consistently**: configure `workspace` with its host absolute path, then mount the complete state root and workspace into the Gateway at those same paths. Otherwise the sandbox may mount the workspace while the Gateway cannot write skill-workspace files.
-- **Podman Machine setup**: bind sources must be under the host home directory. Set the Gateway `HOME` to that path and point `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_CONFIG_DIR` at the canonical mounted state root. The image needs a compatible Podman client, its named connection and SSH identity, plus a dedicated writable SSH directory for known-host metadata.
+- **Podman Machine setup**: bind sources must be under the host home directory. Set the Gateway `HOME` to that path and point `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_CONFIG_DIR` at the resolved mounted state root. The image needs a compatible Podman client, its named connection and SSH identity, plus a dedicated writable SSH directory for known-host metadata.
 - **Keep Podman access Gateway-only**: never mount the engine socket, connection material, or SSH identity into agent sandboxes. Arbitrary remote connections are unsupported; use the SSH backend instead.
 
 </Warning>
+
+Each running rootless Podman container holds a session keyring charged to the engine host user's kernel key quota. Busy hosts can exhaust the default quota and fail with `create keyring: Disk quota exceeded` even with free disk space. On the engine host, use `sudo sysctl -w kernel.keys.maxkeys=2000 kernel.keys.maxbytes=200000` and persist both values in a file under `/etc/sysctl.d/`. OpenClaw retries a quota failure once after stopping at most one least-recently-used inactive sandbox; active contexts, live or uncertain exec processes, and persistent Docker exec custody prevent reclamation. Stopping preserves the writable layer but ends processes and clears `tmpfs`; regular idle and age removal policies are unchanged.

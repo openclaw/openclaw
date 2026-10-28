@@ -1,11 +1,17 @@
-// Update hold tests cover campaign deferral and its validated schedule response.
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { updateHandlers } from "./update.js";
 
 type UpdateScheduleState =
   import("../../../packages/gateway-protocol/src/index.js").UpdateScheduleState;
 type UpdateCampaignState = NonNullable<UpdateScheduleState["campaign"]>;
+const campaign: UpdateCampaignState = {
+  id: "campaign-1",
+  state: "waiting-for-idle",
+  announcedAtMs: 1,
+  forceAtMs: 900_001,
+  updatedAtMs: 1,
+};
+const heldCampaign = { ...campaign, holdUntilMs: 3_600_001, forceAtMs: 4_500_001 };
 
 const holdUpdateCampaignMock = vi.hoisted(() => vi.fn(() => false));
 const getUpdateCampaignStateMock = vi.hoisted(() =>
@@ -31,28 +37,17 @@ vi.mock("../../infra/update-status-state.js", () => ({
   getUpdateSchedule: getUpdateScheduleMock,
 }));
 
-vi.mock("./validation.js", () => ({
-  assertValidParams: () => true,
-}));
-
 beforeEach(() => {
   campaignOwner.present = true;
-  holdUpdateCampaignMock.mockReset();
-  holdUpdateCampaignMock.mockReturnValue(false);
-  getUpdateCampaignStateMock.mockReset();
-  getUpdateCampaignStateMock.mockReturnValue(undefined);
-  getUpdateScheduleMock.mockReset();
-  getUpdateScheduleMock.mockReturnValue(null);
+  holdUpdateCampaignMock.mockReset().mockReturnValue(false);
+  getUpdateCampaignStateMock.mockReset().mockReturnValue(undefined);
+  getUpdateScheduleMock.mockReset().mockReturnValue(null);
 });
 
-async function invokeUpdateHold(
-  respond: ReturnType<typeof vi.fn>,
-  logInfo = vi.fn(),
-): Promise<void> {
-  await expectDefined(
-    updateHandlers["update.hold"],
-    'updateHandlers["update.hold"] test invariant',
-  )({
+async function invokeUpdateHold() {
+  const respond = vi.fn();
+  const logInfo = vi.fn();
+  await updateHandlers["update.hold"]!({
     params: {},
     respond,
     client: {
@@ -62,6 +57,7 @@ async function invokeUpdateHold(
     },
     context: { logGateway: { info: logInfo } },
   } as never);
+  return { respond, logInfo };
 }
 
 describe("update.hold", () => {
@@ -70,35 +66,10 @@ describe("update.hold", () => {
     getUpdateScheduleMock.mockReturnValueOnce({
       channel: "beta",
       autoEnabled: true,
-      campaign: {
-        id: "campaign-1",
-        state: "waiting-for-idle",
-        announcedAtMs: 1,
-        holdUntilMs: 3_600_001,
-        forceAtMs: 4_500_001,
-        updatedAtMs: 1,
-      },
+      campaign: heldCampaign,
     });
-    getUpdateCampaignStateMock
-      .mockReturnValueOnce({
-        id: "campaign-1",
-        state: "waiting-for-idle",
-        announcedAtMs: 1,
-        forceAtMs: 900_001,
-        updatedAtMs: 1,
-      })
-      .mockReturnValueOnce({
-        id: "campaign-1",
-        state: "waiting-for-idle",
-        announcedAtMs: 1,
-        holdUntilMs: 3_600_001,
-        forceAtMs: 4_500_001,
-        updatedAtMs: 1,
-      });
-    const respond = vi.fn();
-    const logInfo = vi.fn();
-
-    await invokeUpdateHold(respond, logInfo);
+    getUpdateCampaignStateMock.mockReturnValueOnce(campaign).mockReturnValueOnce(heldCampaign);
+    const { respond, logInfo } = await invokeUpdateHold();
 
     const result = {
       ok: true,
@@ -115,51 +86,16 @@ describe("update.hold", () => {
     );
   });
 
-  it("returns ok=false when there is no active campaign", async () => {
-    campaignOwner.present = false;
-    const respond = vi.fn();
-    const logInfo = vi.fn();
-
-    await invokeUpdateHold(respond, logInfo);
-
-    expect(respond).toHaveBeenCalledWith(true, { ok: false });
-    expect(holdUpdateCampaignMock).not.toHaveBeenCalled();
-    expect(logInfo).toHaveBeenCalledWith(
-      expect.stringMatching(/^update\.hold refused actor=control-ui /),
-      { reason: "no campaign" },
-    );
-  });
-
   it.each([
-    {
-      name: "an applying campaign",
-      campaign: {
-        id: "campaign-1",
-        state: "applying" as const,
-        announcedAtMs: 1,
-        forceAtMs: 900_001,
-        updatedAtMs: 1,
-      },
-      reason: "applying",
-    },
-    {
-      name: "an already-held campaign",
-      campaign: {
-        id: "campaign-1",
-        state: "waiting-for-idle" as const,
-        announcedAtMs: 1,
-        holdUntilMs: 3_600_001,
-        forceAtMs: 4_500_001,
-        updatedAtMs: 1,
-      },
-      reason: "already held",
-    },
-  ])("logs why $name cannot be held", async ({ campaign, reason }) => {
-    getUpdateCampaignStateMock.mockReturnValueOnce(campaign);
-    const logInfo = vi.fn();
-
-    await invokeUpdateHold(vi.fn(), logInfo);
-
+    ["no campaign", undefined],
+    ["applying", { ...campaign, state: "applying" }],
+    ["already held", heldCampaign],
+  ] as const)("refuses a hold: %s", async (reason, currentCampaign) => {
+    campaignOwner.present = currentCampaign !== undefined;
+    getUpdateCampaignStateMock.mockReturnValueOnce(currentCampaign);
+    const { respond, logInfo } = await invokeUpdateHold();
+    expect(respond).toHaveBeenCalledWith(true, { ok: false });
+    expect(holdUpdateCampaignMock).toHaveBeenCalledTimes(currentCampaign ? 1 : 0);
     expect(logInfo).toHaveBeenCalledWith(
       expect.stringMatching(/^update\.hold refused actor=control-ui /),
       { reason },

@@ -681,10 +681,10 @@ extension OpenClawChatViewModel {
                 }
             case .reconcile:
                 guard await self.reconcileOutboxBranchScope(
-                    session,
+                    self.outboxBranchScope(for: session),
                     branches: response.branches,
                     previousState: previousState,
-                    connectionGeneration: connectionGeneration)
+                    capturedSession: session)
                 else {
                     self.pauseOutboxBranchScope(session)
                     return false

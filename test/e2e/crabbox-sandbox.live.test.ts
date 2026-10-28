@@ -26,6 +26,10 @@ import { readRegistry } from "../../src/agents/sandbox/registry.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../src/config/config.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { closeOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
+import {
+  assertLiveCrabboxClassSizing,
+  resolveLiveCrabboxSandboxConfig,
+} from "./crabbox-sandbox.test-support.js";
 
 const LIVE = process.env.OPENCLAW_E2E_CRABBOX === "1";
 const LIVE_TIMEOUT_MS = 20 * 60_000;
@@ -50,13 +54,7 @@ describe.skipIf(!LIVE)("Crabbox registered sandbox backend (live)", () => {
       const configPath = path.join(root, "openclaw.json");
       const tokenWaitMs = Number(process.env.OPENCLAW_E2E_CRABBOX_TOKEN_WAIT_MS ?? 0);
       expect(Number.isSafeInteger(tokenWaitMs) && tokenWaitMs >= 0).toBe(true);
-      const sandbox = {
-        provider: process.env.OPENCLAW_E2E_CRABBOX_PROVIDER,
-        class: process.env.OPENCLAW_E2E_CRABBOX_CLASS,
-        binary: process.env.OPENCLAW_E2E_CRABBOX_BINARY,
-        ttl: "30m",
-        idleTimeout: "15m",
-      };
+      const sandbox = resolveLiveCrabboxSandboxConfig(process.env);
       const config: OpenClawConfig = {
         agents: {
           defaults: {
@@ -149,6 +147,18 @@ describe.skipIf(!LIVE)("Crabbox registered sandbox backend (live)", () => {
         }
       }
       try {
+        // An inherited exact type overrides --class, so reject it before either warmup path.
+        assertLiveCrabboxClassSizing(
+          await crabbox(
+            [
+              "config",
+              "show",
+              "--json",
+              ...(sandbox.provider ? ["--provider", sandbox.provider] : []),
+            ],
+            workspaceDir,
+          ),
+        );
         await expect(resolve("before-config-repair")).rejects.toThrow(
           /requires a build with claim-owned/,
         );

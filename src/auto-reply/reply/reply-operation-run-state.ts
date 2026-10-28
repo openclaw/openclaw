@@ -1,66 +1,19 @@
-import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
-import type { ReplyCompletion } from "../../agents/reply-completion.js";
-import type { ReplyPayload } from "../../shared/reply-payload.types.js";
+import type {
+  FollowupRun,
+  ReplyOperation,
+  ReplyOperationRunState,
+  ReplyPreRunRejectionCode,
+} from "../../sessions/session-controller.contracts.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
-import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.js";
-import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
-
-type ReplyOperationAdmissionSnapshot =
-  | { status: "owned" }
-  | { status: "accepted"; mode: "steer" | "followup" }
-  | {
-      status: "skipped";
-      reason:
-        | "active-run"
-        | "aborted"
-        | "lifecycle-invalidated"
-        | "queue-cap"
-        | "question-response-indeterminate"
-        | "question-response-refused"
-        | "question-response-rejected";
-    };
-
-// Rejection diagnostics carry owner-selected codes, never user-facing error text.
-export type ReplyPreRunRejectionCode =
-  | "model-scope-conflict"
-  | "model-scope-not-authorized"
-  | "model-selection-locked"
-  | "model-runtime-invalid"
-  | "model-selection-rejected"
-  | "model-selection-conflict"
-  | "session-directive-rejected";
-
-export type ReplyOperationRunState = {
-  replyCompletion?: ReplyCompletion;
-  heartbeat?: {
-    prepareReply: (
-      replyResult: ReplyPayload | ReplyPayload[] | undefined,
-      runState: ReplyOperationRunState,
-    ) => Promise<{
-      reply?: ReplyPayload;
-      settle?: (outcome: ReplyDispatchDeliveryOutcome) => Promise<void>;
-    }>;
-  };
-  admission?: ReplyOperationAdmissionSnapshot;
-  /** The Gateway accepted this question answer or rejected its values before commitment. */
-  questionInputHandled?: true;
-  messageInjectionAborted?: true;
-  agentTurn?: ReturnType<typeof resolveAgentTurnExecutionStatus>;
-  agentTurnOwner?: ReplyOperation;
-  messagingToolSentTargets?: MessagingToolSend[];
-  backgroundWorkStarted?: boolean;
-  preRunRejection?: ReplyPreRunRejectionCode;
-  /**
-   * Armed by the admitted interactive run owner. Dispatch consumes it once when a stale
-   * watchdog drops the turn before output; true means the session lane will answer instead.
-   */
-  continueStalledTurn?: () => boolean;
-};
+import type { SessionEventExecution } from "./session-event-contract.js";
+export type {
+  ReplyOperationRunState,
+  ReplyPreRunRejectionCode,
+} from "../../sessions/session-controller.contracts.js";
 
 // Carries this invocation's admission decision through reply option spreads so
-// heartbeat cleanup never infers it from whichever operation is active later.
+// cleanup never infers it from whichever operation is active later.
 export const REPLY_OPERATION_RUN_STATE = Symbol("openclaw.replyOperationRunState");
 
 export type ReplyOptionsWithOperationRunState = {
@@ -71,6 +24,17 @@ export function resolveReplyOperationRunState(
   options: object | undefined,
 ): ReplyOperationRunState | undefined {
   return (options as ReplyOptionsWithOperationRunState | undefined)?.[REPLY_OPERATION_RUN_STATE];
+}
+
+/** Either source owner can prevent its retained background work from adding delivery. */
+export function resolveReplySessionEventDelivery(
+  options: object | undefined,
+  run: { internalEventExecution?: Pick<SessionEventExecution, "deliver"> },
+): false | undefined {
+  return run.internalEventExecution?.deliver === false ||
+    resolveReplyOperationRunState(options)?.sessionEventDelivery === false
+    ? false
+    : undefined;
 }
 
 export function recordReplyOperationAgentTurn(
@@ -92,7 +56,7 @@ export function recordReplyOperationAgentTurn(
       outcome ?? (owner?.result?.kind === "aborted" ? owner.result : undefined),
     );
     if (outcome?.kind === "settled") {
-      state.messagingToolSentTargets = outcome.result.messagingToolSentTargets?.slice();
+      state.messagingToolSentTargets = outcome.result.messagingToolSentTargets;
       state.backgroundWorkStarted = Boolean(
         outcome.result.asyncWorkStarted || outcome.result.acceptedSessionSpawns?.length,
       );
@@ -104,6 +68,37 @@ export function recordReplyOperationAgentTurn(
   }
 }
 
+export function recordReplyFollowupAdmission(
+  state: ReplyOperationRunState | undefined,
+  params: {
+    explicitFollowup: boolean;
+    requesterMismatch: boolean;
+    collaborationBlocked?: boolean;
+    unavailableSteer: boolean;
+    followupRun: FollowupRun;
+  },
+): void {
+  if (!state) {
+    return;
+  }
+  state.admission = {
+    status: "accepted",
+    mode: "followup",
+    ...(params.explicitFollowup
+      ? { reason: "explicit-followup" as const }
+      : params.collaborationBlocked
+        ? { reason: "collaborative-steering-disabled" as const }
+        : params.requesterMismatch
+          ? { reason: "requester-mismatch" as const }
+          : params.unavailableSteer &&
+              params.followupRun.currentInboundEventKind !== "room_event" &&
+              (!params.followupRun.run.inputProvenance ||
+                params.followupRun.run.inputProvenance.kind === "external_user")
+            ? { reason: "steering-unavailable" as const }
+            : {}),
+  };
+}
+
 export function recordReplyPreRunRejection(
   state: ReplyOperationRunState | undefined,
   rejection: ReplyPreRunRejectionCode | undefined,
@@ -111,8 +106,4 @@ export function recordReplyPreRunRejection(
   if (state && rejection) {
     state.preRunRejection ??= rejection;
   }
-}
-
-export function resolveReplyOperationAgentTurn(state: ReplyOperationRunState | undefined) {
-  return isReplyOperationSuperseded(state?.agentTurnOwner) ? "superseded" : state?.agentTurn;
 }

@@ -2,6 +2,7 @@ type SessionCompanionAskErrorReason =
   | "busy"
   | "context-unavailable"
   | "rate-limited"
+  | "timeout"
   | "session-missing"
   | "utility-model-unavailable"
   | "image-input-unsupported"

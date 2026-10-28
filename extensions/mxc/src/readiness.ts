@@ -36,21 +36,21 @@ function probeMxcIsolationTier(executablePath: string): { tier: string; warnings
     });
   } catch (error) {
     const detail = error instanceof Error && error.message ? `: ${error.message.trim()}` : "";
-    throw notReady(`the MXC host probe failed${detail}`, error);
+    throw notReady(`the MXC host check failed${detail}`, error);
   }
   let probe: unknown;
   try {
     probe = JSON.parse(output);
   } catch (error) {
-    throw notReady("the MXC host probe did not return JSON", error);
+    throw notReady("the MXC host check did not return JSON", error);
   }
   const parsed = MxcProbeOutputSchema.safeParse(probe);
   if (!parsed.success) {
-    throw notReady("the MXC host probe returned an unexpected result", parsed.error);
+    throw notReady("the MXC host check returned an unexpected result", parsed.error);
   }
   const { tier, warnings, error } = parsed.data;
   if (!tier) {
-    const reason = error || "the probe reported no isolation tier";
+    const reason = error || "the check reported no isolation tier";
     throw notReady(`MXC cannot select an isolation tier on this host (${reason})`);
   }
   return { tier, warnings };
@@ -94,32 +94,15 @@ function systemDrivePrepWarning(systemDrive: string): string {
   );
 }
 
-/**
- * Emits an advisory warning when the system drive is not prepared for
- * AppContainer directory access. Non-fatal: the sandbox still activates.
- */
-export function warnMxcHostPrepIfNeeded(): void {
-  if (process.platform !== "win32") {
-    return;
-  }
-  if (!isSystemDrivePrepared()) {
-    console.warn(systemDrivePrepWarning(process.env.SystemDrive || "C:"));
-  }
-}
-
-/**
- * Fails plugin activation unless MXC's host probe selects an isolation tier for
- * `executablePath`. Degradation warnings from the probe are reported but do not
- * block activation.
- */
-export function assertMxcReadiness(params: { executablePath: string }): void {
-  if (process.platform !== "win32") {
-    return;
-  }
-  const probe = probeMxcIsolationTier(params.executablePath);
+export function prepareMxcHost(executablePath: string): void {
+  const probe = probeMxcIsolationTier(executablePath);
   if (probe.warnings.length > 0) {
     console.warn(
       `[mxc] MXC sandbox is using the ${probe.tier} isolation tier: ${probe.warnings.join("; ")}`,
     );
+  }
+  // Advisory: missing AppContainer directory access does not block activation.
+  if (!isSystemDrivePrepared()) {
+    console.warn(systemDrivePrepWarning(process.env.SystemDrive || "C:"));
   }
 }

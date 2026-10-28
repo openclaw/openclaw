@@ -2,6 +2,7 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
+import { stopStalledGatewayStartup } from "../../daemon/schtasks-process.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import {
   assertGatewayServiceUpdateCurrent,
@@ -24,6 +25,7 @@ import {
   formatGatewayPidList,
   signalVerifiedGatewayPidSync,
 } from "../../infra/gateway-processes.js";
+import { captureStalledGatewayStartup } from "../../infra/gateway-startup-owner.js";
 import {
   assertGatewayServiceMutationAllowed,
   formatExternalSupervisorActionRequired,
@@ -33,7 +35,11 @@ import {
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
-import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  hasCommandProcessCleanupError,
+  ignoreNonCleanupCommandError,
+} from "../../process/exec-result.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createNullWriter } from "../../shared/null-writer.js";
 import { formatCliCommand } from "../command-format.js";
@@ -59,6 +65,7 @@ import {
 } from "./lifecycle-safe-restart.js";
 import { signalGatewayRestart } from "./lifecycle-unmanaged.js";
 import { createDaemonActionContext } from "./response.js";
+import { createGatewayRestartDeadline } from "./restart-health-deadline.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -66,11 +73,11 @@ import {
   renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
+  waitForGatewayHttpReadiness,
   waitForGatewayHealthyListener,
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
 import { renderGatewayServiceStartHints } from "./shared.js";
-import { verifyGatewayStartReadiness } from "./start-health.js";
 import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
@@ -123,6 +130,21 @@ async function stopGatewayWithoutServiceManager(
     serviceContext?.env ?? process.env,
     serviceContext?.command ?? null,
   );
+  const stalled = captureStalledGatewayStartup(env);
+  if (stalled) {
+    await stopStalledGatewayStartup(stalled, assertGatewayServiceUpdateCurrent);
+    appendGatewayLifecycleAudit({
+      action: "stop",
+      source: "cli",
+      mode: "sigterm",
+      pid: stalled.pid,
+      env,
+    });
+    return {
+      result: "stopped" as const,
+      message: `Stopped stalled Gateway startup pid ${stalled.pid}.`,
+    };
+  }
   const listenerPids = findVerifiedGatewayListenerPidsOnPortSync(port, { env });
   // Listener discovery needs lsof, which minimal containers omit. The gateway
   // lock already names the verified owner of this port, so signal it instead of
@@ -134,8 +156,8 @@ async function stopGatewayWithoutServiceManager(
     if (portUsage !== "free") {
       throw new Error(
         portUsage === "busy"
-          ? `Port ${port} is in use but the owning process could not be identified. Run ${formatCliCommand("openclaw gateway status --deep")} to diagnose.`
-          : `Could not determine whether port ${port} is still in use, so the gateway cannot be confirmed stopped. Run ${formatCliCommand("openclaw gateway status --deep")} to diagnose.`,
+          ? `Port ${port} is in use but the owning process could not be identified.`
+          : `Could not determine whether port ${port} is still in use, so the gateway cannot be confirmed stopped.`,
       );
     }
     return null;
@@ -246,12 +268,26 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
   return true;
 }
 
+function renderGatewayServiceStopHints(): string[] {
+  return [
+    `Run ${formatCliCommand("openclaw gateway status --deep")} to inspect the service, then retry.`,
+  ];
+}
+
+function renderGatewayServiceUninstallHints(): string[] {
+  return [
+    ...renderGatewayServiceStopHints(),
+    "To remove the service manually, see https://docs.openclaw.ai/install/uninstall#manual-service-removal-cli-not-installed",
+  ];
+}
+
 /** Uninstall the managed Gateway service after stopping it. */
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   assertGatewayServiceMutationAllowed("uninstall the gateway service");
   return await runServiceUninstall({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
+    renderFailureHints: renderGatewayServiceUninstallHints,
     opts,
     stopBeforeUninstall: true,
     assertNotLoadedAfterUninstall: true,
@@ -290,14 +326,62 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         state,
         issues,
       }),
-    postStartCheck: ({ fail, warnings }) =>
-      verifyGatewayStartReadiness({
-        service,
-        expectedPort,
-        resolveContext: () => resolveGatewayLifecycleContext(service),
-        fail,
-        warnings,
-      }),
+    postStartCheck: async ({ fail, warnings }) => {
+      const { deadlineMs } = resolveGatewayStartupTiming();
+      const context = await resolveGatewayLifecycleContext(service);
+      const port = expectedPort ?? context.port;
+      const deadlineAt = performance.now() + deadlineMs;
+      const attempts = Math.ceil(deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS);
+      const healthDeadline = createGatewayRestartDeadline({ timeoutMs: deadlineMs });
+      const [health, readiness] = await Promise.all([
+        withCommandProcessScope(
+          () =>
+            waitForGatewayHealthyRestart({
+              service,
+              port,
+              attempts,
+              delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+              timeoutMs: deadlineMs,
+              deadline: healthDeadline,
+              deadlineOutcome: "snapshot",
+              env: context.env,
+              supervisorKeepsAlive: process.platform === "darwin",
+            }),
+          healthDeadline.signal,
+        ).finally(() => healthDeadline.dispose()),
+        waitForGatewayHttpReadiness({
+          config: context.config,
+          port,
+          attempts,
+          deadlineAt,
+          delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+        }),
+      ]);
+      if (health.healthy && readiness.healthz === 200 && readiness.readyz === 200) {
+        return;
+      }
+      warnings.push(...renderRestartDiagnostics(health));
+      warnings.push(
+        `Gateway HTTP readiness: /healthz=${readiness.healthz ?? "unreachable"}; ` +
+          `/readyz=${readiness.readyz ?? "unreachable"}.`,
+      );
+      if (health.waitOutcome === "still-starting") {
+        fail(
+          formatGatewayRestartFailure({
+            health,
+            port,
+            defaultTimeoutSeconds: Math.round(deadlineMs / 1000),
+          }).failMessage,
+          [formatCliCommand("openclaw gateway status --deep")],
+          "still-starting",
+        );
+        return;
+      }
+      fail(
+        `Gateway start timed out after ${Math.round(deadlineMs / 1000)}s waiting for /healthz and /readyz.`,
+        [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
+      );
+    },
     expectedPort,
     opts,
   });
@@ -316,16 +400,12 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   return await runServiceStop({
     serviceNoun: "Gateway",
     service,
+    renderFailureHints: renderGatewayServiceStopHints,
     opts,
     stopWhenNotLoaded: process.platform === "darwin" && Boolean(opts.disable),
     onNotLoaded: async ({ stdout }) => {
       if (process.platform === "linux") {
-        const runtime = await service.readRuntime(process.env).catch((error: unknown) => {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          return null;
-        });
+        const runtime = await service.readRuntime(process.env).catch(ignoreNonCleanupCommandError);
         if (runtime?.status === "running") {
           // systemd can run a disabled unit with Restart=always. Stop it through
           // systemctl so a process-level SIGTERM cannot trigger a respawn.
@@ -344,12 +424,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
       const lock = await readActiveGatewayLockIdentity().catch(() => undefined);
       const ctx = lock
         ? null
-        : await resolveGatewayLifecycleContext(service).catch((error: unknown) => {
-            if (hasCommandProcessCleanupError(error)) {
-              throw error;
-            }
-            return null;
-          });
+        : await resolveGatewayLifecycleContext(service).catch(ignoreNonCleanupCommandError);
       const port = lock?.port ?? ctx?.port ?? (await resolveGatewayConfigPorts()).fallback;
       return await stopGatewayWithoutServiceManager(port, lock?.pid, ctx ?? undefined);
     },

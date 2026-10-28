@@ -1,8 +1,8 @@
-import { MAX_HUMAN_MENTIONS } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { MAX_HUMAN_MENTIONS } from "../../../../packages/gateway-protocol/src/human-mention-limits.js";
 import type { HumanMention } from "./chat-types.ts";
 
-export { MAX_HUMAN_MENTIONS } from "@openclaw/gateway-protocol";
+export { MAX_HUMAN_MENTIONS } from "../../../../packages/gateway-protocol/src/human-mention-limits.js";
 
 export type HumanMentionInput = {
   value: string;

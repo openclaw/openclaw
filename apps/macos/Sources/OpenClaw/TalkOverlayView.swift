@@ -64,18 +64,15 @@ private struct TalkOrbInteractionView: NSViewRepresentable {
     let onDoubleClick: () -> Void
     let onDragStart: () -> Void
 
-    func makeNSView(context: Context) -> NSView {
+    func makeNSView(context: Context) -> OrbInteractionNSView {
         let view = OrbInteractionNSView()
-        view.onSingleClick = self.onSingleClick
-        view.onDoubleClick = self.onDoubleClick
-        view.onDragStart = self.onDragStart
+        self.updateNSView(view, context: context)
         view.wantsLayer = true
         view.layer?.backgroundColor = NSColor.clear.cgColor
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        guard let view = nsView as? OrbInteractionNSView else { return }
+    func updateNSView(_ view: OrbInteractionNSView, context: Context) {
         view.onSingleClick = self.onSingleClick
         view.onDoubleClick = self.onDoubleClick
         view.onDragStart = self.onDragStart

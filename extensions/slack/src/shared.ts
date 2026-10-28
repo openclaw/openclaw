@@ -9,7 +9,6 @@ import { slackSetupPlugin } from "./channel.setup.js";
 import { slackBaseConfigAdapter } from "./config-adapter.js";
 import { slackDoctor } from "./doctor.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { slackSecurityAdapter } from "./security.js";
 
 export { SLACK_CHANNEL } from "./setup-shared.js";
 
@@ -28,6 +27,8 @@ export const slackPluginBase = {
   },
   doctor: slackDoctor,
   agentPrompt: {
+    questionInputMode: "buttons",
+    customInlineButtonHint: true,
     inboundFormattingHints: () => ({
       text_markup: "markdown",
       rules: [
@@ -47,7 +48,6 @@ export const slackPluginBase = {
       "- Slack Block Kit or presentation text fields are sent as Slack mrkdwn directly; use `*bold*`, `_italic_`, `~strike~`, `<url|label>` links, and avoid Markdown headings or pipe tables there.",
     ],
   },
-  security: slackSecurityAdapter,
   config: {
     ...slackSetupPlugin.config,
     ...slackConfigAdapter,

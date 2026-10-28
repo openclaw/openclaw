@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
 import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -23,7 +23,13 @@ export function isOpenClawAgentDatabaseReadOpenFailure(error: unknown): boolean 
 }
 
 /** Record schema-owner facts after a failed query or admission, never infer them from error prose. */
-export function classifyOpenClawAgentDatabaseReadError(db: DatabaseSync, error: unknown): unknown {
+export function classifyOpenClawAgentDatabaseReadError(
+  db: EngineConnection,
+  error: unknown,
+): unknown {
+  if (isPostgresSqlConnection(db)) {
+    return error;
+  }
   try {
     const missingTables = collectSqliteSchemaIssues(
       db,

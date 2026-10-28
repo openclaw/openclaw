@@ -2,10 +2,7 @@ import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type {
-  VideoGenerationModelCapabilitiesContext,
-  VideoGenerationProviderCapabilities,
-} from "openclaw/plugin-sdk/video-generation";
+import type { VideoGenerationProviderCapabilities } from "openclaw/plugin-sdk/video-generation";
 import { DEEPINFRA_VIDEO_ASPECT_RATIOS, DEEPINFRA_VIDEO_DURATIONS } from "./media-models.js";
 import { discoverDeepInfraSurfaces } from "./provider-models.js";
 
@@ -42,9 +39,12 @@ async function listDeepInfraGenerationCatalog(
     return null;
   }
   const catalog = await discoverDeepInfraSurfaces({ hasApiKey: true, env: ctx.env });
+  if (!catalog) {
+    return null;
+  }
   const models = kind === "image_generation" ? catalog.imageGen : catalog.videoGen;
-  // Non-live and empty surfaces leave the static fallback authoritative.
-  if (!catalog.live || models.length === 0) {
+  // Empty surfaces leave the registered provider's fallback authoritative.
+  if (models.length === 0) {
     return null;
   }
   return models.map((model) => {
@@ -53,10 +53,8 @@ async function listDeepInfraGenerationCatalog(
       provider: PROVIDER_ID,
       model: model.id,
       source: "live",
+      label: model.name,
     };
-    if (model.name) {
-      entry.label = model.name;
-    }
     if (kind === "video_generation") {
       entry.capabilities = buildDeepInfraVideoModelCapabilities();
     }
@@ -70,21 +68,4 @@ export function listDeepInfraImageGenCatalog(ctx: UnifiedModelCatalogProviderCon
 
 export function listDeepInfraVideoGenCatalog(ctx: UnifiedModelCatalogProviderContext) {
   return listDeepInfraGenerationCatalog(ctx, "video_generation");
-}
-
-export async function resolveDeepInfraVideoModelCapabilities(
-  ctx: VideoGenerationModelCapabilitiesContext,
-): Promise<VideoGenerationProviderCapabilities | undefined> {
-  // Model id may arrive bare or `deepinfra/`-prefixed.
-  const rawId = typeof ctx.model === "string" ? ctx.model : "";
-  const normalized = rawId.startsWith(`${PROVIDER_ID}/`)
-    ? rawId.slice(PROVIDER_ID.length + 1)
-    : rawId;
-  const catalog = await discoverDeepInfraSurfaces({
-    env: process.env,
-  });
-  const entry =
-    catalog.videoGen.find((m) => m.id === normalized) ??
-    catalog.videoGen.find((m) => m.id === rawId);
-  return entry ? buildDeepInfraVideoModelCapabilities() : undefined;
 }

@@ -1,28 +1,26 @@
-/** Persists restart-recoverable final delivery markers for agent runs. */
+/** Retains custody of already-produced final output until transport settlement. */
 import { randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import type { CommandOwnerAssertion } from "../auto-reply/command-owner-authority.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
-import {
-  buildRecoverablePendingFinalDeliveryText,
-  normalizePendingFinalDeliveryPayloads,
-  normalizePendingFinalRecoveryPayloads,
-} from "../auto-reply/reply/pending-final-delivery.js";
-import {
-  getRestartRecoveryTerminalDeliveryEvidence,
-  mergeRestartRecoveryTerminalDeliveryEvidence,
-} from "../config/sessions/restart-recovery-state.js";
+import { normalizePendingFinalDeliveryPayloads } from "../auto-reply/reply/pending-final-delivery.js";
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { SessionAdmissionTransition } from "../config/sessions/session-admission-transition.types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 
+export type PendingFinalDeliverySource = Readonly<
+  Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "activeWriterRunId">
+>;
+
 type PersistPendingFinalDeliveryMarkerParams = {
+  admittedSource?: PendingFinalDeliverySource;
+  compactionTransitions?: readonly SessionAdmissionTransition[];
   agentId: string;
   deliver: boolean;
   sessionStore?: Record<string, SessionEntry>;
@@ -38,23 +36,18 @@ type PersistPendingFinalDeliveryMarkerParams = {
   assertCurrent?: () => void;
 };
 
-type PendingFinalDeliveryMarkerResult = {
+export async function persistPendingFinalDeliveryMarker(
+  params: PersistPendingFinalDeliveryMarkerParams,
+): Promise<{
   sessionEntry?: SessionEntry;
   pendingFinalDeliveryMarkerPersisted: boolean;
   pendingFinalDeliveryIntentId?: string;
   hasSendableFinalPayload: boolean;
-};
-
-export async function persistPendingFinalDeliveryMarker(
-  params: PersistPendingFinalDeliveryMarkerParams,
-): Promise<PendingFinalDeliveryMarkerResult> {
+}> {
   const sendablePayloads = params.payloads.filter(
     (payload) => normalizePendingFinalDeliveryPayloads([payload]).length > 0,
   );
   const hasSendableFinalPayload = sendablePayloads.length > 0;
-  const recoverableText = buildRecoverablePendingFinalDeliveryText(
-    normalizePendingFinalRecoveryPayloads(params.payloads),
-  );
   const entry =
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined) ??
     params.sessionEntry;
@@ -68,8 +61,7 @@ export async function persistPendingFinalDeliveryMarker(
     params.sessionReboundDuringRun ||
     isSubagentSessionKey(params.sessionKey) ||
     !hasSendableFinalPayload ||
-    // A run without a resolvable delivery route (e.g. rejected best-effort
-    // target) must not leave a custody marker restart recovery could act on.
+    // Transport custody needs an exact delivery route.
     !params.deliveryContext
   ) {
     return {
@@ -82,11 +74,28 @@ export async function persistPendingFinalDeliveryMarker(
   params.assertCurrent?.();
   const sessionKey = resolveSqliteSessionKey(params.sessionKey, params.agentId);
   const now = Date.now();
+  let admitted = params.admittedSource;
+  for (const transition of params.compactionTransitions ?? []) {
+    if (
+      !admitted ||
+      transition.previous?.sessionId !== admitted.sessionId ||
+      transition.previous.lifecycleRevision !== admitted.lifecycleRevision
+    ) {
+      admitted = undefined;
+      break;
+    }
+    admitted = { ...admitted, ...transition.current };
+  }
+  if (params.admittedSource && !admitted) {
+    return {
+      sessionEntry: params.sessionEntry,
+      pendingFinalDeliveryMarkerPersisted: false,
+      hasSendableFinalPayload,
+    };
+  }
+  const expected = admitted ?? entry;
   const intentId = randomUUID();
   const deliveryId = randomUUID();
-  const harnessCompletion = entry.restartRecoveryHarnessCompletion
-    ? structuredClone(entry.restartRecoveryHarnessCompletion)
-    : undefined;
   const persisted = await applySessionEntryReplacements<SessionEntry | undefined>({
     agentId: params.agentId,
     sessionKeys: [sessionKey],
@@ -98,44 +107,20 @@ export async function persistPendingFinalDeliveryMarker(
         !current ||
         current.sessionId !== params.runOwnedSessionId ||
         current.abortedLastRun === true ||
-        (harnessCompletion &&
-          (harnessCompletion.sessionId !== current.sessionId ||
-            harnessCompletion.lifecycleRevision !== current.lifecycleRevision ||
-            !isDeepStrictEqual(current.restartRecoveryHarnessCompletion, harnessCompletion)))
+        current.lifecycleRevision !== expected.lifecycleRevision ||
+        current.activeWriterRunId !== expected.activeWriterRunId
       ) {
         return { result: current };
       }
-      const savedEvidence = harnessCompletion
-        ? getRestartRecoveryTerminalDeliveryEvidence(current, harnessCompletion.sourceRunId)
-        : undefined;
       const next: SessionEntry = {
         ...current,
         pendingFinalDelivery: {
-          ...(recoverableText && params.commandOwnerReference === undefined
-            ? { kind: "replayable" as const, text: recoverableText }
-            : { kind: "transport-only" as const }),
+          kind: "transport-only",
           intentId,
           deliveries: [{ id: deliveryId, state: "prepared" as const }],
           createdAt: now,
           context: params.deliveryContext,
         },
-        // A new capture cannot replace a receipt or assign its send facts to another claim.
-        // Preserve existing source evidence even when it cannot acknowledge this requester.
-        ...(harnessCompletion && !savedEvidence
-          ? {
-              restartRecoveryTerminalDeliveryEvidence: mergeRestartRecoveryTerminalDeliveryEvidence(
-                current.restartRecoveryTerminalDeliveryEvidence,
-                [
-                  {
-                    runId: harnessCompletion.sourceRunId,
-                    harnessCompletion,
-                    deliveryContext: params.deliveryContext,
-                    captured: true,
-                  },
-                ],
-              ),
-            }
-          : {}),
         updatedAt: Math.max(current.updatedAt, now),
       };
       return { result: next, replacements: [{ sessionKey, entry: next }] };
@@ -151,29 +136,11 @@ export async function persistPendingFinalDeliveryMarker(
   if (markerPersisted) {
     for (const payload of sendablePayloads) {
       setReplyPayloadMetadata(payload, {
-        ...(harnessCompletion
-          ? {
-              sessionWriterDeliveryAuthority: {
-                ...getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority,
-                agentId: harnessCompletion.requesterAgentId,
-                expectedSessionId: params.runOwnedSessionId,
-                ...(harnessCompletion.lifecycleRevision
-                  ? { expectedLifecycleRevision: harnessCompletion.lifecycleRevision }
-                  : {}),
-                sessionKey: params.sessionKey,
-                storePath: params.storePath,
-                harnessCompletion,
-              },
-            }
-          : {}),
         pendingFinalDeliveryCompletion: {
           commandOwnerReference: params.commandOwnerReference,
           agentId: params.agentId,
           deliveryId,
           intentId,
-          ...(entry.restartRecoveryDeliveryRunId
-            ? { recoveryRunId: entry.restartRecoveryDeliveryRunId }
-            : {}),
           sessionId: params.runOwnedSessionId,
           sessionKey: params.sessionKey,
           storePath: params.storePath,
@@ -188,4 +155,48 @@ export async function persistPendingFinalDeliveryMarker(
     ...(markerPersisted ? { pendingFinalDeliveryIntentId: intentId } : {}),
     hasSendableFinalPayload,
   };
+}
+
+/** Keep only this captured intent's completion locator in step with a host commit. */
+export function advancePendingFinalDeliveryCompletion(params: {
+  payloads: ReplyPayload[];
+  intentId?: string;
+  transition?: SessionAdmissionTransition;
+  entry: SessionEntry;
+}): void {
+  const { transition, entry } = params;
+  if (
+    !transition?.previous ||
+    !params.intentId ||
+    entry.sessionId !== transition.current.sessionId ||
+    entry.lifecycleRevision !== transition.current.lifecycleRevision
+  ) {
+    return;
+  }
+  for (const payload of params.payloads) {
+    const metadata = getReplyPayloadMetadata(payload);
+    const completion = metadata?.pendingFinalDeliveryCompletion;
+    if (
+      completion?.sessionId === transition.previous.sessionId &&
+      completion.intentId === params.intentId &&
+      entry.pendingFinalDelivery?.intentId === completion.intentId &&
+      entry.pendingFinalDelivery.deliveries?.some(
+        (delivery) => delivery.id === completion.deliveryId,
+      )
+    ) {
+      const authority = metadata?.sessionWriterDeliveryAuthority;
+      setReplyPayloadMetadata(payload, {
+        ...(authority
+          ? {
+              sessionWriterDeliveryAuthority: {
+                ...authority,
+                expectedSessionId: transition.current.sessionId,
+                expectedLifecycleRevision: transition.current.lifecycleRevision,
+              },
+            }
+          : {}),
+        pendingFinalDeliveryCompletion: { ...completion, sessionId: transition.current.sessionId },
+      });
+    }
+  }
 }

@@ -15,7 +15,7 @@ import type {
   TaskSuggestionsAcceptResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionInfoDefaults } from "./tui-session-info.js";
-import type { SessionInfo } from "./tui-types.js";
+import type { SessionInfo, TuiSessionRow } from "./tui-types.js";
 
 export type ChatSendOptions = {
   sessionKey: string;
@@ -91,32 +91,7 @@ export type TuiSessionList = {
   limitApplied?: number;
   hasMore?: boolean;
   defaults?: SessionInfoDefaults;
-  sessions: Array<
-    Omit<SessionInfo, "effectiveResponseUsage"> & {
-      key: string;
-      sessionId?: string;
-      archived?: boolean;
-      incognito?: boolean;
-      sendPolicy?: string;
-      label?: string;
-      provider?: string;
-      groupChannel?: string;
-      space?: string;
-      subject?: string;
-      chatType?: string;
-      origin?: {
-        label?: string;
-        provider?: string;
-        surface?: string;
-      };
-      lastChannel?: string;
-      lastProvider?: string;
-      lastTo?: string;
-      lastAccountId?: string;
-      derivedTitle?: string;
-      lastMessagePreview?: string;
-    }
-  >;
+  sessions: TuiSessionRow[];
 };
 
 export type TuiSessionDescription = {
@@ -128,7 +103,14 @@ export type TuiAgentsList = AgentsListResult;
 
 export type TuiModelChoice = Pick<
   ModelChoice,
-  "id" | "name" | "provider" | "contextWindow" | "reasoning" | "available" | "unavailableReason"
+  | "id"
+  | "name"
+  | "provider"
+  | "contextWindow"
+  | "reasoning"
+  | "available"
+  | "unavailableReason"
+  | "recommended"
 >;
 
 export type TuiSessionMutationResult = {
@@ -153,6 +135,17 @@ export type TuiSessionCreateOptions = {
   succeedsParent?: boolean;
 };
 
+export type TuiRequestScope = {
+  sessionKey: string;
+  agentId?: string;
+  runId?: string;
+};
+
+export type TuiModelCatalogScope = {
+  agentId?: string;
+  sessionKey?: string;
+};
+
 /** Minimal backend interface shared by Gateway and embedded local TUI modes. */
 export type TuiBackend = {
   connection: {
@@ -167,6 +160,7 @@ export type TuiBackend = {
   onGap?: (info: { expected: number; received: number }) => void;
   start: () => void;
   stop: () => void | Promise<void>;
+  cancelPendingRequests?: (scope: TuiRequestScope) => void;
   subscribeSessionEvents?: () => Promise<unknown>;
   sendChat: (opts: ChatSendOptions) => Promise<TuiChatSendResult>;
   /** runId optional: omit for session-scoped abort (queued turns then active). */
@@ -183,16 +177,19 @@ export type TuiBackend = {
   ) => Promise<TuiSessionDescription>;
   listAgents: () => Promise<TuiAgentsList>;
   patchSession: (opts: SessionsPatchParams) => Promise<SessionsPatchResult>;
-  createSession: (opts: TuiSessionCreateOptions) => Promise<TuiSessionMutationResult>;
+  createSession: (
+    opts: TuiSessionCreateOptions,
+    requestScope?: TuiRequestScope,
+  ) => Promise<TuiSessionMutationResult>;
   resetSession: (
     key: string,
     reason?: "new" | "reset",
     opts?: { agentId?: string },
   ) => Promise<TuiSessionMutationResult>;
   getGatewayStatus: () => Promise<unknown>;
-  listModels: (opts?: { agentId?: string }) => Promise<TuiModelChoice[]>;
-  getKnownModels?: (opts?: { agentId?: string }) => TuiModelChoice[] | undefined;
-  onModelsChanged?: (agentId?: string) => void;
+  listModels: (opts?: TuiModelCatalogScope) => Promise<TuiModelChoice[]>;
+  getKnownModels?: (opts?: TuiModelCatalogScope) => TuiModelChoice[] | undefined;
+  onModelsChanged?: (scope: TuiModelCatalogScope) => void;
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
   listPluginApprovals?: () => Promise<unknown>;
   resolvePluginApproval?: (id: string, decision: TuiApprovalDecision) => Promise<{ ok?: boolean }>;

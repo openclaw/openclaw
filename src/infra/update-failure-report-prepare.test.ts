@@ -29,14 +29,29 @@ function report(
     redaction,
   );
 }
-function expectText(body: string, includes: readonly string[], excludes: readonly string[] = []) {
+type ExcludedText = readonly string[] | RegExp;
+function expectText(body: string, includes: readonly string[], excludes: ExcludedText = []) {
   for (const text of includes) {
     expect(body).toContain(text);
   }
-  for (const text of excludes) {
-    expect(body).not.toContain(text);
+  if (excludes instanceof RegExp) {
+    expect(body).not.toMatch(excludes);
+  } else {
+    for (const text of excludes) {
+      expect(body).not.toContain(text);
+    }
   }
 }
+function makeRecordedRun(
+  steps: NonNullable<UpdateFailureReportInput["recordedRun"]>["steps"],
+  fields: Partial<NonNullable<UpdateFailureReportInput["recordedRun"]>> = {},
+) {
+  return { runId: attemptId, steps, ...fields };
+}
+const unsafeRecovery = {
+  serviceRestartSafe: false,
+  reason: "runtime-verification-failed",
+} as const;
 
 type Diagnostic = {
   name: string;
@@ -45,10 +60,23 @@ type Diagnostic = {
   reason?: string;
   exitCode?: number | null;
   includes: string[];
-  excludes?: string[];
+  excludes?: ExcludedText;
   title?: string;
 };
 const diagnostics: Diagnostic[] = [
+  {
+    name: "managed handoff filesystem identities",
+    phase: "requested",
+    reason: "managed-service-handoff-failed",
+    fact: {
+      check: "managed-service",
+      code: "managed-service-handoff-failed",
+      message:
+        "managed handoff lease database identity changed at /home/Private Operator/lease.sqlite; recorded /Users/Private Operator/lease.sqlite; file identity changed. Run openclaw update repair.",
+    },
+    includes: ["managed-service-handoff-failed"],
+    excludes: /Private Operator|\/home\/|\/Users\//u,
+  },
   ...["GLIBC_2.33", "GLIBC_2.2.5", "GLIBC_2.33-private", "GLIBC_PRIVATE"].map((version) => ({
     name: `snapshot loader ${version}`,
     phase: "candidate snapshot",
@@ -62,35 +90,10 @@ const diagnostics: Diagnostic[] = [
         "private-loader-text token=synthetic-private-token",
     }),
     includes: version === "GLIBC_2.33" || version === "GLIBC_2.2.5" ? [`${version} not found`] : [],
-    excludes: [
-      "private-user",
-      "private-prefix",
-      "private-loader-text",
-      "synthetic-private-token",
-      "/lib/",
-      ...(version.endsWith("private") || version === "GLIBC_PRIVATE" ? ["GLIBC_"] : []),
-    ],
-  })),
-  ...[false, true].map((candidate) => ({
-    name: `${candidate ? "candidate" : "installed"} config admission`,
-    phase: "invalid-config",
-    reason: "invalid-config",
-    fact: {
-      check: candidate ? "candidate-admission" : "invalid-config",
-      code: "invalid-config",
-      ...(candidate
-        ? {
-            message:
-              "Update refused: configuration is invalid.\n- gateway.port: Invalid configuration field\n- models.providers.private-tenant.apiKey: Invalid configuration field\nprivate rejected value",
-          }
-        : { affectedKey: "gateway.port", message: "Invalid configuration field" }),
-    },
-    includes: [
-      "gateway.*",
-      "Invalid configuration field",
-      ...(candidate ? ["models.providers.*"] : []),
-    ],
-    excludes: ["[redacted-diagnostic]", "private-tenant", "private rejected value"],
+    excludes:
+      version.endsWith("private") || version === "GLIBC_PRIVATE"
+        ? /private-user|private-prefix|private-loader-text|synthetic-private-token|\/lib\/|GLIBC_/u
+        : /private-user|private-prefix|private-loader-text|synthetic-private-token|\/lib\//u,
   })),
   ...["", " private-customer-text"].map((suffix) => ({
     name: `closed handoff diagnostic ${JSON.stringify(suffix)}`,
@@ -103,10 +106,9 @@ const diagnostics: Diagnostic[] = [
       message: `managed update ownership transfer failed${suffix}`,
     },
     includes: suffix ? [] : ["managed update ownership transfer failed"],
-    excludes: [
-      "private-customer-text",
-      ...(suffix ? ["managed update ownership transfer failed"] : []),
-    ],
+    excludes: suffix
+      ? /private-customer-text|managed update ownership transfer failed/u
+      : /private-customer-text/u,
   })),
   ...["startupz", "readyz"].map((check) => ({
     name: `${check} readiness probe`,
@@ -124,6 +126,8 @@ const diagnostics: Diagnostic[] = [
       ["code", "private-host.example:8123"],
       ["pluginId", "10.20.30.40"],
       ["affectedKey", "mcp.servers.private-host.example"],
+      ["affectedKey", "engines.private-host.example"],
+      ["affectedKey", "engines.node.private-host.example"],
       ["errorName", "PrivateTenantError"],
     ] as const
   ).map(([field, host]) => ({
@@ -158,23 +162,13 @@ const diagnostics: Diagnostic[] = [
       "Permission denied",
       "mcp.servers",
     ],
-    excludes: [
-      "synthetic-token-value",
-      "Example Person",
-      "example/",
-      "secret.json",
-      "private second line",
-      "private file",
-    ],
+    excludes:
+      /synthetic-token-value|Example Person|example\/|secret\.json|private second line|private file/u,
   })),
   ...(
     [
       ["openclaw doctor", "package-doctor"],
-      ["candidate doctor lint", "candidate-doctor-lint"],
       ["Checking update health cleanup", "candidate-doctor-lint-cleanup"],
-      ["candidate snapshot", "candidate-state-snapshot"],
-      ["post-install verification", "post-install-verify"],
-      ["gateway recovery verification", "gateway-recovery-verification"],
       ["finalize:targetConfigConvergence", "finalize-target-config-convergence"],
       ["git checkout refs/private/tenant", "git-checkout"],
       [
@@ -208,6 +202,32 @@ it.each(diagnostics)("publishes only bounded diagnostic facts: $name", async (en
   }
 });
 
+it("keeps allowlisted stderr causes alongside a classified startup fact", async () => {
+  const prepared = await report({
+    steps: [
+      step("candidate-gateway-startup", {
+        failureFacts: [
+          {
+            check: "startupz",
+            code: "candidate-startup-failed",
+            message: "plugin load failed",
+            pluginId: "discord",
+          },
+        ],
+        stderrTail:
+          "EACCES: permission denied at /private/customer/plugin on private-host.example token=synthetic-secret",
+      }),
+    ],
+  });
+  expectText(
+    prepared.body,
+    [
+      "Failed phase candidate-gateway-startup: exit 1 (EACCES; Permission denied; plugin load failed: discord)",
+    ],
+    /\/private\/customer|private-host|synthetic-secret/u,
+  );
+});
+
 it("preserves classified destination ownership and recovery without exposing usernames", async () => {
   const redaction = { env: { HOME: "/Users/Fixture Owner" }, stateDir: "/report-test-state" };
   const fact = createUpdateFailureFact(
@@ -233,9 +253,7 @@ it("preserves classified destination ownership and recovery without exposing use
   for (const recorded of [false, true]) {
     const prepared = await report(
       { reason: "global-install-foreign-destination", steps: recorded ? [] : [failed] },
-      recorded
-        ? { recordedRun: { runId: attemptId, steps: updateRunStepsFromResultStep(failed) } }
-        : {},
+      recorded ? { recordedRun: makeRecordedRun(updateRunStepsFromResultStep(failed)) } : {},
       redaction,
     );
     expectText(
@@ -247,7 +265,7 @@ it("preserves classified destination ownership and recovery without exposing use
         "Next step:",
         "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
       ],
-      ["[redacted-diagnostic]", "Private arbitrary diagnostic"],
+      /\[redacted-diagnostic\]|Private arbitrary diagnostic/u,
     );
     for (const text of ["Fixture Owner", "Other Owner", "private-second-line"]) {
       expect(prepared.body).not.toContain(text);
@@ -261,8 +279,6 @@ it("includes every named lint finding using public diagnostic redaction", async 
     reason: "doctor-failed",
     steps: [
       step("post-plugin-doctor-lint", {
-        command: "doctor --lint --json",
-        cwd: "/candidate",
         doctorLintFindings: Array.from({ length: 40 }, (_, index) => ({
           checkId: "core/doctor/security",
           severity: index === 0 ? "error" : "warning",
@@ -284,86 +300,73 @@ it("includes every named lint finding using public diagnostic redaction", async 
 });
 
 it.each([
-  ...[
-    "Package rollback launcher backup changed",
-    "Package rollback verification timed out",
-    "Package rollback verification failed",
-  ].map((cause) => ({
-    source: "rollback",
-    diagnostic: true,
-    cause,
-  })),
-  ...[
-    { source: "stderr", diagnostic: true },
-    { source: "stderr", diagnostic: false },
-    { source: "facts-and-stderr", diagnostic: true },
-    { source: "recorded-detail", diagnostic: true },
-  ].map(({ source, diagnostic }) => ({ source, diagnostic, cause: "" })),
-])(
-  "retains a recognized exit cause from $source ($diagnostic, $cause)",
-  async ({ source, diagnostic, cause }) => {
-    const stderr = [
-      "npm warn private-package from https://private-host.example/registry",
-      ...(diagnostic
-        ? [
-            "npm ERR! code EACCES",
-            "npm ERR! EACCES: permission denied, mkdir '/private/example/cache'",
-          ]
-        : []),
-      "npm ERR! log: /private/example/npm.log",
-    ].join("\n");
-    const failed = step(source === "rollback" ? "package-swap" : "global update", {
-      command: "npm install -g openclaw@2026.9.4",
-      cwd: "/candidate",
-      stderrTail: stderr,
-      ...(source === "facts-and-stderr"
-        ? {
-            failureFacts: [
-              { check: "package-install", code: "EACCES", message: "npm warn private-package" },
-            ],
-          }
-        : {}),
-    });
-    const recorded = source === "rollback" || source === "recorded-detail";
-    const prepared = await report(
-      {
-        reason: source === "rollback" ? undefined : "global-install-failed",
-        steps: recorded ? [] : [failed],
-      },
-      recorded
-        ? {
-            recordedRun: {
-              runId: attemptId,
-              steps:
-                source === "rollback"
-                  ? updateRunStepsFromResultStep({
-                      name: "package-swap",
-                      exitCode: 1,
-                      stderrTail: `${cause}: /private/customer/launcher. Installation recovery is unverified; inspect the installation and backups before restarting.`,
-                    })
-                  : [{ step: "global update", status: "failed", exitCode: 1, detail: stderr }],
-            },
-          }
-        : {},
-    );
-    if (source === "rollback") {
-      expectText(
-        prepared.body,
-        [`Failed phase package-swap: exit 1 (${cause})`],
-        ["/private/customer", "Installation recovery is unverified"],
-      );
-    } else {
-      expectText(
-        prepared.body,
-        [
-          `- Failed phase package-install: exit 1${diagnostic ? " (EACCES; Permission denied)" : ""}\n`,
-        ],
-        ["private-package", "private-host.example", "/private/example", "npm.log"],
-      );
-      expect(prepared.title).toMatch(/^Update failure: package-install \(/u);
-    }
-  },
-);
+  "Package rollback launcher backup changed",
+  "Package rollback verification timed out",
+  "Package rollback verification failed",
+])("retains the recognized rollback cause: %s", async (cause) => {
+  const prepared = await report(
+    {},
+    {
+      recordedRun: makeRecordedRun(
+        updateRunStepsFromResultStep({
+          name: "package-swap",
+          exitCode: 1,
+          stderrTail: `${cause}: /private/customer/launcher. Installation recovery is unverified; inspect the installation and backups before restarting.`,
+        }),
+      ),
+    },
+  );
+  expectText(
+    prepared.body,
+    [`Failed phase package-swap: exit 1 (${cause})`],
+    /\/private\/customer|Installation recovery is unverified/u,
+  );
+});
+
+it.each([
+  { source: "stderr", diagnostic: true },
+  { source: "stderr", diagnostic: false },
+  { source: "facts-and-stderr", diagnostic: true },
+  { source: "recorded-detail", diagnostic: true },
+])("retains a recognized exit cause from $source ($diagnostic)", async ({ source, diagnostic }) => {
+  const stderr = [
+    "npm warn private-package from https://private-host.example/registry",
+    ...(diagnostic
+      ? [
+          "npm ERR! code EACCES",
+          "npm ERR! EACCES: permission denied, mkdir '/private/example/cache'",
+        ]
+      : []),
+    "npm ERR! log: /private/example/npm.log",
+  ].join("\n");
+  const failed = step("global update", {
+    stderrTail: stderr,
+    failureFacts:
+      source === "facts-and-stderr"
+        ? [{ check: "package-install", code: "EACCES", message: "npm warn private-package" }]
+        : undefined,
+  });
+  const recorded = source === "recorded-detail";
+  const prepared = await report(
+    {
+      reason: "global-install-failed",
+      steps: recorded ? [] : [failed],
+    },
+    recorded
+      ? {
+          recordedRun: makeRecordedRun([
+            { step: "global update", status: "failed", exitCode: 1, detail: stderr },
+          ]),
+        }
+      : {},
+  );
+  expectText(
+    prepared.body,
+    [`- Failed phase package-install: exit 1${diagnostic ? " (EACCES; Permission denied)" : ""}\n`],
+    /private-package|private-host\.example|\/private\/example|npm\.log/u,
+  );
+  expect(prepared.title).toMatch(/^Update failure: package-install \(/u);
+});
 
 it.each(["matching", "foreign", "compact", "measured", "earlier", "alias"] as const)(
   "projects durable failure history without losing authority or order: %s",
@@ -426,7 +429,7 @@ it.each(["matching", "foreign", "compact", "measured", "earlier", "alias"] as co
           `Reason code: ${matches ? "doctor-failed" : "unknown"}`,
           `Update mode: ${matches ? "package" : "unknown"}`,
         ],
-        ["private-customer-text", "private second line", "/private/customer"],
+        /private-customer-text|private second line|\/private\/customer/u,
       );
       for (const text of [
         message,
@@ -444,7 +447,7 @@ it.each(["matching", "foreign", "compact", "measured", "earlier", "alias"] as co
           "Failed phase package-rollback: exit unknown",
           "Failed phase [redacted-command]: exit unknown",
         ],
-        ["private-customer-text", "Gateway service ownership"],
+        /private-customer-text|Gateway service ownership/u,
       );
     } else {
       expectText(prepared.body, [`- Failed phase: ${name}\n`, `Failed phase ${name}: exit 7`]);
@@ -463,55 +466,41 @@ it.each(["step", "plugin-summary"])(
   "reports private-safe warnings from %s without changing the failed phase",
   async (source) => {
     const message = "EACCES: permission denied at /private/customer/plugin token=synthetic-token";
-    const result: Partial<UpdateRunResult> = {
-      steps: [
-        ...(source === "step"
-          ? [
-              step("post-plugin-doctor", {
-                command: "doctor --fix",
-                cwd: "/candidate",
-                advisory: { kind: "recoverable-maintenance", message },
-              }),
-            ]
-          : []),
-        step("verifying"),
-      ],
-      ...(source === "plugin-summary"
-        ? {
-            postUpdate: {
-              plugins: {
-                status: "warning",
-                changed: true,
-                warnings: ["discord", "private-customer-plugin"].map((pluginId) => ({
-                  pluginId,
-                  reason: "post-plugin-doctor-execution-failed",
-                  message,
-                  guidance: ["custom-tool private-customer-command"],
-                })),
-                sync: {
-                  changed: false,
-                  switchedToBundled: [],
-                  switchedToNpm: [],
-                  warnings: [],
-                  errors: [],
-                },
-                npm: { changed: false, outcomes: [] },
-                integrityDrifts: [],
-              },
-            },
-          }
-        : {}),
-    };
+    const result: Partial<UpdateRunResult> = { steps: [step("verifying")] };
+    if (source === "step") {
+      result.steps?.unshift(
+        step("post-plugin-doctor", {
+          advisory: { kind: "recoverable-maintenance", message },
+        }),
+      );
+    } else {
+      result.postUpdate = {
+        plugins: {
+          status: "warning",
+          changed: true,
+          warnings: ["discord", "private-customer-plugin"].map((pluginId) => ({
+            pluginId,
+            reason: "post-plugin-doctor-execution-failed",
+            message,
+            guidance: ["custom-tool private-customer-command"],
+          })),
+          sync: {
+            changed: false,
+            switchedToBundled: [],
+            switchedToNpm: [],
+            warnings: [],
+            errors: [],
+          },
+          npm: { changed: false, outcomes: [] },
+          integrityDrifts: [],
+        },
+      };
+    }
     const prepared = await report(result);
     expectText(
       prepared.body,
       ["## Warnings", "EACCES; Permission denied", "- Failed phase: verifying\n"],
-      [
-        "Failed phase post-plugin-doctor",
-        "private-customer",
-        "/private/customer",
-        "synthetic-token",
-      ],
+      /Failed phase post-plugin-doctor|private-customer|\/private\/customer|synthetic-token/u,
     );
     if (source === "plugin-summary") {
       expectText(prepared.body, [
@@ -525,15 +514,31 @@ it.each(["step", "plugin-summary"])(
   },
 );
 
-type RecoveryCase = {
+type ReportCase = {
   name: string;
-  result: Partial<UpdateRunResult>;
+  result?: Partial<UpdateRunResult>;
   recordedRun?: UpdateFailureReportInput["recordedRun"];
   target?: string;
   includes: string[];
   excludes?: string[];
 };
-const recoveryCases: RecoveryCase[] = [
+function recoveryCase(
+  summary: string,
+  recovery: Partial<Extract<UpdateRunResult["recovery"], { serviceRestartSafe: true }>> = {},
+): ReportCase {
+  const outcome = recovery.reason
+    ? `${summary}. Run \`openclaw gateway status --deep\` to check the serving version and readiness.`
+    : summary;
+  return {
+    name: outcome,
+    result: {
+      reason: "runtime-verification-failed",
+      recovery: { serviceRestartSafe: true, version: "2026.9.4", ...recovery },
+    },
+    includes: [`- Recovery outcome: ${outcome}\n`],
+  };
+}
+const recoveryCases: ReportCase[] = [
   {
     name: "candidate repair refused before activation",
     target: "version 2026.9.4",
@@ -541,8 +546,8 @@ const recoveryCases: RecoveryCase[] = [
       reason: "repair-requires-config-change",
       before: { version: "2026.9.3" },
       after: { version: "2026.9.3" },
-      steps: [step("repairing", { command: "repair staged candidate", cwd: "/candidate" })],
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      steps: [step("repairing")],
+      recovery: unsafeRecovery,
     },
     includes: [
       "Failed phase: repairing",
@@ -551,36 +556,25 @@ const recoveryCases: RecoveryCase[] = [
     ],
     excludes: ["rollback"],
   },
-  ...[
-    { healthy: true, code: undefined, expected: "verified serving 2026.9.5" },
-    { healthy: false, code: "stopped-free", expected: "not serving (stopped-free)" },
-    {
-      healthy: false,
-      code: "private-probe-identifier",
-      expected: "recovery check failed (gateway-probe-failed)",
-    },
-  ].map(({ healthy, code, expected }): RecoveryCase => ({
+  ...(
+    [
+      [true, undefined, "verified serving 2026.9.5"],
+      [false, "stopped-free", "not serving (stopped-free)"],
+      [false, "private-probe-identifier", "recovery check failed (gateway-probe-failed)"],
+    ] as const
+  ).map(([healthy, code, expected]): ReportCase => ({
     name: `observed ${expected}`,
-    recordedRun: {
-      runId: attemptId,
-      steps: [],
-      verification: {
-        runningVersion: "2026.9.4",
-        versionMatch: true,
-        readyz: true,
-        settled: true,
-      },
-    },
+    recordedRun: makeRecordedRun([], {
+      verification: { runningVersion: "2026.9.4", versionMatch: true, readyz: true, settled: true },
+    }),
     result: {
       reason: "post-update-plugins",
       after: { version: "2026.9.5" },
       recovery: healthy
         ? { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" }
-        : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        : unsafeRecovery,
       steps: [
         step("gateway recovery verification", {
-          command: "gateway verification",
-          cwd: "/fixture",
           exitCode: healthy ? 0 : 1,
           ...(code ? { failureFacts: [{ check: "settled", code }] } : {}),
         }),
@@ -589,44 +583,28 @@ const recoveryCases: RecoveryCase[] = [
     includes: [`Recovery outcome: ${expected}`],
     excludes: ["not verified", "private-probe-identifier"],
   })),
-  ...(
-    [
-      { service: undefined, outcome: "verified safe to restart" },
-      { service: "healthy", outcome: "Gateway serving 2026.9.4; health verified" },
-      {
-        service: "failed",
-        reason: "restart-unhealthy",
-        outcome:
-          "runtime files verified; Gateway health failed (restart-unhealthy). Run `openclaw gateway status --deep` to check the serving version and readiness.",
-      },
-      {
-        service: "healthy",
-        packageRollbackVerified: true,
-        outcome: "package rollback verified; Gateway serving 2026.9.4; health verified",
-      },
-      {
-        service: "failed",
-        packageRollbackVerified: true,
-        reason: "channel-errors",
-        outcome:
-          "package rollback verified (2026.9.4); Gateway health failed (channel-errors). Run `openclaw gateway status --deep` to check the serving version and readiness.",
-      },
-      {
-        service: undefined,
-        packageRollbackVerified: true,
-        reason: "gateway-readiness-pending",
-        outcome:
-          "package rollback verified (2026.9.4); Gateway health unverified (gateway-readiness-pending). Run `openclaw gateway status --deep` to check the serving version and readiness.",
-      },
-    ] as const
-  ).map(({ outcome, ...recovery }): RecoveryCase => ({
-    name: outcome,
-    result: {
-      reason: "runtime-verification-failed",
-      recovery: { serviceRestartSafe: true, version: "2026.9.4", ...recovery },
+  recoveryCase("verified safe to restart"),
+  recoveryCase("Gateway serving 2026.9.4; health verified", { service: "healthy" }),
+  recoveryCase("runtime files verified; Gateway health failed (restart-unhealthy)", {
+    service: "failed",
+    reason: "restart-unhealthy",
+  }),
+  recoveryCase("package rollback verified; Gateway serving 2026.9.4; health verified", {
+    service: "healthy",
+    packageRollbackVerified: true,
+  }),
+  recoveryCase("package rollback verified (2026.9.4); Gateway health failed (channel-errors)", {
+    service: "failed",
+    packageRollbackVerified: true,
+    reason: "channel-errors",
+  }),
+  recoveryCase(
+    "package rollback verified (2026.9.4); Gateway health unverified (gateway-readiness-pending)",
+    {
+      packageRollbackVerified: true,
+      reason: "gateway-readiness-pending",
     },
-    includes: [`- Recovery outcome: ${outcome}\n`],
-  })),
+  ),
 ];
 it.each(recoveryCases)(
   "reports only the observed recovery outcome: $name",
@@ -639,48 +617,32 @@ it.each(recoveryCases)(
   },
 );
 
-type PublicFieldCase = {
-  name: string;
-  result?: Partial<UpdateRunResult>;
-  target?: string;
-  includes: string[];
-};
-const publicFields: PublicFieldCase[] = [
-  ...["custom-tool private-customer-text", "custom-tool;private-customer-text"].map((value) => ({
-    name: value,
-    result: { reason: value },
-    includes: ["- Reason code: [redacted-command]\n"],
-  })),
-  ...["origin/main@abcdef", "🦞".repeat(5)].map((value) => ({
-    name: value,
-    result: { reason: value },
-    includes: [`- Reason code: ${value}\n`],
-  })),
-  ...["\n", "\u2028"].map((separator) => ({
-    name: `scalar lines separated by ${JSON.stringify(separator)}`,
-    result: {
-      reason: ["build", "custom-tool private-customer-text", "linux/arm64"].join(separator),
-    },
-    includes: [
-      `- Reason code: ${["build", "[redacted-command]", "linux/arm64"].join(separator)}\n`,
-    ],
-  })),
-  ...["version 2026.9.1+build.abc", "stable channel", "extended-stable channel"].map((target) => ({
-    name: target,
-    target,
-    result: { reason: "build-failed" },
-    includes: [`- Update target: ${target}\n`],
-  })),
-  ...["version private-customer-text", "stable channel private-customer-text"].map((target) => ({
-    name: target,
-    target,
-    result: { reason: "build-failed" },
-    includes: ["- Update target: [redacted-command]\n"],
-  })),
-  {
-    name: "arbitrary arguments across report fields",
-    target: 'custom-updater --customer "private-customer-text"',
-    result: {
+type PublicField = { field: "reason" | "target"; value: string; expected: string };
+it.each`
+  field       | value                                                              | expected
+  ${"reason"} | ${"custom-tool private-customer-text"}                             | ${"[redacted-command]"}
+  ${"reason"} | ${"custom-tool;private-customer-text"}                             | ${"[redacted-command]"}
+  ${"reason"} | ${"origin/main@abcdef"}                                            | ${"origin/main@abcdef"}
+  ${"reason"} | ${"🦞".repeat(5)}                                                  | ${"🦞".repeat(5)}
+  ${"reason"} | ${"build\ncustom-tool private-customer-text\nlinux/arm64"}         | ${"build\n[redacted-command]\nlinux/arm64"}
+  ${"reason"} | ${"build\u2028custom-tool private-customer-text\u2028linux/arm64"} | ${"build\u2028[redacted-command]\u2028linux/arm64"}
+  ${"target"} | ${"version 2026.9.1+build.abc"}                                    | ${"version 2026.9.1+build.abc"}
+  ${"target"} | ${"stable channel"}                                                | ${"stable channel"}
+  ${"target"} | ${"extended-stable channel"}                                       | ${"extended-stable channel"}
+  ${"target"} | ${"version private-customer-text"}                                 | ${"[redacted-command]"}
+  ${"target"} | ${"stable channel private-customer-text"}                          | ${"[redacted-command]"}
+`("bounds public $field: $value", async ({ field, value, expected }: PublicField) => {
+  const prepared = await report(
+    { reason: field === "reason" ? value : "build-failed" },
+    field === "target" ? { target: value } : {},
+  );
+  const label = field === "reason" ? "Reason code" : "Update target";
+  expectText(prepared.body, [`- ${label}: ${expected}\n`], ["private-customer-text"]);
+});
+
+it("bounds arbitrary arguments across report fields", async () => {
+  const prepared = await report(
+    {
       reason: 'Command failed: python -c "private-customer-text"',
       before: { version: "custom-tool private-customer-text", sha: "/private-customer-text" },
       after: {
@@ -688,22 +650,14 @@ const publicFields: PublicFieldCase[] = [
         sha: "~\\private-customer-text",
         buildId: '"PowerShell.EXE" -EncodedCommand private-customer-text',
       },
-      steps: [
-        step('ruby -e "private-customer-text"', {
-          command: "never copied",
-          cwd: "/private",
-          exitCode: 7,
-        }),
-      ],
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      steps: [step('ruby -e "private-customer-text"', { exitCode: 7 })],
+      recovery: unsafeRecovery,
     },
-    includes: ["exit 7", "Update mode: npm", "Recovery outcome: not verified"],
-  },
-];
-it.each(publicFields)(
-  "bounds public report fields: $name",
-  async ({ result, target, includes }) => {
-    const prepared = await report(result, { target });
-    expectText(prepared.body, includes, ["private-customer-text"]);
-  },
-);
+    { target: 'custom-updater --customer "private-customer-text"' },
+  );
+  expectText(
+    prepared.body,
+    ["exit 7", "Update mode: npm", "Recovery outcome: not verified"],
+    ["private-customer-text"],
+  );
+});

@@ -11,21 +11,26 @@ import {
   clearNodeSqliteKyselyCacheForDatabase,
   enableNodeSqliteKyselyStatementCache,
 } from "../../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { setSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
-import {
-  registerSqliteCacheExitClose,
-  runInSqliteMaintenanceContext,
-} from "../../infra/sqlite-wal.js";
+import { registerSqliteCacheExitClose } from "../../infra/sqlite-wal.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
+
+export type AuthProfileReadDatabaseOpener = (
+  pathname: string,
+  options: { timeout: number },
+) => DatabaseSync;
 
 const AUTH_PROFILE_READ_HANDLE_CAP = 64;
 const AUTH_PROFILE_READ_IDLE_MS = 30 * 60_000;
 type AuthProfileReadHandle = {
   db: DatabaseSync;
+  identity: string | undefined;
   ready: boolean;
   idleTimer?: ReturnType<typeof setTimeout>;
 };
@@ -37,6 +42,9 @@ type AuthProfileReadPoolCloseScope =
   | { kind: "root"; rootPath: string };
 
 export function closeAuthProfileReadDatabase(databasePath: string): void {
+  if (isArtifactPreservingStateRead("agent", databasePath)) {
+    return;
+  }
   const pathname = path.resolve(databasePath);
   const entry = authProfileReadDatabases.get(pathname);
   if (!entry) {
@@ -62,22 +70,17 @@ export function closeAuthProfileReadPool(scope?: AuthProfileReadPoolCloseScope):
     closeAuthProfileReadDatabase(scope.databasePath);
     return;
   }
-  if (scope?.kind === "root") {
-    for (const pathname of authProfileReadDatabases.keys()) {
-      if (isPathInside(scope.rootPath, pathname)) {
-        closeAuthProfileReadDatabase(pathname);
-      }
-    }
-    return;
-  }
   for (const pathname of authProfileReadDatabases.keys()) {
-    closeAuthProfileReadDatabase(pathname);
+    if (scope?.kind !== "root" || isPathInside(scope.rootPath, pathname)) {
+      closeAuthProfileReadDatabase(pathname);
+    }
   }
 }
 
-registerAgentDatabaseReaderCloser((candidates) => {
+registerAgentDatabaseReaderCloser((candidates, retainedPaths) => {
   for (const pathname of authProfileReadDatabases.keys()) {
     if (
+      !retainedPaths?.has(pathname) &&
       candidates.some((candidate) => matchesAgentDatabaseReadCandidatePath(candidate, pathname))
     ) {
       closeAuthProfileReadDatabase(pathname);
@@ -90,7 +93,7 @@ function armReadHandleIdleClose(pathname: string, entry: AuthProfileReadHandle):
     entry.idleTimer.refresh();
     return;
   }
-  const timer = runInSqliteMaintenanceContext(() =>
+  const timer = runInDetachedAsyncContext(() =>
     setTimeout(() => {
       if (authProfileReadDatabases.get(pathname) !== entry || entry.idleTimer !== timer) {
         return;
@@ -121,13 +124,25 @@ export function isMissingDatabasePath(pathname: string): boolean {
 
 export function acquireAuthProfileReadDatabase(
   pathname: string,
+  openReadOnlyDatabase: AuthProfileReadDatabaseOpener,
+  schema?: SqliteAuthSchema,
+  expectedIdentity?: string,
 ): { status: "missing" } | { status: "unreadable" } | { status: "readable"; db: DatabaseSync } {
   const resolvedPath = path.resolve(pathname);
   if (isDeletedAgentDatabasePath(resolvedPath)) {
     return { status: "missing" };
   }
-  const cached = authProfileReadDatabases.get(resolvedPath);
-  if (cached?.ready && cached.db.isOpen) {
+  const inspection = isArtifactPreservingStateRead("agent", resolvedPath);
+  if (!inspection && schema && schema.userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
+    closeAuthProfileReadDatabase(resolvedPath);
+    return { status: "unreadable" };
+  }
+  const cached = inspection ? undefined : authProfileReadDatabases.get(resolvedPath);
+  if (
+    cached?.ready &&
+    cached.db.isOpen &&
+    (expectedIdentity === undefined || cached.identity === expectedIdentity)
+  ) {
     authProfileReadDatabases.delete(resolvedPath);
     authProfileReadDatabases.set(resolvedPath, cached);
     armReadHandleIdleClose(resolvedPath, cached);
@@ -138,34 +153,52 @@ export function acquireAuthProfileReadDatabase(
   }
   // A failed candidate close must be retried before another handle is opened.
   // This bounds custody to the pool plus one unadmitted candidate.
-  for (const [pendingPath, entry] of authProfileReadDatabases) {
+  for (const [pendingPath, entry] of inspection ? [] : authProfileReadDatabases) {
     if (!entry.ready) {
       closeAuthProfileReadDatabase(pendingPath);
     }
   }
   let db: DatabaseSync;
   try {
-    db = openNodeSqliteDatabase(resolvedPath, { readOnly: true });
+    db = openReadOnlyDatabase(resolvedPath, {
+      timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    });
   } catch {
     return isMissingDatabasePath(resolvedPath) ? { status: "missing" } : { status: "unreadable" };
   }
-  const candidate: AuthProfileReadHandle = { db, ready: false };
-  authProfileReadDatabases.set(resolvedPath, candidate);
-  unregisterReadHandleExitClose ??= registerSqliteCacheExitClose(closeAuthProfileReadPool);
-  armReadHandleIdleClose(resolvedPath, candidate);
+  // The worker validates identity before transferring rows; native open also binds its own file.
+  const candidate: AuthProfileReadHandle = { db, identity: expectedIdentity, ready: false };
+  if (!inspection) {
+    authProfileReadDatabases.set(resolvedPath, candidate);
+    unregisterReadHandleExitClose ??= registerSqliteCacheExitClose(closeAuthProfileReadPool);
+    armReadHandleIdleClose(resolvedPath, candidate);
+  }
   let readable = false;
   try {
     enableNodeSqliteKyselyStatementCache(db);
-    // The pooled reader bypasses canonical agent DB bootstrap, but it shares
-    // the same busy policy and validates the process-stable schema on open.
-    setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
-    readable = readSqliteUserVersion(db) <= OPENCLAW_AGENT_SCHEMA_VERSION;
+    if (inspection) {
+      readable = readSqliteUserVersion(db) <= OPENCLAW_AGENT_SCHEMA_VERSION;
+    } else if (schema) {
+      readable = true;
+    } else {
+      admitSqliteSchema(db, (version) => {
+        if (version > OPENCLAW_AGENT_SCHEMA_VERSION) {
+          throw new Error("Auth profile database uses a newer agent schema");
+        }
+      });
+      readable = true;
+    }
   } catch {
     // Invalid readers are disposed below, where native close failures propagate.
   }
+  const closeCandidate = () =>
+    inspection ? db.close() : closeAuthProfileReadDatabase(resolvedPath);
   if (!readable) {
-    closeAuthProfileReadDatabase(resolvedPath);
+    closeCandidate();
     return { status: "unreadable" };
+  }
+  if (inspection) {
+    return { status: "readable", db };
   }
   try {
     while (authProfileReadDatabases.size > AUTH_PROFILE_READ_HANDLE_CAP) {
@@ -177,7 +210,7 @@ export function acquireAuthProfileReadDatabase(
     }
   } catch (error) {
     try {
-      closeAuthProfileReadDatabase(resolvedPath);
+      closeCandidate();
     } catch (closeError) {
       throw new AggregateError([error, closeError], "Unable to close auth profile readers", {
         cause: closeError,

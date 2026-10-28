@@ -15,7 +15,7 @@ type VisitorProfile = {
   effectiveRole?: string;
   roleSource?: "assigned" | "githubLogin" | "default";
   mergedInto?: string | null;
-  githubIdentity?: { login: string } | null;
+  githubIdentity?: { host?: string; login: string } | null;
 };
 
 type VisitorGatewayAccess = {
@@ -63,11 +63,16 @@ export function createVisitorAccessReader(
     const access = (target: VisitorTarget) => describeAccess(profile(target), roles);
     return {
       describe: (target) => access(target).description,
-      githubLogin: (target) => profile(target)?.githubIdentity?.login,
+      githubLogin: (target) => {
+        const identity = profile(target)?.githubIdentity;
+        return (identity?.host ?? "github.com") === "github.com" ? identity?.login : undefined;
+      },
       assertGithubSelection(login, accountId) {
         const normalized = login.toLowerCase();
         const matches = canonical.filter(
-          (entry) => entry.githubIdentity?.login.toLowerCase() === normalized,
+          (entry) =>
+            (entry.githubIdentity?.host ?? "github.com") === "github.com" &&
+            entry.githubIdentity?.login.toLowerCase() === normalized,
         );
         if (matches.length > 1 || (matches[0] && matches[0].id !== profile(accountId)?.id)) {
           throw new VisitorAccessError(

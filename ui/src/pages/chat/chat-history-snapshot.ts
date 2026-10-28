@@ -1,4 +1,5 @@
 import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChatInputReceipts,
@@ -9,22 +10,28 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../../api/types.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
+import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import {
   isUiSelectedGlobalSessionKey,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
+import { projectChatSessionStateSnapshot } from "./chat-session-state-snapshot.ts";
 import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
+import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
+import { reduceChatSessionProjection } from "./history-merge.ts";
 import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import {
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
   readChatHistoryCursor,
   setChatHistoryCursor,
+  projectChatTranscriptMetadata,
 } from "./session-message-cache.ts";
 import type { AgentEventPayload } from "./tool-stream-contract.ts";
 
 export type ChatHistoryResult = {
+  stateRevision?: ChatHistoryState["stateRevision"];
   activity?: ChatHistoryActivity[];
   pendingInputs?: ChatPendingInputsPage;
   inputReceipts?: ChatInputReceipts;
@@ -41,7 +48,8 @@ export type ChatHistoryResult = {
   verboseLevel?: string;
   defaults?: GatewaySessionsDefaults;
   sessionInfo?: GatewaySessionRow;
-  metadata?: ChatMetadataResult;
+  sessionInfoSnapshotAt?: number;
+  metadata?: Partial<ChatMetadataResult>;
   inFlightRun?: {
     runId: string;
     text?: string;
@@ -56,9 +64,9 @@ export type ChatHistoryDeltaResult = Omit<
   ProtocolChatHistoryDeltaResult,
   "sessionInfo" | "inFlightRun" | "metadata"
 > & {
-  sessionInfo: GatewaySessionRow;
+  sessionInfo?: GatewaySessionRow;
   inFlightRun?: ChatHistoryResult["inFlightRun"];
-  metadata?: ChatMetadataResult;
+  metadata?: Partial<ChatMetadataResult>;
 };
 
 export type { ChatHistoryResetResult };
@@ -91,18 +99,9 @@ export function isHistoryCursor(
 export function resolveChatHistoryPagination(
   result: ChatHistoryResult | undefined,
 ): ChatHistoryPagination {
-  const totalMessages = result?.totalMessages;
-  const validTotal =
-    typeof totalMessages === "number" && Number.isSafeInteger(totalMessages) && totalMessages >= 0
-      ? totalMessages
-      : undefined;
-  const nextOffset = result?.nextOffset;
-  if (
-    result?.hasMore === true &&
-    typeof nextOffset === "number" &&
-    Number.isSafeInteger(nextOffset) &&
-    nextOffset > 0
-  ) {
+  const validTotal = asSafeIntegerInRange(result?.totalMessages, { min: 0 });
+  const nextOffset = asSafeIntegerInRange(result?.nextOffset, { min: 1 });
+  if (result?.hasMore === true && nextOffset !== undefined) {
     return {
       hasMore: true,
       nextOffset,
@@ -124,17 +123,13 @@ export function historySessionId(result: ChatHistoryResult): string | null {
 }
 
 function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | null {
-  const totalMessages = pagination.totalMessages;
-  if (
-    typeof totalMessages !== "number" ||
-    !Number.isSafeInteger(totalMessages) ||
-    totalMessages < 0
-  ) {
+  const totalMessages = asSafeIntegerInRange(pagination.totalMessages, { min: 0 });
+  if (totalMessages === undefined) {
     return null;
   }
   const retainedDepth = pagination.hasMore ? pagination.nextOffset : totalMessages;
   const start = totalMessages - retainedDepth + 1;
-  return Number.isSafeInteger(start) && start > 0 ? start : null;
+  return asSafeIntegerInRange(start, { min: 1 }) ?? null;
 }
 
 export function reconcileHistoryTail(options: {
@@ -152,6 +147,21 @@ export function reconcileHistoryTail(options: {
   ) {
     return null;
   }
+  const previousByIdentity = new Map<string, unknown[]>();
+  for (const message of options.previousMessages) {
+    const identity = nativeHistoryMessageIdentity(message);
+    if (identity) {
+      const matches = previousByIdentity.get(identity) ?? [];
+      matches.push(message);
+      previousByIdentity.set(identity, matches);
+    }
+  }
+  // Identical history rows keep their render identity, including projected siblings.
+  const messages = options.nextMessages.map((message) => {
+    const identity = nativeHistoryMessageIdentity(message);
+    return (identity ? previousByIdentity.get(identity)?.shift() : undefined) ?? message;
+  });
+  const reconciled = { messages, pagination: options.nextPagination };
   const previousTotal = options.previousPagination.totalMessages;
   const nextTotal = options.nextPagination.totalMessages;
   const previousStart = retainedRawHistoryStart(options.previousPagination);
@@ -165,18 +175,18 @@ export function reconcileHistoryTail(options: {
     nextStart > previousTotal + 1 ||
     nextStart <= previousStart
   ) {
-    return null;
+    return reconciled;
   }
   const prefix = options.previousMessages.filter((message) => {
     const seq = readSessionMessageSequence(message);
     return seq !== null && seq < nextStart;
   });
   if (prefix.length === 0) {
-    return null;
+    return reconciled;
   }
   const retainedDepth = nextTotal - previousStart + 1;
   return {
-    messages: [...prefix, ...options.nextMessages],
+    messages: [...prefix, ...messages],
     pagination:
       previousStart > 1
         ? { hasMore: true, nextOffset: retainedDepth, totalMessages: nextTotal }
@@ -184,9 +194,29 @@ export function reconcileHistoryTail(options: {
   };
 }
 
+export function applyChatHistoryRefill(state: ChatState, result: ChatHistoryResult): void {
+  // A byte-limited refill can be smaller than the cache. Replace its
+  // window; the projection owner alone retains live and pending rows.
+  const messages = result.messages ?? [];
+  const tail = reconcileHistoryTail({
+    nextMessages: messages,
+    nextPagination: resolveChatHistoryPagination(result),
+    nextSessionId: historySessionId(result),
+    previousMessages: state.chatMessages,
+    previousPagination: state.chatHistoryPagination,
+    previousSessionId: state.currentSessionId ?? null,
+  });
+  reduceChatSessionProjection(state, {
+    type: "snapshotLoaded",
+    messages: tail?.messages ?? messages,
+  });
+}
+
 export function commitCurrentChatHistorySnapshot(
   state: ChatState,
   deltaCursor?: string | null,
+  sessionInfo?: GatewaySessionRow,
+  historyState?: ChatHistoryState | null,
 ): void {
   if (deltaCursor !== undefined) {
     setChatHistoryCursor(state, deltaCursor ?? undefined);
@@ -199,6 +229,11 @@ export function commitCurrentChatHistorySnapshot(
   const agentId = isUiSelectedGlobalSessionKey(state, sessionKey)
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
+  const previous = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+    sessionKey,
+    agentId,
+  });
+  const retained = previous?.sessionId === (state.currentSessionId ?? null) ? previous : undefined;
   cacheChatSessionSnapshot(
     state.chatMessagesBySession,
     state,
@@ -208,6 +243,15 @@ export function commitCurrentChatHistorySnapshot(
       ...(state.chatDisplayedLeafEntryId !== undefined
         ? { displayedLeafEntryId: state.chatDisplayedLeafEntryId }
         : {}),
+      transcriptMetadata: sessionInfo
+        ? projectChatTranscriptMetadata(sessionInfo)
+        : retained?.transcriptMetadata,
+      sessionState: sessionInfo
+        ? projectChatSessionStateSnapshot(state, sessionInfo, retained?.sessionState)
+        : retained?.sessionState,
+      progressCard: retained?.progressCard,
+      historyState:
+        historyState === undefined ? retained?.historyState : (historyState ?? undefined),
       messages: state.chatMessages,
       pagination: state.chatHistoryPagination,
       sessionId: state.currentSessionId ?? null,

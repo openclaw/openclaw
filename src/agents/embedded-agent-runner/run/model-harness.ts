@@ -1,4 +1,5 @@
 import type { Model } from "../../../llm/types.js";
+import { resolveProviderPolicySurface } from "../../../plugins/provider-public-artifacts.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agent-runtime-id.js";
 import { resolveAuthoredModelContextTokens } from "../../context-resolution.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
@@ -12,7 +13,12 @@ import {
   resolveAgentHarnessPreparedRouteSupport,
 } from "../../harness/support.js";
 import type { AgentHarness } from "../../harness/types.js";
-import { resolveContextConfigProviderForRuntime } from "../../openai-routing.js";
+import {
+  resolveAliasedParamValue,
+  resolveModelExtraParamSources,
+} from "../../model-extra-params.js";
+import { resolveProviderRequestCapabilities } from "../../provider-attribution.js";
+import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
 import type { PreparedAgentRuntimeAuthAttempt } from "../../runtime-plan/prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -34,31 +40,78 @@ export function resolveEmbeddedRunEffectiveModel(
     nativeModelOwned: boolean;
   },
 ) {
-  const contextConfigProvider = resolveContextConfigProviderForRuntime({
-    provider: params.modelConfigProvider,
-    runtimeId: params.agentHarnessId,
-    config: params.runParams.config,
-  });
+  const { defaultParams, modelParams, agentModelParams, agentParams } =
+    resolveModelExtraParamSources({
+      config: params.runParams.config,
+      provider: params.modelConfigProvider,
+      modelId: params.modelId,
+      agentId: params.runParams.agentId,
+    });
+  const sources = [
+    defaultParams,
+    modelParams,
+    agentModelParams,
+    agentParams,
+    Object.fromEntries(
+      Object.entries(params.runParams.streamParams ?? {}).filter(
+        ([, value]) => value !== undefined,
+      ),
+    ),
+    ...(params.runParams.fastMode === undefined ? [] : [{ fastMode: params.runParams.fastMode }]),
+  ];
+  const requestExtraParams: Record<string, unknown> = Object.assign({}, ...sources);
+  // Budget the same winning aliases that request assembly sends.
+  requestExtraParams.serviceTier = resolveAliasedParamValue(sources, [
+    "serviceTier",
+    "service_tier",
+  ]);
+  requestExtraParams.fastMode = resolveAliasedParamValue(sources, ["fastMode", "fast_mode"]);
+  delete requestExtraParams.service_tier;
+  delete requestExtraParams.fast_mode;
+  const requestServiceTiers =
+    params.nativeModelOwned || params.provider !== "openai"
+      ? undefined
+      : resolveProviderPolicySurface(params.provider, {
+          config: params.runParams.config,
+        })?.resolveServiceTiers?.({
+          provider: params.provider,
+          modelId: params.runtimeModel.id,
+          api: params.runtimeModel.api,
+          baseUrl: params.runtimeModel.baseUrl,
+          runtimeId: params.agentHarnessId,
+          params: requestExtraParams,
+          requestCapabilities:
+            getModelProviderRequestRouteFacts(params.runtimeModel)?.capabilities ??
+            resolveProviderRequestCapabilities({
+              provider: params.provider,
+              modelId: params.runtimeModel.id,
+              api: params.runtimeModel.api,
+              baseUrl: params.runtimeModel.baseUrl,
+            }),
+        });
+  const authoredContextTokenCap =
+    params.pinnedHarnessId || params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
+      ? undefined
+      : resolveAuthoredModelContextTokens({
+          cfg: params.runParams.config,
+          provider: params.modelConfigProvider,
+          model: params.modelId,
+        });
   const resolved = resolveEmbeddedRuntimeModelPolicy({
     cfg: params.runParams.config,
     provider: params.provider,
-    contextConfigProvider,
+    contextConfigProvider: params.modelConfigProvider,
     modelId: params.modelId,
     runtimeModel: params.runtimeModel,
     nativeModelOwned: params.nativeModelOwned,
+    authoredContextTokenCap,
+    requestExtraParams,
+    requestServiceTiers,
     ...(params.runParams.contextWindow ? { contextWindow: params.runParams.contextWindow } : {}),
     ...(params.runParams.contextTokenBudget === undefined
       ? {}
       : { contextTokenBudget: params.runParams.contextTokenBudget }),
   });
-  const authoredContextTokenCap =
-    params.nativeModelOwned || params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID
-      ? undefined
-      : resolveAuthoredModelContextTokens({
-          cfg: params.runParams.config,
-          provider: contextConfigProvider,
-          model: params.modelId,
-        });
   return {
     ...resolved,
     ...(authoredContextTokenCap === undefined ? {} : { authoredContextTokenCap }),
@@ -95,57 +148,38 @@ function buildHarnessModelProvider(
   };
 }
 
-function assertPinnedHarness(
-  pinnedHarnessId: string | undefined,
-  selected: AgentHarness,
-  subject: string,
-): void {
-  if (pinnedHarnessId && selected.id !== pinnedHarnessId) {
-    throw new AgentHarnessPreflightError(
-      `${subject} changed the session-pinned agent harness from "${pinnedHarnessId}" to "${selected.id}". Reattach the original native session or use a concrete model chat.`,
-    );
-  }
-}
-
 export function selectEmbeddedRunHarness(
-  params: Parameters<typeof buildHarnessModelProvider>[0],
-): AgentHarness {
-  const selected = selectAgentHarness({
-    provider: params.provider,
-    modelId: params.modelId,
-    modelProvider: buildHarnessModelProvider(params),
-    config: params.runParams.config,
-    agentId: params.runParams.agentId,
-    sessionKey: params.runParams.sessionKey,
-    agentHarnessId: params.runParams.agentHarnessId,
-    agentHarnessRuntimeOverride: params.runParams.agentHarnessRuntimeOverride,
-  });
-  assertPinnedHarness(params.pinnedHarnessId, selected, "Prepared model route");
-  return selected;
-}
-
-export function selectEmbeddedRunHarnessForPreparedAttempts(
-  params: HarnessSelectionContext & {
-    model: Model;
-    attempts: readonly PreparedAgentRuntimeAuthAttempt[];
+  params: Parameters<typeof buildHarnessModelProvider>[0] & {
+    attempts?: readonly PreparedAgentRuntimeAuthAttempt[];
   },
 ): AgentHarness {
-  const selected = selectAgentHarnessForPreparedModelProviders({
+  const selection = {
     provider: params.provider,
     modelId: params.modelId,
-    modelProviders: params.attempts.map((attempt) =>
-      buildHarnessModelProvider({
-        ...params,
-        plan: attempt.plan,
-        preparedAuthAttempt: attempt,
-      }),
-    ),
     config: params.runParams.config,
     agentId: params.runParams.agentId,
     sessionKey: params.runParams.sessionKey,
     agentHarnessId: params.runParams.agentHarnessId,
     agentHarnessRuntimeOverride: params.runParams.agentHarnessRuntimeOverride,
-  });
-  assertPinnedHarness(params.pinnedHarnessId, selected, "Prepared auth routes");
+  };
+  const selected =
+    params.attempts !== undefined
+      ? selectAgentHarnessForPreparedModelProviders({
+          ...selection,
+          modelProviders: params.attempts.map((attempt) =>
+            buildHarnessModelProvider({
+              ...params,
+              plan: attempt.plan,
+              preparedAuthAttempt: attempt,
+            }),
+          ),
+        })
+      : selectAgentHarness({ ...selection, modelProvider: buildHarnessModelProvider(params) });
+  if (params.pinnedHarnessId && selected.id !== params.pinnedHarnessId) {
+    const subject = params.attempts !== undefined ? "Prepared auth routes" : "Prepared model route";
+    throw new AgentHarnessPreflightError(
+      `${subject} changed the session-pinned agent harness from "${params.pinnedHarnessId}" to "${selected.id}". Reattach the original native session or use a concrete model chat.`,
+    );
+  }
   return selected;
 }

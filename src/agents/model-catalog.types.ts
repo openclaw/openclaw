@@ -1,6 +1,7 @@
 import type {
   ModelCatalogContextWindowOption,
   ModelCatalogStatus,
+  ModelInferenceCapabilities,
 } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
 import type { ThinkingLevelMap } from "../llm/types.js";
@@ -18,12 +19,22 @@ export type ModelCatalogEntry = {
   providerOrder?: number;
   alias?: string;
   api?: ModelApi;
+  /** Declared task support for the exact physical route; not authorization or readiness. */
+  inference?: ModelInferenceCapabilities;
   /** Private transport provenance for route matching; never project directly to clients. */
   baseUrl?: string;
   contextWindow?: number;
   contextWindows?: ModelCatalogContextWindowOption[];
   contextWindowDefault?: string;
   contextTokens?: number;
+  /** Provider/catalog-declared total parameter count. */
+  parameterCount?: number;
+  /** Provider/catalog-declared developer lineage for this exact route; never inferred from ids. */
+  family?: string;
+  /** Visible failed-acquisition starter; sizing comes from current static or accepted owner facts. */
+  contextCapacitySource?: "unaccepted-starter";
+  /** Provider-declared unknown-model estimate; not an authored or curated static limit. */
+  contextWindowSource?: "synthetic";
   reasoning?: boolean;
   /** Config-authored reasoning override; internal provenance, never project to clients. */
   configuredReasoning?: boolean;
@@ -47,6 +58,8 @@ export type ModelCatalogSnapshot = {
   routeVariants: ModelCatalogEntry[];
   /** Provider-owned outcome of each live catalog request in this generation. */
   providerOutcomes?: readonly ProviderCatalogOutcome[];
+  /** Previously accepted inventory remains bound to these provider/profile identities. */
+  acceptedDiscoveryOrigins?: readonly Pick<ProviderCatalogOutcome, "provider" | "profileId">[];
   /** Native discovery facts belong to their harness, independently of API-provider auth. */
   nativeProviderOutcomes?: Readonly<Record<string, readonly ProviderCatalogOutcome[]>>;
   /** Untagged harness observations, before API donor enrichment; each runtime owns its scope. */

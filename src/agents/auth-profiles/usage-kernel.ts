@@ -1,10 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { mergeAuthProfileStores, mergePersistedAuthProfileState } from "./persisted.js";
 import { pruneAuthProfileStoreReferences } from "./runtime-snapshot-owner.js";
-import { readAuthProfileJsonCellText, writeAuthProfileJsonCell } from "./sqlite-json.js";
+import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
+import { readAuthProfileJsonCellTexts } from "./sqlite-json.js";
 import { prepareAuthProfileStateMutation } from "./store-mutation.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import {
@@ -17,7 +18,7 @@ import { resetAuthProfileFailureState } from "./usage-state.js";
 
 /** Reduce the authoritative health row without rewriting credential bytes. */
 export function recordAuthProfileUsageInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   databasePath: string,
   databaseKind: "agent" | "shared-state",
   input: AuthProfileUsageInput,
@@ -29,9 +30,12 @@ export function recordAuthProfileUsageInDatabase(
       throw new AuthProfileStoreUnreadableError(databasePath);
     }
   };
-  const credentialText = readAuthProfileJsonCellText(database, "store", databaseKind);
+  const { store: credentialText, state: stateText } = readAuthProfileJsonCellTexts(
+    database,
+    databaseKind,
+  );
   const credentials = parseCell(credentialText);
-  const existingState = parseCell(readAuthProfileJsonCellText(database, "state", databaseKind));
+  const existingState = parseCell(stateText);
   const loaded = mergePersistedAuthProfileState(credentials, () => existingState);
   if (!loaded && credentialText !== undefined) {
     throw new AuthProfileStoreUnreadableError(databasePath);
@@ -57,13 +61,15 @@ export function recordAuthProfileUsageInDatabase(
   const { reduction } = input;
   const next =
     reduction.kind === "success"
-      ? profile &&
-        !profile.setup?.replacement &&
-        canonicalProvider(profile.provider) === input.providerKey
-        ? resetAuthProfileFailureState(previous ?? {}, {
-            lastProbeAt: now,
-            ...(input.inherited ? {} : { lastUsed: reduction.lastUsed }),
-          })
+      ? !profile.setup?.replacement && canonicalProvider(profile.provider) === input.providerKey
+        ? resetAuthProfileFailureState(
+            previous ?? {},
+            {
+              lastProbeAt: now,
+              ...(input.inherited ? {} : { lastUsed: reduction.lastUsed }),
+            },
+            reduction.modelId,
+          )
         : undefined
       : reduceAuthProfileFailure(profile, previous, reduction, now);
   if (!next) {
@@ -94,7 +100,7 @@ export function recordAuthProfileUsageInDatabase(
   if (stateChanged) {
     writeAuthProfileJsonCell(database, "state", databaseKind, statePayload);
   }
-  receipt.result = { previous, next, now };
+  receipt.result = next;
   receipt.publication.stateChanged = stateChanged;
   receipt.publication.selectionChanged = selectionChanged;
   return receipt;

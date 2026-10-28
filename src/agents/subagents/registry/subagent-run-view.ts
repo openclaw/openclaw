@@ -1,7 +1,7 @@
 /** Canonical ordering and visibility for numbered subagent lists and targets. */
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
+import { isRetainedUnendedSubagentRun, isYieldedSubagentRun } from "./subagent-run-liveness.js";
 
 /** Keep display indices and command targets on the same latest-run/liveness policy. */
 export function buildSubagentRunView(params: {
@@ -25,7 +25,6 @@ export function buildSubagentRunView(params: {
     const superseded = childRuns.some((candidate) =>
       matchesSubagentChildSessionOwner(candidate, entry.childSessionKey, entry.childAgentId),
     );
-    // Hidden legacy rows still fence every older owner under the raw key.
     childRuns.push(entry);
     seen.set(entry.childSessionKey, childRuns);
     if (superseded) {
@@ -34,11 +33,7 @@ export function buildSubagentRunView(params: {
     latest.push(entry);
     if (
       isRetainedUnendedSubagentRun(entry, now) ||
-      (entry.pauseReason === "sessions_yield" &&
-        !entry.killReconciliation &&
-        !entry.killIntent &&
-        entry.endedReason !== "subagent-killed" &&
-        entry.suppressAnnounceReason !== "killed") ||
+      isYieldedSubagentRun(entry) ||
       params.countPendingDescendantRuns(entry.childSessionKey) > 0
     ) {
       active.push(entry);

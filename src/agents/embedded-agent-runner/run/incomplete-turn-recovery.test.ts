@@ -5,14 +5,14 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
-  resolveEmptyResponseRetryInstruction,
-  resolveReasoningOnlyRetryInstruction,
+  resolveNonVisibleTurnRetryInstructions,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
 import { resolveIncompleteTurnPayloadText } from "./incomplete-turn-resolution.js";
+import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const EMPTY_RESPONSE_RETRY_INSTRUCTION =
-  "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current state; do not restart from scratch.";
 const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 
@@ -32,6 +32,34 @@ function emptyAttempt(assistant = emptyAssistant()) {
   });
 }
 
+function turnState(
+  attempt: Parameters<typeof resolveNonVisibleTurnRetryInstructions>[0]["attempt"] = emptyAttempt(),
+) {
+  return { payloadCount: 0, aborted: false, timedOut: false, attempt };
+}
+
+function retryInstructions(
+  overrides: Partial<Parameters<typeof resolveNonVisibleTurnRetryInstructions>[0]> = {},
+) {
+  return resolveNonVisibleTurnRetryInstructions({
+    ...turnState(overrides.attempt),
+    settledToolPayloadCount: 0,
+    replyDeliveryState: "missing",
+    ...overrides,
+  });
+}
+
+function isSilent(
+  attempt: EmbeddedRunAttemptResult,
+  terminalReplyExpectation: "required" | "optional" = "optional",
+) {
+  return shouldTreatEmptyAssistantReplyAsSilent({
+    ...turnState(attempt),
+    allowEmptyAssistantReplyAsSilent: true,
+    terminalReplyExpectation,
+  });
+}
+
 describe("incomplete-turn recovery policy", () => {
   it("does not request a visible continuation for an authored speech-only answer", () => {
     const assistant = emptyAssistant({
@@ -43,24 +71,20 @@ describe("incomplete-turn recovery policy", () => {
     });
 
     expect(
-      resolveReasoningOnlyRetryInstruction({
+      retryInstructions({
         modelApi: "openai-completions",
-        aborted: false,
-        timedOut: false,
         attempt: emptyAttempt(assistant),
-      }),
+      })[0],
     ).toBeNull();
   });
 
-  it.each(
-    (["required", "optional"] as const).flatMap((terminalReplyExpectation) =>
-      ["async tool", "active lifecycle item", "unfinished lifecycle item"].map((owner) => ({
-        terminalReplyExpectation,
-        owner,
-      })),
-    ),
-  )(
-    "keeps $owner out of completed silence (reply=$terminalReplyExpectation)",
+  it.each([
+    { terminalReplyExpectation: "required", owner: "unfinished lifecycle item" },
+    { terminalReplyExpectation: "optional", owner: "async tool" },
+    { terminalReplyExpectation: "optional", owner: "active lifecycle item" },
+    { terminalReplyExpectation: "optional", owner: "unfinished lifecycle item" },
+  ] as const)(
+    "honors silence without cancelling $owner (reply=$terminalReplyExpectation)",
     ({ terminalReplyExpectation, owner }) => {
       const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
       const attempt = makeEmbeddedRunnerAttempt({
@@ -78,151 +102,64 @@ describe("incomplete-turn recovery policy", () => {
         replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
         currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
       });
-      const state = { payloadCount: 0, aborted: false, timedOut: false, attempt };
-      // Silence must not steal completion ownership from background work. Nor
-      // may it trigger a replay or a spurious warning while that owner continues.
-      expect(
-        shouldTreatEmptyAssistantReplyAsSilent({
-          ...state,
-          allowEmptyAssistantReplyAsSilent: true,
-          terminalReplyExpectation,
-        }),
-      ).toBe(false);
-      expect(resolveEmptyResponseRetryInstruction(state)).toBeNull();
-      expect(resolveIncompleteTurnPayloadText({ ...state, externalAbort: false })).toBeNull();
+      const state = turnState(attempt);
+      // Outward silence does not prove delivery or authorize replaying pending work.
+      expect(isSilent(attempt, terminalReplyExpectation)).toBe(true);
+      expect(retryInstructions(state)[1]).toBeNull();
+      expect(payloadText(attempt)).toBeNull();
     },
   );
 
   it.each([
     { name: "visible terminal stop", text: "The final answer.", stopReason: "stop" },
     { name: "failed terminal sentinel", text: "NO_REPLY", stopReason: "error" },
+    { name: "media-bearing sentinel", text: "NO_REPLY\nMEDIA:/tmp/image.png", stopReason: "stop" },
     { name: "aborted terminal sentinel", text: "NO_REPLY", stopReason: "aborted" },
   ] as const)("does not revive earlier silence after $name", ({ text, stopReason }) => {
     const assistant = emptyAssistant({ content: [{ type: "text", text }], stopReason });
     const attempt = emptyAttempt(assistant);
     attempt.assistantTexts = ["NO_REPLY"];
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(false);
+    expect(isSilent(attempt)).toBe(false);
     if (stopReason === "error") {
-      expect(
-        resolveIncompleteTurnPayloadText({
-          payloadCount: 0,
-          aborted: false,
-          externalAbort: false,
-          timedOut: false,
-          attempt,
-        }),
-      ).toContain("couldn't generate a response");
+      expect(payloadText(attempt)).toBe("No answer was returned. Ask again if you still need one.");
     }
   });
 
-  it.each([
-    { name: "a completed reaction", aborted: false, timedOut: false, yielded: false, error: false },
-    { name: "a failed reaction", aborted: false, timedOut: false, yielded: false, error: true },
-    { name: "an aborted turn", aborted: true, timedOut: false, yielded: false, error: false },
-    { name: "a timed-out turn", aborted: false, timedOut: true, yielded: false, error: false },
-    { name: "pending work", aborted: false, timedOut: false, yielded: true, error: false },
-  ])(
-    "classifies optional NO_REPLY after $name without replay",
-    ({ aborted, timedOut, yielded, error }) => {
-      const assistant = emptyAssistant({ content: [{ type: "text", text: "NO_REPLY" }] });
-      const attempt = makeEmbeddedRunnerAttempt({
-        assistantTexts: ["NO_REPLY"],
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        toolMetas: [{ toolName: "message", meta: "react", replaySafe: false, isError: error }],
-        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        ...(yielded ? { yieldDetected: true } : {}),
-        ...(error ? { lastToolError: { toolName: "message", error: "reaction failed" } } : {}),
-      });
-      // Optional replies can tolerate completed effects, but never replay them
-      // or take completion ownership from failed, cancelled, or pending work.
-      expect(
-        shouldTreatEmptyAssistantReplyAsSilent({
-          allowEmptyAssistantReplyAsSilent: false,
-          terminalReplyExpectation: "optional",
-          payloadCount: 0,
-          aborted,
-          timedOut,
-          attempt,
-        }),
-      ).toBe(!aborted && !timedOut && !yielded && !error);
-      expect(
-        resolveEmptyResponseRetryInstruction({
-          payloadCount: 0,
-          aborted,
-          timedOut,
-          attempt,
-        }),
-      ).toBeNull();
-    },
-  );
+  it("does not treat a tool-call preamble as a silent final", () => {
+    const assistant = emptyAssistant({
+      stopReason: "toolUse",
+      content: [
+        { type: "text", text: "NO_REPLY" },
+        { type: "toolCall", id: "send", name: "message", arguments: {} },
+      ],
+    });
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        ...turnState(emptyAttempt(assistant)),
+        terminalReplyExpectation: "optional",
+      }),
+    ).toBe(false);
+  });
 
   it.each([
-    {
-      name: "zero-token Anthropic stop",
-      provider: "anthropic",
-      modelId: "claude-opus-4.7",
-      modelApi: "messages",
-      assistant: buildEmbeddedRunnerAssistant({
-        provider: "anthropic",
-        model: "claude-opus-4.7",
-        content: [],
+    ["anthropic", "claude-opus-4.7", "messages"],
+    ["google-vertex", "google/gemini-3.1-flash", undefined],
+  ] as const)(
+    "returns the visible-answer prompt for an empty %s turn",
+    (provider, modelId, modelApi) => {
+      const assistant = emptyAssistant({
+        provider,
+        model: provider === "google-vertex" ? "gemini-3.1-flash" : modelId,
+        content: provider === "anthropic" ? [] : [{ type: "text", text: "" }],
         usage: createZeroUsageFixture(),
-      }),
-    },
-    {
-      name: "Anthropic-compatible positive-output stop",
-      provider: "sub2api",
-      modelId: "claude-opus-4-7",
-      modelApi: "anthropic-messages",
-      assistant: emptyAssistant({
-        api: "anthropic-messages",
-        provider: "sub2api",
-        model: "claude-opus-4-7",
-        usage: {
-          input: 2048,
-          output: 3100,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 5148,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-      }),
-    },
-    {
-      name: "generic empty Gemini turn",
-      provider: "google-vertex",
-      modelId: "google/gemini-3.1-flash",
-      modelApi: undefined,
-      assistant: emptyAssistant({
-        stopReason: "stop",
-        provider: "google-vertex",
-        model: "gemini-3.1-flash",
-      }),
-    },
-  ])(
-    "returns the visible-answer prompt for $name",
-    ({ provider, modelId, modelApi, assistant }) => {
+      });
       expect(
-        resolveEmptyResponseRetryInstruction({
+        retryInstructions({
           provider,
           modelId,
           modelApi,
-          payloadCount: 0,
-          aborted: false,
-          timedOut: false,
           attempt: emptyAttempt(assistant),
-        }),
+        })[1],
       ).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     },
   );
@@ -232,16 +169,7 @@ describe("incomplete-turn recovery policy", () => {
     const attempt = emptyAttempt(assistant);
     attempt.replayMetadata = { hadPotentialSideEffects: true, replaySafe: false };
 
-    expect(
-      resolveEmptyResponseRetryInstruction({
-        provider: "openai",
-        modelId: "gpt-5.4",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBeNull();
+    expect(retryInstructions({ provider: "openai", modelId: "gpt-5.4", attempt })[1]).toBeNull();
   });
 
   it("returns the reasoning continuation for Kimi Anthropic reasoning-only output", () => {
@@ -253,109 +181,20 @@ describe("incomplete-turn recovery policy", () => {
     });
 
     expect(
-      resolveReasoningOnlyRetryInstruction({
+      retryInstructions({
         provider: "kimi",
         modelId: "kimi-for-coding",
         modelApi: "anthropic-messages",
-        aborted: false,
-        timedOut: false,
         attempt: emptyAttempt(assistant),
-      }),
+      })[0],
     ).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
-
-  it("treats reply-optional post-tool empty stops as silent after side effects", () => {
-    const assistant = emptyAssistant();
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      toolMetas: [{ toolName: "sessions", meta: "patch archived", replaySafe: false }],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-    });
-
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(true);
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "required",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "tool failure",
-      attempt: makeEmbeddedRunnerAttempt({
-        assistantTexts: [],
-        toolMetas: [
-          { toolName: "sessions", meta: "patch failed", replaySafe: false, isError: true },
-        ],
-        lastToolError: { toolName: "sessions", error: "patch failed" },
-        lastAssistant: emptyAssistant(),
-      }),
-      aborted: false,
-    },
-    {
-      name: "assistant error",
-      attempt: emptyAttempt(emptyAssistant({ stopReason: "error" })),
-      aborted: false,
-    },
-    {
-      name: "caller abort",
-      attempt: emptyAttempt(emptyAssistant({ stopReason: "error" })),
-      aborted: true,
-    },
-  ])("does not treat $name as intentional silence", ({ attempt, aborted }) => {
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(false);
-  });
-
-  it("settles a heartbeat reasoning-only stop as silence under its declared contract", () => {
-    const assistant = emptyAssistant({
-      content: [
-        {
-          type: "thinking",
-          thinking: "internal reasoning",
-          thinkingSignature: JSON.stringify({ id: "heartbeat_rs", type: "reasoning" }),
-        },
-      ],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-    });
-
-    expect(
-      shouldTreatEmptyAssistantReplyAsSilent({
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        payloadCount: 0,
-        aborted: false,
-        timedOut: false,
-        attempt,
-      }),
-    ).toBe(true);
-  });
 });
+
+function payloadText(attempt: EmbeddedRunAttemptResult, payloadCount = 0) {
+  return resolveIncompleteTurnPayloadText({
+    ...turnState(attempt),
+    payloadCount,
+    externalAbort: false,
+  });
+}

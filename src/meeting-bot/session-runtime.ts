@@ -1,4 +1,5 @@
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type {
   TranscriptStartRequest,
   TranscriptsStartResult,
@@ -60,7 +61,6 @@ export class MeetingSessionRuntime<
 > {
   readonly #sessions = new Map<string, TSession>();
   readonly #participation?: MeetingParticipation<TSession>;
-  readonly #sessionLeaves = new Map<string, Promise<MeetingSessionLeaveResult<TSession>>>();
   readonly #sessionCleanup = new MeetingSessionCleanupTracker();
   readonly #meetingLock = new KeyedAsyncQueue();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
@@ -259,8 +259,7 @@ export class MeetingSessionRuntime<
       return { found: false };
     }
     this.#participation?.close(sessionId);
-    // The meeting lock fences joins and leaves before terminal transcript work;
-    // #sessionLeaves then coalesces retries owned by the same session.
+    // Joins and leaves share one queue through terminal transcript work and cleanup.
     return await this.#meetingLock.enqueue(
       this.#meetingKey(session.transport, session.url),
       async () => await this.#leaveUnlocked(sessionId, options),
@@ -330,9 +329,9 @@ export class MeetingSessionRuntime<
       Math.max(0, this.options.waitForInCallMs),
       Math.max(0, this.options.joinTimeoutMs),
     );
-    const deadline = Date.now() + waitMs;
-    while (Date.now() < deadline) {
-      await sleep(Math.min(250, Math.max(0, deadline - Date.now())));
+    const deadline = monotonicNow() + waitMs;
+    while (monotonicNow() < deadline) {
+      await sleep(Math.min(250, Math.max(0, deadline - monotonicNow())));
       result = await this.speak(session.id, instructions);
       if (result.spoken) {
         return true;
@@ -545,8 +544,14 @@ export class MeetingSessionRuntime<
         throw new Error(this.options.messages.replacementBrowserLeaveFailed);
       }
     } catch (error) {
-      // Complete rollback now; keep only unfinished cleanup reachable for a later leave.
-      await this.#rollbackFailedJoinSession(session);
+      // Attempt cleanup once; retain unfinished work for an explicit leave retry.
+      try {
+        await this.#leaveSession(session);
+      } catch (cleanupError) {
+        this.options.logger.warn(
+          `${this.options.logScope} replacement cleanup failed: ${this.options.formatError(cleanupError)}`,
+        );
+      }
       if (this.#sessionCleanup.isPending(session.id)) {
         this.#sessionCleanup.retainFailedJoin(session.id);
         this.#sessions.set(session.id, session);
@@ -573,10 +578,6 @@ export class MeetingSessionRuntime<
     sessionId: string,
     options?: { keepBrowserTab?: boolean },
   ): Promise<MeetingSessionLeaveResult<TSession>> {
-    const inFlight = this.#sessionLeaves.get(sessionId);
-    if (inFlight) {
-      return await inFlight;
-    }
     const session = this.#sessions.get(sessionId);
     if (!session) {
       return { found: false };
@@ -592,15 +593,7 @@ export class MeetingSessionRuntime<
         ...(session.browserLeft === undefined ? {} : { browserLeft: session.browserLeft }),
       };
     }
-    const leave = this.#leaveSession(session, options);
-    this.#sessionLeaves.set(sessionId, leave);
-    try {
-      return await leave;
-    } finally {
-      if (this.#sessionLeaves.get(sessionId) === leave) {
-        this.#sessionLeaves.delete(sessionId);
-      }
-    }
+    return await this.#leaveSession(session, options);
   }
 
   async #leaveSession(
@@ -658,20 +651,6 @@ export class MeetingSessionRuntime<
   #meetingKey(transport: TTransport, url: string): string {
     const meeting = this.options.normalizeMeetingUrlForReuse(url) ?? url;
     return `${transport}:${meeting}`;
-  }
-
-  async #rollbackFailedJoinSession(session: TSession): Promise<void> {
-    await this.#sessionCleanup.rollbackFailedJoin({
-      sessionId: session.id,
-      browserLeft: session.browserLeft,
-      leave: async () => await this.#leaveSession(session),
-      hasBrowserTab: () => Boolean(this.options.getBrowser(session)?.tab),
-      releaseBrowser: async () => await this.options.releaseBrowserTab(session),
-      formatError: (error) => this.options.formatError(error),
-      warn: (message) => this.options.logger.warn(`${this.options.logScope} ${message}`),
-      onBrowserResult: (left) => (session.browserLeft = left),
-      onComplete: () => this.#dropRuntimeHandles(session.id),
-    });
   }
 
   #attachRuntimeHandles(session: TSession, handles: MeetingSessionRuntimeHandles<THealth>): void {

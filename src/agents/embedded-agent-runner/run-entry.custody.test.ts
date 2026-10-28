@@ -1,4 +1,5 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
 import { initialAttemptOptions, type FallbackRunnerParams } from "./run-entry.test-support.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
@@ -7,6 +8,9 @@ const runFallback = vi.hoisted(() => vi.fn());
 vi.mock("../model-fallback-runner.js", () => ({
   runWithModelFallback: (params: FallbackRunnerParams) => runFallback(params),
 }));
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 it.each(["uncertain", "stop-reason"] as const)(
   "runEmbeddedAgentEntry rechecks %s delivery after result classification",

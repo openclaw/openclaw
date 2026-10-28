@@ -105,9 +105,7 @@ internal fun ChatInlineWidget(
   var resolvedResource by remember(preview.path) { mutableStateOf<ChatWidgetResource?>(null) }
   var unavailable by remember(preview.path) { mutableStateOf(false) }
   var recoveryAttempts by remember(preview.path) { mutableIntStateOf(0) }
-  var refreshInFlight by remember(preview.path) { mutableStateOf(false) }
   var refreshRequestId by remember(preview.path) { mutableStateOf<UUID?>(null) }
-  var exportMenuExpanded by remember(preview.path) { mutableStateOf(false) }
   var exportTarget by remember(preview.path) { mutableStateOf<WebView?>(null) }
   var exportInFlight by remember(preview.path) { mutableStateOf(false) }
   val context = LocalContext.current
@@ -116,7 +114,6 @@ internal fun ChatInlineWidget(
 
   fun export(destination: ChatWidgetExportDestination) {
     val webView = exportTarget ?: return
-    exportMenuExpanded = false
     exportTarget = null
     exportInFlight = true
     scope.launch {
@@ -153,16 +150,14 @@ internal fun ChatInlineWidget(
       resolvedResource = null
       unavailable = false
     }
-    if (refreshInFlight) return
+    if (refreshRequestId != null) return
     if (recoveryAttempts >= ChatWidgetSurfaceRole.entries.size) {
-      refreshRequestId = null
       resolvedResource = null
       unavailable = true
       return
     }
 
     recoveryAttempts += 1
-    refreshInFlight = true
     val requestId = UUID.randomUUID()
     refreshRequestId = requestId
     scope.launch {
@@ -171,13 +166,11 @@ internal fun ChatInlineWidget(
       refreshRequestId = null
       resolvedResource = replacement
       unavailable = replacement == null
-      refreshInFlight = false
     }
   }
 
   LaunchedEffect(preview.path, resolverReady) {
     refreshRequestId = null
-    refreshInFlight = false
     if (!resolverReady) return@LaunchedEffect
     resolvedResource = resolveResource(preview.path, null)
     unavailable = resolvedResource == null
@@ -212,29 +205,23 @@ internal fun ChatInlineWidget(
                 onLongPress = { webView ->
                   if (!exportInFlight) {
                     exportTarget = webView
-                    exportMenuExpanded = true
                   }
                 },
                 onRelease = { webView ->
                   if (exportTarget === webView) {
-                    exportMenuExpanded = false
                     exportTarget = null
                   }
                 },
                 onFailure = { handleFailure(resource, rendererGone = false) },
                 onRendererGone = {
-                  exportMenuExpanded = false
                   exportTarget = null
                   handleFailure(resource, rendererGone = true)
                 },
               )
             }
             AppDropdownMenu(
-              expanded = exportMenuExpanded,
-              onDismissRequest = {
-                exportMenuExpanded = false
-                exportTarget = null
-              },
+              expanded = exportTarget != null,
+              onDismissRequest = { exportTarget = null },
             ) {
               DropdownMenuItem(
                 text = { Text(nativeString("Copy image")) },
@@ -377,31 +364,24 @@ private class InlineWidgetWebViewClient(
 
   @Volatile private var released = false
 
-  fun release(view: WebView) {
-    if (released) return
-    released = true
-    view.setOnLongClickListener(null)
-    view.stopLoading()
-    closeDocumentClient()
-    view.removeAllViews()
-    view.destroy()
-  }
-
-  private fun releaseAfterRendererGone(view: WebView): Boolean {
+  fun release(
+    view: WebView,
+    rendererGone: Boolean = false,
+  ): Boolean {
     if (released) return false
     released = true
     view.setOnLongClickListener(null)
-    // A renderer-less WebView is unusable. Remove and destroy it before
-    // starting asynchronous route recovery; onRelease becomes a no-op.
-    (view.parent as? ViewGroup)?.removeView(view)
-    closeDocumentClient()
-    view.destroy()
-    return true
-  }
-
-  private fun closeDocumentClient() {
+    if (rendererGone) {
+      // A renderer-less WebView must be removed before asynchronous recovery.
+      (view.parent as? ViewGroup)?.removeView(view)
+    } else {
+      view.stopLoading()
+    }
     allowsStaticResources = false
     documentClient?.let(::closeWidgetClientAsync)
+    if (!rendererGone) view.removeAllViews()
+    view.destroy()
+    return true
   }
 
   override fun onPageCommitVisible(
@@ -467,7 +447,7 @@ private class InlineWidgetWebViewClient(
     view: WebView,
     detail: RenderProcessGoneDetail,
   ): Boolean {
-    if (releaseAfterRendererGone(view)) onRendererGone()
+    if (release(view, rendererGone = true)) onRendererGone()
     return true
   }
 }
@@ -479,10 +459,7 @@ private fun buildWidgetClient(rawFingerprint: String?): OkHttpClient? {
     val tls =
       buildGatewayTlsConfig(
         GatewayTlsParams(
-          required = true,
           expectedFingerprint = fingerprint,
-          allowTOFU = false,
-          stableId = "inline-widget",
         ),
       ) ?: return null
     builder.sslSocketFactory(tls.sslSocketFactory, tls.trustManager).hostnameVerifier(tls.hostnameVerifier)

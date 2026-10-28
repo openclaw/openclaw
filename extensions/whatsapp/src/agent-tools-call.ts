@@ -4,14 +4,12 @@ import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import { createActionGate, stringEnum } from "openclaw/plugin-sdk/channel-actions";
-import type {
-  AnyAgentTool,
-  OpenClawPluginApi,
-  OpenClawPluginToolContext,
-} from "openclaw/plugin-sdk/core";
+import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { safeStat } from "openclaw/plugin-sdk/path-existence-runtime";
 import { mulawToPcm } from "openclaw/plugin-sdk/realtime-voice";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
+import { shellEscape } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type, type Static } from "typebox";
@@ -54,271 +52,228 @@ const WhatsAppCallToolSchema = Type.Object(
 
 type WhatsAppCallToolParams = Static<typeof WhatsAppCallToolSchema>;
 
-async function isRegularFile(filePath: string): Promise<boolean> {
-  try {
-    return (await fs.stat(filePath)).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function quotePosixShellArg(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-function quotePowerShellArg(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-function resolveSetupCommand(
-  stateDir: string,
-  sessionStorePath: string,
-  platform: NodeJS.Platform = process.platform,
-): string {
-  if (platform === "win32") {
-    return `meowcaller pair --store ${quotePowerShellArg(sessionStorePath)}`;
-  }
-  const quotedStateDir = quotePosixShellArg(stateDir);
-  const quotedStorePath = quotePosixShellArg(sessionStorePath);
-  return `mkdir -p ${quotedStateDir} && chmod 700 ${quotedStateDir} && meowcaller pair --store ${quotedStorePath}`;
-}
-
-function wrapPcm16MonoInWav(pcm: Buffer, sampleRate: number): Buffer {
-  if (!Number.isInteger(sampleRate) || sampleRate <= 0) {
-    throw new Error("TTS returned an invalid sample rate");
-  }
-  if (pcm.length === 0 || pcm.length % 2 !== 0) {
-    throw new Error("TTS returned invalid 16-bit PCM audio");
-  }
-
-  const header = Buffer.alloc(44);
-  header.write("RIFF", 0, "ascii");
-  header.writeUInt32LE(36 + pcm.length, 4);
-  header.write("WAVE", 8, "ascii");
-  header.write("fmt ", 12, "ascii");
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(1, 22);
-  header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(sampleRate * 2, 28);
-  header.writeUInt16LE(2, 32);
-  header.writeUInt16LE(16, 34);
-  header.write("data", 36, "ascii");
-  header.writeUInt32LE(pcm.length, 40);
-  return Buffer.concat([header, pcm]);
-}
-
-function normalizeTelephonyPcm(audio: Buffer, outputFormat: string | undefined): Buffer {
-  const normalizedFormat = outputFormat?.trim().toLowerCase();
-  if (normalizedFormat?.startsWith("pcm")) {
-    return audio;
-  }
-  if (normalizedFormat === "ulaw_8000" || normalizedFormat === "raw-8khz-8bit-mono-mulaw") {
-    return mulawToPcm(audio);
-  }
-  throw new Error(`TTS returned unsupported telephony format: ${outputFormat ?? "unknown"}`);
-}
-
-function resolveCallWindowMs(pcmBytes: number, sampleRate: number): number {
-  const audioDurationMs = (pcmBytes / 2 / sampleRate) * 1_000;
-  if (audioDurationMs > MAX_AUDIO_DURATION_MS) {
-    throw new Error("TTS audio exceeds the 60-second WhatsApp call limit");
-  }
-  return Math.min(MAX_CALL_WINDOW_MS, Math.ceil(audioDurationMs + MIN_CALL_WINDOW_MS));
-}
-
-async function resolveRequesterE164(params: {
-  accountId: string;
-  cfg: NonNullable<OpenClawPluginToolContext["config"]>;
-  requesterSenderId: string;
-}): Promise<string | null> {
-  const senderId = params.requesterSenderId.trim();
-  if (!senderId.includes("@")) {
-    try {
-      return normalizeE164(senderId.replace(/^whatsapp:/i, ""));
-    } catch {
-      return null;
-    }
-  }
-
-  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
-  const lidLookup = getWhatsAppConnectionController(params.accountId)?.getCurrentSock()
-    ?.signalRepository.lidMapping;
-  return await resolveJidToE164(senderId, { authDir: account.authDir, lidLookup });
-}
-
-async function resolveLinkedWhatsAppSelfE164(params: {
-  accountId: string;
-  cfg: NonNullable<OpenClawPluginToolContext["config"]>;
-}): Promise<string | null> {
-  const controller = getWhatsAppConnectionController(params.accountId);
-  if (!controller) {
-    return null;
-  }
-  const identity = controller.getSelfIdentity();
-  if (!identity) {
-    return null;
-  }
-  if (identity.e164) {
-    return normalizeE164(identity.e164);
-  }
-  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
-  const lidLookup = controller.getCurrentSock()?.signalRepository.lidMapping;
-  return await resolveJidToE164(identity.jid ?? identity.lid, {
-    authDir: account.authDir,
-    lidLookup,
-  });
-}
-
-function resolveRuntimeConfig(api: OpenClawPluginApi, context: OpenClawPluginToolContext) {
-  return context.getRuntimeConfig?.() ?? context.runtimeConfig ?? context.config ?? api.config;
-}
-
-function createWhatsAppCallTool(
-  api: OpenClawPluginApi,
-  context: OpenClawPluginToolContext,
-): AnyAgentTool | null {
-  const cfg = resolveRuntimeConfig(api, context);
-  const isActionEnabled = createActionGate(cfg.channels?.whatsapp?.actions);
-  const requesterSenderId = context.requesterSenderId?.trim();
-  if (
-    !isActionEnabled("calls", false) ||
-    context.messageChannel !== "whatsapp" ||
-    !requesterSenderId
-  ) {
-    return null;
-  }
-
-  const accountId = normalizeAccountId(context.agentAccountId);
-  const stateDir = path.join(resolveOAuthDir(), "whatsapp-calls", accountId);
-  const sessionStorePath = path.join(stateDir, SESSION_DATABASE);
-
-  return {
-    name: "whatsapp_call",
-    label: "WhatsApp Call",
-    description:
-      "Call the current WhatsApp requester and play a synthesized spoken message. This tool cannot call arbitrary phone numbers.",
-    parameters: WhatsAppCallToolSchema,
-    async execute(_toolCallId, rawParams, signal) {
-      const params = rawParams as WhatsAppCallToolParams;
-      const binaryFound = await detectBinary(MEOWCALLER_COMMAND);
-      const sessionStoreFound = await isRegularFile(sessionStorePath);
-      if (params.action === "status") {
-        return jsonResult({
-          binaryFound,
-          sessionStoreFound,
-          accountId,
-          stateDir,
-          setupCommand: resolveSetupCommand(stateDir, sessionStorePath),
-          setupShell: process.platform === "win32" ? "PowerShell" : "POSIX shell",
-          requiredCommand:
-            "meowcaller notify --store <path> --answer-timeout 45s --max-duration 65s <target> <file>",
-          note: "MeowCaller uses a separate WhatsApp linked-device session; it cannot reuse OpenClaw's Baileys credentials.",
-        });
+export function registerWhatsAppCallTool(api: OpenClawPluginApi): void {
+  api.registerTool(
+    (context): AnyAgentTool | null => {
+      const cfg =
+        context.getRuntimeConfig?.() ?? context.runtimeConfig ?? context.config ?? api.config;
+      const isActionEnabled = createActionGate(cfg.channels?.whatsapp?.actions);
+      const requesterSenderId = context.requesterSenderId?.trim();
+      if (
+        !isActionEnabled("calls", false) ||
+        context.messageChannel !== "whatsapp" ||
+        !requesterSenderId
+      ) {
+        return null;
       }
 
-      const message = params.message?.trim();
-      if (!message) {
-        throw new Error("message required for call action");
-      }
-      if (message.length > MAX_MESSAGE_LENGTH) {
-        throw new Error(`message must be at most ${MAX_MESSAGE_LENGTH} characters`);
-      }
-      if (!binaryFound) {
-        throw new Error("MeowCaller is not installed; run whatsapp_call with action=status");
-      }
-      if (!sessionStoreFound) {
-        throw new Error(
-          "MeowCaller has no session store; run whatsapp_call with action=status, then run its setupCommand in an interactive terminal and scan the QR as a linked device",
-        );
-      }
+      const accountId = normalizeAccountId(context.agentAccountId);
+      const stateDir = path.join(resolveOAuthDir(), "whatsapp-calls", accountId);
+      const sessionStorePath = path.join(stateDir, SESSION_DATABASE);
 
-      const target = await resolveRequesterE164({
-        accountId,
-        cfg,
-        requesterSenderId,
-      });
-      if (!target) {
-        throw new Error("Could not resolve the current WhatsApp requester to a phone number");
-      }
-      const linkedSelf = await resolveLinkedWhatsAppSelfE164({ accountId, cfg });
-      if (linkedSelf === target) {
-        throw new Error(
-          "WhatsApp cannot call the linked account itself; use a dedicated OpenClaw WhatsApp number",
-        );
-      }
-
-      if (activeCallAccounts.has(accountId)) {
-        throw new Error("A WhatsApp call is already active for this account");
-      }
-      activeCallAccounts.add(accountId);
-      try {
-        const speech = await api.runtime.tts.textToSpeechTelephony({ text: message, cfg });
-        if (!speech.success || !speech.audioBuffer || !speech.sampleRate) {
-          throw new Error(speech.error ?? "TTS synthesis failed");
+      const resolveRequesterE164 = async (): Promise<string | null> => {
+        const senderId = requesterSenderId.trim();
+        if (!senderId.includes("@")) {
+          return normalizeE164(senderId.replace(/^whatsapp:/i, ""));
         }
-        const pcm = normalizeTelephonyPcm(speech.audioBuffer, speech.outputFormat);
-        const callWindowMs = resolveCallWindowMs(pcm.length, speech.sampleRate);
-        const tempDir = await fs.mkdtemp(
-          path.join(resolvePreferredOpenClawTmpDir(), "openclaw-whatsapp-call-"),
-        );
-        const audioPath = path.join(tempDir, "message.wav");
-        try {
-          await fs.writeFile(audioPath, wrapPcm16MonoInWav(pcm, speech.sampleRate), {
-            mode: 0o600,
-          });
-          const result = await api.runtime.system.runCommandWithTimeout(
-            [
-              MEOWCALLER_COMMAND,
-              "notify",
-              "--store",
-              sessionStorePath,
-              "--answer-timeout",
-              MEOWCALLER_ANSWER_TIMEOUT,
-              "--max-duration",
-              MEOWCALLER_MAX_DURATION,
-              target,
-              audioPath,
-            ],
-            {
-              cwd: stateDir,
-              env: { MEOW_LOG_LEVEL: "warn" },
-              timeoutMs: callWindowMs,
-              signal,
-              killProcessTree: true,
-              maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
-            },
-          );
-          if (result.termination === "signal") {
-            throw new Error("WhatsApp call cancelled");
+
+        const account = resolveWhatsAppAccount({ cfg, accountId });
+        const lidLookup =
+          getWhatsAppConnectionController(accountId)?.getCurrentSock()?.signalRepository.lidMapping;
+        return await resolveJidToE164(senderId, { authDir: account.authDir, lidLookup });
+      };
+      const resolveLinkedWhatsAppSelfE164 = async (): Promise<string | null> => {
+        const controller = getWhatsAppConnectionController(accountId);
+        if (!controller) {
+          return null;
+        }
+        const identity = controller.getSelfIdentity();
+        if (!identity) {
+          return null;
+        }
+        if (identity.e164) {
+          return identity.e164;
+        }
+        const account = resolveWhatsAppAccount({ cfg, accountId });
+        const lidLookup = controller.getCurrentSock()?.signalRepository.lidMapping;
+        return await resolveJidToE164(identity.jid ?? identity.lid, {
+          authDir: account.authDir,
+          lidLookup,
+        });
+      };
+
+      return {
+        name: "whatsapp_call",
+        label: "WhatsApp Call",
+        description:
+          "Call the current WhatsApp requester and play a synthesized spoken message. This tool cannot call arbitrary phone numbers.",
+        parameters: WhatsAppCallToolSchema,
+        async execute(_toolCallId, rawParams, signal) {
+          const params = rawParams as WhatsAppCallToolParams;
+          const binaryFound = await detectBinary(MEOWCALLER_COMMAND);
+          const sessionStoreFound = (await safeStat(sessionStorePath))?.isFile() === true;
+          if (params.action === "status") {
+            let setupCommand: string;
+            if (process.platform === "win32") {
+              setupCommand = `meowcaller pair --store '${sessionStorePath.replaceAll("'", "''")}'`;
+            } else {
+              const quotedStateDir = shellEscape(stateDir);
+              const quotedStorePath = shellEscape(sessionStorePath);
+              setupCommand = `mkdir -p ${quotedStateDir} && chmod 700 ${quotedStateDir} && meowcaller pair --store ${quotedStorePath}`;
+            }
+            return jsonResult({
+              binaryFound,
+              sessionStoreFound,
+              accountId,
+              stateDir,
+              setupCommand,
+              setupShell: process.platform === "win32" ? "PowerShell" : "POSIX shell",
+              requiredCommand:
+                "meowcaller notify --store <path> --answer-timeout 45s --max-duration 65s <target> <file>",
+              note: "MeowCaller uses a separate WhatsApp linked-device session; it cannot reuse OpenClaw's Baileys credentials.",
+            });
           }
-          if (result.termination === "timeout") {
-            throw new Error("MeowCaller exceeded the bounded WhatsApp call window");
+
+          const message = params.message?.trim();
+          if (!message) {
+            throw new Error("message required for call action");
           }
-          if (result.termination !== "exit" || result.code !== 0) {
+          if (message.length > MAX_MESSAGE_LENGTH) {
+            throw new Error(`message must be at most ${MAX_MESSAGE_LENGTH} characters`);
+          }
+          if (!binaryFound) {
+            throw new Error("MeowCaller is not installed; run whatsapp_call with action=status");
+          }
+          if (!sessionStoreFound) {
             throw new Error(
-              `MeowCaller did not complete the call (code ${result.code ?? "unknown"})`,
+              "MeowCaller has no session store; run whatsapp_call with action=status, then run its setupCommand in an interactive terminal and scan the QR as a linked device",
             );
           }
-          return jsonResult({
-            completed: true,
-            recipient: "current WhatsApp requester",
-            callWindowSeconds: Math.ceil(callWindowMs / 1_000),
-            ttsProvider: speech.provider,
-            note: "MeowCaller completed answer, playback, and hangup for the requester-bound call.",
-          });
-        } finally {
-          await fs.rm(tempDir, { recursive: true, force: true });
-        }
-      } finally {
-        activeCallAccounts.delete(accountId);
-      }
-    },
-  };
-}
 
-export function registerWhatsAppCallTool(api: OpenClawPluginApi): void {
-  api.registerTool((context) => createWhatsAppCallTool(api, context), {
-    name: "whatsapp_call",
-  });
+          const target = await resolveRequesterE164();
+          if (!target) {
+            throw new Error("Could not resolve the current WhatsApp requester to a phone number");
+          }
+          const linkedSelf = await resolveLinkedWhatsAppSelfE164();
+          if (linkedSelf === target) {
+            throw new Error(
+              "WhatsApp cannot call the linked account itself; use a dedicated OpenClaw WhatsApp number",
+            );
+          }
+
+          if (activeCallAccounts.has(accountId)) {
+            throw new Error("A WhatsApp call is already active for this account");
+          }
+          activeCallAccounts.add(accountId);
+          try {
+            const speech = await api.runtime.tts.textToSpeechTelephony({ text: message, cfg });
+            if (!speech.success || !speech.audioBuffer || !speech.sampleRate) {
+              throw new Error(speech.error ?? "TTS synthesis failed");
+            }
+            let pcm = speech.audioBuffer;
+            const outputFormat = speech.outputFormat;
+            const normalizedFormat = outputFormat?.trim().toLowerCase();
+            if (!normalizedFormat?.startsWith("pcm")) {
+              if (
+                normalizedFormat === "ulaw_8000" ||
+                normalizedFormat === "raw-8khz-8bit-mono-mulaw"
+              ) {
+                pcm = mulawToPcm(pcm);
+              } else {
+                throw new Error(
+                  `TTS returned unsupported telephony format: ${outputFormat ?? "unknown"}`,
+                );
+              }
+            }
+            const audioDurationMs = (pcm.length / 2 / speech.sampleRate) * 1_000;
+            if (audioDurationMs > MAX_AUDIO_DURATION_MS) {
+              throw new Error("TTS audio exceeds the 60-second WhatsApp call limit");
+            }
+            const callWindowMs = Math.min(
+              MAX_CALL_WINDOW_MS,
+              Math.ceil(audioDurationMs + MIN_CALL_WINDOW_MS),
+            );
+            const tempDir = await fs.mkdtemp(
+              path.join(resolvePreferredOpenClawTmpDir(), "openclaw-whatsapp-call-"),
+            );
+            const audioPath = path.join(tempDir, "message.wav");
+            try {
+              const sampleRate = speech.sampleRate;
+              if (!Number.isInteger(sampleRate) || sampleRate <= 0) {
+                throw new Error("TTS returned an invalid sample rate");
+              }
+              if (pcm.length === 0 || pcm.length % 2 !== 0) {
+                throw new Error("TTS returned invalid 16-bit PCM audio");
+              }
+
+              const header = Buffer.alloc(44);
+              header.write("RIFF", 0, "ascii");
+              header.writeUInt32LE(36 + pcm.length, 4);
+              header.write("WAVE", 8, "ascii");
+              header.write("fmt ", 12, "ascii");
+              header.writeUInt32LE(16, 16);
+              header.writeUInt16LE(1, 20);
+              header.writeUInt16LE(1, 22);
+              header.writeUInt32LE(sampleRate, 24);
+              header.writeUInt32LE(sampleRate * 2, 28);
+              header.writeUInt16LE(2, 32);
+              header.writeUInt16LE(16, 34);
+              header.write("data", 36, "ascii");
+              header.writeUInt32LE(pcm.length, 40);
+              await fs.writeFile(audioPath, Buffer.concat([header, pcm]), {
+                mode: 0o600,
+              });
+              const result = await api.runtime.system.runCommandWithTimeout(
+                [
+                  MEOWCALLER_COMMAND,
+                  "notify",
+                  "--store",
+                  sessionStorePath,
+                  "--answer-timeout",
+                  MEOWCALLER_ANSWER_TIMEOUT,
+                  "--max-duration",
+                  MEOWCALLER_MAX_DURATION,
+                  target,
+                  audioPath,
+                ],
+                {
+                  cwd: stateDir,
+                  env: { MEOW_LOG_LEVEL: "warn" },
+                  timeoutMs: callWindowMs,
+                  signal,
+                  killProcessTree: true,
+                  maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
+                },
+              );
+              if (result.termination === "signal") {
+                throw new Error("WhatsApp call cancelled");
+              }
+              if (result.termination === "timeout") {
+                throw new Error("MeowCaller exceeded the bounded WhatsApp call window");
+              }
+              if (result.termination !== "exit" || result.code !== 0) {
+                throw new Error(
+                  `MeowCaller did not complete the call (code ${result.code ?? "unknown"})`,
+                );
+              }
+              return jsonResult({
+                completed: true,
+                recipient: "current WhatsApp requester",
+                callWindowSeconds: Math.ceil(callWindowMs / 1_000),
+                ttsProvider: speech.provider,
+                note: "MeowCaller completed answer, playback, and hangup for the requester-bound call.",
+              });
+            } finally {
+              await fs.rm(tempDir, { recursive: true, force: true });
+            }
+          } finally {
+            activeCallAccounts.delete(accountId);
+          }
+        },
+      };
+    },
+    {
+      name: "whatsapp_call",
+    },
+  );
 }

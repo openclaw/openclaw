@@ -11,11 +11,11 @@ import {
   configSnapshot,
   emptyMetadataSnapshot,
   metadataSnapshot,
+  mockHostedOfficialCatalog,
 } from "./management-service.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
-  clawReferenceWarnings: vi.fn(),
   commitRecords: vi.fn(),
   installRecords: vi.fn(),
   metadata: vi.fn(),
@@ -75,7 +75,7 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
   // Keep the pure config/record helpers real; only record IO is stubbed.
   ...(await importOriginal<typeof import("./installed-plugin-index-records.js")>()),
   loadInstalledPluginIndexInstallRecords: (...args: unknown[]) => mocks.installRecords(...args),
-  readPersistedInstalledPluginIndexInstallRecords: (...args: unknown[]) =>
+  readPersistedInstalledPluginIndexInstallRecordsAsync: (...args: unknown[]) =>
     mocks.readPersistedRecords(...args),
 }));
 
@@ -89,10 +89,6 @@ vi.mock("./install-record-commit.js", () => ({
   commitPluginInstallRecordsWithConfig: (...args: unknown[]) => mocks.commitRecords(...args),
 }));
 
-vi.mock("./uninstall-claw-references.js", () => ({
-  collectClawPluginUninstallWarnings: (...args: unknown[]) => mocks.clawReferenceWarnings(...args),
-}));
-
 vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./official-external-plugin-catalog.js")>()),
   loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
@@ -101,6 +97,7 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
 
 vi.mock("../infra/clawhub-plugin-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/clawhub-plugin-catalog.js")>()),
+  fetchClawHubPluginDetail: async () => ({}),
   fetchClawHubPluginVersionCategories: (...args: unknown[]) =>
     mocks.pluginVersionCategories(...args),
 }));
@@ -109,15 +106,6 @@ const { clearManagedPluginCatalogCache } = await import("./management-catalog.js
 const { listManagedPlugins } = await import("./management-service.js");
 const { setManagedPluginEnabled, reloadManagedPlugin } = await import("./management-mutations.js");
 const { uninstallManagedPlugin } = await import("./management-uninstall.js");
-
-function mockHostedOfficialCatalog(entries: unknown[]) {
-  mocks.officialCatalog.mockResolvedValue({
-    source: "hosted",
-    entries,
-    feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
-    metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
-  });
-}
 
 describe("plugin management service", () => {
   beforeEach(() => {
@@ -136,8 +124,7 @@ describe("plugin management service", () => {
     mocks.installRecords.mockResolvedValue({});
     mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
     mocks.pluginVersionCategories.mockResolvedValue([]);
-    mocks.clawReferenceWarnings.mockReturnValue([]);
-    mockHostedOfficialCatalog([]);
+    mockHostedOfficialCatalog(mocks.officialCatalog, []);
   });
 
   it.each(["batch", "cross-owner"] as const)(
@@ -195,10 +182,6 @@ describe("plugin management service", () => {
           first: "a".repeat(64),
           second: "b".repeat(64),
         });
-        expect(request.expectedInstallHashes).toEqual({
-          first: hashStableJson(first.index.installRecords.first),
-          second: hashStableJson(second.index.installRecords.second),
-        });
         return application;
       });
       const request: PluginsReloadParams = {
@@ -228,22 +211,35 @@ describe("plugin management service", () => {
     },
   );
 
-  it("reloads a discovered plugin without inventing an installed package record", async () => {
-    const origin = "config";
+  it.each([
+    { origin: "config", retainedRecord: false },
+    { origin: "bundled", retainedRecord: false },
+    { origin: "bundled", retainedRecord: true },
+  ] as const)("reloads a discovered plugin: %j", async ({ origin, retainedRecord }) => {
     const signal = new AbortController().signal;
     const metadata = metadataSnapshot({ enabled: true, id: "discovered" });
+    const installRecords = retainedRecord
+      ? {
+          discovered: {
+            source: "npm",
+            spec: "@openclaw/discovered",
+            installPath: "/tmp/registry/discovered",
+          },
+        }
+      : {};
     mocks.metadata.mockReturnValue({
       ...metadata,
       index: {
         ...metadata.index,
         plugins: metadata.index.plugins.map((plugin) => ({ ...plugin, origin })),
+        installRecords,
       },
       byPluginId: new Map(metadata.plugins.map((plugin) => [plugin.id, { ...plugin, origin }])),
     });
     mocks.readConfig.mockResolvedValue(configSnapshot());
+    mocks.readPersistedRecords.mockReturnValue(installRecords);
     const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => {
       request.assertInvokerOwned?.();
-      expect(request.expectedInstallHashes).toBeUndefined();
       return {
         operationId: "discovered-reload",
         generation: 4,
@@ -267,6 +263,18 @@ describe("plugin management service", () => {
         expectedSourceDigests: { discovered: "a".repeat(64) },
       }),
     );
+    if (retainedRecord) {
+      await expect(
+        reloadManagedPlugin({
+          plugins: [
+            { pluginId: "discovered", installHash: hashStableJson(installRecords.discovered) },
+          ],
+          env: {},
+          applyRuntime,
+        }),
+      ).rejects.toThrow("changed after the installation batch");
+      expect(applyRuntime).toHaveBeenCalledOnce();
+    }
     expect(mocks.commitRecords).not.toHaveBeenCalled();
     expect(mocks.replaceConfig).not.toHaveBeenCalled();
   });

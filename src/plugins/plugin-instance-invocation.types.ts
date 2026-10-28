@@ -1,11 +1,10 @@
 import type { ScopedPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.types.js";
 import type { PluginCacheScope } from "./plugin-cache.types.js";
-import type { PluginInvocationInstance } from "./plugin-instance.types.js";
+import type { PluginInvocationInstance, PluginRetentionOwner } from "./plugin-instance.types.js";
 
 export type PluginInstanceInvocation = {
   instance: PluginInvocationInstance;
   token: object;
-  /** The invocation this one was entered from, so drain dependencies survive nested calls. */
   readonly parent?: PluginInstanceInvocation;
 };
 
@@ -15,6 +14,7 @@ export type PluginSourceCaptureStorage = Readonly<{
 }>;
 
 export type PluginExecutionScopes = {
+  readonly retentionOwner?: PluginRetentionOwner;
   readonly invocation?: PluginInstanceInvocation;
   readonly metadataScope?: ScopedPluginMetadataSnapshot;
   readonly cacheScope?: PluginCacheScope;
@@ -23,5 +23,7 @@ export type PluginExecutionScopes = {
 
 /** Runtime owners preserve their context when these independent scopes change. */
 export interface PluginExecutionFrame extends PluginExecutionScopes {
+  /** Runtime provenance for diagnostics, never authorization. */
+  readonly runtimePluginId?: string | undefined;
   withScopes(scopes: PluginExecutionScopes): PluginExecutionFrame;
 }

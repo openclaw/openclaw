@@ -1,4 +1,4 @@
-import type { SessionPendingInputRow } from "./session-accessor.sqlite-pending-inputs.js";
+import type { SessionPendingInputRow } from "./session-pending-input.types.js";
 
 export type PendingInputHistoryQuery = {
   sessionKey: string;
@@ -6,6 +6,10 @@ export type PendingInputHistoryQuery = {
   limit?: number;
   before?: number;
   id?: string;
+  includeTotal?: false;
+  /** Exact custody captured in a committed graceful-shutdown marker. */
+  queuedInputIds?: readonly string[];
+  liveInputIds?: readonly string[];
 };
 export type PendingInputHistorySnapshot = {
   rows: SessionPendingInputRow[];
@@ -17,16 +21,6 @@ export type PendingInputCustodyCandidate = Pick<
   SessionPendingInputRow,
   "input_id" | "session_key" | "session_id" | "lifecycle_generation"
 >;
-export type PendingInputHistoryGrant = {
-  kind: "pending-input-history-custody";
-  candidates: PendingInputCustodyCandidate[];
-  currentSessionId?: string;
-  protected?: SharedArrayBuffer;
-};
-export type PendingInputHistoryReceipt = {
-  kind: "pending-input-history-interrupted";
-  ids: string[];
-};
 export type PendingInputHistoryWorkerInput = {
   kind: "session-pending-input-history";
   database: { agentId: string; path: string };

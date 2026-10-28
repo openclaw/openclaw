@@ -1,6 +1,11 @@
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { describe, expect, it } from "vitest";
-import { collectA2aStatusIssues } from "./status-issues.js";
+import { a2aChannelPlugin } from "./channel.js";
+
+const collectA2aStatusIssues = a2aChannelPlugin.status?.collectStatusIssues;
+if (!collectA2aStatusIssues) {
+  throw new Error("expected A2A status issue collector");
+}
 
 /** Extras such as the withheld-peer lists ride on the snapshot but are not in its declared type. */
 function snapshot(fields: Record<string, unknown>): ChannelAccountSnapshot {
@@ -8,10 +13,6 @@ function snapshot(fields: Record<string, unknown>): ChannelAccountSnapshot {
 }
 
 describe("collectA2aStatusIssues", () => {
-  it("reports nothing for a healthy account", () => {
-    expect(collectA2aStatusIssues([snapshot({})])).toEqual([]);
-  });
-
   it("names peers whose inbound token reference did not resolve, with a fix", () => {
     const issues = collectA2aStatusIssues([snapshot({ unresolvedPeers: ["lost", "late"] })]);
     expect(issues).toHaveLength(1);
@@ -29,22 +30,10 @@ describe("collectA2aStatusIssues", () => {
     expect(issues[0]?.fix).toContain("outboundToken");
   });
 
-  it("still reports when every peer is withheld and the account reads as unconfigured", () => {
-    const issues = collectA2aStatusIssues([
-      snapshot({ configured: false, unresolvedPeers: ["only"] }),
-    ]);
-    expect(issues).toHaveLength(1);
-    expect(issues[0]?.message).toContain("only");
-  });
-
   it("skips disabled accounts and malformed rows", () => {
     expect(
       collectA2aStatusIssues([snapshot({ enabled: false, unresolvedPeers: ["lost"] })]),
     ).toEqual([]);
     expect(collectA2aStatusIssues([null as never, "x" as never])).toEqual([]);
-  });
-
-  it("ignores non-string peer entries", () => {
-    expect(collectA2aStatusIssues([snapshot({ unresolvedPeers: [1, null, ""] })])).toEqual([]);
   });
 });

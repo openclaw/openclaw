@@ -1,5 +1,3 @@
-// Gateway plugin bootstrap helpers.
-// Resolves activation config before loading or staging a Gateway registry.
 import { performance } from "node:perf_hooks";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { PluginLogger } from "../plugins/logger-types.js";
@@ -16,31 +14,28 @@ import { resolveDurableWorkerProviderAutoEnabledReasons } from "../plugins/worke
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
 
-type GatewayPluginBootstrapLog = Required<PluginLogger>;
-type GatewayPluginBootstrapParams = Omit<
-  Parameters<typeof loadGatewayPlugins>[0],
-  "autoEnabledReasons"
-> & { log: GatewayPluginBootstrapLog };
-
 // Reload replaces the cache's metadata object and permits the next generation's notices.
 const loggedInfoByMetadata = new WeakMap<object, Set<string>>();
 
 /** The caller joins accepted cleanup even when synchronous publication throws. */
 export type GatewayPluginRuntimePreparation = (
-  loaded: ReturnType<typeof prepareGatewayPluginLoad>,
+  loaded: Awaited<ReturnType<typeof prepareGatewayPluginLoad>>,
   trackActivationCleanup: (completion: Promise<void>) => void,
 ) => Promise<{
   publish: () => void;
   afterCommit: () => void;
 }>;
 
-/** Prepares gateway plugin runtime and returns the loaded plugin registry state. */
-export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
+export async function prepareGatewayPluginLoad(
+  params: Omit<Parameters<typeof loadGatewayPlugins>[0], "autoEnabledReasons"> & {
+    log: Required<PluginLogger>;
+  },
+) {
   return withPluginCache(
     params.pluginMetadataSnapshot
       ? getPluginMetadataSnapshotCache(params.pluginMetadataSnapshot)
       : getPluginCache(),
-    () => {
+    async () => {
       const started = performance.now();
       const { log, ...loadParams } = params;
       const activationSourceConfig = params.activationSourceConfig ?? params.cfg;
@@ -72,7 +67,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
         ["autoEnableMs", autoEnableMs],
         ["resolvedConfigMs", performance.now() - started - autoEnableMs],
       ]);
-      const loaded = loadGatewayPlugins({
+      const loaded = await loadGatewayPlugins({
         ...loadParams,
         cfg: resolvedConfig,
         activationSourceConfig,

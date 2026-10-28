@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { CliOptions, JsonTestResults } from "vitest/node";
 import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 import { parseVitestExecutionArgs } from "./vitest-cli.mts";
+import { vitestInfrastructureExitCode } from "./vitest-outcome.mts";
 import type { VitestReportCapture } from "./vitest-report-capture.mts";
 
 export type VitestReportOutcome = {
@@ -193,6 +194,11 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
       runMerge: (args: string[]) => Promise<VitestReportOutcome>,
       incompleteReason?: string,
     ) {
+      let exitCode: number;
+      const recordFailure = (error: unknown) => {
+        index.error = String(error);
+        console.error(`[test] report publication failed; retained ${directory}: ${index.error}`);
+      };
       try {
         if (incompleteReason) {
           throw new Error(incompleteReason);
@@ -358,14 +364,20 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
         console.error(
           `[test] native JSON aggregate: ${destination}; originals: ${directory}. Native merge omits snapshot summaries and JSON coverageMap; startTime is merge time. Use index.json for process outcomes.`,
         );
-        return index.merge.code;
+        exitCode = index.merge.code;
       } catch (error) {
-        index.error = String(error);
-        console.error(`[test] report publication failed; retained ${directory}: ${index.error}`);
-        return 1;
-      } finally {
-        save();
+        recordFailure(error);
+        exitCode = vitestInfrastructureExitCode(index.merge?.code);
       }
+      // The final index is part of publication, including after an assertion-red merge.
+      // A failure here must return infrastructure status, never escape as Node exit 1.
+      try {
+        save();
+      } catch (error) {
+        recordFailure(error);
+        exitCode = vitestInfrastructureExitCode(exitCode);
+      }
+      return exitCode;
     },
   };
 }

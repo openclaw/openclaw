@@ -1,64 +1,50 @@
-// Session diff RPC tests run against real throwaway git repos so the parsing
-// stays honest about git's -z output and --no-index untracked handling.
+import "./sessions-files.repository.test-support.js";
 import { execFileSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveExecutablePath } from "../../infra/executable-path.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import * as execRunner from "../../process/exec-runner.js";
-import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
-import { parseNumstatZ, splitPatchByFile } from "../../sessions/session-diff-parser.js";
 import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
+import { collectCheckoutDiff } from "../../sessions/session-diff.runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { withLocalWorkspaceStore } from "../worker-environments/local-workspace-store.js";
 import { loadSessionDiff, sessionsDiffHandlers } from "./sessions-diff.js";
+import {
+  git,
+  initRepo,
+  fixedStoreConfig,
+  seedManagedReview,
+} from "./sessions-diff.test-support.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const hoisted = vi.hoisted(() => ({
-  readSessionEntryReadOnlyInWorker: vi.fn(),
-  loadSessionEntry: vi.fn(),
-  patchSessionEntryCore: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(),
-  resolveDefaultAgentId: vi.fn(),
-}));
+const { sessionWorkspaceMocks: hoisted } =
+  await import("./sessions-files.repository.test-support.js");
+const patchSessionEntryCore = vi.hoisted(() => vi.fn());
 
-vi.mock("../session-utils.js", () => ({
-  loadSessionEntry: hoisted.loadSessionEntry,
-  loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
-}));
-
-vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
-  resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
-  resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
+// mock-isolation: Diff RPC cases supply session discovery while exercising real Git reads.
+vi.mock("../session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: (params: { key: string; agentId?: string }) =>
+    hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
 }));
 
 // mock-isolation: Diff RPC cases control session persistence independently of throwaway Git repos.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryCore: hoisted.patchSessionEntryCore,
+  patchSessionEntryCore,
 }));
-
-// mock-isolation: Baseline policy uses the supplied session row without opening a read worker.
-vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
-  readSessionEntryReadOnlyInWorker: hoisted.readSessionEntryReadOnlyInWorker,
-}));
-
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-}
-
-function initRepo(root: string, objectFormat?: "sha1" | "sha256"): void {
-  git(
-    root,
-    "init",
-    "-q",
-    "-b",
-    "main",
-    ...(objectFormat ? [`--object-format=${objectFormat}`] : []),
-  );
-  git(root, "config", "user.email", "test@openclaw.test");
-  git(root, "config", "user.name", "Test");
-  git(root, "config", "commit.gpgsign", "false");
-}
 
 function mockSession(spawnedCwd: string, entry: Record<string, unknown> = {}): void {
   hoisted.loadSessionEntry.mockReturnValue({
@@ -70,77 +56,103 @@ function mockSession(spawnedCwd: string, entry: Record<string, unknown> = {}): v
   });
 }
 
-describe("sessions.diff parsers", () => {
-  it("parses numstat -z including rename and binary entries", () => {
-    // NUL separators written as \u0000: a bare \0 before a digit would
-    // parse as an octal escape.
-    const byPath = parseNumstatZ(
-      "2\t1\ta.txt\u0000-\t-\tblob.bin\u00000\t0\t\u0000old.txt\u0000new.txt\u0000",
-    );
-    expect(byPath.get("a.txt")).toEqual({ additions: 2, deletions: 1, binary: false });
-    expect(byPath.get("blob.bin")).toEqual({ additions: 0, deletions: 0, binary: true });
-    expect(byPath.get("new.txt")).toEqual({ additions: 0, deletions: 0, binary: false });
+async function requestDiff(
+  params: Record<string, unknown>,
+  cfg: OpenClawConfig = {},
+  reqParams: Record<string, unknown> = {},
+  authority: Partial<
+    Pick<GatewayRequestHandlerOptions, "client" | "hasCurrentClientAuthority">
+  > = {},
+) {
+  const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+  await sessionsDiffHandlers["sessions.diff"]?.({
+    req: { type: "req", id: "sessions.diff", method: "sessions.diff", params: reqParams },
+    params,
+    client: null,
+    ...authority,
+    isWebchatConnect: () => false,
+    respond: (ok, payload, error) => calls.push({ ok, payload, error }),
+    context: {
+      getRuntimeConfig: () => cfg,
+      logGateway: createSubsystemLogger("test/sessions-diff"),
+    } as never,
   });
-
-  it("splits multi-file patches and keys deleted files by old path", () => {
-    const patch = [
-      "diff --git a/kept.txt b/kept.txt",
-      "index 000..111 100644",
-      "--- a/kept.txt",
-      "+++ b/kept.txt",
-      "@@ -1 +1 @@",
-      "-old",
-      "+new",
-      "diff --git a/gone.txt b/gone.txt",
-      "deleted file mode 100644",
-      "--- a/gone.txt",
-      "+++ /dev/null",
-      "@@ -1 +0,0 @@",
-      "-bye",
-      'diff --git "a/gone\\t\\001\\303\\251.txt" "b/gone\\t\\001\\303\\251.txt"',
-      "deleted file mode 100644",
-      '--- "a/gone\\t\\001\\303\\251.txt"',
-      "+++ /dev/null",
-      "@@ -1 +0,0 @@",
-      "-quoted deletion",
-      'diff --git "a/old\\\".txt" "b/new\\\\.txt"',
-      "similarity index 100%",
-      'rename from "old\\\".txt"',
-      'rename to "new\\\\.txt"',
-      'diff --git "a/mode\\\" b/\\303\\251.sh" "b/mode\\\" b/\\303\\251.sh"',
-      "old mode 100644",
-      "new mode 100755",
-      "diff --git a/mode b/café.sh b/mode b/café.sh",
-      "old mode 100644",
-      "new mode 100755",
-      "",
-    ].join("\n");
-    const chunks = splitPatchByFile(patch);
-    expect([...chunks.keys()]).toEqual([
-      "kept.txt",
-      "gone.txt",
-      "gone\t\u0001é.txt",
-      "new\\.txt",
-      'mode" b/é.sh',
-      "mode b/café.sh",
-    ]);
-    expect(chunks.get("kept.txt")).toContain("+new");
-    expect([...chunks.values()].join("")).toBe(patch);
-  });
-});
+  return calls;
+}
 
 describe("loadSessionDiff", () => {
   let repoRoot: string;
+  let tempDirs: string[];
+  const tempDir = (prefix: string) => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+    tempDirs.push(dir);
+    return dir;
+  };
+  const repoGit = (...args: string[]) => git(repoRoot, ...args);
+  const readDiff = (params: Omit<Parameters<typeof loadSessionDiff>[0], "sessionKey"> = {}) =>
+    loadSessionDiff({ sessionKey: "agent:main:s1", ...params });
+  const baseline = (sessionId = "s1", cwd = repoRoot) =>
+    captureSessionDiffBaseline({ cwd, sessionId });
+  const write = (name: string, data: string | Buffer) =>
+    fs.writeFileSync(path.join(repoRoot, name), data);
+  const append = (name: string, data: string) => fs.appendFileSync(path.join(repoRoot, name), data);
+  const commitFiles = (message = "init", files = ".") => {
+    repoGit("add", files);
+    repoGit("commit", "-qm", message);
+  };
+  const revision = () => repoGit("rev-parse", "HEAD").trim();
+  const useBaseline = async (sessionId = "s1", cwd = repoRoot) => {
+    const captured = await baseline(sessionId, cwd);
+    mockSession(cwd, { sessionDiffBaseline: captured });
+    return captured;
+  };
+  const filePaths = (result: { files: Array<{ path: string }> } | undefined) =>
+    result?.files.map((file) => file.path);
+  const changedFile = (name: string, status: string, additions: number, deletions = 0) => ({
+    path: name,
+    status,
+    additions,
+    deletions,
+  });
+  const addedFile = (name: string, additions: number, flags: Record<string, boolean>) => ({
+    ...changedFile(name, "added", additions),
+    untracked: true,
+    ...flags,
+  });
+  const diffFile = (result: Awaited<ReturnType<typeof readDiff>>, name: string) =>
+    result.files.find((file) => file.path === name);
 
+  const initFiles = (files: Record<string, string | Buffer>, format?: "sha1" | "sha256") => {
+    initRepo(repoRoot, format);
+    for (const [name, data] of Object.entries(files)) {
+      write(name, data);
+    }
+  };
+  const seedRepo = (
+    files: Record<string, string | Buffer>,
+    subject = "init",
+    format?: "sha1" | "sha256",
+  ) => {
+    initFiles(files, format);
+    commitFiles(subject);
+  };
   beforeEach(() => {
+    setRuntimeConfigSnapshot({});
     vi.clearAllMocks();
-    repoRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-diff-")));
+    tempDirs = [];
+    repoRoot = tempDir("openclaw-sessions-diff-");
     hoisted.resolveDefaultAgentId.mockReturnValue("main");
     hoisted.resolveAgentWorkspaceDir.mockReturnValue(repoRoot);
+    mockSession(repoRoot);
   });
 
   afterEach(() => {
-    fs.rmSync(repoRoot, { recursive: true, force: true });
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    for (const dir of tempDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    clearRuntimeConfigSnapshot();
   });
 
   it("reports unknown sessions without touching a workspace", async () => {
@@ -148,29 +160,144 @@ describe("loadSessionDiff", () => {
       agentId: "main",
       cfg: {},
       entry: undefined,
-      storePath: undefined,
+      storePath: "/tmp/sessions.json",
       canonicalKey: "agent:main:missing",
     });
     const result = await loadSessionDiff({ sessionKey: "agent:main:missing" });
-    expect(result.unavailableReason).toBe("unknown_session");
-    expect(result.files).toEqual([]);
+    expect(result).toMatchObject({ unavailableReason: "unknown_session", files: [] });
   });
 
-  it("reports non-git checkouts", async () => {
-    mockSession(repoRoot);
-    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-    expect(result.unavailableReason).toBe("not_git");
+  it("returns computing while sharing delayed workspace metadata across diff polls", async () => {
+    seedRepo({ "tracked.txt": "before\n" });
+    write("tracked.txt", "after\n");
+    const cfg = {};
+    const released = createDeferredCore();
+    const loaded = {
+      agentId: "main",
+      cfg,
+      entry: { sessionId: "s1", spawnedCwd: repoRoot },
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:s1",
+    };
+    hoisted.loadSessionEntry
+      .mockImplementation(() => {
+        throw new Error("Completed metadata was discarded before the next poll");
+      })
+      .mockImplementationOnce(async () => {
+        await released.promise;
+        return loaded;
+      });
+    const params = { sessionKey: "agent:main:s1", scope: "uncommitted", poll: true };
+    const responses: Awaited<ReturnType<typeof requestDiff>>[] = [];
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const pending = [
+      requestDiff(params, cfg).then((calls) => responses.push(calls)),
+      requestDiff(params, cfg).then((calls) => responses.push(calls)),
+    ];
+    try {
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(responses.length).toBe(2);
+      for (const calls of responses) {
+        expect(calls).toEqual([
+          {
+            ok: true,
+            payload: {
+              sessionKey: params.sessionKey,
+              files: [],
+              additions: 0,
+              deletions: 0,
+              computing: true,
+            },
+            error: undefined,
+          },
+        ]);
+      }
+      expect(hoisted.loadSessionEntry).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      released.resolve();
+      await Promise.all(pending);
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 500);
+    });
+    const completed = await requestDiff(params, cfg);
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledTimes(1);
+    expect(completed).toMatchObject([
+      {
+        ok: true,
+        payload: {
+          sessionKey: params.sessionKey,
+          files: [
+            {
+              path: "tracked.txt",
+              additions: 1,
+              deletions: 1,
+              patch: expect.stringContaining("-before\n+after"),
+            },
+          ],
+          additions: 1,
+          deletions: 1,
+        },
+      },
+    ]);
   });
 
-  it.each([
-    { pendingWorktree: { titleSource: "New checkout" } },
-    { pendingProjectGitUrl: "https://github.com/example/project.git" },
-  ])("keeps pending checkouts separate from the agent workspace: %j", async (pending) => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "AGENTS.md"), "Agent workspace bootstrap\n");
-    mockSession(repoRoot, { spawnedCwd: undefined, ...pending });
+  it("keeps authority per caller and metadata separate per session while polls share preparation", async () => {
+    seedRepo({ "tracked.txt": "before\n" });
+    write("tracked.txt", "after\n");
+    const otherRoot = tempDir("openclaw-other-diff-");
+    initRepo(otherRoot);
+    fs.writeFileSync(path.join(otherRoot, "other.txt"), "other session\n");
+    const cfg = {};
+    const released = createDeferredCore();
+    hoisted.loadSessionEntry.mockImplementation(async (key: string) => {
+      await released.promise;
+      return {
+        agentId: "main",
+        cfg,
+        canonicalKey: key,
+        storePath: "/tmp/sessions.json",
+        entry: { sessionId: key, spawnedCwd: key.endsWith(":s1") ? repoRoot : otherRoot },
+      };
+    });
+    const params = { sessionKey: "agent:main:s1", scope: "uncommitted", poll: true };
+    let current = true;
+    const revoked = requestDiff(params, cfg, {}, { hasCurrentClientAuthority: () => current });
+    const rejected = expect(revoked).rejects.toThrow("Gateway requester authority changed");
+    const allowed = requestDiff(params, cfg);
+    const other = requestDiff({ ...params, sessionKey: "agent:main:s2" }, cfg);
+    current = false;
+    released.resolve();
+    try {
+      await rejected;
+      expect(await allowed).toMatchObject([
+        {
+          ok: true,
+          payload: {
+            files: [{ path: "tracked.txt", patch: expect.stringContaining("-before\n+after") }],
+          },
+        },
+      ]);
+      expect(await other).toMatchObject([
+        {
+          ok: true,
+          payload: { sessionKey: "agent:main:s2", files: [{ path: "other.txt" }] },
+        },
+      ]);
+      expect(hoisted.loadSessionEntry).toHaveBeenCalledTimes(2);
+    } finally {
+      await Promise.allSettled([revoked, allowed, other]);
+    }
+  });
 
-    expect(await loadSessionDiff({ sessionKey: "agent:main:s1" })).toEqual({
+  it("keeps pending checkouts separate from the agent workspace", async () => {
+    initFiles({ "AGENTS.md": "Agent workspace bootstrap\n" });
+    mockSession(repoRoot, {
+      spawnedCwd: undefined,
+      pendingProjectGitUrl: "https://github.com/example/project.git",
+    });
+    expect(await readDiff()).toEqual({
       sessionKey: "agent:main:s1",
       files: [],
       additions: 0,
@@ -178,70 +305,34 @@ describe("loadSessionDiff", () => {
     });
   });
 
-  // Diff and baseline reads run inside the Gateway process against user
-  // checkouts, so a checkout-configured core.fsmonitor command (or hook) must
-  // never execute — same invariant as the publication git transport.
   it.skipIf(process.platform === "win32")(
     "never executes a checkout-configured core.fsmonitor command",
     async () => {
-      initRepo(repoRoot);
-      fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\n");
-      git(repoRoot, "add", "a.txt");
-      git(repoRoot, "commit", "-qm", "init");
-      fs.writeFileSync(path.join(repoRoot, "a.txt"), "two\n");
-      // Script and sentinel live outside the checkout so they never show up
-      // as untracked entries in the diffs under test.
-      const outside = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fsmonitor-"));
-      try {
-        const sentinel = path.join(outside, "sentinel");
-        const hook = path.join(outside, "fsmonitor.sh");
-        fs.writeFileSync(hook, `#!/bin/sh\n: > "${sentinel}"\nexit 1\n`, { mode: 0o755 });
-        git(repoRoot, "config", "core.fsmonitor", hook);
-        // Sanity: unpinned git in this checkout does run the command.
-        git(repoRoot, "status", "--porcelain");
-        expect(fs.existsSync(sentinel)).toBe(true);
-        fs.rmSync(sentinel);
+      initFiles({ "a.txt": "one\n" });
+      commitFiles("init", "a.txt");
+      write("a.txt", "two\n");
+      const outside = tempDir("openclaw-fsmonitor-");
+      const sentinel = path.join(outside, "sentinel");
+      const hook = path.join(outside, "fsmonitor.sh");
+      fs.writeFileSync(hook, `#!/bin/sh\n: > "${sentinel}"\nexit 1\n`, { mode: 0o755 });
+      repoGit("config", "core.fsmonitor", hook);
+      // Sanity: unpinned git in this checkout does run the command.
+      repoGit("status", "--porcelain");
+      expect(fs.existsSync(sentinel)).toBe(true);
+      fs.rmSync(sentinel);
 
-        mockSession(repoRoot);
-        const diff = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-        expect(diff.files.map((file) => file.path)).toEqual(["a.txt"]);
-        const baseline = await captureSessionDiffBaseline({ cwd: repoRoot, sessionId: "s1" });
-        expect(baseline?.files.map((file) => file.path)).toEqual(["a.txt"]);
-        expect(fs.existsSync(sentinel)).toBe(false);
-      } finally {
-        fs.rmSync(outside, { recursive: true, force: true });
-      }
+      const diff = await readDiff();
+      expect(filePaths(diff)).toEqual(["a.txt"]);
+      const captured = await baseline();
+      expect(filePaths(captured)).toEqual(["a.txt"]);
+      expect(fs.existsSync(sentinel)).toBe(false);
     },
   );
 
-  it("shows the full diff without mutating a pending baseline claim", async () => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "pending.txt"), "pending first turn\n");
-    mockSession(repoRoot, {
-      sessionDiffBaselineCapture: {
-        version: 1,
-        captureId: "pending-capture",
-        status: "pending",
-      },
-    });
-
-    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-
-    expect(result.files.map((file) => file.path)).toEqual(["pending.txt"]);
-    expect(hoisted.patchSessionEntryCore).not.toHaveBeenCalled();
-  });
-
   it("uses the persisted fixed-store owner for a bare session checkout", async () => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "owned.txt"), "ops\n");
-    const cfg = {
-      session: { store: "/tmp/shared.sqlite", scope: "global" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    } as const;
+    initFiles({ "owned.txt": "ops\n" });
+    const cfg = fixedStoreConfig();
+    setRuntimeConfigSnapshot(cfg);
     hoisted.loadSessionEntry.mockReturnValue({
       agentId: "ops",
       cfg,
@@ -252,623 +343,581 @@ describe("loadSessionDiff", () => {
     hoisted.resolveAgentWorkspaceDir.mockImplementation((_cfg: unknown, agentId: string) =>
       agentId === "ops" ? repoRoot : "/wrong/research",
     );
-    const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-
-    await sessionsDiffHandlers["sessions.diff"]?.({
-      req: { type: "req", id: "sessions.diff", method: "sessions.diff", params: {} },
-      params: { sessionKey: "global" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond: (ok, payload, error) => calls.push({ ok, payload, error }),
-      context: {
-        getRuntimeConfig: () => cfg,
-        logGateway: createSubsystemLogger("test/sessions-diff"),
-      } as never,
-    });
-
-    expect(calls).toEqual([
-      expect.objectContaining({
-        ok: true,
-        payload: expect.objectContaining({ root: repoRoot }),
-      }),
-    ]);
-    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith(
-      "global",
-      expect.objectContaining({ agentId: "ops" }),
-    );
-    expect(hoisted.resolveAgentWorkspaceDir).toHaveBeenCalledWith(cfg, "ops");
+    const calls = await requestDiff({ sessionKey: "global" }, cfg);
+    expect(calls).toMatchObject([{ ok: true, payload: { root: repoRoot } }]);
   });
 
   it("rejects a foreign agent before loading a bare fixed-store checkout", async () => {
-    const cfg = {
-      session: { store: "/tmp/shared.sqlite", scope: "global" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    } as const;
-    const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-
-    await sessionsDiffHandlers["sessions.diff"]?.({
-      req: { type: "req", id: "sessions.diff", method: "sessions.diff", params: {} },
-      params: { sessionKey: "global", agentId: "research" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond: (ok, payload, error) => calls.push({ ok, payload, error }),
-      context: { getRuntimeConfig: () => cfg } as never,
-    });
-
-    expect(calls).toEqual([
-      expect.objectContaining({
+    const cfg = fixedStoreConfig();
+    setRuntimeConfigSnapshot(cfg);
+    const calls = await requestDiff({ sessionKey: "global", agentId: "research" }, cfg);
+    expect(calls).toMatchObject([
+      {
         ok: false,
-        error: expect.objectContaining({
+        error: {
           code: "INVALID_REQUEST",
           message: 'agent "research" does not match session key agent "ops"',
-        }),
-      }),
+        },
+      },
     ]);
     expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
   });
 
-  it("diffs a feature branch against the local default branch", async () => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\ntwo\nthree\n");
-    fs.writeFileSync(path.join(repoRoot, "old.txt"), "keep\n");
-    fs.writeFileSync(path.join(repoRoot, "gone.txt"), "bye\n");
-    fs.writeFileSync(path.join(repoRoot, "tracked.bin"), Buffer.from([0, 1, 2]));
-    git(repoRoot, "add", ".");
-    git(repoRoot, "commit", "-qm", "init");
-    git(repoRoot, "checkout", "-qb", "feature");
-    fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\nTWO\nthree\nfour\n");
-    fs.writeFileSync(path.join(repoRoot, "tracked.bin"), Buffer.from([0, 3, 4]));
-    git(repoRoot, "mv", "old.txt", "renamed.txt");
-    git(repoRoot, "rm", "-q", "gone.txt");
-    git(repoRoot, "add", ".");
-    git(repoRoot, "commit", "-qm", "change");
-    fs.writeFileSync(path.join(repoRoot, "untracked.txt"), "hello\nworld\n");
-    fs.writeFileSync(path.join(repoRoot, "blob.bin"), Buffer.from([0, 1, 2, 0, 3]));
-    mockSession(repoRoot);
-
-    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-
-    expect(result.unavailableReason).toBeUndefined();
-    expect(result.root).toBe(repoRoot);
-    expect(result.branch).toBe("feature");
-    expect(result.baseRef).toBe("main");
-    expect(result.files.map((file) => file.path)).toEqual([
-      "a.txt",
-      "blob.bin",
-      "gone.txt",
-      "renamed.txt",
-      "tracked.bin",
-      "untracked.txt",
-    ]);
-
-    const modified = result.files.find((file) => file.path === "a.txt");
-    expect(modified?.status).toBe("modified");
-    expect(modified?.additions).toBe(2);
-    expect(modified?.deletions).toBe(1);
-    expect(modified?.patch).toContain("+TWO");
-
-    const renamed = result.files.find((file) => file.path === "renamed.txt");
-    expect(renamed?.status).toBe("renamed");
-    expect(renamed?.oldPath).toBe("old.txt");
-
-    const deleted = result.files.find((file) => file.path === "gone.txt");
-    expect(deleted?.status).toBe("deleted");
-    expect(deleted?.patch).toContain("-bye");
-
-    const untracked = result.files.find((file) => file.path === "untracked.txt");
-    expect(untracked?.status).toBe("added");
-    expect(untracked?.untracked).toBe(true);
-    expect(untracked?.additions).toBe(2);
-    expect(untracked?.patch).toContain("+hello");
-
-    const binary = result.files.find((file) => file.path === "blob.bin");
-    expect(binary?.binary).toBe(true);
-    expect(binary?.patch).toBeUndefined();
-
-    expect(result.files.find((file) => file.path === "tracked.bin")).toEqual({
-      path: "tracked.bin",
-      status: "modified",
-      additions: 0,
-      deletions: 0,
-      binary: true,
-    });
-
-    expect(result.additions).toBe(4);
-    expect(result.deletions).toBe(2);
-  });
-
   it("keeps tracked counts while omitting patches above the total changed-line limit", async () => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "large.txt"), "before\n");
-    fs.writeFileSync(path.join(repoRoot, "small.txt"), "before\n");
-    git(repoRoot, "add", ".");
-    git(repoRoot, "commit", "-qm", "init");
-    fs.writeFileSync(path.join(repoRoot, "large.txt"), "after\n".repeat(100_001));
-    fs.writeFileSync(path.join(repoRoot, "small.txt"), "after\n");
-    mockSession(repoRoot);
+    seedRepo({ "large.txt": "before\n", "small.txt": "before\n" }, "init");
+    write("large.txt", "after\n".repeat(100_001));
+    write("small.txt", "after\n");
 
-    const runCommand = execRunner.runCommandBuffersWithTimeout;
-    let trackedDiffCommands = 0;
-    const observer = vi
-      .spyOn(execRunner, "runCommandBuffersWithTimeout")
-      .mockImplementation((argv, options) => {
-        if (
-          argv[argv.indexOf("-C") + 1] === repoRoot &&
-          argv.includes("diff") &&
-          !argv.includes("--no-index")
-        ) {
-          trackedDiffCommands++;
-        }
-        return runCommand(argv, options);
-      });
-    try {
-      const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-
-      expect(result.files).toEqual([
-        {
-          path: "large.txt",
-          status: "modified",
-          additions: 100_001,
-          deletions: 1,
-          truncated: true,
-        },
-        { path: "small.txt", status: "modified", additions: 1, deletions: 1, truncated: true },
-      ]);
-      expect(result.additions).toBe(100_002);
-      expect(result.deletions).toBe(2);
-      expect(trackedDiffCommands).toBeLessThanOrEqual(1);
-    } finally {
-      observer.mockRestore();
+    const lstat = vi.spyOn(fs.promises, "lstat");
+    const result = await collectCheckoutDiff({ cwd: repoRoot });
+    expect(result.files).toEqual([
+      { ...changedFile("large.txt", "modified", 100_001, 1), truncated: true },
+      { ...changedFile("small.txt", "modified", 1, 1), truncated: true },
+    ]);
+    expect(result).toMatchObject({ additions: 100_002, deletions: 2 });
+    for (const file of ["large.txt", "small.txt"]) {
+      expect(lstat.mock.calls.some(([target]) => target === path.join(repoRoot, file))).toBe(false);
     }
   });
 
-  it("keeps tracked filenames and previews when line-count collection fails", async () => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "tracked.txt"), "before\n");
-    git(repoRoot, "add", ".");
-    git(repoRoot, "commit", "-qm", "init");
-    fs.writeFileSync(path.join(repoRoot, "tracked.txt"), "after\n");
-    mockSession(repoRoot);
-
+  it.each([
+    { kind: "tracked", flag: "--numstat" },
+    { kind: "untracked", flag: "ls-files" },
+  ])("reports a failed $kind inventory instead of an empty diff", async ({ kind, flag }) => {
+    seedRepo({ "tracked.txt": "before\n" }, "init");
+    write("tracked.txt", "after\n");
     const runCommand = execRunner.runCommandBuffersWithTimeout;
-    const observer = vi
-      .spyOn(execRunner, "runCommandBuffersWithTimeout")
-      .mockImplementation(async (argv, options) => {
+    vi.spyOn(execRunner, "runCommandBuffersWithTimeout").mockImplementation(
+      async (argv, options) => {
         const result = await runCommand(argv, options);
-        return argv[argv.indexOf("-C") + 1] === repoRoot && argv.includes("--numstat")
+        return argv[argv.indexOf("-C") + 1] === repoRoot && argv.includes(flag)
           ? { ...result, code: 1, stdout: Buffer.alloc(0) }
           : result;
-      });
-    try {
-      const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+      },
+    );
+    await expect(readDiff()).rejects.toThrow("Unable to read " + kind + " Git changes");
+  });
 
-      expect(result.files).toEqual([
-        {
-          path: "tracked.txt",
-          status: "modified",
-          additions: 0,
-          deletions: 0,
-          patch: expect.stringContaining("+after\n"),
-        },
-      ]);
-    } finally {
-      observer.mockRestore();
+  it("returns session-filtered summary counts without patches or branch history", async () => {
+    seedRepo(
+      {
+        "changed.txt": "before\n",
+        "deleted.txt": "remove\nthese\n",
+        "renamed.txt": "keep\nthese\nlines\n",
+        "preexisting.txt": "existing\n",
+      },
+      "base",
+    );
+    repoGit("checkout", "-qb", "feature");
+    append("preexisting.txt", "before session\n");
+    await useBaseline();
+    write("committed.txt", "branch\n");
+    commitFiles("branch work", "committed.txt");
+    write("changed.txt", "after\nmore\n");
+    repoGit("add", "changed.txt");
+    repoGit("mv", "renamed.txt", "renamed-next.txt");
+    fs.rmSync(path.join(repoRoot, "deleted.txt"));
+    write("loose file.txt", "new\nlines\n");
+    write("binary.bin", Buffer.from([0, 1, 2]));
+    const result = await readDiff({ summaryOnly: true });
+
+    expect(result.files).toEqual([
+      addedFile("binary.bin", 0, { binary: true }),
+      changedFile("changed.txt", "modified", 2, 1),
+      changedFile("committed.txt", "added", 1),
+      changedFile("deleted.txt", "deleted", 0, 2),
+      addedFile("loose file.txt", 2, {}),
+      {
+        ...changedFile("renamed-next.txt", "renamed", 0),
+        oldPath: "renamed.txt",
+      },
+    ]);
+    expect(result).toMatchObject({ additions: 5, deletions: 3 });
+    for (const field of ["commits", "mergeBase", "truncated"] as const) {
+      expect(result[field]).toBeUndefined();
     }
   });
 
-  it("diffs uncommitted work on the default branch against HEAD", async () => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\n");
-    git(repoRoot, "add", ".");
-    git(repoRoot, "commit", "-qm", "init");
-    const rootCommit = git(repoRoot, "rev-parse", "HEAD").trim();
-    fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\nmore\n");
-    mockSession(repoRoot);
-
-    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-
-    expect(result.baseRef).toBe("HEAD");
-    expect(result.files).toHaveLength(1);
-    expect(result.files[0]?.additions).toBe(1);
-
-    const committed = await loadSessionDiff({
-      sessionKey: "agent:main:s1",
-      scope: "commit",
-      commit: rootCommit,
-    });
-    expect(committed.unavailableReason).toBe("unknown_commit");
-    expect(committed.files).toEqual([]);
+  it("shows an unrelated root commit merged into the feature branch in a sha256 repository", async () => {
+    seedRepo({ "base.txt": "base\n" }, "base", "sha256");
+    repoGit("checkout", "--orphan", "imported", "-q");
+    repoGit("rm", "-rf", ".");
+    write("imported.txt", "imported root\n");
+    commitFiles("imported root");
+    const rootCommit = revision();
+    repoGit("checkout", "-qb", "feature", "main");
+    repoGit("merge", "--allow-unrelated-histories", "--no-edit", "imported");
+    append("imported.txt", "working tree edit\n");
+    const result = await readDiff({ scope: "commit", commit: rootCommit });
+    expect(result.unavailableReason).toBeUndefined();
+    expect(filePaths(result)).toEqual(["imported.txt"]);
+    expect(result.files[0]).toMatchObject({ status: "added", additions: 1, deletions: 0 });
+    expect(result.files[0]?.patch).toContain("+imported root");
+    expect(result.files[0]?.patch).not.toContain("working tree edit");
   });
 
-  it.each(["sha1", "sha256"] as const)(
-    "shows an unrelated root commit merged into the feature branch in a %s repository",
-    async (objectFormat) => {
-      initRepo(repoRoot, objectFormat);
-      fs.writeFileSync(path.join(repoRoot, "base.txt"), "base\n");
-      git(repoRoot, "add", ".");
-      git(repoRoot, "commit", "-qm", "base");
-      git(repoRoot, "checkout", "--orphan", "imported", "-q");
-      git(repoRoot, "rm", "-rf", ".");
-      fs.writeFileSync(path.join(repoRoot, "imported.txt"), "imported root\n");
-      git(repoRoot, "add", ".");
-      git(repoRoot, "commit", "-qm", "imported root");
-      const rootCommit = git(repoRoot, "rev-parse", "HEAD").trim();
-      git(repoRoot, "checkout", "-qb", "feature", "main");
-      git(repoRoot, "merge", "--allow-unrelated-histories", "--no-edit", "imported");
-      fs.appendFileSync(path.join(repoRoot, "imported.txt"), "working tree edit\n");
-      mockSession(repoRoot);
+  it("scopes branch, working-tree, and commit diffs against origin/master with branch metadata", async () => {
+    const baseRef = "origin/master";
 
-      const result = await loadSessionDiff({
-        sessionKey: "agent:main:s1",
-        scope: "commit",
-        commit: rootCommit,
+    seedRepo({ "base.txt": "base\n" }, "base");
+    const mergeBase = revision();
+    repoGit("checkout", "-qb", "sibling");
+    write("sibling.txt", "sibling commit\n");
+    commitFiles("sibling change");
+    const siblingCommit = revision();
+    repoGit("checkout", "-q", "main");
+    repoGit("checkout", "-qb", "feature");
+    repoGit("update-ref", `refs/remotes/${baseRef}`, mergeBase);
+    repoGit("branch", "-d", "main");
+
+    write("first.txt", "first commit\n");
+    commitFiles("first change");
+    const firstCommit = revision();
+    write("second.txt", "second commit\n");
+    commitFiles("second change");
+    append("second.txt", "working tree\n");
+    write("loose.txt", "untracked\n");
+    const all = await readDiff();
+    expect(all.baseRef).toBe(baseRef);
+    expect(filePaths(all)).toEqual(["first.txt", "loose.txt", "second.txt"]);
+    const uncommitted = await readDiff({ scope: "uncommitted" });
+    expect(filePaths(uncommitted)).toEqual(["loose.txt", "second.txt"]);
+    expect(diffFile(uncommitted, "second.txt")?.patch).toContain("+working tree");
+
+    await useBaseline();
+    const committed = await readDiff({ scope: "commit", commit: firstCommit });
+    expect(filePaths(committed)).toEqual(["first.txt"]);
+    expect(committed.files[0]?.patch).toContain("+first commit");
+    expect(committed.files[0]?.untracked).toBeUndefined();
+
+    for (const commit of [siblingCommit, mergeBase, "not-a-commit"]) {
+      expect(await readDiff({ scope: "commit", commit })).toMatchObject({
+        unavailableReason: "unknown_commit",
+        files: [],
       });
+    }
+  });
 
-      expect(result.unavailableReason).toBeUndefined();
-      expect(result.files.map((file) => file.path)).toEqual(["imported.txt"]);
-      expect(result.files[0]).toMatchObject({ status: "added", additions: 1, deletions: 0 });
-      expect(result.files[0]?.patch).toContain("+imported root");
-      expect(result.files[0]?.patch).not.toContain("working tree edit");
-    },
-  );
-
-  it.each(["main", "origin/main", "origin/master"])(
-    "scopes branch, working-tree, and commit diffs against %s with branch metadata",
-    async (baseRef) => {
-      initRepo(repoRoot);
-      fs.writeFileSync(path.join(repoRoot, "base.txt"), "base\n");
-      git(repoRoot, "add", ".");
-      git(repoRoot, "commit", "-qm", "base");
-      const mergeBase = git(repoRoot, "rev-parse", "HEAD").trim();
-      git(repoRoot, "checkout", "-qb", "sibling");
-      fs.writeFileSync(path.join(repoRoot, "sibling.txt"), "sibling commit\n");
-      git(repoRoot, "add", ".");
-      git(repoRoot, "commit", "-qm", "sibling change");
-      const siblingCommit = git(repoRoot, "rev-parse", "HEAD").trim();
-      git(repoRoot, "checkout", "-q", "main");
-      git(repoRoot, "checkout", "-qb", "feature");
-      if (baseRef !== "main") {
-        git(repoRoot, "update-ref", `refs/remotes/${baseRef}`, mergeBase);
-        git(repoRoot, "branch", "-d", "main");
-      }
-
-      fs.writeFileSync(path.join(repoRoot, "first.txt"), "first commit\n");
-      git(repoRoot, "add", ".");
-      git(repoRoot, "commit", "-qm", "first change");
-      const firstCommit = git(repoRoot, "rev-parse", "HEAD").trim();
-      fs.writeFileSync(path.join(repoRoot, "second.txt"), "second commit\n");
-      git(repoRoot, "add", ".");
-      git(repoRoot, "commit", "-qm", "second change");
-      const secondCommit = git(repoRoot, "rev-parse", "HEAD").trim();
-
-      fs.appendFileSync(path.join(repoRoot, "second.txt"), "working tree\n");
-      fs.writeFileSync(path.join(repoRoot, "loose.txt"), "untracked\n");
-      mockSession(repoRoot);
-
-      const all = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-      expect(all.baseRef).toBe(baseRef);
-      expect(all.files.map((file) => file.path)).toEqual(["first.txt", "loose.txt", "second.txt"]);
-      expect(all.aheadCount).toBe(2);
-      expect(all.commits).toEqual([
-        {
-          sha: git(repoRoot, "rev-parse", "--short", secondCommit).trim(),
-          subject: "second change",
-        },
-        { sha: git(repoRoot, "rev-parse", "--short", firstCommit).trim(), subject: "first change" },
-      ]);
-      expect(all.mergeBase).toEqual({
-        sha: git(repoRoot, "rev-parse", "--short", mergeBase).trim(),
-        subject: "base",
+  it("uses the accepted managed base for working, committed, and archived reads", async () => {
+    const stateRoot = tempDir("openclaw-review-base-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
+    const id = randomUUID();
+    const sessionKey = "agent:main:s1";
+    try {
+      openOpenClawStateDatabase();
+      seedRepo({ "base.txt": "base\n" }, "original base");
+      repoGit("update-ref", "refs/remotes/origin/main", revision());
+      repoGit("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+      write("upstream.txt", "upstream only\n");
+      commitFiles("accepted upstream");
+      const acceptedBase = revision();
+      repoGit("checkout", "-qb", "task");
+      const worktree = { id, repoRoot, branch: "task" };
+      await seedManagedReview(worktree, { sessionKey, sessionId: "s1" }, stateRoot, acceptedBase);
+      mockSession(repoRoot, { worktree });
+      write("task.txt", "authored change\n");
+      const beforePublication = await readDiff();
+      expect(filePaths(beforePublication)).toEqual(["task.txt"]);
+      expect(beforePublication.baseRef).toBe(acceptedBase);
+      const summary = await readDiff({ summaryOnly: true });
+      expect(summary.files).toEqual([addedFile("task.txt", 1, {})]);
+      expect(summary.baseRef).toBe(acceptedBase);
+      expect(summary.commits).toBeUndefined();
+      expect(filePaths(await readDiff({ scope: "uncommitted" }))).toEqual(["task.txt"]);
+      commitFiles("publish task", "task.txt");
+      const afterPublication = await readDiff();
+      expect(afterPublication).toMatchObject({
+        files: [{ path: "task.txt", additions: 1, deletions: 0 }],
+        aheadCount: 1,
       });
-
-      const uncommitted = await loadSessionDiff({
-        sessionKey: "agent:main:s1",
-        scope: "uncommitted",
-      });
-      expect(uncommitted.files.map((file) => file.path)).toEqual(["loose.txt", "second.txt"]);
-      expect(uncommitted.files.find((file) => file.path === "second.txt")?.patch).toContain(
-        "+working tree",
+      expect(afterPublication.commits?.map((commit) => commit.subject)).toEqual(["publish task"]);
+      expect(afterPublication.mergeBase?.subject).toBe("accepted upstream");
+      const uncommitted = await readDiff({ scope: "uncommitted" });
+      expect(uncommitted.files).toEqual([]);
+      expect((await readDiff({ scope: "commit", commit: acceptedBase })).unavailableReason).toBe(
+        "unknown_commit",
       );
-
-      const baseline = await captureSessionDiffBaseline({ cwd: repoRoot, sessionId: "s1" });
-      mockSession(repoRoot, { sessionDiffBaseline: baseline });
-      const committed = await loadSessionDiff({
-        sessionKey: "agent:main:s1",
-        scope: "commit",
-        commit: firstCommit,
-      });
-      expect(committed.files.map((file) => file.path)).toEqual(["first.txt"]);
-      expect(committed.files[0]?.patch).toContain("+first commit");
-      expect(committed.files[0]?.untracked).toBeUndefined();
-
-      for (const commit of [siblingCommit, mergeBase]) {
-        const outsideAdvertisedHistory = await loadSessionDiff({
-          sessionKey: "agent:main:s1",
-          scope: "commit",
-          commit,
-        });
-        expect(outsideAdvertisedHistory.unavailableReason).toBe("unknown_commit");
-        expect(outsideAdvertisedHistory.files).toEqual([]);
+      append("task.txt", "follow-up change\n");
+      commitFiles("follow-up task", "task.txt");
+      const followUpCommit = revision();
+      const committed = await readDiff({ scope: "commit", commit: followUpCommit });
+      expect(filePaths(committed)).toEqual(["task.txt"]);
+      expect(committed).toMatchObject({ additions: 1, deletions: 0, aheadCount: 2 });
+      expect(committed.commits?.map((commit) => commit.subject)).toEqual([
+        "follow-up task",
+        "publish task",
+      ]);
+      expect(committed.files[0]?.patch).toContain("+follow-up change");
+      expect(committed.files[0]?.patch).not.toContain("+authored change");
+      mockSession(repoRoot, { worktree, archivedAt: 1 });
+      const archived = await readDiff();
+      expect(filePaths(archived)).toEqual(["task.txt"]);
+      expect(archived).toMatchObject({ additions: 2, deletions: 0, aheadCount: 2 });
+      for (const patch of [
+        { agent_id: "other" },
+        { session_key: "agent:main:other" },
+        { session_id: "replaced" },
+      ]) {
+        await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
+          store.update(store.get()!, patch),
+        );
+        await expect(readDiff()).rejects.toThrow(/workspace.*incarnation/i);
+        await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
+          store.update(store.get()!, {
+            agent_id: "main",
+            session_key: sessionKey,
+            session_id: "s1",
+          }),
+        );
       }
-
-      const unknown = await loadSessionDiff({
-        sessionKey: "agent:main:s1",
-        scope: "commit",
-        commit: "not-a-commit",
-      });
-      expect(unknown.unavailableReason).toBe("unknown_commit");
-      expect(unknown.files).toEqual([]);
-    },
-  );
+      mockSession(path.dirname(repoRoot), { worktree, archivedAt: 1 });
+      await expect(readDiff()).rejects.toThrow("Local workspace review owner changed");
+      mockSession(repoRoot, { worktree, archivedAt: 1 });
+      await withLocalWorkspaceStore({ worktreeId: id }, (store) => store.delete(store.get()!));
+      expect(filePaths(await readDiff())).toEqual(["task.txt", "upstream.txt"]);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
 
   it("never executes configured textconv drivers from the read RPC", async () => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, ".gitattributes"), "*.txt diff=evil\n");
-    fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\n");
-    git(repoRoot, "add", ".");
-    git(repoRoot, "commit", "-qm", "init");
+    seedRepo({ ".gitattributes": "*.txt diff=evil\n", "a.txt": "one\n" }, "init");
     const marker = path.join(repoRoot, "pwned");
-    git(repoRoot, "config", "diff.evil.textconv", `touch ${marker}; cat`);
-    fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\ntwo\n");
-    fs.writeFileSync(path.join(repoRoot, "untracked.txt"), "new\n");
-    mockSession(repoRoot);
-
-    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-
+    repoGit("config", "diff.evil.textconv", `touch ${marker}; cat`);
+    write("a.txt", "one\ntwo\n");
+    write("untracked.txt", "new\n");
+    const result = await readDiff();
     expect(fs.existsSync(marker)).toBe(false);
-    const tracked = result.files.find((file) => file.path === "a.txt");
-    expect(tracked?.patch).toContain("+two");
+    expect(diffFile(result, "a.txt")?.patch).toContain("+two");
   });
 
   it("withholds patch content for hardlinked files pointing outside the checkout", async () => {
-    const secretDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secret-")));
+    const secretDir = tempDir("openclaw-secret-");
     const secretFile = path.join(secretDir, "secret.txt");
     fs.writeFileSync(secretFile, "TOP SECRET VALUE\n");
-    try {
-      initRepo(repoRoot);
-      fs.writeFileSync(path.join(repoRoot, "seed.txt"), "seed\n");
-      git(repoRoot, "add", ".");
-      git(repoRoot, "commit", "-qm", "init");
-      // Untracked hardlink to an out-of-tree secret: same inode, in-tree name.
-      fs.linkSync(secretFile, path.join(repoRoot, "leak.txt"));
-      // Tracked file replaced by a hardlink to the same secret after commit.
-      fs.writeFileSync(path.join(repoRoot, "tracked.txt"), "original\n");
-      git(repoRoot, "add", "tracked.txt");
-      git(repoRoot, "commit", "-qm", "add tracked");
-      fs.rmSync(path.join(repoRoot, "tracked.txt"));
-      fs.linkSync(secretFile, path.join(repoRoot, "tracked.txt"));
-      mockSession(repoRoot);
-
-      const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-
-      expect(JSON.stringify(result)).not.toContain("TOP SECRET VALUE");
-      for (const name of ["leak.txt", "tracked.txt"]) {
-        const file = result.files.find((entry) => entry.path === name);
-        expect(file?.patch).toBeUndefined();
-        expect(file?.truncated).toBe(true);
-      }
-    } finally {
-      fs.rmSync(secretDir, { recursive: true, force: true });
+    seedRepo({ "seed.txt": "seed\n" }, "init");
+    fs.linkSync(secretFile, path.join(repoRoot, "leak.txt"));
+    write("tracked.txt", "original\n");
+    commitFiles("add tracked", "tracked.txt");
+    fs.rmSync(path.join(repoRoot, "tracked.txt"));
+    fs.linkSync(secretFile, path.join(repoRoot, "tracked.txt"));
+    const result = await readDiff();
+    expect(JSON.stringify(result)).not.toContain("TOP SECRET VALUE");
+    for (const name of ["leak.txt", "tracked.txt"]) {
+      const file = diffFile(result, name);
+      expect(file?.patch).toBeUndefined();
+      expect(file?.truncated).toBe(true);
     }
   });
 
-  it.each(["sha1", "sha256"] as const)(
-    "reports staged files and filters the session baseline before the first %s commit",
-    async (objectFormat) => {
-      initRepo(repoRoot, objectFormat);
-      fs.writeFileSync(path.join(repoRoot, "staged.txt"), "line one\nline two\n");
-      git(repoRoot, "add", "staged.txt");
-      fs.writeFileSync(path.join(repoRoot, "loose.txt"), "loose\n");
-      mockSession(repoRoot);
+  it("reports staged files and filters the session baseline before the first sha256 commit", async () => {
+    initFiles({ "staged.txt": "line one\nline two\n" }, "sha256");
+    repoGit("add", "staged.txt");
+    write("loose.txt", "loose\n");
+    const result = await readDiff();
+    expect(result.unavailableReason).toBeUndefined();
+    const staged = diffFile(result, "staged.txt");
+    expect(staged).toMatchObject({ status: "added", additions: 2 });
+    expect(staged?.patch).toContain("+line one");
+    expect(diffFile(result, "loose.txt")?.untracked).toBe(true);
 
-      const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+    expect(filePaths(await useBaseline())).toEqual(["loose.txt", "staged.txt"]);
+    expect((await readDiff()).files).toEqual([]);
 
-      expect(result.unavailableReason).toBeUndefined();
-      const staged = result.files.find((file) => file.path === "staged.txt");
-      expect(staged?.status).toBe("added");
-      expect(staged?.additions).toBe(2);
-      expect(staged?.patch).toContain("+line one");
-      // The untracked scan still covers files git does not track yet.
-      expect(result.files.find((file) => file.path === "loose.txt")?.untracked).toBe(true);
+    append("staged.txt", "later edit\n");
+    const changed = await readDiff();
+    expect(filePaths(changed)).toEqual(["staged.txt"]);
+    expect(changed.files[0]?.patch).toContain("+later edit");
+  });
 
-      const baseline = await captureSessionDiffBaseline({ cwd: repoRoot, sessionId: "s1" });
-      expect(baseline?.files.map((file) => file.path)).toEqual(["loose.txt", "staged.txt"]);
-      mockSession(repoRoot, { sessionDiffBaseline: baseline });
-      expect((await loadSessionDiff({ sessionKey: "agent:main:s1" })).files).toEqual([]);
-
-      fs.appendFileSync(path.join(repoRoot, "staged.txt"), "later edit\n");
-      const changed = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-      expect(changed.files.map((file) => file.path)).toEqual(["staged.txt"]);
-      expect(changed.files[0]?.patch).toContain("+later edit");
-    },
-  );
-
-  it.skipIf(process.platform === "win32").each(["unborn", "branch", "detached"])(
-    "preserves checkout path bytes for %s baseline and diff reads",
-    async (revision) => {
+  it.skipIf(process.platform === "win32")(
+    "preserves checkout path bytes for detached baseline and diff reads",
+    async () => {
       const checkout = path.join(repoRoot, "checkout \n");
       const nested = path.join(checkout, "nested");
       fs.mkdirSync(nested, { recursive: true });
       initRepo(checkout);
       fs.writeFileSync(path.join(checkout, "tracked.txt"), "initial\n");
       git(checkout, "add", "tracked.txt");
-      if (revision !== "unborn") {
-        git(checkout, "commit", "-qm", "initial");
-        if (revision === "detached") {
-          git(checkout, "checkout", "--detach", "-q");
-        }
-      }
+      git(checkout, "commit", "-qm", "initial");
+      git(checkout, "checkout", "--detach", "-q");
       fs.appendFileSync(path.join(checkout, "tracked.txt"), "changed\n");
       fs.writeFileSync(path.join(checkout, "loose.txt"), "new\n");
       mockSession(nested);
 
-      const baseline = await captureSessionDiffBaseline({ cwd: nested, sessionId: "s1" });
-      expect(baseline?.root).toBe(checkout);
-      expect(baseline?.files.map((file) => file.path)).toEqual(["loose.txt", "tracked.txt"]);
-      const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+      const captured = await baseline("s1", nested);
+      expect(captured?.root).toBe(checkout);
+      expect(filePaths(captured)).toEqual(["loose.txt", "tracked.txt"]);
+      const result = await readDiff();
       expect(result.root).toBe(checkout);
-      expect(result.branch).toBe(revision === "branch" ? "main" : undefined);
-      expect(result.files.map((file) => file.path)).toEqual(["loose.txt", "tracked.txt"]);
+      expect(result.branch).toBeUndefined();
+      expect(filePaths(result)).toEqual(["loose.txt", "tracked.txt"]);
 
-      mockSession(nested, { sessionDiffBaseline: baseline });
-      expect((await loadSessionDiff({ sessionKey: "agent:main:s1" })).files).toEqual([]);
+      mockSession(nested, { sessionDiffBaseline: captured });
+      expect((await readDiff()).files).toEqual([]);
       fs.appendFileSync(path.join(checkout, "tracked.txt"), "later edit\n");
-      const changed = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-      expect(changed.files.map((file) => file.path)).toEqual(["tracked.txt"]);
+      const changed = await readDiff();
+      expect(filePaths(changed)).toEqual(["tracked.txt"]);
     },
   );
 
-  it("hides unchanged files captured at session start and resurfaces later edits", async () => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "AGENTS.md"), "existing bootstrap\n");
-    mockSession(repoRoot);
-
-    const baseline = await captureSessionDiffBaseline({
-      cwd: repoRoot,
-      sessionId: "s1",
-    });
-    expect(baseline?.files).toHaveLength(1);
-
-    mockSession(repoRoot, { sessionDiffBaseline: baseline });
-    const unchanged = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-    expect(unchanged.files).toEqual([]);
-    expect(unchanged.additions).toBe(0);
-
-    fs.appendFileSync(path.join(repoRoot, "AGENTS.md"), "added by this session\n");
-    const changed = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-    expect(changed.files.map((file) => file.path)).toEqual(["AGENTS.md"]);
-    expect(changed.files[0]?.patch).toContain("+added by this session");
-  });
-
-  it("hides unchanged binary files and resurfaces later binary edits", async () => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "icon.bin"), Buffer.from([0, 1, 2, 0, 3]));
-    mockSession(repoRoot);
-
-    const baseline = await captureSessionDiffBaseline({
-      cwd: repoRoot,
-      sessionId: "s1",
-    });
-    expect(baseline?.files).toHaveLength(1);
-
-    mockSession(repoRoot, { sessionDiffBaseline: baseline });
-    const unchanged = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-    expect(unchanged.files).toEqual([]);
-
-    fs.writeFileSync(path.join(repoRoot, "icon.bin"), Buffer.from([0, 1, 9, 0, 3]));
-    const changed = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-    expect(changed.files.map((file) => file.path)).toEqual(["icon.bin"]);
-    expect(changed.files[0]?.binary).toBe(true);
-  });
-
   it("keeps pre-session changes hidden when new files exceed the fingerprint budget", async () => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "z-existing.txt"), "preexisting work\n");
-    const baseline = await captureSessionDiffBaseline({ cwd: repoRoot, sessionId: "s1" });
-    expect(baseline?.files.map((file) => file.path)).toEqual(["z-existing.txt"]);
+    initFiles({ "z-existing.txt": "preexisting work\n" });
+    const captured = await baseline();
+    expect(filePaths(captured)).toEqual(["z-existing.txt"]);
     const addedPaths = Array.from({ length: 4 }, (_, index) => `a-new-${index}.bin`);
     for (const filePath of addedPaths) {
-      fs.writeFileSync(path.join(repoRoot, filePath), Buffer.alloc(4 * 1024 * 1024));
+      write(filePath, Buffer.alloc(4 * 1024 * 1024));
     }
-    mockSession(repoRoot, { sessionDiffBaseline: baseline });
-
-    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-
-    expect(result.files.map((file) => file.path)).toEqual(addedPaths);
+    mockSession(repoRoot, { sessionDiffBaseline: captured });
+    const result = await readDiff();
+    expect(filePaths(result)).toEqual(addedPaths);
     expect(result.additions).toBe(0);
   });
 
-  it("skips oversized files instead of materializing them during baseline capture", async () => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "large.txt"), Buffer.alloc(4 * 1024 * 1024 + 1, 97));
-
-    const baseline = await captureSessionDiffBaseline({
-      cwd: repoRoot,
-      sessionId: "s1",
-    });
-
-    expect(baseline?.files).toEqual([]);
-    expect(baseline?.truncated).toBe(true);
-  });
-
   it("ignores a baseline from an older session generation", async () => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "AGENTS.md"), "existing bootstrap\n");
-    mockSession(repoRoot);
-    const baseline = await captureSessionDiffBaseline({
-      cwd: repoRoot,
-      sessionId: "old-session",
-    });
-
-    mockSession(repoRoot, { sessionDiffBaseline: baseline });
-    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-
-    expect(result.files.map((file) => file.path)).toEqual(["AGENTS.md"]);
+    initFiles({ "AGENTS.md": "existing bootstrap\n" });
+    await useBaseline("old-session");
+    const result = await readDiff();
+    expect(filePaths(result)).toEqual(["AGENTS.md"]);
   });
 
   it("keeps exact large-file counts and later previews when untracked patches are omitted", async () => {
     initRepo(repoRoot);
     const additions = 140_000;
-    fs.writeFileSync(path.join(repoRoot, "a-large.txt"), `${"x".repeat(127)}\n`.repeat(additions));
-    fs.writeFileSync(path.join(repoRoot, "b-large.bin"), Buffer.alloc(4 * 1024 * 1024 + 1));
+    write("a-large.txt", `${"x".repeat(127)}\n`.repeat(additions));
+    write("b-large.bin", Buffer.alloc(4 * 1024 * 1024 + 1));
     // Each added line's prefix can push a small input beyond the output cap.
-    fs.writeFileSync(path.join(repoRoot, "c-expanded.txt"), "\n".repeat(100_000));
-    fs.writeFileSync(path.join(repoRoot, "z-small.txt"), "small addition\n");
-    mockSession(repoRoot);
-
-    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-
-    expect(result.files[0]).toEqual({
-      path: "a-large.txt",
-      status: "added",
-      additions,
-      deletions: 0,
-      untracked: true,
-      truncated: true,
-    });
-    expect(result.files[1]).toEqual({
-      path: "b-large.bin",
-      status: "added",
-      additions: 0,
-      deletions: 0,
-      untracked: true,
-      binary: true,
-    });
-    expect(result.files[2]).toEqual({
-      path: "c-expanded.txt",
-      status: "added",
-      additions: 100_000,
-      deletions: 0,
-      untracked: true,
-      truncated: true,
-    });
+    write("c-expanded.txt", "\n".repeat(100_000));
+    write("z-small.txt", "small addition\n");
+    const result = await readDiff();
+    expect(result.files[0]).toEqual(addedFile("a-large.txt", additions, { truncated: true }));
+    expect(result.files[1]).toEqual(addedFile("b-large.bin", 0, { binary: true }));
+    expect(result.files[2]).toEqual(addedFile("c-expanded.txt", 100_000, { truncated: true }));
     expect(result.files[3]?.patch).toContain("+small addition");
-    expect(result.additions).toBe(additions + 100_000 + 1);
-    expect(result.deletions).toBe(0);
-    expect(result.truncated).toBe(true);
+    expect(result).toMatchObject({
+      additions: additions + 100_000 + 1,
+      deletions: 0,
+      truncated: true,
+    });
   });
 
-  it.each([
-    { name: "custom prefixes", config: "srcPrefix = before/\n dstPrefix = after/" },
-    { name: "no prefixes", config: "noprefix = true" },
-    { name: "mnemonic prefixes", config: "mnemonicPrefix = true" },
-    { name: "oversized prefixes", config: `srcPrefix = ${"x".repeat(220_000)}` },
-  ])("keeps tracked and untracked previews under $name", async ({ config }) => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "tracked.txt"), "before\n");
-    git(repoRoot, "add", ".");
-    git(repoRoot, "commit", "-qm", "init");
-    fs.appendFileSync(path.join(repoRoot, ".git", "config"), `\n[diff]\n ${config}\n`);
-    fs.appendFileSync(path.join(repoRoot, "tracked.txt"), "after\n");
-    fs.writeFileSync(path.join(repoRoot, "untracked.txt"), "new\n");
-    mockSession(repoRoot);
+  it.each([100, 101, 10_000])(
+    "bounds untracked filename materialization for a %i-path inventory",
+    async (count) => {
+      initRepo(repoRoot);
+      const displayed = Array.from(
+        { length: 100 },
+        (_, index) => `loose-${String(index).padStart(5, "0")}.txt`,
+      );
+      for (const name of displayed) {
+        write(name, "one line\n");
+      }
+      const listing = Array.from(
+        { length: count },
+        (_, index) => `loose-${String(index).padStart(5, "0")}.txt\0`,
+      ).join("");
+      const runCommand = execRunner.runCommandWithTimeout;
+      vi.spyOn(execRunner, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        const result = await runCommand(argv, options);
+        return argv[argv.indexOf("-C") + 1] === repoRoot && argv.includes("ls-files")
+          ? { ...result, stdout: listing }
+          : result;
+      });
+      // oxlint-disable-next-line typescript/unbound-method -- Called below with the original string receiver.
+      const split = String.prototype.split;
+      let materializedPaths = 0;
+      vi.spyOn(String.prototype, "split").mockImplementation(function (
+        this: string,
+        separator,
+        limit,
+      ) {
+        const parts = split.call(this, separator, limit);
+        if (this === listing) {
+          materializedPaths += parts.length - Number(parts.at(-1) === "");
+        }
+        return parts;
+      });
 
-    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+      const result = await collectCheckoutDiff({ cwd: repoRoot, summaryOnly: true });
 
+      expect(result.files).toEqual(displayed.map((name) => addedFile(name, 1, {})));
+      expect(result.additions).toBe(100);
+      expect(result.truncated).toBe(count > 100 ? true : undefined);
+      expect(materializedPaths).toBeLessThanOrEqual(101);
+    },
+  );
+
+  it.each([false, true])(
+    "batches untracked Git reads without changing native output (summary: %s)",
+    async (summaryOnly) => {
+      seedRepo({ "tracked.txt": "before\n", ".gitignore": "ignored.txt\n" });
+      append("tracked.txt", "after\n");
+      for (let index = 0; index < 40; index++) {
+        write(`loose-${index}.txt`, `line ${index}\nlast line`);
+      }
+      write("binary.bin", Buffer.from([0, 1, 2]));
+      write("empty.txt", "");
+      write("large.txt", "large line\n".repeat(20_000));
+      write("ignored.txt", "ignored\n");
+      if (process.platform !== "win32") {
+        fs.symlinkSync("tracked.txt", path.join(repoRoot, "link.txt"));
+      }
+      const indexBefore = fs.readFileSync(path.join(repoRoot, ".git", "index"));
+      const result = await readDiff({ summaryOnly });
+      expect(result.files).toHaveLength(process.platform === "win32" ? 44 : 45);
+      expect(diffFile(result, "binary.bin")).toEqual(addedFile("binary.bin", 0, { binary: true }));
+      expect(diffFile(result, "large.txt")).toEqual(
+        addedFile("large.txt", 20_000, summaryOnly ? {} : { truncated: true }),
+      );
+      if (process.platform !== "win32") {
+        expect(diffFile(result, "link.txt")).toEqual(addedFile("link.txt", 0, { truncated: true }));
+      }
+      if (!summaryOnly) {
+        for (const name of ["loose-0.txt", "empty.txt"]) {
+          const native = spawnSync(
+            "git",
+            ["-c", "core.quotePath=false", "diff", "--no-index", "--", "/dev/null", name],
+            { cwd: repoRoot, encoding: "utf8" },
+          );
+          expect([0, 1]).toContain(native.status);
+          expect(diffFile(result, name)?.patch).toBe(native.stdout);
+        }
+      }
+      expect(result.additions).toBe(20_081);
+      expect(fs.readFileSync(path.join(repoRoot, ".git", "index"))).toEqual(indexBefore);
+    },
+  );
+
+  it("reads outside sparse cones without writing split-index backing files", async () => {
+    fs.mkdirSync(path.join(repoRoot, "kept"));
+    seedRepo({ "kept/tracked.txt": "kept\n" });
+    repoGit("sparse-checkout", "init", "--cone", "--no-sparse-index");
+    repoGit("sparse-checkout", "set", "kept");
+    repoGit("config", "core.splitIndex", "true");
+    repoGit("config", "splitIndex.maxPercentChange", "0");
+    repoGit("config", "splitIndex.sharedIndexExpire", "now");
+    repoGit("update-index", "--split-index");
+    const objects = path.join(tempDir("openclaw-diff-objects-"), "objects");
+    fs.renameSync(path.join(repoRoot, ".git", "objects"), objects);
+    fs.mkdirSync(path.join(repoRoot, ".git", "objects"));
+    vi.stubEnv("GIT_ALTERNATE_OBJECT_DIRECTORIES", objects);
+    fs.mkdirSync(path.join(repoRoot, "outside"), { recursive: true });
+    write("outside/loose.txt", "$Id: original $\n");
+    const indexFiles = () =>
+      fs
+        .readdirSync(path.join(repoRoot, ".git"))
+        .filter((name) => name === "index" || name.startsWith("sharedindex."))
+        .toSorted()
+        .map((name) => [name, fs.readFileSync(path.join(repoRoot, ".git", name)).toString("hex")]);
+    const before = indexFiles();
+    const result = await readDiff();
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]).toMatchObject({ path: "outside/loose.txt", additions: 1 });
+    expect(result.files[0]?.patch).toContain("+$Id: original $");
+    expect(indexFiles()).toEqual(before);
+    expect((await readDiff({ summaryOnly: true })).additions).toBe(1);
+    expect(indexFiles()).toEqual(before);
+  });
+
+  it("preserves no-index previews when tracked attributes are absent", async () => {
+    seedRepo({ ".gitattributes": "*.txt ident\n" });
+    fs.unlinkSync(path.join(repoRoot, ".gitattributes"));
+    write("loose.txt", "$Id: original $\n");
+    const preview = diffFile(await readDiff(), "loose.txt");
+    expect(preview?.patch).toContain("+$Id: original $");
+  });
+
+  it.each([false, true])(
+    "keeps other untracked files when a required filter fails (summary: %s)",
+    async (summaryOnly) => {
+      seedRepo({ ".gitattributes": "bad.txt filter=broken\n" });
+      repoGit("config", "filter.broken.clean", "false");
+      repoGit("config", "filter.broken.required", "true");
+      write("bad.txt", "cannot convert\n");
+      write("good.txt", "valid addition\n");
+      const result = await readDiff({ summaryOnly });
+      expect(result.files[0]).toEqual(addedFile("bad.txt", 0, { truncated: true }));
+      expect(result.files[1]).toMatchObject(addedFile("good.txt", 1, {}));
+      if (!summaryOnly) {
+        expect(result.files[1]?.patch).toContain("+valid addition");
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refreshes untracked diffs for file, nested-directory, and ignore changes",
+    async () => {
+      vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+      vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+      await drainGlobalSingletonLifecycleState("restart");
+      seedRepo({ "tracked.txt": "before\n", ".gitignore": "ignored.txt\n" });
+      append("tracked.txt", "after\n");
+      write("loose.txt", "new\n");
+      write("ignored.txt", "hidden\n");
+      const linkedDirectory = tempDir("openclaw-diff-directory-link-");
+      fs.mkdirSync(path.join(linkedDirectory, ".git"));
+      fs.symlinkSync(linkedDirectory, path.join(repoRoot, "directory-link"));
+      await readDiff();
+      await readDiff({ summaryOnly: true });
+      write("loose.txt", "new\nsecond\n");
+      append("tracked.txt", "third\n");
+      expect((await readDiff({ summaryOnly: true })).additions).toBe(4);
+      expect(diffFile(await readDiff(), "loose.txt")?.patch).toContain("+second");
+      fs.mkdirSync(path.join(repoRoot, "nested", "empty"), { recursive: true });
+      await readDiff();
+      write("nested/empty/new.txt", "nested addition\n");
+      expect(filePaths(await readDiff())).toContain("nested/empty/new.txt");
+      write(".gitignore", "");
+      expect(filePaths(await readDiff({ summaryOnly: true }))).toContain("ignored.txt");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "invalidates cached diffs when the Git installation's system configuration appears",
+    async () => {
+      const realGit = resolveExecutablePath("git", { cwd: repoRoot, useCache: false })!;
+      const installation = tempDir("openclaw-git-installation-");
+      const config = path.join(installation, "system.config");
+      const excludes = path.join(installation, "system.ignore");
+      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+      fs.writeFileSync(
+        path.join(installation, "git"),
+        `#!/bin/sh
+if [ "$1" = "-C" ]; then
+  cd "$2" || exit 1
+  shift 2
+fi
+if [ "$1" = "var" ] && [ "$2" = "GIT_CONFIG_SYSTEM" ]; then
+  printf '%s\\n' ${quote(config)}
+else
+  GIT_CONFIG_SYSTEM=${quote(config)} exec ${quote(realGit)} "$@"
+fi
+`,
+        { mode: 0o755 },
+      );
+      vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+      vi.stubEnv("GIT_CONFIG_SYSTEM", undefined);
+      vi.stubEnv("GIT_CONFIG_NOSYSTEM", "0");
+      vi.stubEnv("PATH", `${installation}${path.delimiter}${process.env.PATH ?? ""}`);
+      await drainGlobalSingletonLifecycleState("restart");
+      seedRepo({ "tracked.txt": "base\n" });
+      write("system-ignored.txt", "new\n");
+      expect(filePaths(await readDiff())).toContain("system-ignored.txt");
+      fs.writeFileSync(excludes, "system-ignored.txt\n");
+      execFileSync(realGit, ["config", "--file", config, "core.excludesFile", excludes]);
+      expect(filePaths(await readDiff())).not.toContain("system-ignored.txt");
+    },
+  );
+
+  it("keeps tracked and untracked previews under oversized prefixes", async () => {
+    const config = `srcPrefix = ${"x".repeat(220_000)}`;
+
+    seedRepo({ "tracked.txt": "before\n" }, "init");
+    append(".git/config", `\n[diff]\n ${config}\n`);
+    append("tracked.txt", "after\n");
+    write("untracked.txt", "new\n");
+    const result = await readDiff();
     expect(result.files.map((file) => [file.path, file.additions])).toEqual([
       ["tracked.txt", 1],
       ["untracked.txt", 1],
@@ -881,17 +930,12 @@ describe("loadSessionDiff", () => {
   });
 
   it("keeps carriage-return header-like content as text in both diff paths", async () => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "tracked.txt"), "before\n");
-    git(repoRoot, "add", ".");
-    git(repoRoot, "commit", "-qm", "init");
+    seedRepo({ "tracked.txt": "before\n" }, "init");
     const content =
       "\rBinary files a/x and b/x differ\n\r@@ -0,0 +1,999 @@\n\rdiff --git a/fake b/fake\n\r+++ b/fake\nlast\n";
-    fs.appendFileSync(path.join(repoRoot, "tracked.txt"), content);
-    fs.writeFileSync(path.join(repoRoot, "untracked.txt"), content);
-    mockSession(repoRoot);
-
-    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+    append("tracked.txt", content);
+    write("untracked.txt", content);
+    const result = await readDiff();
 
     for (const file of result.files) {
       expect(file.additions).toBe(5);
@@ -903,32 +947,29 @@ describe("loadSessionDiff", () => {
     expect(result.additions).toBe(10);
   });
 
-  it.skipIf(process.platform === "win32").each([
-    { name: "tab, newline, and non-ASCII", suffix: "\tname\ncafé.txt" },
-    { name: "C-escaped and octal", suffix: '"\\\u0007\b\f\r\v\u0001-café.txt' },
-    { name: "space", suffix: " name café.txt" },
-  ])("preserves $name filenames in tracked and untracked previews", async ({ suffix }) => {
-    initRepo(repoRoot);
-    const trackedPath = `tracked${suffix}`;
-    const untrackedPath = `untracked${suffix}`;
-    fs.writeFileSync(path.join(repoRoot, trackedPath), "initial\n");
-    git(repoRoot, "add", ".");
-    git(repoRoot, "commit", "-qm", "init");
-    fs.appendFileSync(path.join(repoRoot, trackedPath), "later\n");
-    fs.writeFileSync(path.join(repoRoot, untrackedPath), "one\ntwo\n");
-    mockSession(repoRoot);
+  it.skipIf(process.platform === "win32")(
+    "preserves C-escaped and octal filenames in tracked and untracked previews",
+    async () => {
+      const suffix = '"\\\u0007\b\f\r\v\u0001-café.txt';
 
-    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-
-    expect(result.files.map((file) => [file.path, file.additions, file.deletions])).toEqual([
-      [trackedPath, 1, 0],
-      [untrackedPath, 2, 0],
-    ]);
-    expect(result.additions).toBe(3);
-    expect(result.files[0]?.patch).toContain("+later\n");
-    expect(result.files[1]?.patch).toContain("+one\n+two\n");
-    expect(result.truncated).toBeUndefined();
-  });
+      initRepo(repoRoot);
+      const trackedPath = `tracked${suffix}`;
+      const untrackedPath = `untracked${suffix}`;
+      write(trackedPath, "initial\n");
+      commitFiles("init");
+      append(trackedPath, "later\n");
+      write(untrackedPath, "one\ntwo\n");
+      const result = await readDiff();
+      expect(result.files.map((file) => [file.path, file.additions, file.deletions])).toEqual([
+        [trackedPath, 1, 0],
+        [untrackedPath, 2, 0],
+      ]);
+      expect(result.additions).toBe(3);
+      expect(result.files[0]?.patch).toContain("+later\n");
+      expect(result.files[1]?.patch).toContain("+one\n+two\n");
+      expect(result.truncated).toBeUndefined();
+    },
+  );
 
   it.each([
     {
@@ -947,43 +988,25 @@ describe("loadSessionDiff", () => {
     "keeps fitting untracked previews after $name without extra conversion passes",
     async ({ attribute, content, normalized }) => {
       initRepo(repoRoot);
-      fs.writeFileSync(
-        path.join(repoRoot, ".git", "verbose-filter.mjs"),
+      write(
+        ".git/verbose-filter.mjs",
         'import { appendFileSync } from "node:fs"; appendFileSync(".git/filter-calls", "call\\n"); process.stderr.write("diagnostic\\n".repeat(10_000)); process.stdin.pipe(process.stdout);\n',
       );
-      git(repoRoot, "config", "filter.verbose.clean", "node .git/verbose-filter.mjs");
-      fs.writeFileSync(
-        path.join(repoRoot, ".gitattributes"),
-        `converted.txt ${attribute} filter=verbose\n`,
-      );
-      git(repoRoot, "add", ".gitattributes");
-      git(repoRoot, "commit", "-qm", "attributes");
-      fs.writeFileSync(path.join(repoRoot, "converted.txt"), content);
-      const native = spawnSync(
-        "git",
-        [
-          "-C",
-          repoRoot,
-          "diff",
-          "--no-color",
-          "--no-ext-diff",
-          "--no-textconv",
-          "--no-index",
-          "--",
-          "/dev/null",
-          "converted.txt",
-        ],
-        { encoding: "utf8" },
-      );
+      repoGit("config", "filter.verbose.clean", "node .git/verbose-filter.mjs");
+      write(".gitattributes", `converted.txt ${attribute} filter=verbose\n`);
+      commitFiles("attributes", ".gitattributes");
+      write("converted.txt", content);
+      const diffArgs = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-index"];
+      const native = spawnSync("git", [...diffArgs, "--", "/dev/null", "converted.txt"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+      });
       expect(native.status).toBe(1);
       const callsPath = path.join(repoRoot, ".git", "filter-calls");
       const nativeCalls = fs.readFileSync(callsPath, "utf8");
       expect(nativeCalls.length).toBeGreaterThan(0);
       fs.writeFileSync(callsPath, "");
-      mockSession(repoRoot);
-
-      const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-
+      const result = await readDiff();
       expect(result.files).toHaveLength(1);
       expect(result.files[0]?.additions).toBe(1);
       expect(result.files[0]?.patch?.includes(`+${normalized}`)).toBe(true);
@@ -991,26 +1014,6 @@ describe("loadSessionDiff", () => {
       expect(fs.readFileSync(callsPath, "utf8")).toBe(nativeCalls);
     },
   );
-
-  it.each([
-    { name: "plus-prefixed content", content: "++i\n+++more\nplain\n", additions: 3 },
-    { name: "an empty file", content: "", additions: 0 },
-    { name: "an unterminated last line", content: "one\nlast", additions: 2 },
-  ])("counts untracked additions for $name", async ({ content, additions }) => {
-    initRepo(repoRoot);
-    fs.writeFileSync(path.join(repoRoot, "seed.txt"), "seed\n");
-    git(repoRoot, "add", ".");
-    git(repoRoot, "commit", "-qm", "init");
-    fs.writeFileSync(path.join(repoRoot, "diffish.txt"), content);
-    mockSession(repoRoot);
-
-    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
-
-    const file = result.files.find((entry) => entry.path === "diffish.txt");
-    expect(file?.additions).toBe(additions);
-    expect(file?.patch).toBeDefined();
-    expect(file?.truncated).toBeUndefined();
-  });
 
   it("rejects invalid params through the handler", async () => {
     const invalidParams = [
@@ -1020,42 +1023,9 @@ describe("loadSessionDiff", () => {
       { sessionKey: "agent:main:s1", scope: "uncommitted", commit: "HEAD" },
     ];
     for (const params of invalidParams) {
-      const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-      await sessionsDiffHandlers["sessions.diff"]?.({
-        req: { type: "req", id: "sessions.diff", method: "sessions.diff", params },
-        params,
-        client: null,
-        isWebchatConnect: () => false,
-        respond: (ok: boolean, payload?: unknown, error?: unknown) => {
-          calls.push({ ok, payload, error });
-        },
-        context: { getRuntimeConfig: () => ({}) } as never,
-      });
+      const calls = await requestDiff(params, {}, params);
       expect(calls).toHaveLength(1);
       expect(calls[0]?.ok).toBe(false);
     }
-  });
-});
-
-describe("ensureSessionDiffBaseline", () => {
-  it("does not baseline an existing operator session after upgrade", async () => {
-    const entry: SessionEntry = {
-      createdVia: "operator",
-      sessionId: "existing-session",
-      updatedAt: Date.now(),
-    };
-    hoisted.readSessionEntryReadOnlyInWorker.mockResolvedValue(entry);
-
-    const result = await ensureSessionDiffBaseline({
-      agentId: "main",
-      cwd: "/unused",
-      entry,
-      isNewSession: false,
-      sessionKey: "agent:main:existing",
-      storePath: "/unused/sessions.json",
-    });
-
-    expect(result).toBe(entry);
-    expect(hoisted.patchSessionEntryCore).not.toHaveBeenCalled();
   });
 });

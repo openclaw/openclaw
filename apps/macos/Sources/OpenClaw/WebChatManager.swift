@@ -101,11 +101,9 @@ final class WebChatManager {
     private var gatewayWindows: [UUID: GatewayWindowInstance] = [:]
     private var gatewayWindowOrder: [UUID] = []
     @ObservationIgnored private var unavailableProfileIDs: Set<String> = []
-    @ObservationIgnored private var sessionObserverOwners = WebChatSessionObserverVisibilityOwners()
+    @ObservationIgnored private(set) var sessionObserverOwners = WebChatSessionObserverVisibilityOwners()
     @ObservationIgnored private var sessionObserverMonitors: [ObjectIdentifier: Task<Void, Never>] = [:]
-    @ObservationIgnored private var sessionObserverRequests: [ObjectIdentifier: (id: UUID, task: Task<Void, Never>)] =
-        [:]
-    @ObservationIgnored private var sessionObserverDeclarations: [ObjectIdentifier: GatewayConnection.ServerLease] = [:]
+    @ObservationIgnored private var sessionObserverRequests: [ObjectIdentifier: Task<Void, Never>] = [:]
 
     var onChatWindowVisibilityChanged: ((Bool) -> Void)?
 
@@ -252,7 +250,7 @@ final class WebChatManager {
                     requestedRoute: route,
                     sourceIsCurrent: sourceIsCurrent)
             } catch is CancellationError {
-                webChatManagerLogger.debug("Cancelled native Gateway window open after its owner changed")
+                // Owner retirement cancels the pending open.
             } catch {
                 guard generation == self.windowGeneration else { return }
                 Self.showProfileError(error, message: "Could Not Open Gateway Window")
@@ -521,8 +519,7 @@ final class WebChatManager {
         // A retired profile has no future socket on which to declare hidden.
         // Its subscription must end even when the final hide cannot acquire a lease.
         self.sessionObserverMonitors.removeValue(forKey: connectionID)?.cancel()
-        self.sessionObserverRequests.removeValue(forKey: connectionID)?.task.cancel()
-        self.sessionObserverDeclarations.removeValue(forKey: connectionID)
+        self.sessionObserverRequests.removeValue(forKey: connectionID)?.cancel()
     }
 
     private func setSessionObserverVisible(
@@ -557,15 +554,12 @@ final class WebChatManager {
 
     private func scheduleSessionObserverVisibility(
         _ visible: Bool,
-        connection: GatewayConnection,
-        remainingHiddenRetries: Int = 1)
+        connection: GatewayConnection)
     {
         let connectionID = ObjectIdentifier(connection)
-        let previous = self.sessionObserverRequests[connectionID]?.task
-        let requestID = UUID()
+        let previous = self.sessionObserverRequests[connectionID]
         let task = Task { @MainActor [weak self] in
             await previous?.value
-            defer { self?.finishSessionObserverRequest(connection: connectionID, id: requestID) }
             guard !Task.isCancelled, let self,
                   self.sessionObserverOwners.isVisible(connection: connectionID) == visible,
                   let lease = await connection.captureServerLease(),
@@ -573,13 +567,6 @@ final class WebChatManager {
                   self.sessionObserverOwners.isVisible(connection: connectionID) == visible
             else { return }
 
-            if visible, let lease = self.sessionObserverDeclarations[connectionID],
-               await connection.isCurrentServerLease(lease)
-            { return }
-
-            // A timed-out mutation may already have changed the Gateway. Clear
-            // the old confirmation before dispatch so reopening retries truthfully.
-            self.sessionObserverDeclarations.removeValue(forKey: connectionID)
             do {
                 if visible {
                     let subscribe = OpenClawChatGatewayRequests.subscribeSessions()
@@ -593,36 +580,15 @@ final class WebChatManager {
                 _ = try await connection.request(
                     request, ifCurrentServerLease: lease)
                 guard !Task.isCancelled else { return }
-                if visible {
-                    self.sessionObserverDeclarations[connectionID] = lease
-                } else {
-                    self.sessionObserverDeclarations.removeValue(forKey: connectionID)
-                    if !self.sessionObserverOwners.isVisible(connection: connectionID) {
-                        self.sessionObserverMonitors.removeValue(forKey: connectionID)?.cancel()
-                    }
+                if !visible, !self.sessionObserverOwners.isVisible(connection: connectionID) {
+                    self.sessionObserverMonitors.removeValue(forKey: connectionID)?.cancel()
                 }
             } catch {
-                // A hidden mutation can time out after dispatch. Retry once on its
-                // original socket; keep the snapshot monitor for a replaced socket.
-                if !visible,
-                   !Task.isCancelled,
-                   remainingHiddenRetries > 0,
-                   await connection.isCurrentServerLease(lease),
-                   !self.sessionObserverOwners.isVisible(connection: connectionID)
-                {
-                    self.scheduleSessionObserverVisibility(
-                        false,
-                        connection: connection,
-                        remainingHiddenRetries: remainingHiddenRetries - 1)
-                }
+                // Visibility is best effort; the next transition or reconnect redeclares it.
+                webChatManagerLogger.debug("Could not update native session observer visibility: \(error)")
             }
         }
-        self.sessionObserverRequests[connectionID] = (id: requestID, task: task)
-    }
-
-    private func finishSessionObserverRequest(connection: ObjectIdentifier, id: UUID) {
-        guard self.sessionObserverRequests[connection]?.id == id else { return }
-        self.sessionObserverRequests.removeValue(forKey: connection)
+        self.sessionObserverRequests[connectionID] = task
     }
 
     enum GatewayProfileSelection {
@@ -672,11 +638,4 @@ final class WebChatManager {
         alert.messageText = message
         AppActivation.shared.presentAlert(alert)
     }
-
-    #if DEBUG
-    func _testSessionObserverVisible(connection: GatewayConnection) -> Bool {
-        self.sessionObserverOwners.isVisible(connection: ObjectIdentifier(connection))
-    }
-
-    #endif
 }

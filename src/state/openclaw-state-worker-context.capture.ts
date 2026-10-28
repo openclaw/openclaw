@@ -2,9 +2,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
+import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import { resolveLegacyCronDefaultStoreKey } from "./openclaw-state-db-cron-identity-migration.js";
 import { captureOpenClawStateSchemaReadAdmission } from "./openclaw-state-db-schema-policy.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
@@ -16,10 +19,12 @@ export function captureOpenClawStateReadContextWithAdmission(
 ): Pick<
   OpenClawStateWorkerContext,
   | "admission"
+  | "databaseEngineSelection"
   | "maintenanceScope"
   | "existingSchemaPath"
   | "runInCapturedSchemaScope"
   | "stateIntegrity"
+  | "artifactPreservingReads"
 > & { assertPublicationCurrent: () => void } {
   const schema = captureOpenClawStateSchemaReadAdmission(pathname);
   const capturedAdmission = captureAdmission(pathname);
@@ -48,12 +53,14 @@ export function captureOpenClawStateReadContextWithAdmission(
       });
   }
   return {
+    databaseEngineSelection: getDatabaseEngineSelection(),
     maintenanceScope: getOpenClawDatabaseMaintenanceScope(),
     admission,
     assertPublicationCurrent,
     existingSchemaPath: schema?.path,
     stateIntegrity: integrity,
     runInCapturedSchemaScope,
+    artifactPreservingReads: isArtifactPreservingStateRead("agent", pathname) || undefined,
   };
 }
 
@@ -89,6 +96,7 @@ export function captureOpenClawStateWorkerContextWithAdmission(
   const context = captureOpenClawStateReadWorkerContextWithAdmission(options, captureAdmission);
   return {
     ...context,
+    initializationCronDefaultStoreKey: resolveLegacyCronDefaultStoreKey(options.env ?? process.env),
     initializationEnvironment: mergeProcessEnv([
       options.env ?? process.env,
       { OPENCLAW_STATE_DIR: undefined, OPENCLAW_SUPERVISOR_MODE: undefined },

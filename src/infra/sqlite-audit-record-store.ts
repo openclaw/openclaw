@@ -1,10 +1,10 @@
-// Shared SQLite storage for bounded diagnostic audit records.
-import type { DatabaseSync } from "node:sqlite";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+// Shared SQLite storage for bounded diagnostic audit records.
+import type { EngineConnection } from "./sql-connection.js";
 import {
   createSqliteAuditRecordKernel,
   prepareSqliteAuditRecord,
@@ -17,14 +17,10 @@ export function createSqliteAuditRecordStore<T>(
 ) {
   const scope = options.scope;
   const maxEntries = Math.max(1, Math.floor(options.maxEntries));
-  const kernel = (database: DatabaseSync) =>
+  const kernel = (database: EngineConnection) =>
     createSqliteAuditRecordKernel<T>(database, { scope, maxEntries });
   const prepare = (record: SqliteAuditRecordEntry<T>) => prepareSqliteAuditRecord(scope, record);
   return {
-    register(key: string, value: T, createdAt = Date.now()): void {
-      const record = prepare({ key, value, createdAt });
-      runOpenClawStateWriteTransaction(({ db }) => kernel(db).register(record), options);
-    },
     upsert(key: string, value: T, createdAt = Date.now()): void {
       const record = prepare({ key, value, createdAt });
       runOpenClawStateWriteTransaction(({ db }) => kernel(db).upsert(record), options);

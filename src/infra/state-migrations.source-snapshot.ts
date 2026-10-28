@@ -8,12 +8,13 @@ import {
   moveLegacyMigrationFileNoReplace,
   recoverLegacyMigrationLinkedMove,
 } from "./state-migrations.no-replace-move.js";
+import { decodeUtf8Input } from "./utf8-input.js";
 
 /** The stable source identity every doctor-owned import verifies before cleanup. */
 export type LegacyMigrationSourceSnapshot = {
   buffer: Buffer;
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
   mtimeMs: number;
   raw: string;
   sha256: string;
@@ -71,6 +72,14 @@ export class LegacyMigrationSourceClaim<
 
   async read(claimed = false): Promise<TSnapshot> {
     return await this.params.readSnapshot(claimed ? this.claimPath : this.sourcePath);
+  }
+
+  async verify(snapshot: TSnapshot, mismatchMessage: string, claimed = false): Promise<TSnapshot> {
+    const current = await this.read(claimed);
+    if (!legacyMigrationSourceSnapshotsMatch(current, snapshot)) {
+      throw new Error(mismatchMessage);
+    }
+    return current;
   }
 
   /** Roll back a link publication interrupted before its source name was removed. */
@@ -133,11 +142,7 @@ export class LegacyMigrationSourceClaim<
       this.sourceRelativePath,
       this.claimRelativePath,
     );
-    const claimed = await this.read(true);
-    if (!legacyMigrationSourceSnapshotsMatch(claimed, params.snapshot)) {
-      throw new Error(params.mismatchMessage);
-    }
-    return claimed;
+    return await this.verify(params.snapshot, params.mismatchMessage, true);
   }
 
   /** Drain both receipt-retired names through the caller's safe reader before removing them. */
@@ -215,14 +220,15 @@ export async function claimLegacyMigrationSourceClaims<
   TSnapshot extends LegacyMigrationSourceIdentity,
 >(
   claims: readonly { claim: LegacyMigrationSourceClaim<TSnapshot>; snapshot: TSnapshot }[],
-  params: { beforeClaim?: () => void; mismatchMessage: string },
+  beforeClaim?: () => void,
 ): Promise<void> {
-  params.beforeClaim?.();
+  beforeClaim?.();
+  const mismatchMessage = "legacy Web Push source changed before doctor could claim it";
   const claimed: LegacyMigrationSourceClaim<TSnapshot>[] = [];
   try {
     for (const { claim, snapshot } of claims) {
       claimed.push(claim);
-      await claim.claim({ snapshot, mismatchMessage: params.mismatchMessage });
+      await claim.claim({ snapshot, mismatchMessage });
     }
   } catch (error) {
     const restoreErrors = await restoreLegacyMigrationSourceClaims(claimed);
@@ -274,11 +280,17 @@ export async function readLegacyMigrationSourceSnapshot(params: {
     resolveLegacyMigrationRelativePath(params.stateDir, params.sourcePath, params.label),
     { hardlinks: "reject", maxBytes: params.maxBytes, symlinks: "reject" },
   );
-  const raw = opened.buffer.toString("utf8");
+  // Recovery compares text fingerprints before domain parsing can validate the bytes.
+  const raw = params.hashDecodedText
+    ? decodeUtf8Input(
+        opened.buffer,
+        `Back up legacy ${params.label} source ${params.sourcePath}, replace it with a corrected copy, and retry Doctor; the input`,
+      )
+    : opened.buffer.toString("utf8");
   return {
     buffer: opened.buffer,
-    dev: opened.stat.dev,
-    ino: opened.stat.ino,
+    dev: opened.exactIdentity.dev,
+    ino: opened.exactIdentity.ino,
     mtimeMs: opened.stat.mtimeMs,
     raw,
     sha256: createHash("sha256")
@@ -296,18 +308,18 @@ export function readLegacyMigrationSourceSnapshotSync(params: {
   followSymlinks?: boolean;
   maxBytes?: number;
 }): LegacyMigrationSourceSnapshot {
-  const { buffer, stat } = readRegularFileSync({
+  const { buffer, stat, exactIdentity } = readRegularFileSync({
     filePath: params.followSymlinks ? fs.realpathSync(params.sourcePath) : params.sourcePath,
     maxBytes: params.maxBytes,
   });
   const raw = buffer.toString("utf8");
   return {
-    buffer: Buffer.from(raw),
-    dev: stat.dev,
-    ino: stat.ino,
+    buffer,
+    dev: exactIdentity.dev,
+    ino: exactIdentity.ino,
     mtimeMs: stat.mtimeMs,
     raw,
-    sha256: createHash("sha256").update(raw).digest("hex"),
+    sha256: createHash("sha256").update(buffer).digest("hex"),
     size: buffer.byteLength,
     sourcePath: params.sourcePath,
   };
@@ -337,7 +349,6 @@ export function claimAndRemoveLegacyMigrationSource(params: {
   snapshot: LegacyMigrationSourceSnapshot;
   label: string;
   followSymlinks?: boolean;
-  maxBytes?: number;
   beforeClaim?: () => void;
   beforeRestore?: () => void;
   removeSource?: (sourcePath: string) => void;

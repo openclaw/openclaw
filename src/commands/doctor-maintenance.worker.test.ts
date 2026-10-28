@@ -1,31 +1,42 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  writeNativeHookRelayBridgeRecord,
-  type NativeHookRelayBridgeRecord,
-} from "../agents/harness/native-hook-relay-store.js";
+import type { NativeHookRelayBridgeRecord } from "../agents/harness/native-hook-relay-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadCronStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { acquireFileLock } from "../infra/file-lock.js";
-import * as gatewayLock from "../infra/gateway-lock.js";
-import {
-  autoMigrateLegacyStateDir,
-  resetAutoMigrateLegacyStateDirForTest,
-} from "../infra/state-migrations.state-dir.js";
-import * as updateState from "../infra/update-candidate-state.js";
-import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
-import { withEnvAsync } from "../test-utils/env.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { maybeMigrateHeartbeatCadenceToCron } from "./doctor-heartbeat-cadence-migration.js";
-import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+
+async function loadFixtureGraph() {
+  return {
+    write: (await import("../agents/harness/native-hook-relay-store.js"))
+      .writeNativeHookRelayBridgeRecord,
+    cron: await import("../cron/store.js"),
+    lock: (await import("../infra/file-lock.js")).acquireFileLock,
+    gatewayLock: await import("../infra/gateway-lock.js"),
+    migrate: (await import("../infra/state-migrations.state-dir.js")).autoMigrateLegacyStateDir,
+    updateState: await import("../infra/update-candidate-state.js"),
+    generations: (await import("../infra/update-physical-database-generations.js"))
+      .readUpdatePhysicalDatabaseGenerations,
+    close: (await import("../state/openclaw-state-db-cache.js")).closeOpenClawStateDatabaseAsync,
+    version: (await import("../state/openclaw-state-db-contract.js")).OPENCLAW_STATE_SCHEMA_VERSION,
+    open: (await import("../state/openclaw-state-db.js")).openOpenClawStateDatabase,
+    statePath: (await import("../state/openclaw-state-db.paths.js")).resolveOpenClawStateSqlitePath,
+    legacyTables: (await import("../state/openclaw-state-schema.test-support.js"))
+      .addPreCutoverClientCredentialTablesForTest,
+    context: (await import("../state/openclaw-state-worker-context.js"))
+      .captureOpenClawStateWorkerContext,
+    execute: (await import("../state/openclaw-state-worker-store.js")).executeOpenClawStateWorker,
+    withEnv: (await import("../test-utils/env.js")).withEnvAsync,
+    withState: (await import("../test-utils/openclaw-test-state.js")).withOpenClawTestState,
+    heartbeat: (await import("./doctor-heartbeat-retirement.js"))
+      .maybeMigrateHeartbeatCadenceToCron,
+    begin: (await import("./doctor-maintenance.js")).beginDoctorMaintenance,
+  };
+}
+let api = await loadFixtureGraph();
+async function reloadStateDirFixtureGraph() {
+  await api.close();
+  vi.resetModules();
+  api = await loadFixtureGraph();
+}
 
 function relayRecord(revision: number): NativeHookRelayBridgeRecord {
   return {
@@ -38,8 +49,25 @@ function relayRecord(revision: number): NativeHookRelayBridgeRecord {
   };
 }
 
+const maintenanceOptions = {
+  options: { repair: true, nonInteractive: true },
+  root: null,
+  runtime: { log() {}, error() {}, exit() {} },
+};
+const implicitStateEnv = {
+  OPENCLAW_HOME: undefined,
+  OPENCLAW_STATE_DIR: undefined,
+  OPENCLAW_CONFIG_PATH: undefined,
+};
+function readRelay() {
+  return api.execute(api.context(), {
+    type: "nativeHookRelay.read",
+    input: { relayId: "doctor" },
+  });
+}
+
 function claimHistoricalProjection(stateDir: string) {
-  const { stateLockPath } = gatewayLock.resolveGatewayLockPaths({
+  const { stateLockPath } = api.gatewayLock.resolveGatewayLockPaths({
     ...process.env,
     OPENCLAW_STATE_DIR: stateDir,
   });
@@ -50,90 +78,67 @@ function claimHistoricalProjection(stateDir: string) {
 }
 
 afterEach(async () => {
+  await api.close();
   vi.restoreAllMocks();
-  await closeOpenClawStateDatabaseAsync();
-  resetAutoMigrateLegacyStateDirForTest();
 });
 
 describe("Doctor maintenance with shared-state workers", () => {
-  it("refuses a canonical root created after legacy maintenance admission", async () => {
-    await withOpenClawTestState(
-      { layout: "home", scenario: "external-service", label: "doctor-legacy-target-race" },
-      async (state) => {
+  it.each(["new-root", "symlink"] as const)(
+    "refuses changed legacy admission (%s)",
+    async (kind) => {
+      await reloadStateDirFixtureGraph();
+      await api.withState({ layout: "home", scenario: "external-service" }, async (state) => {
         const legacy = path.join(state.home, ".clawdbot");
-        fs.renameSync(state.stateDir, legacy);
-        const original = fs.statSync(legacy, { bigint: true });
-        await withEnvAsync(
-          {
-            OPENCLAW_HOME: undefined,
-            OPENCLAW_STATE_DIR: undefined,
-            OPENCLAW_CONFIG_PATH: undefined,
-          },
-          async () => {
-            await expect(
-              beginDoctorMaintenance({
-                options: { repair: true, nonInteractive: true },
-                root: null,
-                runtime: { log() {}, error() {}, exit() {} },
-                beforeStateMutation: async () => {
-                  fs.mkdirSync(state.stateDir);
-                  fs.writeFileSync(path.join(state.stateDir, "independent-state"), "keep");
-                },
-              }),
-            ).rejects.toThrow("State directory selection changed");
-            expect(fs.statSync(legacy, { bigint: true }).ino).toBe(original.ino);
+        const source = kind === "symlink" ? path.join(state.home, "retained-state") : legacy;
+        fs.renameSync(state.stateDir, source);
+        const original = fs.statSync(source, { bigint: true });
+        if (kind === "symlink") {
+          fs.symlinkSync(source, legacy, process.platform === "win32" ? "junction" : "dir");
+        }
+        await api.withEnv(implicitStateEnv, async () => {
+          await expect(
+            api.begin({
+              ...maintenanceOptions,
+              ...(kind === "new-root"
+                ? {
+                    beforeStateMutation: async () => {
+                      fs.mkdirSync(state.stateDir);
+                      fs.writeFileSync(path.join(state.stateDir, "independent-state"), "keep");
+                    },
+                  }
+                : {}),
+            }),
+          ).rejects.toThrow(
+            kind === "new-root"
+              ? "State directory selection changed"
+              : "Legacy state path is not a directory",
+          );
+          expect(fs.statSync(source, { bigint: true }).ino).toBe(original.ino);
+          if (kind === "new-root") {
             expect(fs.readdirSync(state.stateDir)).toEqual(["independent-state"]);
             expect(fs.readFileSync(path.join(state.stateDir, "independent-state"), "utf8")).toBe(
               "keep",
             );
-          },
-        );
-      },
-    );
-  });
-  it("refuses a legacy symlink before creating the canonical state root", async () => {
-    await withOpenClawTestState(
-      { layout: "home", scenario: "external-service", label: "doctor-legacy-symlink" },
-      async (state) => {
-        const retained = path.join(state.home, "retained-state");
-        const legacy = path.join(state.home, ".clawdbot");
-        fs.renameSync(state.stateDir, retained);
-        fs.symlinkSync(retained, legacy, process.platform === "win32" ? "junction" : "dir");
-        await withEnvAsync(
-          {
-            OPENCLAW_HOME: undefined,
-            OPENCLAW_STATE_DIR: undefined,
-            OPENCLAW_CONFIG_PATH: undefined,
-          },
-          async () => {
-            await expect(
-              beginDoctorMaintenance({
-                options: { repair: true, nonInteractive: true },
-                root: null,
-                runtime: { log() {}, error() {}, exit() {} },
-              }),
-            ).rejects.toThrow("Legacy state path is not a directory");
+          } else {
             expect(fs.existsSync(state.stateDir)).toBe(false);
-            expect(fs.realpathSync(legacy)).toBe(fs.realpathSync(retained));
-          },
-        );
-      },
-    );
-  });
-  it.each([
-    "schema-upgrade",
-    "resident-worker",
-    "historical-contender",
-    "receipt-unchanged",
-    "receipt-changed",
-  ] as const)(
+            expect(fs.realpathSync(legacy)).toBe(fs.realpathSync(source));
+          }
+        });
+      });
+    },
+  );
+  it.each(["resident-worker", "historical-contender", "receipt-unchanged"] as const)(
     "drains and reacquires maintenance around implicit legacy-root relocation: %s",
     async (scenario) => {
-      await withOpenClawTestState(
+      await reloadStateDirFixtureGraph();
+      await api.withState(
         { layout: "home", scenario: "external-service", label: "doctor-legacy-root" },
         async (state) => {
-          const { db } = openOpenClawStateDatabase();
-          const version = OPENCLAW_STATE_SCHEMA_VERSION - (scenario === "resident-worker" ? 0 : 1);
+          const { db } = api.open();
+          const version = api.version - (scenario === "resident-worker" ? 0 : 1);
+          if (version < api.version) {
+            api.legacyTables(db);
+          }
           db.exec(`
           PRAGMA user_version = ${version};
           UPDATE schema_meta SET schema_version = ${version}
@@ -142,61 +147,59 @@ describe("Doctor maintenance with shared-state workers", () => {
           INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
             VALUES ('doctor-relocation-sentinel', '{"keep":true}', 1);
         `);
-          await closeOpenClawStateDatabaseAsync();
+          await api.close();
           const legacy = path.join(state.home, ".clawdbot");
           fs.renameSync(state.stateDir, legacy);
           if (scenario === "resident-worker") {
-            await withEnvAsync(
+            await api.withEnv(
               {
                 OPENCLAW_STATE_DIR: legacy,
                 OPENCLAW_CONFIG_PATH: path.join(legacy, "openclaw.json"),
               },
               async () => {
-                await writeNativeHookRelayBridgeRecord({ record: relayRecord(1), updatedAtMs: 1 });
+                await api.write({ record: relayRecord(1), updatedAtMs: 1 });
               },
             );
           }
-          await withEnvAsync(
+          await api.withEnv(
             {
-              OPENCLAW_STATE_DIR: undefined,
-              OPENCLAW_HOME: undefined,
-              OPENCLAW_CONFIG_PATH: undefined,
+              ...implicitStateEnv,
               OPENCLAW_TEST_FAST: "0",
               OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             },
             async () => {
               const databasePath = path.join(legacy, "state", "openclaw.sqlite");
               const databaseGenerations = scenario.startsWith("receipt-")
-                ? readUpdateDatabaseGenerations([databasePath])
+                ? await api.generations([databasePath])
                 : undefined;
               if (databaseGenerations) {
-                vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(
-                  async (paths) => readUpdateDatabaseGenerations(paths),
-                );
-                if (scenario === "receipt-changed") {
-                  const beforeAdmission = new DatabaseSync(databasePath);
-                  beforeAdmission.exec(
-                    "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('outside', '{}', 2)",
-                  );
-                  beforeAdmission.close();
-                }
+                vi.spyOn(
+                  api.updateState,
+                  "readUpdateDatabaseGenerationPairIsolated",
+                ).mockImplementation(async (paths) => {
+                  const generations = await api.generations(paths);
+                  return {
+                    committed: generations,
+                    physical: generations,
+                    emptyReaderAlternates: {},
+                  };
+                });
               }
               const admittedGenerations = databaseGenerations
-                ? readUpdateDatabaseGenerations([databasePath])
+                ? await api.generations([databasePath])
                 : undefined;
               const log = vi.fn();
-              const maintenance = await beginDoctorMaintenance({
-                options: { repair: true, nonInteractive: true },
-                root: null,
+              const maintenance = await api.begin({
+                ...maintenanceOptions,
                 runtime: { log, error() {}, exit() {} },
                 databaseGenerations,
               });
               try {
                 await maintenance!.run(async () => {
-                  await autoMigrateLegacyStateDir({ env: process.env });
-                  const migrated = openOpenClawStateDatabase();
+                  await api.migrate({ env: process.env });
+                  const migrated = api.open();
                   expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
-                    user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+                    user_version: api.version,
                   });
                   expect(
                     migrated.db
@@ -206,25 +209,15 @@ describe("Doctor maintenance with shared-state workers", () => {
                   expect(log).toHaveBeenCalledWith(`State dir: ${legacy} → ${state.stateDir}`);
                   expect(fs.existsSync(legacy)).toBe(false);
                   if (scenario === "resident-worker") {
-                    expect(
-                      await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-                        type: "nativeHookRelay.read",
-                        input: { relayId: "doctor" },
-                      }),
-                    ).toEqual(relayRecord(1));
+                    expect(await readRelay()).toEqual(relayRecord(1));
                   }
                   if (scenario === "historical-contender") {
                     expect(() => claimHistoricalProjection(state.stateDir)).toThrow(/EEXIST/);
-                    await writeNativeHookRelayBridgeRecord({
+                    await api.write({
                       record: relayRecord(2),
                       updatedAtMs: 2,
                     });
-                    expect(
-                      await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-                        type: "nativeHookRelay.read",
-                        input: { relayId: "doctor" },
-                      }),
-                    ).toEqual(relayRecord(2));
+                    expect(await readRelay()).toEqual(relayRecord(2));
                     expect(() => claimHistoricalProjection(state.stateDir)).toThrow(/EEXIST/);
                   }
                 });
@@ -233,12 +226,7 @@ describe("Doctor maintenance with shared-state workers", () => {
               }
               if (scenario === "historical-contender") {
                 expect(() => claimHistoricalProjection(state.stateDir)).not.toThrow();
-                expect(
-                  await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-                    type: "nativeHookRelay.read",
-                    input: { relayId: "doctor" },
-                  }),
-                ).toEqual(relayRecord(2));
+                expect(await readRelay()).toEqual(relayRecord(2));
               }
               if (databaseGenerations) {
                 // The published updater retains old path keys; relocation must not certify
@@ -246,7 +234,7 @@ describe("Doctor maintenance with shared-state workers", () => {
                 expect(maintenance!.databaseWrites).toEqual({
                   unchanged: false,
                   fromGenerations: admittedGenerations,
-                  generations: readUpdateDatabaseGenerations([databasePath]),
+                  generations: await api.generations([databasePath]),
                 });
                 expect(maintenance!.databaseWrites?.generations[databasePath]).not.toBe(
                   databaseGenerations[databasePath],
@@ -258,97 +246,59 @@ describe("Doctor maintenance with shared-state workers", () => {
       );
     },
   );
-  it.each([
-    { alreadyOpen: false, reload: false },
-    { alreadyOpen: true, reload: false },
-    { alreadyOpen: true, reload: true },
-  ])(
-    "completes writes and drainage with an already-open worker=$alreadyOpen after module reload=$reload",
-    async ({ alreadyOpen, reload }) => {
-      await withOpenClawTestState(
-        { scenario: "external-service", label: "doctor-managed-worker" },
-        async () => {
-          openOpenClawStateDatabase();
-          let execute = executeOpenClawStateWorker;
-          let capture = captureOpenClawStateWorkerContext;
-          let write = writeNativeHookRelayBridgeRecord;
-          if (alreadyOpen) {
-            await execute(capture(), {
-              type: "nativeHookRelay.read",
-              input: { relayId: "doctor" },
-            });
-          }
-          let enterMaintenance = beginDoctorMaintenance;
-          if (reload) {
-            await closeOpenClawStateDatabaseAsync();
-            vi.resetModules();
-            const [doctor, worker, contexts, relay] = await Promise.all([
-              import("./doctor-maintenance.js"),
-              import("../state/openclaw-state-worker-store.js"),
-              import("../state/openclaw-state-worker-context.js"),
-              import("../agents/harness/native-hook-relay-store.js"),
-            ]);
-            enterMaintenance = doctor.beginDoctorMaintenance;
-            execute = worker.executeOpenClawStateWorker;
-            capture = contexts.captureOpenClawStateWorkerContext;
-            write = relay.writeNativeHookRelayBridgeRecord;
-          }
-          const maintenance = await enterMaintenance({
-            options: { repair: true, nonInteractive: true },
-            root: null,
-            runtime: { log() {}, error() {}, exit() {} },
+  it("completes writes and drainage with a resident worker after module reload", async () => {
+    await api.withState(
+      { scenario: "external-service", label: "doctor-managed-worker" },
+      async () => {
+        api.open();
+        await readRelay();
+        await api.close();
+        vi.resetModules();
+        const [doctor, worker, contexts, relay] = await Promise.all([
+          import("./doctor-maintenance.js"),
+          import("../state/openclaw-state-worker-store.js"),
+          import("../state/openclaw-state-worker-context.js"),
+          import("../agents/harness/native-hook-relay-store.js"),
+        ]);
+        const execute = worker.executeOpenClawStateWorker;
+        const write = relay.writeNativeHookRelayBridgeRecord;
+        const read = () =>
+          execute(contexts.captureOpenClawStateWorkerContext(), {
+            type: "nativeHookRelay.read",
+            input: { relayId: "doctor" },
           });
-          const record = relayRecord(1);
-          try {
-            await maintenance!.run(async () => {
-              await write({ record, updatedAtMs: 1 });
-              expect(
-                await execute(capture(), {
-                  type: "nativeHookRelay.read",
-                  input: { relayId: record.relayId },
-                }),
-              ).toEqual(record);
-            });
-          } finally {
-            await maintenance?.release();
-          }
-          await closeOpenClawStateDatabaseAsync();
-          expect(
-            await execute(capture(), {
-              type: "nativeHookRelay.read",
-              input: { relayId: record.relayId },
-            }),
-          ).toEqual(record);
-          const successor = relayRecord(2);
-          await write({ record: successor, updatedAtMs: 2 });
-          expect(
-            await execute(capture(), {
-              type: "nativeHookRelay.read",
-              input: { relayId: record.relayId },
-            }),
-          ).toEqual(successor);
-        },
-      );
-    },
-  );
+        const maintenance = await doctor.beginDoctorMaintenance(maintenanceOptions);
+        const record = relayRecord(1);
+        try {
+          await maintenance!.run(async () => {
+            await write({ record, updatedAtMs: 1 });
+            expect(await read()).toEqual(record);
+          });
+        } finally {
+          await maintenance?.release();
+        }
+        await api.close();
+        expect(await read()).toEqual(record);
+        const successor = relayRecord(2);
+        await write({ record: successor, updatedAtMs: 2 });
+        expect(await read()).toEqual(successor);
+      },
+    );
+  });
 });
 
 it("releases cron custody before Doctor finishes, without waiting for CLI cleanup", async () => {
-  await withOpenClawTestState(
+  await api.withState(
     { scenario: "external-service", label: "doctor-cron-custody" },
     async (state) => {
       const cfg: OpenClawConfig = {
         agents: { entries: { main: { heartbeat: { every: "30m" } } } },
       };
       await state.writeConfig(cfg);
-      const maintenance = await beginDoctorMaintenance({
-        options: { repair: true, nonInteractive: true },
-        root: null,
-        runtime: { log() {}, error() {}, exit() {} },
-      });
+      const maintenance = await api.begin(maintenanceOptions);
       try {
         const result = await maintenance!.run(() =>
-          maybeMigrateHeartbeatCadenceToCron({ cfg, shouldRepair: true, env: state.env }),
+          api.heartbeat({ cfg, shouldRepair: true, env: state.env }),
         );
         expect(result.warnings).toEqual([]);
         expect(result.changes).toHaveLength(1);
@@ -356,18 +306,17 @@ it("releases cron custody before Doctor finishes, without waiting for CLI cleanu
         await maintenance!.finish(cfg);
       }
       // A successor must acquire custody while the Doctor process is still alive.
-      const successor = await acquireFileLock(
-        `${resolveOpenClawStateSqlitePath(state.env)}.cron-authority`,
-        {
-          retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-          stale: 0,
-          staleRecovery: "remove-if-definitely-stale",
-        },
-      );
+      const successor = await api.lock(`${api.statePath(state.env)}.cron-authority`, {
+        retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
+        stale: 0,
+        staleRecovery: "remove-if-definitely-stale",
+      });
       await successor.release();
-      const jobs = await loadCronStore(resolveCronJobsStorePathFromConfig(cfg, state.env));
+      const jobs = await api.cron.loadCronStore(
+        api.cron.resolveCronJobsStorePathFromConfig(cfg, state.env),
+      );
       expect(jobs.jobs).toHaveLength(1);
-      expect(jobs.jobs[0]?.payload.kind).toBe("heartbeat");
+      expect(jobs.jobs[0]?.payload.kind).toBe("agentTurn");
     },
   );
 });

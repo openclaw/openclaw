@@ -5,7 +5,10 @@ import type {
   createAgentHarnessCompletionEventSink,
   deliverAgentHarnessCompletion,
 } from "openclaw/plugin-sdk/agent-harness-completion";
-import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  AgentHarness,
+  EmbeddedRunAttemptParamsV2,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexInferenceThreadQualification } from "./inference-qualification.js";
 import type { NativeSubagentAssignment } from "./native-subagent-assignment.js";
@@ -15,8 +18,14 @@ import type { CodexNativeSubagentCompletion } from "./native-subagent-notificati
 import type { CodexNativeSubagentAssignmentStore } from "./native-subagent-pending-assignments.js";
 import type {
   CodexNativeSubagentSubmission,
+  CodexNativeSubagentSubmissionAcknowledgement,
   CodexNativeSubagentSubmissionStore,
 } from "./native-subagent-submission.js";
+
+type DescendantCancellation = NonNullable<AgentHarness["withDescendantCancellation"]>;
+type NativeRequestCustody = NonNullable<
+  Parameters<Parameters<DescendantCancellation>[0]["acceptsRequest"]>[0]
+>;
 
 export type NativeSubagentMonitorRuntime = {
   deliverAgentHarnessCompletion: typeof deliverAgentHarnessCompletion;
@@ -84,6 +93,14 @@ export type NativeModelToolInputRequest = Omit<NativeModelInputRequest, "targetT
 };
 
 export type ParentOwner = {
+  requestCustody?: NativeRequestCustody;
+  requesterAgentId?: string;
+  requesterSessionKey?: string;
+  requesterTurnRunId?: string;
+  requesterSessionId?: string;
+  requesterLifecycleRevision?: string;
+  descendantsCancelled?: true;
+  registrationSettled?: Promise<void>;
   completionCustody?: AgentHarnessCompletionCustody;
   turnId?: string;
   modelSource?: NativeModelSourceOwner;
@@ -102,9 +119,24 @@ export type ParentOwner = {
   onDirectChildAccepted?: () => void;
 };
 
+/** A native child whose completion still resumes its requester, in the host's pending-child shape. */
+export type NativePendingChild = {
+  runId: string;
+  childSessionKey: string;
+  label?: string;
+  state: "running" | "completing";
+  wakeArmed: false;
+};
+
 export type ParentRegistrationHandle = {
   ready: Promise<void>;
+  observeSubmissionAcknowledgement: (
+    receipt: CodexNativeSubagentSubmissionAcknowledgement,
+    assertCurrent: () => void,
+  ) => Promise<void>;
   bindTurn: (turnId: string, mapping?: NativeModelMapping) => void;
+  /** Unsettled children of this requester's parent threads, including earlier turns'. */
+  listPendingChildren: () => NativePendingChild[];
   unregister: () => Promise<void>;
 };
 
@@ -135,9 +167,10 @@ export type NativeChildAdmissionEvidence = DirectSpawnEvidence &
   );
 export type ParentState = {
   parentThreadId: string;
+  nativeLoad?: { loaded: boolean };
   // Retirement sees pending captures, but notifications cannot admit their work.
   preparing?: true;
-  pendingRegistrations?: number;
+  pendingRegistrations?: Set<ParentOwner>;
   // Overlapping runs share this parent; the last owner releases it only after
   // detached children finish recovery and delivery.
   owners: Map<symbol, ParentOwner>;
@@ -149,12 +182,28 @@ export type ParentState = {
   turnIds: Set<string>;
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
   requesterSessionKey?: string;
+  requesterStorePath?: string;
   completionScope?: AgentHarnessCompletionScope;
   historyOwner?: CodexNativeSubagentHistoryOwner;
   agentId?: string;
   submissionStore?: CodexNativeSubagentSubmissionStore;
   assignmentStore?: CodexNativeSubagentAssignmentStore;
 };
+
+export type NativeSubagentsReadRequest = {
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  storePath: string;
+  parentThreadId: string;
+  historyOwner: CodexNativeSubagentHistoryOwner;
+  assertCurrent(): void;
+};
+
+export type NativeSubagentsSnapshot = Awaited<
+  ReturnType<NonNullable<AgentHarness["readNativeSubagents"]>>
+>;
 
 export type NativeExecutionWait = {
   kind: "approval" | "user_input" | "agent_messages" | "children";
@@ -170,6 +219,10 @@ export type NativeTurnObservation = {
 };
 
 export type ChildState = NativeSubagentAssignment & {
+  requestCustody?: NativeRequestCustody;
+  requesterTurnRunId?: string;
+  cancellationRequested?: true;
+  terminalHandling?: Promise<void>;
   completionCustody?: AgentHarnessCompletionCustody;
   emitEvent?: ReturnType<typeof createAgentHarnessCompletionEventSink>;
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
@@ -189,9 +242,9 @@ export type ChildState = NativeSubagentAssignment & {
   pendingCompletion?: RecoveredCompletion;
   subscriptionClosed?: true;
   nativeCompletionDelivered: boolean;
+  completionDeliveryAbandoned?: true;
   completionDeliveryAttempt: number;
   completionDeliveryTimer?: ReturnType<typeof setTimeout>;
-  deliveringCompletion: boolean;
   deliveryOwnerKey?: string;
   settledWithoutCompletion: boolean;
   releaseDirectChild?: () => void;
@@ -201,13 +254,14 @@ export type ChildState = NativeSubagentAssignment & {
 };
 
 export type KnownChild = {
+  nativeLoad?: { loaded: boolean };
   configurationQualification?: CodexInferenceThreadQualification;
   parent: ParentState;
   nativeParentThreadId: string;
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
   assignment: NativeSubagentAssignment & { terminal: boolean; unanchored?: true };
   turnId?: string;
-  observedTurns: Map<string, { awaitingInteraction?: true }>;
+  observedTurns: Map<string, { awaitingInteraction?: true; state?: NativeTurnState }>;
   pendingTurns: Array<
     NativeTurnObservation & {
       admittedOwner?: ParentOwner;
@@ -235,18 +289,20 @@ export type ThreadRecovery = {
   threadState: "unavailable" | "active" | "system_error" | "other";
 };
 
-export type ThreadStatusRevision = {
-  value: number;
-  readers: number;
-  terminal?: true;
-  parentThreadId?: string;
+export type NativeDescendantCancellation = Parameters<DescendantCancellation>[0] & {
+  parentThreadId: string;
+  /** Optional native binding guard; persistence compares the row inside its own mutation. */
+  assertBindingCurrent?: () => void;
 };
 
 export type MonitorOptions = {
+  interruptChildAndWait?: (
+    threadId: string,
+    turnId: string,
+    assertCurrent: () => void,
+    timeoutMs: number,
+  ) => Promise<boolean>;
   interruptModelExecution?: (threadId: string, turnId: string) => void;
-  recoveryPollDelaysMs?: readonly number[];
-  completionDeliveryRetryDelaysMs?: readonly number[];
-  completionDeliveryMaxRetries?: number;
   retainClient?: () => (() => void) | undefined;
   retainParentThread?: (threadId: string) => (() => void) | undefined;
   hasObservationBacking?: (parentThreadId: string, childThreadId: string) => boolean;
@@ -255,3 +311,7 @@ export type MonitorOptions = {
   releaseChildThread?: (threadId: string) => Promise<unknown>;
   captureChildThreadForget?: (threadId: string) => Promise<(() => void) | undefined>;
 };
+
+export type NativeDescendantCancellationResult = Awaited<
+  ReturnType<Parameters<Parameters<DescendantCancellation>[1]>[0]>
+>;

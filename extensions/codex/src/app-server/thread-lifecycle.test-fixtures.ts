@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -17,6 +18,8 @@ import {
   type RpcRequest,
   type RpcResponse,
   type CodexServerNotification,
+  type CodexConfigReadResponse,
+  type JsonObject,
 } from "./protocol.js";
 import {
   registerCodexTestSessionIdentity,
@@ -30,6 +33,62 @@ import {
 import { createClientHarness, createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 
+export { createCodexRuntimePlanFixture } from "./test-support.js";
+
+export function createLifecycleRequest(
+  respond: (method: string, requestParams?: unknown) => Promise<unknown>,
+) {
+  return vi.fn((method: string, requestParams?: unknown) => {
+    if (method === "config/read") {
+      return Promise.resolve({ config: {}, origins: {}, layers: [] });
+    }
+    if (method === "configRequirements/read") {
+      return Promise.resolve({ requirements: null });
+    }
+    return respond(method, requestParams);
+  });
+}
+
+export const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
+  "features.reasoning_effort_override": true,
+  project_doc_max_bytes: 131_072,
+  "features.tool_suggest": false,
+  "features.recommended_plugins": false,
+  "features.goals": false,
+  "tools.update_plan.enabled": false,
+  "features.code_mode": true,
+  "features.code_mode_only": false,
+  "features.shell_tool": true,
+  "features.apply_patch_streaming_events": true,
+  suppress_unstable_features_warning: true,
+  "features.standalone_web_search": false,
+  web_search: "cached",
+} as const;
+
+export function nativeQuestionConfigFixture(enabled: boolean | undefined): CodexConfigReadResponse {
+  const metadata = {
+    name: { type: "user" as const, file: "/synthetic/codex/config.toml", profile: null },
+    version: "question-config",
+  };
+  const config: JsonObject =
+    enabled === undefined ? {} : { tools: { experimental_request_user_input: { enabled } } };
+  return {
+    // The typed tools projection omits this key; the winning raw layer retains it.
+    config: { tools: { web_search: null } },
+    origins:
+      enabled === undefined ? {} : { "tools.experimental_request_user_input.enabled": metadata },
+    layers: [
+      { ...metadata, config },
+      {
+        name: { type: "project", dotCodexFolder: "/synthetic/untrusted/.codex" },
+        version: "disabled-question-config",
+        config: { tools: { experimental_request_user_input: { enabled: true } } },
+        disabledReason: "Project is not trusted",
+      },
+    ],
+  };
+}
+
 type NativeFixtureThread = {
   response: Record<string, unknown>;
   thread: Record<string, unknown>;
@@ -40,7 +99,8 @@ type NativeFixtureThread = {
 /** A synthetic native server, not a client mock: requests still cross the real wire and guards. */
 export function createCodexLifecycleHarness(options: {
   respond: (method: string, params?: unknown) => unknown;
-  persistedThreads?: string[];
+  codexHome?: string;
+  persistedThreads?: Array<string | ReturnType<typeof nativeThreadStartResult>>;
   unsubscribe?: (threadId: string) => unknown;
 }) {
   const threads = new Map<string, NativeFixtureThread>();
@@ -65,15 +125,18 @@ export function createCodexLifecycleHarness(options: {
     };
     threads.set(response.thread.id, entry);
   };
-  for (const threadId of options.persistedThreads ?? []) {
-    remember(nativeThreadStartResult(threadId), false, false);
+  for (const thread of options.persistedThreads ?? []) {
+    remember(typeof thread === "string" ? nativeThreadStartResult(thread) : thread, false, false);
   }
   const dispatch = async (request: RpcRequest) => {
     const params = isJsonObject(request.params) ? request.params : {};
     const threadId = typeof params.threadId === "string" ? params.threadId : "";
     const current = threads.get(threadId);
     if (request.method === "initialize") {
-      return { userAgent: "codex-cli/0.151.0" };
+      return {
+        userAgent: "codex-cli/0.151.0",
+        ...(options.codexHome ? { codexHome: options.codexHome } : {}),
+      };
     }
     if (request.method === "thread/start") {
       const response = await options.respond(request.method, request.params);
@@ -110,6 +173,12 @@ export function createCodexLifecycleHarness(options: {
         (response.status === "unsubscribed" || response.status === "notSubscribed")
       ) {
         current.subscribed = false;
+        current.loaded = false;
+        harness.send({
+          method: "thread/status/changed",
+          params: { threadId, status: { type: "notLoaded" } },
+        });
+        harness.send({ method: "thread/closed", params: { threadId } });
       }
       return response;
     }
@@ -117,8 +186,7 @@ export function createCodexLifecycleHarness(options: {
       if (!current) {
         throw new Error(`Unseeded synthetic native resume: ${threadId}`);
       }
-      // Stock 0.151.0 retains an unsubscribed loaded cache entry. Full resume overrides
-      // trigger teardown only when no subscriber can still observe that session.
+      // External native servers may retain unsubscribed idle threads until resume.
       if (
         current.loaded &&
         !current.subscribed &&
@@ -396,14 +464,62 @@ export type CodexAttemptThreadInput = Omit<
   "bindingStore" | "params"
 > & { params: EmbeddedRunAttemptParams };
 
+const clientsWithEmptySkillCatalog = new WeakSet<CodexAppServerClient>();
+
+/** Keeps lifecycle-only tests independent from native skill catalog contents. */
+function stubEmptyCodexSkillCatalog(client: CodexAppServerClient): void {
+  if (clientsWithEmptySkillCatalog.has(client)) {
+    return;
+  }
+  const request = client.request.bind(client);
+  client.request = ((
+    method: string,
+    params?: unknown,
+    options?: Parameters<CodexAppServerClient["request"]>[2],
+  ) =>
+    method === "skills/list"
+      ? Promise.resolve({ data: [] })
+      : request(method, params, options)) as CodexAppServerClient["request"];
+  if (typeof client.addNotificationHandler !== "function") {
+    client.addNotificationHandler = () => () => undefined;
+  }
+  if (typeof client.getInstanceId !== "function") {
+    const instanceId = randomUUID();
+    client.getInstanceId = () => instanceId;
+  }
+  clientsWithEmptySkillCatalog.add(client);
+}
+
 /** Full-attempt fixtures register their transcript identity; cold session preparation has no transcript. */
-export function startOrResumeAttemptThread(params: CodexAttemptThreadInput) {
+function startOrResumeAttemptThread(params: CodexAttemptThreadInput) {
   registerCodexTestSessionIdentity(
     params.params.sessionFile,
     params.params.sessionId,
     params.params.sessionKey,
   );
   return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
+}
+
+export function startOrResumeAttemptThreadWithoutSkills(params: CodexAttemptThreadInput) {
+  stubEmptyCodexSkillCatalog(params.client);
+  return startOrResumeAttemptThread(params);
+}
+
+export function startOrResumeThreadWithEmptySkillCatalog(
+  params: Parameters<typeof startOrResumeThreadImpl>[0],
+) {
+  stubEmptyCodexSkillCatalog(params.client);
+  return startOrResumeThreadImpl(params);
+}
+
+export function startOrResumeThreadWithoutSkills(
+  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
+) {
+  return startOrResumeThreadWithEmptySkillCatalog({
+    signal: new AbortController().signal,
+    ...params,
+    bindingStore: testCodexAppServerBindingStore,
+  });
 }
 
 export function startOrResumeThread(
@@ -435,17 +551,6 @@ export async function writeNativeCatalogFixture(
     rolloutPath,
     `${JSON.stringify({ type: "session_meta", payload: { id: threadId, dynamic_tools: dynamicTools } })}\n`,
   );
-}
-
-export function disabledMcpServerStatus(name: string) {
-  return {
-    name,
-    serverInfo: null,
-    tools: {},
-    resources: [],
-    resourceTemplates: [],
-    authStatus: "unsupported",
-  };
 }
 
 export function createAppServerOptions(): CodexAppServerRuntimeOptions {
@@ -518,27 +623,6 @@ export function setCodexTestModelSupportsTools(
     ...params.model,
     compat: { ...params.model.compat, supportsTools },
   } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
-}
-
-export function createCodexRuntimePlanFixture(): NonNullable<
-  EmbeddedRunAttemptParams["runtimePlan"]
-> {
-  return {
-    auth: {},
-    observability: {
-      resolvedRef: "codex/gpt-5.4-codex",
-      provider: "codex",
-      modelId: "gpt-5.4-codex",
-      harnessId: "codex",
-    },
-    prompt: {
-      resolveSystemPromptContribution: () => undefined,
-    },
-    tools: {
-      normalize: (tools: unknown[]) => tools,
-      logDiagnostics: () => undefined,
-    },
-  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
 }
 
 export function createThreadRequestAttemptParams(params: {

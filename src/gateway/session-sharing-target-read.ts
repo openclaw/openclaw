@@ -4,10 +4,19 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreReadCandidate,
+} from "../config/sessions/session-store-read-candidates.js";
+import { isConfiguredSessionStoreAgentId } from "../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
 import type { SessionOperatorScope } from "../shared/session-method-scopes-base.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { sessionMethodDatabaseAdmission } from "./session-method-policy.js";
 import {
   resolveRequestedSessionAgentId,
   resolveRequestedSessionAgentInput,
@@ -15,24 +24,154 @@ import {
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { readSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
 import {
   hiddenSessionNotFound,
-  resolveSessionSharingTarget,
+  resolveIncognitoSessionSharingTarget,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
+import {
+  captureSessionMutationRouting,
+  prepareSessionMutationFacts,
+  SessionMutationFactsUnavailableError,
+} from "./session-sharing-preparation.js";
 import {
   resolveDirectSessionTargets,
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
-import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
-import type { GatewaySessionStoreCache } from "./session-utils-store-lookup.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
+
+export type SessionSharingReadProjection = Pick<
+  SessionRowProjection,
+  | "sharingTarget"
+  | "sharingTargetState"
+  | "readSource"
+  | "readMembership"
+  | "needsMembershipPreparation"
+  | "prepareMembership"
+>;
+
+export function isSameSessionSharingTarget(
+  target: SessionSharingTarget | null,
+  selected: SessionSharingTarget,
+): boolean {
+  return Boolean(
+    target &&
+    target.agentId === selected.agentId &&
+    target.canonicalKey === selected.canonicalKey &&
+    target.storeKey === selected.storeKey &&
+    target.storePath === selected.storePath &&
+    target.entry.sessionId === selected.entry.sessionId &&
+    target.entry.lifecycleRevision === selected.entry.lifecycleRevision &&
+    target.readSource?.path === selected.readSource?.path &&
+    target.readSource?.agentId === selected.readSource?.agentId &&
+    target.readSource?.databaseIdentity === selected.readSource?.databaseIdentity &&
+    target.readSource?.databaseBirthtime === selected.readSource?.databaseBirthtime,
+  );
+}
+
+/** Reuse admitted sharing facts; other targets retain their prepared storage custody. */
+export async function prepareSessionSharingRead(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  preserveQualifiedAddress?: boolean;
+  projection?: SessionSharingReadProjection;
+}) {
+  try {
+    if (isIncognitoSessionKey(params.sessionKey)) {
+      return prepareSessionMutationFacts({ ...params, allowMissing: true });
+    }
+    const { cfg, projection } = params;
+    const query = { key: params.sessionKey, agentId: params.agentId };
+    const resident = projection?.sharingTarget(query);
+    const source = resident && projection?.readSource({ ...query, storePath: resident.storePath });
+    const configuredStorePath = resolveSessionStorePathCore(cfg.session?.store, {
+      agentId: params.agentId,
+    });
+    const configuredSource = captureSessionStoreReadCandidate(
+      resolveUnsuffixedSqliteTargetFromSessionStorePath(configuredStorePath).path,
+    );
+    // Run selectors retain their stored address even after the configured main alias moves.
+    const captured =
+      !params.preserveQualifiedAddress &&
+      resident &&
+      source?.path === resident.storePath &&
+      isConfiguredSessionStoreAgentId(cfg, resident.agentId) &&
+      source.path === configuredSource.physicalPath
+        ? { ...resident, readSource: source }
+        : undefined;
+    if (!captured || !projection) {
+      return prepareSessionMutationFacts({ ...params, allowMissing: true });
+    }
+    const assertRouting = captureSessionMutationRouting(cfg, undefined, [params]);
+    // Capture before readiness yields so a replacement cannot become the selected session.
+    while (projection.needsMembershipPreparation()) {
+      await projection.prepareMembership();
+    }
+    let active = true;
+    const readCurrent = (currentCfg: OpenClawConfig) => {
+      try {
+        if (!active) {
+          throw new SessionMutationFactsUnavailableError();
+        }
+        assertRouting(currentCfg);
+        assertSessionStoreReadCandidate(configuredSource.path, [configuredSource]);
+        const current = readProjectedSessionMutationTarget(
+          { sessionKey: params.sessionKey, agentId: params.agentId },
+          currentCfg,
+          projection,
+          "read",
+        );
+        if (current.status !== "ready" || !isSameSessionSharingTarget(current.target, captured)) {
+          throw new SessionMutationFactsUnavailableError();
+        }
+        const target = current.target;
+        return {
+          target,
+          sourcePath: captured.readSource.path,
+          sourceAgentId: captured.readSource.agentId,
+          membership:
+            projection.readMembership({ ...query, storePath: target.storePath }) ??
+            new Set<string>(),
+        };
+      } catch (error) {
+        throw error instanceof SessionMutationFactsUnavailableError
+          ? error
+          : new SessionMutationFactsUnavailableError({ cause: error });
+      }
+    };
+    readCurrent(cfg);
+    return {
+      storageTarget: {
+        agentId: captured.agentId,
+        canonicalKey: captured.canonicalKey,
+        storePath: configuredStorePath,
+      },
+      readCurrent,
+      release: () => {
+        active = false;
+      },
+    };
+  } catch (error) {
+    throw error instanceof SessionMutationFactsUnavailableError
+      ? error
+      : new SessionMutationFactsUnavailableError({ cause: error });
+  }
+}
 
 export const readProjectedSessionMutationTarget = (
   targetRef: SessionMutationTarget,
   cfg: OpenClawConfig,
-  projection: SessionRowProjection,
+  projection: Pick<SessionSharingReadProjection, "sharingTargetState" | "readSource">,
+  admission: "read" | "write" = "write",
 ): { status: "ready"; target: SessionSharingTarget } | { status: "pending" | "unavailable" } => {
-  const agent = resolveRequestedSessionAgentId(cfg, targetRef.sessionKey, targetRef.agentId);
+  const agent = resolveRequestedSessionAgentId(
+    cfg,
+    targetRef.sessionKey,
+    targetRef.agentId,
+    admission,
+  );
   if (!agent.ok) {
     return { status: "unavailable" };
   }
@@ -43,11 +182,7 @@ export const readProjectedSessionMutationTarget = (
   }
   const readSource = projection.readSource({ ...query, storePath: state.target.storePath });
   // Legacy selectors and filesystem aliases retain the native candidate-selection contract.
-  if (
-    !readSource ||
-    readSource.path !== state.target.storePath ||
-    typeof readSource.databaseIdentity !== "string"
-  ) {
+  if (!readSource || readSource.path !== state.target.storePath) {
     return { status: "unavailable" };
   }
   assertExistingDatabaseIdentity(
@@ -65,13 +200,9 @@ export function readSessionMutationTarget(params: {
   method: string;
   requestParams: unknown;
   sessionScope?: SessionOperatorScope;
+  databaseAdmission?: "read" | "write";
   sessionRowRead?: SessionRowReadView;
   targetRef: SessionMutationTarget;
-  targetCount: number;
-  lookupCaches: () => {
-    storeCache: GatewaySessionStoreCache;
-    targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
-  };
 }):
   | {
       target: SessionSharingTarget | null;
@@ -87,9 +218,25 @@ export function readSessionMutationTarget(params: {
     return { error: input.error };
   }
   try {
+    if (isIncognitoSessionKey(params.targetRef.sessionKey)) {
+      const { agentId, canonicalKey } = resolveSessionStoreIdentity({
+        cfg: params.cfg,
+        ...params.targetRef,
+      });
+      const facts = readSessionSharingMemoryFacts({
+        agentId,
+        sessionKey: canonicalKey,
+        resolved: {
+          storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+        },
+      });
+      return { target: facts?.target ?? null };
+    }
     const projection = getSessionRowProjection(params.context);
+    const admission = params.databaseAdmission ?? sessionMethodDatabaseAdmission(params.method);
     const projected =
-      projection && readProjectedSessionMutationTarget(params.targetRef, params.cfg, projection);
+      projection &&
+      readProjectedSessionMutationTarget(params.targetRef, params.cfg, projection, admission);
     // Prepared callers retain logical locators; resident rows expose physical store paths.
     if (
       projected?.status === "ready" &&
@@ -113,6 +260,7 @@ export function readSessionMutationTarget(params: {
         params.sessionRowRead.state.cfg,
         params.targetRef.sessionKey,
         params.targetRef.agentId,
+        admission,
       );
       if (!agent.ok) {
         return { error: agent.error };
@@ -140,15 +288,24 @@ export function readSessionMutationTarget(params: {
           : null,
       };
     }
-    return {
-      target: resolveSessionSharingTarget({
-        cfg: params.cfg,
-        sessionKey: params.targetRef.sessionKey,
-        agentId: input.value,
-        ...params.lookupCaches(),
-        exactRead: params.targetCount === 1,
-      }),
-    };
+    if (!isIncognitoSessionKey(params.targetRef.sessionKey)) {
+      return {
+        error: errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "Session facts are unavailable; retry the request",
+        ),
+      };
+    }
+    let preparedReadSource: SessionSharingTarget["readSource"];
+    const target = resolveIncognitoSessionSharingTarget({
+      cfg: params.cfg,
+      sessionKey: params.targetRef.sessionKey,
+      agentId: input.value,
+      onReadSource: (source) => {
+        preparedReadSource = source;
+      },
+    });
+    return { target, preparedReadSource };
   } catch (error) {
     if (error instanceof AgentSelectionRequiredError) {
       return {

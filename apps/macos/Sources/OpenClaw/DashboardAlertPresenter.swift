@@ -79,8 +79,11 @@ final class DashboardAlertPresenter {
         }
 
         let id = UUID()
+        alert.window.sharingType = .none
+        ApprovalPromptState.shared.setPending(alert.buttons.count > 1, source: id)
         let pending = PendingAlert(alert: alert) { [weak self] response in
             self?.pending.removeValue(forKey: id)
+            ApprovalPromptState.shared.setPending(false, source: id)
             completion?(response)
         }
         self.pending[id] = pending
@@ -97,6 +100,7 @@ final class DashboardAlertPresenter {
             backing: .buffered,
             defer: false)
         panel.title = "OpenClaw"
+        panel.sharingType = .none
         panel.isReleasedWhenClosed = false
         panel.isRestorable = false
         panel.level = .floating
@@ -185,8 +189,6 @@ private struct DashboardAlertContent: View {
                     }
                     if index == 0 {
                         button.keyboardShortcut(.defaultAction)
-                    } else if index == self.buttonTitles.count - 1 {
-                        button.keyboardShortcut(.cancelAction)
                     } else {
                         button
                     }

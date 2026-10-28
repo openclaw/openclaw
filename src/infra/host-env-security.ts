@@ -1,6 +1,6 @@
-// Filters host environment variables before passing them to runtimes.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveNodeServiceIdentityEnvironment } from "../daemon/constants.js";
 import { HOST_ENV_SECURITY_POLICY } from "./host-env-security-policy.js";
 import { markOpenClawExecEnv, SUBAGENT_EXEC_ENV_VAR } from "./openclaw-exec-env.js";
 
@@ -21,12 +21,69 @@ const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS = new Set([
 const HOST_DANGEROUS_ENV_KEYS = new Set(HOST_ENV_SECURITY_POLICY.blockedKeys);
 const HOST_DANGEROUS_INHERITED_ENV_KEYS = new Set(HOST_ENV_SECURITY_POLICY.blockedInheritedKeys);
 const HOST_DANGEROUS_OVERRIDE_ENV_KEYS = new Set(HOST_ENV_SECURITY_POLICY.blockedOverrideKeys);
+const NODE_SERVICE_ENV_KEYS = new Set([
+  ...Object.keys(resolveNodeServiceIdentityEnvironment()),
+  "OPENCLAW_GATEWAY_SERVICE_PID",
+]);
+// The profile selects child CLI config and state too; it is not node daemon identity.
+NODE_SERVICE_ENV_KEYS.delete("OPENCLAW_PROFILE");
 const CARGO_TARGET_EXECUTABLE_OVERRIDE_ENV_KEY = /^CARGO_TARGET_[A-Z0-9_]+_(?:LINKER|RUNNER)$/;
 const GIT_ALLOW_PROTOCOL_ENV_KEY = "GIT_ALLOW_PROTOCOL";
 const GIT_PROTOCOL_FROM_USER_ENV_KEY = "GIT_PROTOCOL_FROM_USER";
 const GIT_PROTOCOL_FROM_USER_DISABLED_VALUE = "0";
 const GIT_DEFAULT_ALWAYS_ALLOWED_PROTOCOLS = new Set(["git", "http", "https", "ssh"]);
 const scopedBlockedInheritedEnvKeys = new AsyncLocalStorage<ReadonlySet<string>>();
+const gatewayCredentialEnvKeysByOwner = new Map<string, ReadonlySet<string>>();
+
+/**
+ * Publish, per owner, the env names the running Gateway reads its own credentials from (for
+ * example the `NAME` in `hooks.token: "${NAME}"`). Host exec children never inherit them.
+ */
+export function setGatewayCredentialEnvKeys(owner: string, keys: Iterable<string>): void {
+  const normalized = new Set<string>();
+  for (const key of keys) {
+    const trimmed = key.trim();
+    if (trimmed) {
+      normalized.add(trimmed.toUpperCase());
+    }
+  }
+  if (normalized.size > 0) {
+    gatewayCredentialEnvKeysByOwner.set(owner, normalized);
+  } else {
+    gatewayCredentialEnvKeysByOwner.delete(owner);
+  }
+}
+
+function isGatewayCredentialEnvVarName(key: string): boolean {
+  const upper = key.toUpperCase();
+  for (const keys of gatewayCredentialEnvKeysByOwner.values()) {
+    if (keys.has(upper)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Re-apply the currently published Gateway credential names to an env prepared earlier. A
+ * prepared env can outlive a reload (an exec waiting for approval), so launch drops every
+ * active name still carrying the Gateway's own value; a value the request supplied stays.
+ */
+export function omitGatewayCredentialEnv<T extends Record<string, string | undefined>>(env: T): T {
+  if (gatewayCredentialEnvKeysByOwner.size === 0) {
+    return env;
+  }
+  let result = env;
+  for (const [key, value] of Object.entries(env)) {
+    if (isGatewayCredentialEnvVarName(key) && value !== undefined && value === process.env[key]) {
+      if (result === env) {
+        result = { ...env };
+      }
+      delete result[key];
+    }
+  }
+  return result;
+}
 
 /** Run a bounded operation without forwarding selected inherited env vars to host exec. */
 export function withHostExecInheritedEnvOmitted<T>(keys: Iterable<string>, run: () => T): T {
@@ -40,9 +97,8 @@ export function withHostExecInheritedEnvOmitted<T>(keys: Iterable<string>, run: 
   return scopedBlockedInheritedEnvKeys.run(normalized, run);
 }
 
-function isScopedBlockedHostExecEnvVarName(rawKey: string): boolean {
-  const key = normalizeEnvVarKey(rawKey);
-  return key ? (scopedBlockedInheritedEnvKeys.getStore()?.has(key.toUpperCase()) ?? false) : false;
+function isScopedBlockedHostExecEnvVarName(key: string): boolean {
+  return scopedBlockedInheritedEnvKeys.getStore()?.has(key.toUpperCase()) ?? false;
 }
 
 function isNoPagerOverride(key: string, value: string): boolean {
@@ -52,11 +108,7 @@ function isNoPagerOverride(key: string, value: string): boolean {
   );
 }
 
-function isShellWrapperAllowedOverrideEnvVarName(rawKey: string): boolean {
-  const key = normalizeEnvVarKey(rawKey, { portable: true });
-  if (!key) {
-    return false;
-  }
+function isShellWrapperAllowedOverrideEnvVarName(key: string): boolean {
   const upper = key.toUpperCase();
   return HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS.has(upper) || upper.startsWith("LC_");
 }
@@ -196,13 +248,9 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
       continue;
     }
     const upper = normalized.toUpperCase();
-    if (isScopedBlockedHostExecEnvVarName(upper)) {
-      rejectedBlocked.push(upper);
-      continue;
-    }
     // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
     // request-scoped PATH overrides from agents/gateways.
-    if (blockPathOverrides && upper === "PATH") {
+    if (isScopedBlockedHostExecEnvVarName(upper) || (blockPathOverrides && upper === "PATH")) {
       rejectedBlocked.push(upper);
       continue;
     }
@@ -235,7 +283,11 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
 
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(baseEnv)) {
-    if (isScopedBlockedHostExecEnvVarName(key)) {
+    // Child CLIs must not select the node service as their Gateway; requested overrides still apply.
+    if (baseEnv.OPENCLAW_SERVICE_KIND === "node" && NODE_SERVICE_ENV_KEYS.has(key.toUpperCase())) {
+      continue;
+    }
+    if (isScopedBlockedHostExecEnvVarName(key) || isGatewayCredentialEnvVarName(key)) {
       continue;
     }
     const sanitized = sanitizeHostInheritedEnvValue(key, value);
@@ -244,10 +296,7 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
     }
   }
 
-  const overrideResult = sanitizeHostEnvOverridesWithDiagnostics({
-    overrides: params?.overrides ?? undefined,
-    blockPathOverrides: params?.blockPathOverrides ?? true,
-  });
+  const overrideResult = sanitizeHostEnvOverridesWithDiagnostics(params);
   for (const [key, value] of Object.entries(overrideResult.acceptedOverrides)) {
     merged[key] = value;
   }

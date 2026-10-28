@@ -58,9 +58,6 @@ export type SubagentCompletionDeliveryState = {
   windowStartedAt?: number;
   deadlineAt?: number;
   nextAttemptAt?: number;
-  steeringLeaseId?: string;
-  steeringLeasedAt?: number;
-  steeringInjectedAt?: number;
   suspendedAt?: number;
   suspendedReason?: "expiry" | "permanent_failure";
   dismissedAt?: number;
@@ -80,6 +77,7 @@ export type SubagentCompletionDeliveryState = {
     | "sink_unavailable"
     | "steer_dropped"
     | "message_tool_delivery_missing"
+    | "visible_reply_missing"
     | "dedupe"
     | "waiting_for_requester_turn";
 };
@@ -103,7 +101,7 @@ export type SubagentRunReadRecord = {
   /** Stable spawning-session owner for caps, scheduling, and wait authorization. */
   swarmRequesterSessionKey?: string;
   childSessionKey: string;
-  /** Agent captured at registration for raw child session keys. */
+  /** Selected child agent; historical qualified keys may carry ownership without this field. */
   childAgentId?: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
@@ -125,8 +123,7 @@ export type SubagentRunReadRecord = {
   delivery?: SubagentCompletionDeliveryState;
   execution: {
     status: "queued" | "running" | "interrupted" | "terminal";
-    /** Retained after restart settlement; an interrupted execution is not a task failure. */
-    interruptionReason?: "gateway-restart";
+    /** Recorded execution timing remains readable for retained task history. */
     startedAt?: number;
     endedAt?: number;
     outcome?: SubagentRunOutcome;
@@ -135,22 +132,3 @@ export type SubagentRunReadRecord = {
     status: SwarmCollectorStatus;
   };
 };
-
-/** Cloneable comparison input; source custody and the deletion verdict remain with the caller. */
-export type SubagentRunsDurableBasis = Readonly<{
-  databasePath: string;
-  databaseIdentity: string;
-  databaseBirthtime?: string;
-  sessionKeys: readonly string[];
-  liveTopology: readonly Readonly<{
-    childSessionKey: string;
-    requesterSessionKey: string;
-  }>[];
-  digest: string | null;
-}>;
-
-/** Maintenance compares its compact physical projection, without descendant topology. */
-export type SubagentMaintenanceDurableBasis = Pick<
-  SubagentRunsDurableBasis,
-  "databasePath" | "databaseIdentity" | "databaseBirthtime" | "digest"
->;

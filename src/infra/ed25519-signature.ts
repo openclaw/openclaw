@@ -31,19 +31,13 @@ function base64UrlDecode(input: string): Buffer {
 /** Decode a canonical standard-base64 or unpadded-base64url value. */
 export function decodeCanonicalBase64OrBase64Url(input: string): Buffer {
   assertBoundedBase64Input(input);
-  if (/^[A-Za-z0-9_-]+$/.test(input)) {
-    const decoded = Buffer.from(input, "base64url");
-    if (decoded.toString("base64url") !== input) {
-      throw new Error("invalid canonical base64url input");
-    }
-    return decoded;
-  }
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(input) || input.length % 4 !== 0) {
+  const encoding = /^[A-Za-z0-9_-]+$/.test(input) ? "base64url" : "base64";
+  if (encoding === "base64" && (!/^[A-Za-z0-9+/]+={0,2}$/.test(input) || input.length % 4 !== 0)) {
     throw new Error("invalid canonical base64 input");
   }
-  const decoded = Buffer.from(input, "base64");
-  if (decoded.toString("base64") !== input) {
-    throw new Error("invalid canonical base64 input");
+  const decoded = Buffer.from(input, encoding);
+  if (decoded.toString(encoding) !== input) {
+    throw new Error(`invalid canonical ${encoding} input`);
   }
   return decoded;
 }

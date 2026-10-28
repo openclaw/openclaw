@@ -1,7 +1,6 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   getReplyPayloadMetadata,
   type ReplyPayload,
@@ -13,6 +12,52 @@ type PendingFinalDeliveryIdentity = NonNullable<
 >;
 
 type PendingFinalDeliveryOptions = { preserveActivity?: boolean };
+
+const terminalReceipts = resolveGlobalSingleton(
+  Symbol.for("openclaw.pendingFinalDeliveryReceipts"),
+  () =>
+    new WeakMap<
+      PendingFinalDeliveryIdentity,
+      { state: "delivered" | "suppressed"; cleared: boolean }
+    >(),
+);
+
+/** Channel settlement and dispatcher cleanup share the same committed receipt. */
+export async function settleReplyPendingFinalDelivery(
+  payload: ReplyPayload,
+  state: Parameters<typeof settlePendingFinalDelivery>[1],
+  expectedStates?: Parameters<typeof settlePendingFinalDelivery>[2],
+): Promise<Awaited<ReturnType<typeof settlePendingFinalDelivery>> | undefined> {
+  const metadata = getReplyPayloadMetadata(payload);
+  const completion = metadata?.pendingFinalDeliveryCompletion;
+  if (!completion) {
+    return undefined;
+  }
+  const cleanup = metadata.pendingFinalDeliveryCleanup;
+  const terminal = state === "delivered" || state === "suppressed";
+  const receipt = terminalReceipts.get(completion);
+  if (receipt && (!terminal || !cleanup || receipt.cleared)) {
+    return { state: receipt.state };
+  }
+  const result = await settlePendingFinalDelivery(
+    { kind: "pending-final", ...completion },
+    state,
+    expectedStates,
+    terminal && cleanup
+      ? {
+          preserveActivity: cleanup.preserveActivity,
+          clearAfterSettled: true,
+        }
+      : undefined,
+  );
+  if (result.state === "delivered" || result.state === "suppressed") {
+    terminalReceipts.set(completion, {
+      state: result.state,
+      cleared: terminal && Boolean(cleanup),
+    });
+  }
+  return result;
+}
 
 export async function suppressPendingFinalDelivery(
   payload: ReplyPayload | undefined,
@@ -26,9 +71,8 @@ export async function suppressPendingFinalDelivery(
       { kind: "pending-final", ...completion },
       "suppressed",
       ["prepared"],
-      options,
+      { ...options, clearAfterSettled: true },
     );
-    await clearPendingFinalDeliveryAfterSuccess(completion, options);
   }
 }
 
@@ -39,49 +83,16 @@ export async function clearPendingFinalDeliveryAfterSuccess(
   if (!identity) {
     return;
   }
-  await patchSessionEntryCore(
+  await applySessionEntryOperation(
     { agentId: identity.agentId, storePath: identity.storePath, sessionKey: identity.sessionKey },
-    (entry) => {
-      const recoveryRunId = normalizeOptionalString(entry.restartRecoveryDeliveryRunId);
-      const deliveries = entry.pendingFinalDelivery?.deliveries;
-      if (
-        entry.sessionId !== identity.sessionId ||
-        entry.pendingFinalDelivery?.intentId !== identity.intentId ||
-        !deliveries?.length ||
-        !deliveries.every(({ state }) => state === "delivered" || state === "suppressed") ||
-        (recoveryRunId !== undefined && recoveryRunId !== identity.recoveryRunId)
-      ) {
-        return null;
-      }
-      const completesHookTurn =
-        recoveryRunId === undefined &&
-        (entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
-          entry.restartRecoveryBeforeAgentReplyState === "handled-unrecoverable");
-      const endedAt = completesHookTurn ? Date.now() : undefined;
-      return {
-        ...(recoveryRunId
-          ? buildRestartRecoveryClaimCleanupPatch({ entry, recordTerminalSource: true })
-          : {
-              restartRecoveryBeforeAgentReplyState: undefined,
-              restartRecoverySourceIngress: undefined,
-              restartRecoveryForceSafeTools: undefined,
-            }),
-        pendingFinalDelivery: undefined,
-        ...(endedAt === undefined
-          ? {}
-          : {
-              abortedLastRun: false,
-              endedAt,
-              lifecycleRunId: undefined,
-              runtimeMs:
-                typeof entry.startedAt === "number"
-                  ? Math.max(0, endedAt - entry.startedAt)
-                  : undefined,
-              status: "done" as const,
-            }),
-      };
+    {
+      kind: "pending-final-clear",
+      sessionId: identity.sessionId,
+      intentId: identity.intentId,
+      now: Date.now(),
     },
     {
+      result: "none",
       skipMaintenance: true,
       takeCacheOwnership: true,
       preserveActivity: options.preserveActivity,

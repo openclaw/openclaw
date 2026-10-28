@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { SessionScope } from "../config/sessions/types.js";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
+import type { EngineConnection } from "./sql-connection.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
@@ -15,7 +15,7 @@ import type { LegacyWorkspaceStateDetection } from "./state-migrations.workspace
 
 export type PluginDoctorRepairAuthority = {
   assertCurrent(): void;
-  assertOwnedInTransaction(database: DatabaseSync): void;
+  assertOwnedInTransaction(database: EngineConnection): void;
 };
 
 export type LegacyRescuePendingDetection = {

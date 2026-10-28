@@ -14,5 +14,6 @@ export {
 export {
   serveOwnedWorkerTasks,
   type WorkerTaskChannel,
+  type WorkerTaskHandler,
   type WorkerTaskServerHost,
 } from "./worker-task-server.js";

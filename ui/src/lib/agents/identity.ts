@@ -1,20 +1,18 @@
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
-import { resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
+import { isGatewayAvailable, resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
 
-type AgentIdentityGatewaySnapshot = {
-  client: GatewayBrowserClient | null;
-  phase: ApplicationGatewayPhase;
-};
-
-type AgentIdentityGateway = {
-  readonly snapshot: AgentIdentityGatewaySnapshot;
-  subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
-  subscribeEvents?: (listener: (event: { event: string }) => void) => () => void;
-};
+type AgentIdentityGatewaySnapshot = Pick<
+  ApplicationGatewaySnapshot,
+  "client" | "phase" | "restartPending" | "suspensionPhase"
+> &
+  Partial<Pick<ApplicationGatewaySnapshot, "hello" | "selfUser">>;
 
 type AgentIdentityCacheEntry = {
   pending: Promise<AgentIdentityResult | null>;
@@ -24,11 +22,8 @@ type AgentIdentityCacheEntry = {
 };
 
 const AGENT_IDENTITY_CACHE_LIMIT = 128;
-// Workspace avatars can change in place without a config or roster event.
-const AGENT_IDENTITY_CACHE_TTL_MS = 60_000;
 const identityRequests = new WeakMap<GatewayBrowserClient, Map<string, AgentIdentityCacheEntry>>();
 
-/** Retire every UI surface's cached request when its connection or roster revision changes. */
 function invalidateAgentIdentityCache(
   client: GatewayBrowserClient | null,
   agentIds?: readonly string[],
@@ -44,10 +39,6 @@ function invalidateAgentIdentityCache(
   } else {
     identityRequests.delete(client);
   }
-}
-
-function hasFreshAgentIdentityResult(entry: AgentIdentityCacheEntry | undefined): boolean {
-  return Boolean(entry?.result && Date.now() < entry.refreshAt);
 }
 
 export function fetchAgentIdentity(
@@ -80,8 +71,6 @@ export function fetchAgentIdentity(
           return null;
         }
         entry.result = { identity };
-        entry.refreshAt = Date.now() + AGENT_IDENTITY_CACHE_TTL_MS;
-        entry.failures = 0;
         return identity;
       },
       (error: unknown) => {
@@ -95,7 +84,7 @@ export function fetchAgentIdentity(
         if (cache.size <= AGENT_IDENTITY_CACHE_LIMIT) {
           break;
         }
-        if (Number.isFinite(candidate.refreshAt)) {
+        if (candidate.result || Number.isFinite(candidate.refreshAt)) {
           cache.delete(id);
         }
       }
@@ -106,12 +95,22 @@ export function fetchAgentIdentity(
 
 export type AgentIdentityCapability = ReturnType<typeof createAgentIdentityCapability>;
 
-export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
+export function createAgentIdentityCapability(
+  gateway: {
+    readonly snapshot: AgentIdentityGatewaySnapshot;
+    readonly connectionRevision?: number;
+    subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
+    subscribeEvents?: (
+      listener: (event: { event: string; payload?: unknown }) => void,
+    ) => () => void;
+  },
+  readOfflineIdentity?: (agentId: string) => AgentIdentityResult | null,
+) {
   let cachedClient: GatewayBrowserClient | null = gateway.snapshot.client;
   let cachedConnected = gateway.snapshot.phase === "connected";
+  let presentationKey = gatewayPresentationScope(gateway).key;
   let connectionGeneration = 0;
-  const identities = new Map<string, AgentIdentityResult>();
-  const invalidationEpochs = new Map<string, number>();
+  const identities = new Map<string, { identity: AgentIdentityResult; generation: number }>();
   const listeners = new Set<() => void>();
 
   const publish = () => {
@@ -122,108 +121,120 @@ export function createAgentIdentityCapability(gateway: AgentIdentityGateway) {
 
   const resetForGateway = (snapshot: AgentIdentityGatewaySnapshot) => {
     const connected = snapshot.phase === "connected";
-    if (snapshot.client === cachedClient && connected === cachedConnected) {
+    const nextPresentationKey = gatewayPresentationScope(gateway).key;
+    const identityChanged =
+      snapshot.client !== cachedClient || presentationKey !== nextPresentationKey;
+    const accessLost = connected && !hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null);
+    if (!identityChanged && connected === cachedConnected && !accessLost) {
       return;
     }
+    presentationKey = nextPresentationKey;
     const hadIdentities = identities.size > 0;
     invalidateAgentIdentityCache(cachedClient);
     cachedClient = snapshot.client;
     cachedConnected = connected;
     connectionGeneration += 1;
-    identities.clear();
-    invalidationEpochs.clear();
-    if (hadIdentities) {
+    if (identityChanged || accessLost) {
+      identities.clear();
+    } else if (connected && hadIdentities) {
+      void capability.ensure([...identities.keys()]);
+    }
+    if ((identityChanged || accessLost) && hadIdentities) {
       publish();
     }
   };
 
+  // This Gateway-lifetime owner retires identity caches across connection, access, and roster changes.
   gateway.subscribe(resetForGateway);
 
+  const invalidate = (agentIds: readonly (string | null | undefined)[]) => {
+    const ids = normalizeUniqueTrimmedStringList(agentIds);
+    invalidateAgentIdentityCache(cachedClient, ids);
+    for (const agentId of ids) {
+      identities.delete(agentId);
+    }
+    // Chat can hold a shared request without a capability snapshot.
+    if (ids.length > 0) {
+      publish();
+    }
+  };
+
   gateway.subscribeEvents?.((event) => {
+    if (event.event === "agent.identity.changed") {
+      const agentId = asNonArrayRecord(event.payload).agentId;
+      if (typeof agentId === "string") {
+        invalidate([agentId]);
+      }
+      return;
+    }
     if (event.event !== "config.changed") {
       return;
     }
     invalidateAgentIdentityCache(cachedClient);
     connectionGeneration += 1;
     identities.clear();
-    invalidationEpochs.clear();
     publish();
   });
 
-  return {
-    get(agentId: string | null | undefined) {
+  const capability = {
+    get(this: void, agentId: string | null | undefined) {
       const normalized = agentId?.trim();
-      return normalized ? (identities.get(normalized) ?? null) : null;
+      return normalized
+        ? (identities.get(normalized)?.identity ?? readOfflineIdentity?.(normalized) ?? null)
+        : null;
     },
     entries() {
-      return [...identities.values()];
+      return [...identities.values()].map((entry) => entry.identity);
     },
     async ensure(this: void, agentIds: readonly (string | null | undefined)[]) {
       const snapshot = gateway.snapshot;
       resetForGateway(snapshot);
       const client = snapshot.client;
-      if (!client || snapshot.phase !== "connected") {
+      if (
+        !client ||
+        !isGatewayAvailable(snapshot) ||
+        !hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null)
+      ) {
         return;
       }
       const generation = connectionGeneration;
-      const missing = normalizeUniqueTrimmedStringList(agentIds).filter((agentId) => {
-        const cached = identityRequests.get(client)?.get(agentId);
-        return (
-          !hasFreshAgentIdentityResult(cached) ||
-          identities.get(agentId) !== cached?.result?.identity
-        );
-      });
+      // Request-cache eviction does not retire this owner's settled identity.
+      const missing = normalizeUniqueTrimmedStringList(agentIds).filter(
+        (agentId) => identities.get(agentId)?.generation !== generation,
+      );
       if (missing.length === 0) {
         return;
       }
       const results = await Promise.all(
-        missing.map(async (agentId) => {
-          const invalidationEpoch = invalidationEpochs.get(agentId) ?? 0;
-          return [
-            agentId,
-            invalidationEpoch,
-            await fetchAgentIdentity(client, agentId).catch(() => null),
-          ] as const;
-        }),
+        missing.map(
+          async (agentId) =>
+            [agentId, await fetchAgentIdentity(client, agentId).catch(() => null)] as const,
+        ),
       );
+      const current = gateway.snapshot;
       if (
         connectionGeneration !== generation ||
-        gateway.snapshot.client !== client ||
-        gateway.snapshot.phase !== "connected"
+        current.client !== client ||
+        current.phase !== "connected" ||
+        !hasOperatorSelfReadAccess(current.hello?.auth ?? null)
       ) {
         return;
       }
       let changed = false;
-      for (const [agentId, invalidationEpoch, identity] of results) {
+      for (const [agentId, identity] of results) {
         // Overlapping ensure calls share the request, so only its first
         // publication changes the snapshot observed by subscribers.
-        if (
-          identity &&
-          identities.get(agentId) !== identity &&
-          invalidationEpoch === (invalidationEpochs.get(agentId) ?? 0)
-        ) {
-          identities.set(agentId, identity);
-          changed = true;
+        if (identity) {
+          changed ||= identities.get(agentId)?.identity !== identity;
+          identities.set(agentId, { identity, generation });
         }
       }
       if (changed) {
         publish();
       }
     },
-    invalidate(agentIds: readonly (string | null | undefined)[]) {
-      let changed = false;
-      const ids = normalizeUniqueTrimmedStringList(agentIds);
-      invalidateAgentIdentityCache(cachedClient, ids);
-      for (const agentId of ids) {
-        invalidationEpochs.set(agentId, (invalidationEpochs.get(agentId) ?? 0) + 1);
-        if (identities.delete(agentId)) {
-          changed = true;
-        }
-      }
-      if (changed) {
-        publish();
-      }
-    },
+    invalidate,
     subscribe: (listener: () => void) => registerListener(listeners, listener),
   };
+  return capability;
 }

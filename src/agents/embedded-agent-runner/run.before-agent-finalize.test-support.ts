@@ -1,8 +1,8 @@
-// Full-entry coverage for before_agent_finalize revision handling in embedded runs.
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import {
-  mockedGlobalHookRunner,
-  mockedRunEmbeddedAttempt,
+  mockedGlobalHookRunner as hooks,
+  mockedRunEmbeddedAttempt as attempt,
   resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
@@ -18,42 +18,23 @@ const REASONING_ONLY_RETRY_INSTRUCTION =
 let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
-function finalAnswerAttempt(
-  text: string,
-  overrides?: Partial<EmbeddedRunAttemptResult>,
-): EmbeddedRunAttemptResult {
-  // Finalize tests need a successful assistant turn with both surfaced text and
-  // snapshot content so the runner can decide whether to request a revision.
+function finalAnswer(text: string, overrides?: Partial<EmbeddedRunAttemptResult>) {
+  const assistant = makeAssistantMessageFixture({
+    stopReason: "stop",
+    errorMessage: undefined,
+    model: "gpt-5.5",
+    content: [{ type: "text", text }],
+  });
   return session.makeAttemptResult({
     assistantTexts: [text],
-    lastAssistant: {
-      stopReason: "stop",
-      provider: "openai",
-      model: "gpt-5.5",
-      content: [{ type: "text", text }],
-    } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-    messagesSnapshot: [
-      {
-        role: "assistant",
-        content: [{ type: "text", text }],
-      } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-    ],
+    lastAssistant: assistant,
+    messagesSnapshot: [assistant],
     ...overrides,
   });
 }
 
-function attemptCall(index: number): {
-  prompt?: string;
-  suppressNextUserMessagePersistence?: boolean;
-} {
-  const call = mockedRunEmbeddedAttempt.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected embedded attempt call ${index}`);
-  }
-  return call[0] as {
-    prompt?: string;
-    suppressNextUserMessagePersistence?: boolean;
-  };
+function runFinalize(runId: string) {
+  return runEmbeddedAgent({ ...session.runParams, provider: "openai", model: "gpt-5.5", runId });
 }
 
 describe("runEmbeddedAgent before_agent_finalize", () => {
@@ -65,60 +46,48 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     resetSharedRunIntegrationHarnessMocks();
     session = await createSharedRunIntegrationSession();
     useOpenAIPlatformAuthFixture();
-    mockedGlobalHookRunner.hasHooks.mockImplementation(
-      (hookName: string) => hookName === "before_agent_finalize",
-    );
+    hooks.hasHooks.mockImplementation((name) => name === "before_agent_finalize");
   });
 
-  afterEach(async () => {
-    await session?.cleanup();
-  });
+  afterEach(() => session?.cleanup());
 
   it("replaces an incomplete-turn continuation with a finalize revision", async () => {
-    mockedRunEmbeddedAttempt
+    const reasoning = session.makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "end_turn",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [
+          {
+            type: "thinking",
+            thinking: "internal reasoning",
+            thinkingSignature: JSON.stringify({ id: "rs_before_finalize", type: "reasoning" }),
+          },
+        ],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+    attempt
+      .mockResolvedValueOnce(reasoning)
       .mockResolvedValueOnce(
-        session.makeAttemptResult({
-          assistantTexts: [],
-          lastAssistant: {
-            role: "assistant",
-            stopReason: "end_turn",
-            provider: "openai",
-            model: "gpt-5.5",
-            content: [
-              {
-                type: "thinking",
-                thinking: "internal reasoning",
-                thinkingSignature: JSON.stringify({ id: "rs_before_finalize", type: "reasoning" }),
-              },
-            ],
-          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-        }),
-      )
-      .mockResolvedValueOnce(
-        finalAnswerAttempt("Visible draft.", {
+        finalAnswer("Visible draft.", {
           beforeAgentFinalizeRevisionReason: "Tighten the recovered answer.",
         }),
       )
-      .mockResolvedValueOnce(finalAnswerAttempt("Revised recovered answer."));
+      .mockResolvedValueOnce(finalAnswer("Revised recovered answer."));
 
-    await runEmbeddedAgent({
-      ...session.runParams,
-      provider: "openai",
-      model: "gpt-5.5",
-      runId: "run-before-finalize-after-incomplete-turn",
-    });
+    await runFinalize("run-before-finalize-after-incomplete-turn");
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
-    expect(attemptCall(1).prompt).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
-    expect(attemptCall(2).prompt).toContain("Tighten the recovered answer.");
-    expect(attemptCall(2).prompt).not.toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(attempt).toHaveBeenCalledTimes(3);
+    const prompts = attempt.mock.calls.map(([params]) => params.prompt);
+    expect(prompts[1]).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(prompts[2]).toContain("Tighten the recovered answer.");
   });
 
   it("does not retry finalize revisions after a timed-out attempt", async () => {
-    // A timed-out attempt may have partial assistant text, but asking for a
-    // finalize revision would replay an invalid or blocked provider turn.
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      finalAnswerAttempt("Late answer.", {
+    attempt.mockResolvedValueOnce(
+      finalAnswer("Late answer.", {
         terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
         beforeAgentFinalizeRevisionReason: "Revise the late answer.",
         promptTimeoutOutcome: {
@@ -131,13 +100,8 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
       }),
     );
 
-    await runEmbeddedAgent({
-      ...session.runParams,
-      provider: "openai",
-      model: "gpt-5.5",
-      runId: "run-before-finalize-timeout",
-    });
+    await runFinalize("run-before-finalize-timeout");
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(attempt).toHaveBeenCalledTimes(1);
   });
 });

@@ -210,6 +210,7 @@ final class ComputerWindowActionExecutor {
             where app.windowCount > 0 || app.windowIDs?.isEmpty == false
         {
             do {
+                try Self.checkExternalProcess(app.processIdentifier)
                 let output = try await self.withExecutionAuthority {
                     try await self.applications.listWindows(
                         for: "PID:\(app.processIdentifier)",
@@ -242,9 +243,17 @@ final class ComputerWindowActionExecutor {
         _ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult
     {
         let limits = try Self.observationLimits(params)
-        let context: WindowContext? = try params.windowRef.map { ref in
-            let target = try self.resolveWindow(ref)
-            return Self.windowContext(target, limits: limits)
+        let context: WindowContext
+        if let ref = params.windowRef {
+            context = try Self.windowContext(self.resolveWindow(ref), limits: limits)
+        } else {
+            let app = try await self.withExecutionAuthority {
+                try await self.applications.getFrontmostApplication()
+            }
+            try Self.checkExternalProcess(app.processIdentifier)
+            context = WindowContext(
+                applicationProcessId: app.processIdentifier,
+                applicationProcessStartIdentity: app.processStartIdentity)
         }
         let result = try await self.withExecutionAuthority {
             try await self.automation.inspectAccessibilityTree(windowContext: context)
@@ -288,7 +297,7 @@ final class ComputerWindowActionExecutor {
             throw ComputerActionService.ComputerActionError.staleObservation
         }
         let request = DesktopObservationRequest(
-            target: .windowID(windowID),
+            target: .pid(target.app.processIdentifier, window: .id(windowID)),
             capture: DesktopCaptureOptions(focus: .background),
             detection: DesktopDetectionOptions(
                 mode: .accessibility,
@@ -399,17 +408,7 @@ final class ComputerWindowActionExecutor {
         _ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult
     {
         let target = try self.requiredWindow(params)
-        try await self.focus(target)
-        let focused = try await self.withExecutionAuthority {
-            try await self.windows.getFocusedWindow()
-        }
-        let confirmed = focused?.windowID == target.window.windowID
-        return OpenClawComputerActResult(
-            ok: confirmed,
-            effect: confirmed ? .confirmed : .suspectedNoop,
-            escalation: confirmed ? nil : OpenClawComputerEscalation(
-                recommended: "desktop",
-                reasonCode: "foreground_ineffective"))
+        return try await Self.result(from: self.focus(target), background: false)
     }
 
     // MARK: - Input
@@ -606,7 +605,16 @@ final class ComputerWindowActionExecutor {
         guard let target = self.windowRefs[ref] else {
             throw ComputerActionService.ComputerActionError.staleObservation
         }
+        try Self.checkExternalProcess(target.app.processIdentifier)
         return target
+    }
+
+    private static func checkExternalProcess(_ processIdentifier: pid_t) throws {
+        // Same-process AX callbacks run on Peekaboo's detached queue and trap in AppKit's main-actor accessors.
+        guard processIdentifier != getpid() else {
+            throw ComputerActionService.ComputerActionError.refused(
+                "Peekaboo cannot inspect OpenClaw's own windows; use the CUA provider to target OpenClaw")
+        }
     }
 
     /// Only the newest observation may authorize element work, so issuing one
@@ -735,13 +743,15 @@ final class ComputerWindowActionExecutor {
         return Self.result(from: result.outcome, background: true)
     }
 
-    private func focus(_ target: WindowTarget) async throws {
-        try await self.withExecutionAuthority {
-            try await self.applications.activateApplication(request: ApplicationActivationRequest(
-                application: target.app))
+    @discardableResult
+    private func focus(_ target: WindowTarget) async throws -> DesktopActionOutcome? {
+        guard let identity = target.window.mutationIdentity else {
+            throw ComputerActionService.ComputerActionError.staleObservation
         }
-        try await self.withExecutionAuthority {
-            try await self.windows.focusWindow(target: .windowId(target.window.windowID))
+        return try await self.withExecutionAuthority {
+            try await self.windows.focusWindowActionResult(
+                target: .windowId(target.window.windowID),
+                expectedIdentity: identity).outcome
         }
     }
 }
@@ -756,7 +766,7 @@ extension ComputerWindowActionExecutor {
         guard let outcome else {
             return OpenClawComputerActResult(ok: true, effect: .unverifiable)
         }
-        if outcome.effect == .refused {
+        if outcome.effect == .refused || (!background && outcome.effect == .suspectedNoop) {
             return background
                 ? self.backgroundEscalation(reason: outcome.refusalReason?.rawValue ?? "action_refused")
                 : OpenClawComputerActResult(
@@ -921,7 +931,7 @@ extension ComputerWindowActionExecutor {
             .leftMouseDown
         let upType: CGEventType = button == .center ? .otherMouseUp : button == .right ? .rightMouseUp : .leftMouseUp
         let count = action == .tripleClick ? 3 : action == .doubleClick ? 2 : 1
-        let flags = try self.modifierFlags(modifiers)
+        let flags = try ComputerModifiers.parse(modifiers, syntax: .window)
         for index in 1...count {
             guard let down = CGEvent(
                 mouseEventSource: nil,
@@ -944,25 +954,5 @@ extension ComputerWindowActionExecutor {
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
         }
-    }
-
-    private static func modifierFlags(_ raw: String?) throws -> CGEventFlags {
-        var flags: CGEventFlags = []
-        for token in (raw ?? "")
-            .lowercased()
-            .split(whereSeparator: { $0 == "," || $0 == "+" || $0.isWhitespace })
-        {
-            switch token {
-            case "cmd", "command", "meta": flags.insert(.maskCommand)
-            case "shift": flags.insert(.maskShift)
-            case "ctrl", "control": flags.insert(.maskControl)
-            case "alt", "option": flags.insert(.maskAlternate)
-            case "fn", "function": flags.insert(.maskSecondaryFn)
-            default:
-                throw ComputerActionService.ComputerActionError.invalidRequest(
-                    "unsupported modifier '\(token)'")
-            }
-        }
-        return flags
     }
 }

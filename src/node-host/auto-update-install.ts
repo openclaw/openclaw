@@ -1,34 +1,41 @@
 import { createHash, randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 import {
+  normalizeNpmViewMetadata,
   packNpmSpecToArchive,
   resolveNpmSpecMetadata,
   withInstallWorkspace,
+  type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import { isExactSemverVersion } from "../infra/npm-registry-spec.js";
 import { collectPackageDistContentInventoryErrors } from "../infra/package-dist-inventory.js";
 import { runGlobalPackageUpdateSteps } from "../infra/package-update-steps.js";
-import {
-  downloadRegistryPackageArchive,
-  fetchRegistryPackageManifest,
-} from "../infra/registry-package-archive.js";
+import { lstatIfExists } from "../infra/path-existence.js";
+import { fetchRegistryPackageDocument } from "../infra/update-check-package-target.js";
 import { resolveUpdateRegistryTarget } from "../infra/update-check.js";
 import {
   collectInstalledGlobalPackageErrors,
   createGlobalInstallEnv,
   resolveGlobalInstallTarget,
 } from "../infra/update-global.js";
+import { UPDATE_NETWORK_TIMEOUT_MS } from "../infra/update-network-budget.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import { AUTO_UPDATE_STEP_TIMEOUT_MS } from "../infra/update-run-timeouts.js";
 import { runStep } from "../infra/update-runner-command.js";
 import type { CommandRunner } from "../infra/update-runner-types.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { parsePackageOpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
+import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import {
   assertNodeRuntimeSchemaVersions,
   assertNodeRuntimeUpdateCompatible,
@@ -60,14 +67,40 @@ export async function prepareNodeRuntimeUpdate(params: {
   const registryTarget = resolveUpdateRegistryTarget();
   const registryManifest =
     manager === "bun"
-      ? await fetchRegistryPackageManifest({ ...registryTarget, version, signal: params.signal })
+      ? await (async () => {
+          try {
+            const json = await fetchRegistryPackageDocument({
+              ...registryTarget,
+              signal: params.signal,
+              target: version,
+              label: "npm package manifest",
+              operation: "npm-registry-package-manifest",
+              bodyTimeoutMs: Math.max(1, UPDATE_NETWORK_TIMEOUT_MS),
+            });
+            const metadata = normalizeNpmViewMetadata(
+              json,
+              `${registryTarget.packageName}@${version}`,
+            );
+            const tarball = normalizeOptionalString(asRecord(asRecord(json).dist).tarball);
+            if (!metadata?.name || !metadata.version || !tarball) {
+              throw new Error(
+                "Registry returned incomplete package metadata (name, version, or tarball).",
+              );
+            }
+            return { ...metadata, tarball };
+          } catch (error) {
+            throw new Error(`Registry package manifest failed: ${String(error)}`, { cause: error });
+          }
+        })()
       : undefined;
-  const resolved =
-    registryManifest ?? (await resolveNpmSpecMetadata({ spec, signal: params.signal }));
-  if (!resolved.ok) {
-    throw new Error(resolved.error);
+  let metadata: NpmSpecResolution | undefined = registryManifest;
+  if (!metadata) {
+    const resolved = await resolveNpmSpecMetadata({ spec, signal: params.signal });
+    if (!resolved.ok) {
+      throw new Error(resolved.error);
+    }
+    metadata = resolved.metadata;
   }
-  const { metadata } = resolved;
   if (metadata.name !== "openclaw" || metadata.version !== version || !metadata.integrity) {
     throw new Error(
       "Node auto-update registry metadata does not identify the requested release and integrity.",
@@ -102,15 +135,7 @@ export async function prepareNodeRuntimeUpdate(params: {
         params.signal?.throwIfAborted();
       };
       assertCurrent();
-      let retained = false;
-      try {
-        await fs.lstat(packageRoot);
-        retained = true;
-      } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
-      }
+      const retained = (await lstatIfExists(packageRoot, "ENOENT")) !== undefined;
       if (retained) {
         // Never reinstall over a retained generation: the launcher may still be running it.
         try {
@@ -139,19 +164,57 @@ export async function prepareNodeRuntimeUpdate(params: {
       return await withInstallWorkspace("openclaw-node-update-", async (workspace) => {
         assertCurrent();
         let archivePath: string;
-        if (registryManifest?.ok) {
-          const downloaded = await downloadRegistryPackageArchive({
-            tarballUrl: registryManifest.metadata.tarball,
-            registryUrl: registryTarget.registryUrl,
-            integrity,
-            cwd: workspace,
+        if (registryManifest) {
+          const { signal, cleanup, refresh } = buildTimeoutAbortSignal({
+            timeoutMs: Math.max(1, UPDATE_NETWORK_TIMEOUT_MS),
             signal: params.signal,
+            operation: "npm-registry-package-download",
           });
-          assertCurrent();
-          if (!downloaded.ok) {
-            throw new Error(downloaded.error);
+          let response: Response | undefined;
+          let downloadPath: string | undefined;
+          try {
+            const url = new URL(registryManifest.tarball);
+            if (url.origin !== new URL(registryTarget.registryUrl).origin) {
+              throw new Error("Package tarball must share the registry origin.");
+            }
+            if (!/^sha512-[A-Za-z0-9+/]{86}==$/u.test(integrity)) {
+              throw new Error("Package archive requires supported sha512 integrity.");
+            }
+            // Reject redirects so a same-origin URL cannot send the download elsewhere.
+            response = await fetch(url.toString(), { signal, redirect: "error" });
+            if (!response.ok || !response.body) {
+              throw new Error(`Package archive download failed: HTTP ${response.status}`);
+            }
+            refresh();
+            const hash = createHash("sha512");
+            downloadPath = path.join(workspace, `${randomUUID()}.tgz`);
+            await pipeline(
+              response.body,
+              async function* (chunks) {
+                for await (const chunk of chunks) {
+                  hash.update(chunk);
+                  refresh();
+                  yield chunk;
+                }
+              },
+              createWriteStream(downloadPath, { flags: "wx", mode: 0o600 }),
+              { signal },
+            );
+            signal?.throwIfAborted();
+            if (`sha512-${hash.digest("base64")}` !== integrity) {
+              throw new Error("Package archive integrity mismatch.");
+            }
+            archivePath = downloadPath;
+          } catch (error) {
+            if (downloadPath) {
+              await fs.rm(downloadPath, { force: true });
+            }
+            throw new Error(`Registry package archive failed: ${String(error)}`, { cause: error });
+          } finally {
+            await cancelUnreadResponseBody(response);
+            cleanup();
           }
-          archivePath = downloaded.archivePath;
+          assertCurrent();
         } else {
           const packed = await packNpmSpecToArchive({
             spec,

@@ -1,30 +1,45 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import {
-  watch,
-  type WatchHealth,
-  type WatchScope,
-  type WatchSubscription,
-} from "@openclaw/fs-safe/watch";
+import { isDeepStrictEqual } from "node:util";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveFsObservationMode } from "../../infra/fs-observation-mode.js";
-import { admitObservationRoot } from "../../infra/fs-observation-root.js";
-import { readObservationSnapshot } from "../../infra/fs-observation-snapshot.js";
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
+import { observeOwnedDirectory } from "../../infra/owned-directory-observation.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { clearSkillRootRecordsCache } from "../loading/skill-root-loader.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
+import type { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
+import type { Skill } from "../loading/skill-contract.js";
+import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
+import type { SkillSnapshotProjectionInput } from "../loading/skill-snapshot-projection.js";
 import {
-  resolveWorkspaceSkillSourcePlan,
   splitSkillSourcePlan,
-  type WorkspaceSkillSourcePlan,
+  type WorkspaceSkillSourcePlanOptions,
 } from "../loading/workspace-skill-sources.js";
-import { createSkillFileScheduler } from "./refresh-file-stability.js";
+import type {
+  WorkspaceSkillSourcePlan,
+  WorkspaceSkillSourceRequest,
+  WorkspaceSkillSources,
+} from "../loading/workspace-skill-sources.types.js";
+import type { SkillSnapshot } from "../types.js";
 import {
-  skillsObservationScope,
-  skillsObservationTransport,
-} from "./refresh-observation-source.js";
+  captureSkillsDiscoveryEnvironment,
+  type SkillsDiscoveryEnvironment,
+  type SkillsDiscoveryInput,
+  type SkillsDiscoveryResult,
+  type SkillsDiscoveryOutput,
+  type SkillsDiscoverySourceSelection,
+  type SkillsSourcePlanInput,
+} from "./discovery-worker-contract.js";
+import {
+  captureSkillsSourcePlanInput,
+  type SkillsWatcherParams,
+} from "./discovery-worker-input.js";
 import {
   closeRemoteSkillsWatchers,
   disposeRemoteSkillsWatcher,
@@ -32,715 +47,537 @@ import {
 } from "./refresh-remote.js";
 import {
   bumpSkillsSnapshotVersion,
+  markSkillsSupportingFilesChanged,
+  notifySkillsWatchAvailable,
   resetSkillsRefreshStateForTest,
-  setSkillsChangeListenerErrorHandler,
 } from "./refresh-state.js";
-import { isIgnoredSkillsWatchPath, isSkillDiscoveryFileWatchPath } from "./refresh-watch-path.js";
-import {
-  clearWorkspaceWatchTargets,
-  disposeWorkspacePathWatchState,
-  evictWorkspaceWatchStates,
-  nextSkillsWatchGeneration,
-  resolveSkillsWatchScope,
-  flushSkillsWatchChanges,
-  hasUnreadySharedTargets,
-  hasVerifiedCoverage,
-  pathWatchers,
-  publishRecoveredCoverage,
-  publishSkillsWatchChanges,
-  setWorkspaceWatchTargets,
-  settleWorkspaceWatchTargetsPlan,
-  unsubscribeWorkspaceFromPath,
-  workspaceWatchLastEnsuredAt,
-  workspaceWatchOwners,
-  workspaceWatchTargetCache,
-  workspaceWatchTargets,
-  type PendingSkillsWatchChange,
-  type SkillsPathWatchState,
-  type SkillsWatchChange,
-  type SkillsWatchOwner,
-} from "./refresh-watch-registry.js";
-import { compareSkillsWatchTargets, resolveSkillsWatchTargets } from "./refresh-watch-targets.js";
-import type { WatchTarget } from "./refresh-watch-targets.types.js";
 export { registerSkillsChangeListener } from "./refresh-state.js";
 
 const log = createSubsystemLogger("gateway/skills");
-// Gateway startup imports this owner before serving turns. Shared watcher handles,
-// including later rebuilds, must inherit that lifetime rather than the triggering turn.
-const runInSkillsWatcherContext = AsyncLocalStorage.snapshot();
-const SKILLS_WATCH_DEBOUNCE_MS = 250;
-const retiringWatchers = new Set<Promise<void>>();
-const replacingWatchers = new Set<Promise<void>>();
-let watchersClosing = false;
-let nativeWatchCapacityFailed = false;
-// Optional classification detail, not an observation inventory or read authority.
-// Overflow conservatively invalidates discovery instead of retaining more names.
-const MAX_SKILLS_WATCH_ENTRY_KINDS = 4096;
-
-setSkillsChangeListenerErrorHandler((err) => {
-  log.warn(`skills change listener failed: ${String(err)}`);
-});
-
-function createSkillsPathWatcher(
-  target: WatchTarget,
-  previous?: SkillsPathWatchState,
-): SkillsPathWatchState {
-  const lifetime = new AbortController();
-  let subscription: WatchSubscription | undefined;
-  let subscriptionReady = false;
-  let plannedScope: WatchScope | undefined;
-  let entryDirectoryObserved = false;
-  // true means a directory/link/other entry was seen. Keep both sides of a
-  // reconciliation so directory -> file and deletion cannot look supporting-only.
-  // Exclusion callbacks can cover only a directory slice, so omitted names do
-  // not imply deletion. Retain their kinds until observed again or detail fills.
-  let entryKinds: Map<string, boolean> | undefined = new Map();
-  let scannedKinds: Map<string, boolean> | undefined = new Map();
-  let starting = Promise.resolve();
-  let closing: Promise<void> | undefined;
-  let updating: Promise<void> | undefined;
-  let updateRequested = false;
-  const state: SkillsPathWatchState = {
-    generation: nextSkillsWatchGeneration(),
-    closed: false,
-    depth: target.depth,
-    initialScan: previous?.initialScan ?? "pending",
-    unavailable: Boolean(previous?.unavailable),
-    verified: false,
-    failed: false,
-    recovering: Boolean(previous?.unavailable),
-    replacing: false,
-    subscribers: new Set(),
-    refreshScope() {
-      updateRequested = true;
-      updating ??= runInSkillsWatcherContext(() =>
-        Promise.resolve()
-          .then(async () => {
-            await starting;
-            while (updateRequested && isCurrent()) {
-              if (!subscription) {
-                break;
-              }
-              updateRequested = false;
-              const authority = await state.authority!;
-              const scope = await skillsObservationScope(
-                authority,
-                { ...target, depth: state.depth },
-                lifetime.signal,
-              );
-              if (!isCurrent()) {
-                return;
-              }
-              if (
-                scope.path === plannedScope?.path &&
-                scope.kind === plannedScope.kind &&
-                scope.depth === plannedScope.depth
-              ) {
-                publishReady();
-                continue;
-              }
-              state.verified = false;
-              if (!state.unavailable) {
-                state.unavailable = true;
-                publishSkillsWatchChanges([{ ...targetChange, change: "unavailable" }]);
-              }
-              if (!isCurrent()) {
-                return;
-              }
-              plannedScope = scope;
-              entryDirectoryObserved = false;
-              subscriptionReady = false;
-              await subscription.setScopes([scope]);
-              subscriptionReady = true;
-              if (scope.kind === "entry" && entryDirectoryObserved) {
-                updateRequested = true;
-              } else if (isCurrent()) {
-                publishReady();
-              }
-            }
-          })
-          .catch((error: unknown) => {
-            updateRequested = false;
-            failed(error, subscription?.health().failure);
-          })
-          .finally(() => {
-            updating = undefined;
-            if (updateRequested && isCurrent()) {
-              void state.refreshScope();
-            }
-          }),
-      );
-      return updating;
-    },
-    close() {
-      if (closing) {
-        return closing;
-      }
-      state.closed = true;
-      state.verified = false;
-      lifetime.abort();
-      clearTimeout(state.timer);
-      closing = Promise.allSettled([
-        starting,
-        updating,
-        subscription?.close(),
-        stability.close(),
-      ]).then((results) => {
-        const errors = results
-          .slice(2)
-          .flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-        if (errors.length) {
-          throw new AggregateError(errors, "Skills observation retirement failed");
-        }
-      });
-      retiringWatchers.add(closing);
-      void closing.then(
-        () => retiringWatchers.delete(closing!),
-        () => {},
-      );
-      return closing;
-    },
-  };
-  const isCurrent = () => !state.closed && pathWatchers.get(target.path) === state;
-  const targetChange = { targetPath: target.path, state, watcherKeys: state.subscribers };
-  const schedule = (changedPath?: string, change: SkillsWatchChange = "skills") => {
-    if (!isCurrent() || (change === "supporting" && state.pendingChange === "skills")) {
-      return;
-    }
-    if (change === "skills") {
-      state.generation = nextSkillsWatchGeneration();
-    }
-    state.pendingPath = changedPath ?? state.pendingPath;
-    state.pendingChange = change;
-    clearTimeout(state.timer);
-    state.pendingAt = performance.now() + SKILLS_WATCH_DEBOUNCE_MS;
-    state.timer = setTimeout(() => flushSkillsWatchChanges(state), SKILLS_WATCH_DEBOUNCE_MS);
-  };
-  const stability = createSkillFileScheduler({
-    stabilityMs: SKILLS_WATCH_DEBOUNCE_MS,
-    sample: async (changedPath) => {
-      const authority = await state.authority;
-      if (!authority || !isCurrent()) {
-        return undefined;
-      }
-      return await readObservationSnapshot(
-        authority,
-        path.relative(authority.rootDir, changedPath),
-      );
-    },
-    schedule,
-    onError: (changedPath, error) =>
-      log.warn("skills watcher stability check failed (" + changedPath + "): " + String(error)),
-  });
-  const failed = (error: unknown, failure?: WatchHealth["failure"]) => {
-    if (!isCurrent() || state.failed) {
-      return;
-    }
-    state.failed = true;
-    state.verified = false;
-    const capacity =
-      failure?.operation === "watch" &&
-      ["watch-limit", "EMFILE", "ENFILE"].includes(failure.code ?? "");
-    if (capacity && resolveFsObservationMode() !== "poll") {
-      if (!nativeWatchCapacityFailed) {
-        nativeWatchCapacityFailed = true;
-        log.warn(
-          "skills native watcher capacity exhausted (" +
-            failure?.code +
-            "); refreshing skills during agent preparation",
-        );
-        for (const active of pathWatchers.values()) {
-          void active.close().catch((closeError: unknown) => log.warn(String(closeError)));
-        }
-        for (const workspaceDir of new Set(
-          [...workspaceWatchOwners.values()].map((owner) => owner.workspaceDir),
-        )) {
-          bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch-unavailable" });
-        }
-      }
-      return;
-    }
-    log.warn("skills watcher error (" + target.path + "): " + String(error));
-    if (state.initialScan === "pending") {
-      state.initialScan = "error";
-    }
-    const change = state.unavailable ? "skills" : "unavailable";
-    state.unavailable = true;
-    publishSkillsWatchChanges([{ ...targetChange, change }]);
-    // A fresh subscription gets one automatic recovery attempt. Each replacement
-    // re-admits its source after joined retirement; close failure never rearms.
-    const subscriber = state.subscribers.values().next().value;
-    if (isCurrent() && !state.recovering && subscriber !== undefined) {
-      subscribeWorkspaceToPath(subscriber, target);
-    }
-  };
-  const publishReady = () => {
-    // Scan-time links need their own admitted target before coverage is ready.
-    // Reentrant discovery can replace subscribers; snapshot this handoff's owners.
-    for (const subscriber of Array.from(state.subscribers)) {
-      if (!isCurrent()) {
-        return;
-      }
-      workspaceWatchOwners.get(subscriber)?.reconcileTargets?.();
-    }
-    if (!isCurrent() || updateRequested) {
-      return;
-    }
-    const restored = state.unavailable;
-    state.unavailable = false;
-    state.failed = false;
-    state.recovering = false;
-    state.verified = true;
-    state.generation = nextSkillsWatchGeneration();
-    const changes: PendingSkillsWatchChange[] = [];
-    if (state.initialScan !== "ready") {
-      state.initialScan = "ready";
-      const watcherKeys = [...state.subscribers].filter((key) =>
-        workspaceWatchTargets.get(key)?.every((entry) => {
-          const current = pathWatchers.get(entry.path);
-          return current && !current.closed && current.initialScan !== "pending";
-        }),
-      );
-      changes.push({ ...targetChange, watcherKeys, change: "initial-scan" });
-    }
-    if (restored) {
-      changes.push({ ...targetChange, change: "skills" });
-    }
-    publishSkillsWatchChanges(changes);
-    publishRecoveredCoverage();
-  };
-  starting = runInSkillsWatcherContext(() =>
-    Promise.resolve().then(async () => {
-      if (!isCurrent()) {
-        return;
-      }
-      state.authority = admitObservationRoot(target.authorityPath);
-      const authority = await state.authority;
-      if (!isCurrent()) {
-        return;
-      }
-      const scope = await skillsObservationScope(
-        authority,
-        { ...target, depth: state.depth },
-        lifetime.signal,
-      );
-      plannedScope = scope;
-      if (!isCurrent()) {
-        return;
-      }
-      const { mode, pollIntervalMs, reportHealth } = skillsObservationTransport(target.path);
-      subscription = watch(authority, {
-        scopes: [scope],
-        mode,
-        pollIntervalMs,
-        signal: lifetime.signal,
-        exclude: (entry) => {
-          if (plannedScope?.kind === "entry" && entry.path === plannedScope.path) {
-            entryDirectoryObserved = entry.kind === "directory";
-          }
-          const absolute = path.resolve(authority.rootDir, entry.path);
-          // Ancestors belong to observation plumbing. An explicitly admitted
-          // source under .cache (or another ignored parent) still needs coverage.
-          const inside = isPathInside(target.path, absolute);
-          const ignored = inside && isIgnoredSkillsWatchPath(path.relative(target.path, absolute));
-          if (inside && !ignored && scannedKinds) {
-            if (
-              !scannedKinds.has(entry.path) &&
-              scannedKinds.size >= MAX_SKILLS_WATCH_ENTRY_KINDS
-            ) {
-              scannedKinds = undefined;
-            } else {
-              scannedKinds.set(
-                entry.path,
-                scannedKinds.get(entry.path) === true || entry.kind !== "file",
-              );
-            }
-          }
-          return ignored;
-        },
-        onInvalidate: (hint) => {
-          if (!isCurrent()) {
-            return;
-          }
-          if (
-            subscriptionReady &&
-            plannedScope?.kind === "entry" &&
-            (!hint.changes || hint.changes.some((change) => change.type === "structural"))
-          ) {
-            // A blocked lexical entry can become a directory (or retarget).
-            // Re-admit the selected scope under the same Root, not a new authority.
-            state.generation = nextSkillsWatchGeneration();
-            publishSkillsWatchChanges([
-              { ...targetChange, changedPath: target.path, change: "skills" },
-            ]);
-            if (isCurrent()) {
-              void state.refreshScope();
-            }
-            return;
-          }
-          if (state.initialScan === "pending") {
-            return;
-          }
-          if (!hint.changes) {
-            schedule(target.path);
-            return;
-          }
-          for (const change of hint.changes) {
-            const changedPath = path.resolve(authority.rootDir, change.path);
-            const inside = isPathInside(target.path, changedPath);
-            const relative = path.relative(target.path, changedPath);
-            if (inside && isIgnoredSkillsWatchPath(relative)) {
-              continue;
-            }
-            if (
-              !inside &&
-              !(change.type === "structural" && isPathInside(changedPath, target.path))
-            ) {
-              continue;
-            }
-            if (
-              isSkillDiscoveryFileWatchPath(relative) &&
-              (change.type === "content" || scannedKinds?.has(change.path) !== false)
-            ) {
-              // Creation and atomic replacement can precede more writes. Only
-              // a scan-confirmed deletion may bypass guarded write settling.
-              state.generation = nextSkillsWatchGeneration();
-              stability.schedule(changedPath);
-            } else if (change.type === "structural") {
-              const before = entryKinds?.get(change.path);
-              const after = scannedKinds?.get(change.path);
-              const supportingFile =
-                inside &&
-                relative !== "" &&
-                !isSkillDiscoveryFileWatchPath(relative) &&
-                entryKinds !== undefined &&
-                scannedKinds !== undefined &&
-                before !== true &&
-                after !== true &&
-                (before === false || after === false);
-              // File creation, deletion and atomic save are structural to fs-safe,
-              // but only directories/links/discovery files change Skills discovery.
-              schedule(changedPath, supportingFile ? "supporting" : "skills");
-            } else {
-              schedule(changedPath, "supporting");
-            }
-          }
-        },
-        onHealth: (health) => {
-          if (isCurrent()) {
-            reportHealth(health);
-          }
-          if (health.state === "starting" || health.state === "reconciling") {
-            scannedKinds = new Map();
-          } else if (health.state === "ready") {
-            if (!scannedKinds) {
-              entryKinds = undefined;
-            } else if (entryKinds) {
-              for (const [name, kind] of scannedKinds) {
-                if (!entryKinds.has(name) && entryKinds.size >= MAX_SKILLS_WATCH_ENTRY_KINDS) {
-                  entryKinds = undefined;
-                  break;
-                }
-                entryKinds.set(name, kind);
-              }
-            }
-            scannedKinds = new Map();
-          }
-          if (health.state === "unavailable") {
-            failed(health.failure?.error, health.failure);
-          }
-        },
-      });
-      await subscription.ready;
-      if (!isCurrent()) {
-        return;
-      }
-      subscriptionReady = true;
-      if (plannedScope?.kind === "entry" && entryDirectoryObserved) {
-        // The baseline can see a directory that replaced the planned blocking entry.
-        void state.refreshScope();
-        return;
-      }
-      publishReady();
-    }),
-  );
-  void starting.catch((error: unknown) => failed(error, subscription?.health().failure));
-  return state;
-}
-
-function subscribeWorkspaceToPath(workspaceDir: string, target: WatchTarget): void {
-  const existing = pathWatchers.get(target.path);
-  if (existing) {
-    existing.subscribers.add(workspaceDir);
-    const healthy = !existing.closed && !existing.failed;
-    const reusable = healthy && existing.depth >= target.depth;
-    existing.depth = Math.max(existing.depth, target.depth);
-    if (reusable || existing.replacing) {
-      return;
-    }
-    existing.verified = false;
-    if (healthy) {
-      // A deeper subscriber cannot claim coverage while scope expansion is pending.
-      void existing.refreshScope();
-      return;
-    }
-    if (!existing.unavailable) {
-      existing.unavailable = true;
-      publishSkillsWatchChanges([
-        {
-          targetPath: target.path,
-          state: existing,
-          watcherKeys: existing.subscribers,
-          change: "unavailable",
-        },
-      ]);
-    }
-    existing.replacing = true;
-    const replacement = existing
-      .close()
-      .then(() => {
-        if (
-          watchersClosing ||
-          nativeWatchCapacityFailed ||
-          pathWatchers.get(target.path) !== existing ||
-          existing.subscribers.size === 0
-        ) {
-          return;
-        }
-        const next = createSkillsPathWatcher({ ...target, depth: existing.depth }, existing);
-        for (const subscriber of existing.subscribers) {
-          next.subscribers.add(subscriber);
-          workspaceWatchTargetCache.delete(subscriber);
-        }
-        pathWatchers.set(target.path, next);
-      })
-      .catch((error: unknown) =>
-        log.warn("skills observation retirement failed (" + target.path + "): " + String(error)),
-      );
-    replacingWatchers.add(replacement);
-    void replacement.finally(() => replacingWatchers.delete(replacement));
-    return;
-  }
-  const state = createSkillsPathWatcher(target);
-  state.subscribers.add(workspaceDir);
-  pathWatchers.set(target.path, state);
-}
-
-function disposeWorkspaceWatchState(watcherKey: string): void {
-  const watchTargets = workspaceWatchTargets.get(watcherKey) ?? [];
-  disposeRemoteSkillsWatcher(watcherKey);
-  disposeWorkspacePathWatchState(watcherKey, watchTargets);
-}
-
-export function ensureSkillsWatcher(params: {
+const runInDiscoveryContext = AsyncLocalStorage.snapshot();
+const SAFETY_REFRESH_MS = 30 * 60_000;
+const MAX_SOURCES = 128;
+type Source = {
+  selection: SkillsDiscoverySourceSelection;
   workspaceDir: string;
-  executionWorkspaceDir?: string;
-  executionWorkspaceFileHost?: "gateway";
-  config?: OpenClawConfig;
-  agentId?: string;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  /** Already admitted roots, mapped into the workspace host filesystem. */
-  sourcePlan?: WorkspaceSkillSourcePlan;
-}) {
-  if (watchersClosing) {
-    return;
-  }
-  const { workspaceDir, executionWorkspaceDir, watcherKey, sourceScope } =
-    resolveSkillsWatchScope(params);
-  if (!workspaceDir) {
-    return;
-  }
-  const owner: SkillsWatchOwner = {
-    workspaceDir,
-    sourceScope,
-    sharedScanPending: workspaceWatchOwners.get(watcherKey)?.sharedScanPending ?? false,
-    unavailable: workspaceWatchOwners.get(watcherKey)?.unavailable ?? false,
-  };
-  workspaceWatchOwners.set(watcherKey, owner);
-  const isCurrent = () => !watchersClosing && workspaceWatchOwners.get(watcherKey) === owner;
-  const refreshInputs = {
-    sourceScope,
-    config: params.config,
-    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
-  };
-  const now = Date.now();
-  if (params.config?.skills?.load?.watch === false) {
-    disposeWorkspaceWatchState(watcherKey);
-    evictWorkspaceWatchStates(now, disposeWorkspaceWatchState);
-    return;
-  }
+  environment: SkillsDiscoveryEnvironment;
+  watch: boolean;
+  dirty: boolean;
+  sources?: WorkspaceSkillSources;
+  fingerprint?: string;
+  unavailable?: boolean;
+  watchDirectories?: string[];
+  observations: Map<string, ReturnType<typeof observeOwnedDirectory>>;
+};
+type DiscoveryState = {
+  catalog: Map<string, Skill>;
+  sources: Map<string, Source>;
+  plans: Map<string, Promise<{ plan: WorkspaceSkillSourcePlan; input: SkillsSourcePlanInput }>>;
+  pool?: WorkerTaskPool<SkillsDiscoveryInput, SkillsDiscoveryOutput>;
+  refreshTimer?: ReturnType<typeof setTimeout>;
+  pending?: Promise<void>;
+  closing?: Promise<void>;
+};
 
-  // Map order breaks equal-clock ties and promotes reuse without adding a generation.
-  workspaceWatchLastEnsuredAt.delete(watcherKey);
-  workspaceWatchLastEnsuredAt.set(watcherKey, now);
-  evictWorkspaceWatchStates(now, disposeWorkspaceWatchState);
-  if (!isCurrent()) {
+const state = resolveGlobalSingleton<DiscoveryState>(
+  Symbol.for("openclaw.skillsDiscovery"),
+  () => ({ sources: new Map(), plans: new Map(), catalog: new Map() }),
+  () => closeSkillsWatchers(),
+);
+
+/** Share parsed facts, never agent selection or workspace read authority. */
+function shareCatalogSkill(skill: Skill): Skill {
+  const key = JSON.stringify([
+    skill.filePath,
+    skill.sourceInfo,
+    skill.discoveryRoot,
+    skill.fileHost,
+    skill.source,
+  ]);
+  const previous = state.catalog.get(key);
+  if (previous === skill || (previous && isDeepStrictEqual(previous, skill))) {
+    return previous;
+  }
+  // A completed scan supplies the current content hash and metadata. Replace
+  // edited facts; snapshots already in use retain their immutable old revision.
+  Object.freeze(skill.sourceInfo);
+  if (skill.discoveryRoot) {
+    Object.freeze(skill.discoveryRoot);
+  }
+  state.catalog.set(key, Object.freeze(skill));
+  // Bound catalogs from retired workspaces and transient resource locations.
+  if (state.catalog.size > 4096) {
+    state.catalog.delete(state.catalog.keys().next().value!);
+  }
+  return skill;
+}
+
+function pool() {
+  return (state.pool ??= runInDiscoveryContext(
+    () =>
+      new WorkerTaskPool({
+        workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.skillsDiscovery),
+        workerClass: "singleton",
+        idleTimeoutMs: 0,
+      }),
+  ));
+}
+
+function observeSource(source: Source) {
+  if (!source.watch || !source.watchDirectories) {
     return;
   }
-  const access = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
-  let localPlan = params.sourcePlan;
-  let localExecutionWorkspaceDir = executionWorkspaceDir;
-  if (access?.loadSkills) {
-    const {
-      gatewayPlan,
-      workspacePlan,
-      gatewayExecutionWorkspaceDir,
-      workspaceExecutionWorkspaceDir,
-    } = splitSkillSourcePlan(resolveWorkspaceSkillSourcePlan(workspaceDir, params), sourceScope);
-    localExecutionWorkspaceDir = gatewayExecutionWorkspaceDir;
-    ensureRemoteSkillsWatcher({
-      watcherKey,
-      workspaceDir,
-      executionWorkspaceDir: workspaceExecutionWorkspaceDir,
-      access,
-      sourcePlan: workspacePlan,
-    });
-    localPlan = gatewayPlan;
-  } else {
-    disposeRemoteSkillsWatcher(watcherKey);
-  }
-  if (!isCurrent()) {
-    return;
-  }
-  if (nativeWatchCapacityFailed) {
-    // Reconcile file-backed sources during preparation while native observation
-    // is unavailable, without reopening watches.
-    workspaceWatchTargetCache.delete(watcherKey);
-    bumpSkillsSnapshotVersion({ workspaceDir, refreshInputs, reason: "watch" });
-    return;
-  }
-  const reconcileTargets = (retryFailedTargets: boolean) => {
-    const previousTargets = workspaceWatchTargets.get(watcherKey) ?? [];
-    const failedTargets = retryFailedTargets
-      ? previousTargets.filter((entry) => pathWatchers.get(entry.path)?.unavailable)
-      : [];
-    if (failedTargets.length > 0) {
-      // A failed verifier leaves observation incomplete. Preparation must rescan
-      // filesystem-derived targets before reconciling only the affected sources.
-      workspaceWatchTargetCache.delete(watcherKey);
+  const directories = new Set(source.watchDirectories);
+  for (const [directory, observation] of source.observations) {
+    if (!directories.has(directory)) {
+      observation.close();
+      source.observations.delete(directory);
     }
-    const cachedTargets = workspaceWatchTargetCache.get(watcherKey);
-    const resolvedTargets = resolveSkillsWatchTargets(
-      workspaceDir,
-      params.config,
-      params.agentId,
-      localExecutionWorkspaceDir,
-      params.pluginMetadataSnapshot,
-      localPlan,
-      cachedTargets,
-    );
-    settleWorkspaceWatchTargetsPlan(watcherKey, resolvedTargets);
-    const watchTargets = resolvedTargets.targets;
-    const coveredTargets = previousTargets.length
-      ? previousTargets
-      : Array.from(workspaceWatchOwners).flatMap(([key, other]) =>
-          other.workspaceDir === workspaceDir ? (workspaceWatchTargets.get(key) ?? []) : [],
-        );
-    const targetChanges = compareSkillsWatchTargets(previousTargets, watchTargets, coveredTargets);
-    const watcherDepthsCoverTargets = watchTargets.every(
-      (watchTarget) => (pathWatchers.get(watchTarget.path)?.depth ?? -1) >= watchTarget.depth,
-    );
-    if (targetChanges.targetsUnchanged && watcherDepthsCoverTargets && failedTargets.length === 0) {
-      return;
+  }
+  for (const directory of directories) {
+    if (!source.observations.has(directory)) {
+      // Windows cannot rename a workspace while a watch holds a descendant directory.
+      // One recursive workspace handle still reports edits in each selected subtree.
+      const watchRoot =
+        process.platform === "win32"
+          ? ([source.workspaceDir, source.selection.request.executionWorkspaceDir]
+              .filter((root): root is string => Boolean(root && isPathInside(root, directory)))
+              .toSorted((a, b) => a.length - b.length)[0] ?? path.dirname(directory))
+          : undefined;
+      source.observations.set(
+        directory,
+        observeOwnedDirectory(
+          directory,
+          () => {
+            source.dirty = true;
+            state.refreshTimer ??= runInDiscoveryContext(() =>
+              setTimeout(() => {
+                state.refreshTimer = undefined;
+                void scanDirtySources().catch((error: unknown) =>
+                  log.warn(`passive skills refresh failed: ${String(error)}`),
+                );
+              }, 50).unref(),
+            );
+          },
+          { recursive: true, reconcileIntervalMs: SAFETY_REFRESH_MS, watchRoot },
+        ),
+      );
     }
-    const nextTargetKeys = new Set(watchTargets.map((target) => target.path));
-    for (const watchTarget of previousTargets) {
-      if (!nextTargetKeys.has(watchTarget.path)) {
-        unsubscribeWorkspaceFromPath(watcherKey, watchTarget);
-      }
-    }
-    // A replacement notification can synchronously dispose or re-ensure this owner.
-    // Publish its full plan first so disposal also releases the admitted prefix.
-    setWorkspaceWatchTargets(watcherKey, watchTargets);
-    for (const watchTarget of watchTargets) {
-      const existing = pathWatchers.get(watchTarget.path);
-      if (!retryFailedTargets && existing?.unavailable && (existing.failed || existing.closed)) {
-        // A peer becoming ready must not consume another failed target's retry.
-        // Explicit preparation and the failed owner still own recovery admission.
-        existing.subscribers.add(watcherKey);
-      } else {
-        subscribeWorkspaceToPath(watcherKey, watchTarget);
-      }
-      if (!isCurrent()) {
+  }
+}
+
+function closeSource(source: Source) {
+  for (const observation of source.observations.values()) {
+    observation.close();
+  }
+  source.observations.clear();
+}
+
+function scanDirtySources(): Promise<void> {
+  if (state.closing) {
+    return Promise.reject(new Error("Skills discovery is closing"));
+  }
+  state.pending ??= runInDiscoveryContext(async () => {
+    while (!state.closing) {
+      const selected = [...state.sources].filter(([, source]) => source.dirty);
+      if (!selected.length) {
         return;
       }
+      for (const [, source] of selected) {
+        source.dirty = false;
+      }
+      let results: SkillsDiscoveryResult[];
+      try {
+        const response = await pool().run(
+          {
+            kind: "scan",
+            requests: selected.map(([key, source]) => ({
+              key,
+              environment: source.environment,
+              selection: source.selection,
+            })),
+            path: process.env.PATH,
+          },
+          { timeoutMs: 120_000 },
+        );
+        if (response.kind !== "scan") {
+          throw new Error("Unexpected Skills discovery response");
+        }
+        results = response.results;
+      } catch (error) {
+        for (const [key, source] of selected) {
+          if (state.sources.get(key) !== source) {
+            continue;
+          }
+          source.dirty = true;
+          if (!state.closing && !source.unavailable) {
+            source.unavailable = true;
+            bumpSkillsSnapshotVersion({
+              workspaceDir: source.workspaceDir,
+              reason: "watch-unavailable",
+            });
+          }
+        }
+        throw error;
+      }
+      if (state.closing) {
+        return;
+      }
+      const changed = new Set<string>();
+      const refreshed = new Set<string>();
+      const recovered: Source[] = [];
+      // Install the completed batch before publishing any revision or listener event.
+      for (const result of results) {
+        const source = state.sources.get(result.key);
+        if (
+          !source ||
+          source !== selected.find(([key]) => key === result.key)?.[1] ||
+          source.dirty
+        ) {
+          continue;
+        }
+        if (source.fingerprint !== undefined && source.fingerprint !== result.fingerprint) {
+          changed.add(source.workspaceDir);
+        }
+        if (source.unavailable) {
+          source.unavailable = false;
+          recovered.push(source);
+        }
+        if (result.plan && source.selection.plan) {
+          const input = source.selection.plan.input;
+          state.plans.set(JSON.stringify(input), Promise.resolve({ plan: result.plan, input }));
+        }
+        for (const entry of [...result.sources.entries, ...result.sources.executionEntries]) {
+          entry.skill = shareCatalogSkill(entry.skill);
+        }
+        source.sources = result.sources;
+        source.fingerprint = result.fingerprint;
+        source.watchDirectories = result.watchDirectories;
+        observeSource(source);
+        refreshed.add(source.workspaceDir);
+      }
+      while (state.plans.size > MAX_SOURCES) {
+        state.plans.delete(state.plans.keys().next().value!);
+      }
+      // A completed bounded pass also invalidates supporting-file copies. This
+      // deliberately conservative revision avoids a second recursive tree scan.
+      for (const workspaceDir of refreshed) {
+        markSkillsSupportingFilesChanged({ workspaceDir });
+      }
+      for (const workspaceDir of changed) {
+        bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+      }
+      for (const source of recovered) {
+        notifySkillsWatchAvailable({
+          workspaceDir: source.workspaceDir,
+        });
+      }
     }
-    owner.sharedScanPending ||= hasUnreadySharedTargets(watcherKey);
-    const joinedUnavailable = watchTargets.some(
-      (target) =>
-        pathWatchers.get(target.path)?.unavailable &&
-        !previousTargets.some((previous) => previous.path === target.path),
-    );
+  }).finally(() => {
+    state.pending = undefined;
+  });
+  return state.pending;
+}
 
-    const notifyUnavailable = joinedUnavailable && !owner.unavailable;
-    owner.unavailable ||= joinedUnavailable;
-
-    // Acquisition must invalidate reads cached during an unwatched interval,
-    // before the first consumer runs or the asynchronous initial scan completes.
-    if (!targetChanges.targetsUnchanged || failedTargets.length > 0) {
+async function registerSource(selection: SkillsDiscoverySourceSelection, watch?: boolean) {
+  if (state.closing) {
+    await state.closing;
+  }
+  const environment = selection.plan?.input.environment ?? captureSkillsDiscoveryEnvironment();
+  const { request } = selection;
+  const key = JSON.stringify(
+    selection.plan
+      ? { ...request, sourcePlan: undefined, plan: selection.plan }
+      : { ...request, environment },
+  );
+  let source = state.sources.get(key);
+  if (!source) {
+    if (state.sources.size >= MAX_SOURCES) {
+      const oldestKey = state.sources.keys().next().value!;
+      const oldest = state.sources.get(oldestKey)!;
+      closeSource(oldest);
+      state.sources.delete(oldestKey);
+      // An evicted source has no retained fingerprint to compare on readmission.
       bumpSkillsSnapshotVersion({
-        workspaceDir,
-        sourceScopes:
-          targetChanges.sharedTargetsChanged ||
-          failedTargets.some((target) => !target.executionOnly)
-            ? undefined
-            : [sourceScope],
-        refreshInputs,
-        // New subscribers need the existing availability fact once. Repeated
-        // preparation reconciles content without requeueing a watch-only worker.
-        reason: notifyUnavailable ? "watch-unavailable" : "watch-targets",
-        changedPath: watchTargets.map((target) => target.path).join("|"),
+        workspaceDir: oldest.workspaceDir,
+        reason: "watch",
       });
     }
+    source = {
+      selection,
+      workspaceDir:
+        selection.kind === "planned"
+          ? selection.plan.input.workspaceDir
+          : selection.request.sourcePlan.workspaceDir,
+      environment,
+      watch: watch !== false,
+      dirty: true,
+      observations: new Map(),
+    };
+    state.sources.set(key, source);
+  } else {
+    // An opt-out read must not withdraw another consumer's passive observation.
+    source.watch ||= watch !== false;
+    state.sources.delete(key);
+    state.sources.set(key, source);
+  }
+  observeSource(source);
+  return { key, source };
+}
+
+function readRegisteredSource({ key, source }: Awaited<ReturnType<typeof registerSource>>) {
+  if (state.sources.get(key) !== source || !source.sources) {
+    throw new Error("Skills discovery was retired before publication");
+  }
+  return source.sources;
+}
+
+async function publishRegisteredSource(registration: Awaited<ReturnType<typeof registerSource>>) {
+  const { source } = registration;
+  if (source.dirty || !source.sources) {
+    await scanDirtySources();
+  }
+  return readRegisteredSource(registration);
+}
+
+/** The only asynchronous local discovery boundary, shared by all Gateway consumers. */
+export async function prepareLocalSkillSources(
+  request: WorkspaceSkillSourceRequest,
+  options: { watch?: boolean; plan?: SkillsDiscoverySourceSelection["plan"] } = {},
+): Promise<WorkspaceSkillSources> {
+  return publishRegisteredSource(
+    await registerSource({ kind: "selected", request, plan: options.plan }, options.watch),
+  );
+}
+
+/** Compose roots on the same worker, reusing facts until its next completed scan. */
+export async function prepareSkillSourcePlan(
+  workspaceDir: string,
+  options: WorkspaceSkillSourcePlanOptions = {},
+) {
+  if (state.closing) {
+    await state.closing;
+  }
+  const input = captureSkillsSourcePlanInput(workspaceDir, options);
+  const key = JSON.stringify(input);
+  return getOrCreatePromise(
+    state.plans,
+    key,
+    () => {
+      if (state.plans.size >= MAX_SOURCES) {
+        state.plans.delete(state.plans.keys().next().value!);
+      }
+      return pool()
+        .run({ kind: "plan", input }, { timeoutMs: 120_000 })
+        .then((result) => {
+          if (result.kind !== "plan") {
+            throw new Error("Unexpected Skills source plan response");
+          }
+          return { plan: result.plan, input };
+        });
+    },
+    { cacheRejections: false },
+  );
+}
+
+export async function projectSkillSnapshot(
+  input: SkillSnapshotProjectionInput,
+): Promise<SkillSnapshot> {
+  if (state.closing) {
+    await state.closing;
+  }
+  const skills = input.eligible.map((entry) => shareCatalogSkill(entry.skill));
+  const result = await pool().run(
+    { kind: "project", input, environment: captureSkillsDiscoveryEnvironment() },
+    { timeoutMs: 120_000 },
+  );
+  if (result.kind !== "project") {
+    throw new Error("Unexpected Skills projection response");
+  }
+  return {
+    ...result.snapshot,
+    resolvedSkills: result.resolvedIndices.map((index) => skills[index]!),
+    discoverySkills: result.discoveryIndices.map((index) => skills[index]!),
   };
-  owner.reconcileTargets = () => {
-    if (!isCurrent() || nativeWatchCapacityFailed) {
+}
+
+export async function prepareSkillStatusFacts(
+  input: Parameters<typeof readWorkspaceSkillStatusFacts>[0],
+) {
+  if (state.closing) {
+    await state.closing;
+  }
+  const result = await pool().run(
+    { kind: "status", input, environment: captureSkillsDiscoveryEnvironment() },
+    { timeoutMs: 120_000 },
+  );
+  if (result.kind !== "status") {
+    throw new Error("Unexpected Skills status response");
+  }
+  return result.facts;
+}
+
+async function registerSkillsWatcher(params: SkillsWatcherParams) {
+  if (state.closing) {
+    await state.closing;
+  }
+  const access = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
+  const watcherKey = JSON.stringify([
+    params.workspaceDir,
+    params.executionWorkspaceDir,
+    params.executionWorkspaceFileHost,
+  ]);
+  if (!access?.loadSkills && !params.sourcePlan) {
+    await disposeRemoteSkillsWatcher(watcherKey);
+    // Local discovery selects roots and reads them in one worker pass.
+    return registerSource(
+      {
+        kind: "planned",
+        request: {
+          executionWorkspaceDir: params.executionWorkspaceDir,
+          limits: resolveSkillDiscoveryLimits(params.config),
+          additionalBins: [],
+        },
+        plan: { input: captureSkillsSourcePlanInput(params.workspaceDir, params) },
+      },
+      params.config?.skills?.load?.watch,
+    );
+  }
+  const prepared = params.sourcePlan
+    ? undefined
+    : await prepareSkillSourcePlan(params.workspaceDir, params);
+  const plan = params.sourcePlan ?? prepared!.plan;
+  const split = access?.loadSkills ? splitSkillSourcePlan(plan, params) : undefined;
+  if (split && params.config?.skills?.load?.watch !== false) {
+    await ensureRemoteSkillsWatcher({
+      watcherKey,
+      workspaceDir: params.workspaceDir,
+      executionWorkspaceDir: split.workspaceExecutionWorkspaceDir,
+      access: access!,
+      sourcePlan: split.workspacePlan,
+    });
+  } else {
+    await disposeRemoteSkillsWatcher(watcherKey);
+  }
+  return registerSource(
+    {
+      kind: "selected",
+      request: {
+        sourcePlan: split?.gatewayPlan ?? plan,
+        executionWorkspaceDir: split
+          ? split.gatewayExecutionWorkspaceDir
+          : params.executionWorkspaceDir,
+        limits: resolveSkillDiscoveryLimits(params.config),
+        additionalBins: [],
+      },
+      plan: prepared
+        ? { input: prepared.input, ...(split ? { scope: "gateway" as const } : {}) }
+        : undefined,
+    },
+    params.config?.skills?.load?.watch,
+  );
+}
+
+/** Keep remote observation on its owning host; await the local source publication. */
+export async function ensureSkillsWatcher(params: SkillsWatcherParams): Promise<void> {
+  await publishRegisteredSource(await registerSkillsWatcher(params));
+}
+
+/** Explicit actions await a completed worker publication. */
+export async function refreshSkillsDiscovery(
+  params: {
+    workspaceDir?: string;
+    config?: OpenClawConfig;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
+    reason?: "manual" | "workshop" | "config-change";
+  } = {},
+): Promise<void> {
+  if (params.reason === "config-change") {
+    await resetSkillsDiscoverySources(false);
+  }
+  for (const source of state.sources.values()) {
+    source.dirty = true;
+  }
+  if (params.config) {
+    const { listAgentIds, resolveAgentWorkspaceDir } =
+      await import("../../agents/agent-scope-config.js");
+    const agentIds = listAgentIds(params.config);
+    // Register each bounded batch before dispatch; roots are selected once per source.
+    for (let offset = 0; offset < agentIds.length; offset += MAX_SOURCES) {
+      const registrations = await Promise.all(
+        agentIds.slice(offset, offset + MAX_SOURCES).map((agentId) =>
+          registerSkillsWatcher({
+            workspaceDir: resolveAgentWorkspaceDir(params.config!, agentId),
+            config: params.config,
+            pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+            agentId,
+          }),
+        ),
+      );
+      await scanDirtySources();
+      registrations.forEach(readRegisteredSource);
+    }
+  } else {
+    if (!state.sources.size && params.workspaceDir) {
+      await registerSkillsWatcher({
+        workspaceDir: params.workspaceDir,
+        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+      });
+    }
+    await scanDirtySources();
+  }
+  bumpSkillsSnapshotVersion({
+    workspaceDir: params.workspaceDir,
+    reason: params.reason ?? "manual",
+  });
+}
+
+async function resetSkillsDiscoverySources(
+  retireWorker: boolean,
+  resetState = false,
+): Promise<void> {
+  if (state.closing) {
+    await state.closing;
+    // A concurrent shutdown must still retire the worker a source reset retained.
+    if (!retireWorker || !state.pool) {
       return;
     }
-    workspaceWatchTargetCache.delete(watcherKey);
-    reconcileTargets(false);
-  };
-  reconcileTargets(true);
-}
-
-/** Finish discovery deferred during an outage before a worker advertises coverage. */
-export function reconcileSkillsWatcherCoverage(
-  params: Parameters<typeof ensureSkillsWatcher>[0],
-): boolean {
-  ensureSkillsWatcher(params);
-  const { watcherKey } = resolveSkillsWatchScope(params);
-  const owner = workspaceWatchOwners.get(watcherKey);
-  const covered = !watchersClosing && !nativeWatchCapacityFailed && hasVerifiedCoverage(watcherKey);
-  if (owner && !covered) {
-    // New targets need their own verification; their ready event resumes this
-    // availability check after discovery and outage edits have been reconciled.
-    owner.unavailable = true;
   }
-  return covered;
-}
-
-export async function closeSkillsWatchers(resetState = false): Promise<void> {
-  watchersClosing = true;
-  if (resetState) {
-    resetSkillsRefreshStateForTest();
+  clearTimeout(state.refreshTimer);
+  state.refreshTimer = undefined;
+  // Config changes replace plans and subscriptions, not the healthy discovery worker.
+  // Its requests already carry their own environment and freshly selected source plan.
+  const activePool = retireWorker ? state.pool : undefined;
+  if (retireWorker) {
+    state.pool = undefined;
   }
-  const active = Array.from(pathWatchers.values());
-  nativeWatchCapacityFailed = false;
-  pathWatchers.clear();
-  clearWorkspaceWatchTargets();
-  clearSkillRootRecordsCache();
-  workspaceWatchOwners.clear();
-  workspaceWatchTargetCache.clear();
-  workspaceWatchLastEnsuredAt.clear();
-  active.forEach((state) => void state.close());
-  const results = await Promise.allSettled([
-    ...replacingWatchers,
-    ...retiringWatchers,
+  for (const source of state.sources.values()) {
+    closeSource(source);
+  }
+  state.sources.clear();
+  state.plans.clear();
+  if (retireWorker) {
+    state.catalog.clear();
+  }
+  state.closing = Promise.allSettled([
+    state.pending?.catch(() => {}),
+    activePool?.close(),
     closeRemoteSkillsWatchers(),
-  ]);
-  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-  if (errors.length) {
-    throw new AggregateError(errors, "Skills watcher shutdown failed");
-  }
-  watchersClosing = false;
+  ])
+    .then((results) => {
+      if (resetState) {
+        resetSkillsRefreshStateForTest();
+      }
+      throwSettledAggregate(results, "Skills discovery shutdown failed");
+    })
+    .finally(() => {
+      state.closing = undefined;
+    });
+  return state.closing;
 }
+
+export function closeSkillsWatchers(resetState = false): Promise<void> {
+  return resetSkillsDiscoverySources(true, resetState);
+}
+
+export const detachSkillsWatchers = closeSkillsWatchers;

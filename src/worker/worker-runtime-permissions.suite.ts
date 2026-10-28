@@ -1,6 +1,8 @@
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import type { WorkerTranscriptCommitParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerExecApprovalParams } from "../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import type { WorkerInferenceStartParams } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,10 +20,14 @@ type WorkerPermissionFixture = {
       | { args: Record<string, unknown>; toolCallId: string; toolName: string }
     >;
     execApprovals?: ExecApprovalsFile;
+    execCommand?: string;
+    execApprovalDecision?: "allow-once" | "deny";
   }) => Promise<{
     gateway: {
       inferenceRequests: WorkerInferenceStartParams[];
       methods: string[];
+      messages: WorkerTranscriptCommitParams["messages"];
+      execApprovalRequests: WorkerExecApprovalParams[];
       config?: OpenClawConfig;
       toolSurface: () => WorkerToolSurface;
     };
@@ -31,6 +37,37 @@ type WorkerPermissionFixture = {
 };
 
 export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture) {
+  it.skipIf(process.platform === "win32")(
+    "routes automatic exec review through the admitted worker connection",
+    async () => {
+      const command = "/bin/echo worker-runtime-reviewed";
+      const { gateway, launch } = await setup({
+        inferencePlans: [{ toolName: "exec", toolCallId: "auto-exec", args: { command } }, "text"],
+        execApprovalDecision: "allow-once",
+        execApprovals: {
+          version: 1,
+          defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+          agents: {},
+        },
+      });
+      launch.assignment.toolAuthority.exec = {
+        host: "gateway",
+        mode: "auto",
+        security: "allowlist",
+        ask: "on-miss",
+      };
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+      expect(gateway.execApprovalRequests).toMatchObject([
+        { operation: "review", binding: { command } },
+      ]);
+      const result = gateway.messages.find(
+        (message) => message.role === "toolResult" && message.toolCallId === "auto-exec",
+      );
+      expect(result).toMatchObject({ details: { status: "completed", exitCode: 0 } });
+      expect(JSON.stringify(result)).toContain("worker-runtime-reviewed");
+    },
+  );
+
   it("enforces Gateway filesystem and patch configuration through the worker entry point", async () => {
     const cases = [
       { workspaceOnly: true, toolName: "read", patch: { enabled: false }, patchAllowed: false },
@@ -129,19 +166,18 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
     {
       mode: "guarded" as const,
       omittedTools: [],
-      denial:
-        /approval_required.*worker guarded permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
+      denial: /Exec denied.*user-denied/isu,
     },
     {
       mode: "workspace" as const,
       omittedTools: [],
-      denial:
-        /approval_required.*worker workspace permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
+      denial: /Exec denied by auto-review/iu,
     },
     { mode: "full" as const, omittedTools: [], denial: null },
   ])("applies the $mode worker permission clamp", async ({ mode, omittedTools, denial }) => {
     const { gateway, workspaceDir, launch } = await setup({
       inferencePlans: ["tool", "text"],
+      ...(mode !== "full" ? { execCommand: "/bin/echo worker-local" } : {}),
       ...(mode === "full"
         ? {
             execApprovals: {
@@ -168,6 +204,9 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
     );
     if (denial) {
       expect(toolResult).toMatch(denial);
+      if (mode !== "read-only") {
+        expect(gateway.methods).toContain("worker.exec.approval");
+      }
       await expect(
         readFile(path.join(workspaceDir, "local-proof.txt"), "utf8"),
       ).rejects.toMatchObject({ code: "ENOENT" });
@@ -196,13 +235,16 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
           (message) => message.role === "toolResult",
         ),
       );
-      expect(toolResult).toContain("approval_required");
+      expect(toolResult).toMatch(
+        mode === "workspace" ? /Exec denied by auto-review/iu : /Exec denied.*user-denied/isu,
+      );
+      expect(gateway.methods).toContain("worker.exec.approval");
     },
   );
 
   it.each([
     {
-      policy: "default",
+      policy: "configured",
       permissionMode: undefined,
       operatorHint: "workspace-contained by configuration",
     },
@@ -242,6 +284,8 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
       launch.assignment.workerContainmentRoot = contained;
       if (permissionMode) {
         launch.assignment.permissionMode = permissionMode;
+      } else {
+        gateway.config = { tools: { exec: { applyPatch: { workspaceOnly: true } } } };
       }
 
       const logError = vi.spyOn(logger, "logError").mockImplementation(() => {});
@@ -251,7 +295,7 @@ export function registerWorkerPermissionTests({ setup }: WorkerPermissionFixture
         const failure = {
           status: "error",
           tool: "apply_patch",
-          error: `Path escapes sandbox root (${await realpath(contained)}): ../outside.txt`,
+          error: `Path escapes sandbox root (${await realpath(contained)}): ../outside.txt. Keep patch paths within the bound root. For an authorized task in another repository, ask the parent to respawn the worker with sessions_spawn and cwd set to that repository. Changing exec workdir does not rebind file tools.`,
         };
         const toolResult = gateway.inferenceRequests[1]?.context.messages.find(
           (message) => message.role === "toolResult",

@@ -1,3 +1,8 @@
+import {
+  attachInternalToolExecutionPreparer,
+  copyInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { PluginHostObject } from "../plugins/plugin-instance-owned-values.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -10,8 +15,8 @@ import {
 import { copyChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { copyCodeModeControlToolIdentity } from "./code-mode-control-tools.js";
 import { copyCronScheduledToolProjection } from "./exec-tool-target-pinning.js";
-import { copyInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import { resolveCoreToolExecutionLocation } from "./tool-catalog.js";
+import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 export type AgentToolActionDescriptor = Readonly<{
@@ -29,10 +34,11 @@ export type AgentToolExecutionLocation =
       timeout?: WorkerToolSurface["tools"][number]["timeout"];
     };
 
-type ToolActionState = {
+type ToolActionState = Readonly<{
   descriptor?: AgentToolActionDescriptor;
   executionLocation?: AgentToolExecutionLocation;
-};
+  gatewayPolicyControl?: true;
+}>;
 
 // Rebuilt tools retain prepared classification without adding weak-table edges.
 class ToolActionMetadata extends PluginHostObject {
@@ -40,20 +46,30 @@ class ToolActionMetadata extends PluginHostObject {
 
   constructor(tool: AnyAgentTool, state: ToolActionState) {
     super(tool);
-    this.#state = { ...state };
+    this.#state = state;
   }
 
-  static get(tool: AnyAgentTool): ToolActionState | undefined {
+  static get(tool: object): ToolActionState | undefined {
     return #state in tool ? tool.#state : undefined;
   }
 
   static set(tool: AnyAgentTool, state: ToolActionState): void {
     if (#state in tool) {
-      Object.assign(tool.#state, state);
+      tool.#state = { ...tool.#state, ...state };
     } else {
       void new ToolActionMetadata(tool, state);
     }
   }
+}
+
+/** Only host-owned catalog dispatchers bypass the target-tool allowlist. */
+export function bindGatewayToolPolicyControl<T extends AnyAgentTool>(tool: T): T {
+  ToolActionMetadata.set(tool, { gatewayPolicyControl: true });
+  return tool;
+}
+
+export function isGatewayToolPolicyControl(tool: object): boolean {
+  return ToolActionMetadata.get(tool)?.gatewayPolicyControl === true;
 }
 
 const memoryAction: AgentToolActionDescriptor = Object.freeze({
@@ -102,11 +118,13 @@ export function copyBeforeToolCallWrapperMetadata(
   // SAFETY: both metadata owners attach to the same runtime tool object shape.
   copyChannelAgentToolMeta(source as never, target as never);
   copyToolTerminalPresentation(source, target);
+  copyCodeModeControlToolIdentity(source, target);
   const state = ToolActionMetadata.get(source);
   if (state) {
     ToolActionMetadata.set(target, state);
   }
   copyAgentToolAvailability(source, target);
+  copyAgentToolReplaySafety(source, target);
 }
 
 /** Bind the broad family at final assembly from private, process-stable owner metadata. */
@@ -133,8 +151,29 @@ export function copyAgentToolMetadata<T extends AnyAgentTool>(
   }
   copyBeforeToolCallWrapperMetadata(source, target);
   copyBeforeToolCallMetadata(source, target, wrapExecution);
-  copyCodeModeControlToolIdentity(source, target);
   copyCronScheduledToolProjection(source, target);
   copyInternalToolExecutionPreparer(source, target);
   return target;
+}
+
+export function wrapAgentToolExecutionContext<T extends AnyAgentTool>(
+  tool: T,
+  execute: T["execute"],
+  run: <R>(operation: () => Promise<R>) => Promise<R>,
+  rewrap: ToolExecutionWrapper,
+): T {
+  const wrapped = copyAgentToolMetadata(tool, { ...tool, execute }, rewrap);
+  const sourcePreparer = getInternalToolExecutionPreparer(tool);
+  if (sourcePreparer) {
+    attachInternalToolExecutionPreparer(wrapped, async (params) => {
+      const prepared = await run(() => sourcePreparer(params));
+      return prepared.kind === "ready"
+        ? {
+            ...prepared,
+            execute: (start) => run(() => prepared.execute(start)),
+          }
+        : prepared;
+    });
+  }
+  return wrapped;
 }

@@ -1,20 +1,22 @@
 import { isDeepStrictEqual } from "node:util";
-import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { PhysicalStore, SessionClaim } from "./legacy-main-session-migration.contract.js";
+import type {
+  PhysicalStore,
+  SessionClaim,
+  SessionComparisonClaim,
+} from "./legacy-main-session-migration.contract.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import {
   readSqliteSessionGenerationClaim,
+  readSqliteSessionGenerationComparison,
   readSqliteSessionGenerationWindows,
   rehomeSqliteSessionGenerationWindow,
 } from "./session-accessor.sqlite-generation-copy.js";
-import type { SqliteSessionGenerationClaim } from "./session-accessor.sqlite-generation.types.js";
+import type { SqliteSessionGenerationComparison } from "./session-accessor.sqlite-generation.types.js";
 import { readSessionNodeArtifactFingerprint } from "./session-accessor.sqlite-node-artifacts.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
@@ -28,11 +30,17 @@ function projectEntryIdentity(entry: SessionEntry): SessionEntry {
   return projected;
 }
 
-function generationWindowIdentity(generation: SqliteSessionGenerationClaim, canonicalKey: string) {
+function generationWindowIdentity(
+  generation: SqliteSessionGenerationComparison,
+  canonicalKey: string,
+) {
+  // Derived previews and local write clocks do not distinguish retained histories.
   const {
     updated_at: _updatedAt,
     transcript_updated_at: _transcriptUpdatedAt,
     transcript_observed_at: _transcriptObservedAt,
+    row_transcript_json: _rowTranscript,
+    row_transcript_updated_at: _rowTranscriptUpdatedAt,
     ...identity
   } = rehomeSqliteSessionGenerationWindow(
     generation.window,
@@ -43,8 +51,8 @@ function generationWindowIdentity(generation: SqliteSessionGenerationClaim, cano
 }
 
 export function generationsMatch(
-  left: SqliteSessionGenerationClaim,
-  right: SqliteSessionGenerationClaim,
+  left: SqliteSessionGenerationComparison,
+  right: SqliteSessionGenerationComparison,
   canonicalKey: string,
 ): boolean {
   return (
@@ -56,7 +64,7 @@ export function generationsMatch(
   );
 }
 
-export function claimsMatch(left: SessionClaim, right: SessionClaim): boolean {
+export function claimsMatch(left: SessionComparisonClaim, right: SessionComparisonClaim): boolean {
   const generations = new Map(
     right.generations.map((generation) => [generation.window.session_id, generation]),
   );
@@ -97,7 +105,7 @@ export function readClaim(
   key: string,
   canonicalKey: string,
 ): SessionClaim | undefined {
-  return runSqliteDeferredTransactionSync(database.db, () => {
+  return runSqliteReadSnapshotSync(database.db, () => {
     const row = readExactSessionEntryRowForCanonicalRepair(database, key);
     if (!row) {
       return undefined;
@@ -119,55 +127,29 @@ export function readClaim(
   });
 }
 
-export async function restoreColdSessionClaims(
-  claims: SessionClaim[],
-  env: NodeJS.ProcessEnv,
-  beforePersistentApply?: () => void,
-): Promise<void> {
-  for (const [index, claim] of claims.entries()) {
-    const cold = withOpenClawAgentDatabaseReadOnly(
-      (database) =>
-        executeSqliteQuerySync(
-          database.db,
-          getSessionKysely(database.db)
-            .selectFrom("session_transcript_cold_archives")
-            .select("session_id")
-            .where(
-              "session_id",
-              "in",
-              sqliteStringSet(claim.generations.map((generation) => generation.window.session_id)),
-            ),
-        ).rows,
-      { agentId: claim.store.databaseAgentId, env, path: claim.store.path },
+/** Detection compares history; only Doctor acquires the artifact custody needed to delete it. */
+export function readComparisonClaim(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+  store: PhysicalStore,
+  key: string,
+  canonicalKey: string,
+): SessionComparisonClaim | undefined {
+  return runSqliteReadSnapshotSync(database.db, () => {
+    const row = readExactSessionEntryRowForCanonicalRepair(database, key);
+    if (!row) {
+      return undefined;
+    }
+    const windows = readSqliteSessionGenerationWindows(
+      database,
+      [key],
+      collectSessionStateIdsForEntry(row.entry),
     );
-    if (!cold.found) {
-      throw new Error(`Legacy session store changed before history restoration: ${claim.key}`);
-    }
-    if (
-      cold.value.length === 0 &&
-      claim.generations.every((generation) => !generation.coldArchive)
-    ) {
-      continue;
-    }
-    const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-    for (const generation of cold.value) {
-      await restoreSessionColdTranscript(
-        {
-          agentId: claim.store.databaseAgentId,
-          env,
-          sessionId: generation.session_id,
-          storePath: claim.store.path,
-        },
-        beforePersistentApply,
-      );
-    }
-    const refreshed = withOpenClawAgentDatabaseReadOnly(
-      (database) => readClaim(database, claim.store, claim.key, claim.canonicalKey),
-      { agentId: claim.store.databaseAgentId, env, path: claim.store.path },
-    );
-    if (!refreshed.found || !refreshed.value) {
-      throw new Error(`Legacy session changed during history restoration: ${claim.key}`);
-    }
-    claims[index] = refreshed.value;
-  }
+    return {
+      canonicalKey,
+      entry: row.entry,
+      generations: windows.map((window) => readSqliteSessionGenerationComparison(database, window)),
+      key,
+      store,
+    };
+  });
 }

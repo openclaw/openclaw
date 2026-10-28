@@ -2,13 +2,18 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
+import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.js";
 import { GitHubPublicationKnownFailure } from "./github-publication-failure.js";
 import {
   githubPublicationApiArgs,
   requirePublicationCommand,
 } from "./github-publication-git-transport.js";
 
+export type PublishedGitHubPullRequest = { url: string; number: number; pushRepository: string };
+
 type GitHubPublicationPullRequestLookup = {
+  pullRequest?: SessionGitHubPullRequestBinding;
+  publishedPullRequest?: PublishedGitHubPullRequest;
   repository: string;
   pushOwner: string;
   branch: string;
@@ -20,7 +25,7 @@ type GitHubPublicationPullRequestLookup = {
 };
 
 async function readGitHubPublicationApi(
-  params: GitHubPublicationPullRequestLookup,
+  params: Pick<GitHubPublicationPullRequestLookup, "host" | "refreshIdentity" | "assertCurrent">,
   endpoint: string,
   args: string[] = [],
 ) {
@@ -40,7 +45,94 @@ async function readGitHubPublicationApi(
   return { identity, raw };
 }
 
-async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRequestLookup) {
+/** Read only the receipt-selected PR and verify both repository/branch boundaries. */
+export async function readPublishedGitHubPullRequest(
+  params: Pick<
+    GitHubPublicationPullRequestLookup,
+    "repository" | "branch" | "host" | "refreshIdentity" | "assertCurrent"
+  > & {
+    publishedPullRequest: PublishedGitHubPullRequest;
+    baseBranch?: string;
+    publisherAccountId?: number;
+  },
+) {
+  const pr = params.publishedPullRequest;
+  const { identity, raw } = await readGitHubPublicationApi(
+    params,
+    `repos/${params.repository}/pulls/${pr.number}`,
+  );
+  params.assertCurrent();
+  const value: unknown = JSON.parse(raw);
+  if (
+    !isRecord(value) ||
+    value.html_url !== pr.url ||
+    value.number !== pr.number ||
+    !isRecord(value.user) ||
+    value.user.id !== (params.publisherAccountId ?? identity.account.accountId) ||
+    !isRecord(value.head) ||
+    !isRecord(value.head.repo) ||
+    typeof value.head.repo.full_name !== "string" ||
+    value.head.repo.full_name.toLowerCase() !== pr.pushRepository.toLowerCase() ||
+    value.head.ref !== params.branch ||
+    !isRecord(value.base) ||
+    !isRecord(value.base.repo) ||
+    typeof value.base.repo.full_name !== "string" ||
+    value.base.repo.full_name.toLowerCase() !== params.repository.toLowerCase() ||
+    (params.baseBranch !== undefined && value.base.ref !== params.baseBranch)
+  ) {
+    throw new Error("The original published pull request target changed.");
+  }
+  const [candidate] = parseGitHubPublicationPullRequests(
+    JSON.stringify([
+      {
+        url: value.html_url,
+        userId: value.user.id,
+        state: value.state,
+        body: value.body ?? "",
+        headSha: value.head.sha,
+        headRef: value.head.ref,
+        baseRef: value.base.ref,
+      },
+    ]),
+  );
+  return { identity, candidate: candidate! };
+}
+
+async function loadGitHubPublicationPullRequests(
+  params: Omit<GitHubPublicationPullRequestLookup, "baseBranch"> & { baseBranch?: string },
+) {
+  if (params.pullRequest) {
+    const pr = params.pullRequest;
+    const { identity, raw } = await readGitHubPublicationApi(
+      params,
+      `repos/${pr.base.repository}/pulls/${pr.number}`,
+      [
+        "--jq",
+        '{url: .html_url, userId: .user.id, state: .state, body: "", headSha: .head.sha, headRef: .head.ref, baseRef: .base.ref, headRepository: .head.repo.full_name, headRepositoryId: .head.repo.id, baseRepository: .base.repo.full_name, baseRepositoryId: .base.repo.id}',
+      ],
+    );
+    const value: unknown = JSON.parse(raw);
+    if (
+      !isRecord(value) ||
+      value.url !== pr.url ||
+      value.headRepository !== pr.head.repository ||
+      value.headRepositoryId !== pr.head.repositoryId ||
+      value.baseRepository !== pr.base.repository ||
+      value.baseRepositoryId !== pr.base.repositoryId ||
+      value.headRef !== pr.head.branch ||
+      value.baseRef !== pr.base.branch
+    ) {
+      throw new Error("The original GitHub pull request target changed.");
+    }
+    return { identity, candidates: parseGitHubPublicationPullRequests(JSON.stringify([value])) };
+  }
+  if (params.publishedPullRequest) {
+    const { identity, candidate } = await readPublishedGitHubPullRequest({
+      ...params,
+      publishedPullRequest: params.publishedPullRequest,
+    });
+    return { identity, candidates: [candidate] };
+  }
   const marker = JSON.stringify(params.marker);
   const { identity, raw } = await readGitHubPublicationApi(
     params,
@@ -48,8 +140,7 @@ async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRe
     [
       "-f",
       `head=${params.pushOwner}:${params.branch}`,
-      "-f",
-      `base=${params.baseBranch}`,
+      ...(params.baseBranch ? ["-f", `base=${params.baseBranch}`] : []),
       "-f",
       "state=all",
       "--paginate",
@@ -103,28 +194,44 @@ function parseGitHubPublicationPullRequests(raw: string) {
   });
 }
 
+function matchingGitHubPublicationHeads(
+  params: Omit<GitHubPublicationPullRequestLookup, "baseBranch"> & {
+    headCommit: string;
+    baseBranch?: string;
+  },
+  lookup: Awaited<ReturnType<typeof loadGitHubPublicationPullRequests>>,
+) {
+  return lookup.candidates.filter(
+    (candidate) =>
+      (params.pullRequest || candidate.userId === lookup.identity.account.accountId) &&
+      candidate.headSha === params.headCommit &&
+      candidate.headRef === params.branch &&
+      (params.baseBranch === undefined || candidate.baseRef === params.baseBranch),
+  );
+}
+
 export async function findGitHubPublicationPullRequest(
   params: GitHubPublicationPullRequestLookup & {
     headCommit: string;
-    recordObserved?: (url: string) => void;
+    recordObserved?: (url: string) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
   const { identity, candidates } = await loadGitHubPublicationPullRequests(params);
-  const exact = candidates.filter(
-    (candidate) =>
-      candidate.userId === identity.account.accountId &&
-      candidate.headSha === params.headCommit &&
-      candidate.headRef === params.branch &&
-      candidate.baseRef === params.baseBranch,
-  );
+  if (params.publishedPullRequest && candidates.some((candidate) => candidate.state === "closed")) {
+    throw new GitHubPublicationKnownFailure("The original published pull request was closed.", {
+      code: "github_rejected",
+      nextAction: "Inspect the original pull request before requesting another publication.",
+    });
+  }
+  const exact = matchingGitHubPublicationHeads(params, { identity, candidates });
   const found =
     exact.find((candidate) => candidate.state === "open") ??
     exact.find(
       (candidate) => candidate.state === "closed" && candidate.body.includes(params.marker),
     );
   if (found) {
-    params.recordObserved?.(found.url);
-    if (found.state === "closed") {
+    await params.recordObserved?.(found.url);
+    if (found.state === "closed" && found.body.includes(params.marker)) {
       params.assertCurrent();
       throw new GitHubPublicationKnownFailure(
         "GitHub pull request was closed before publication completed.",
@@ -142,7 +249,7 @@ export async function findGitHubPublicationPullRequest(
       candidate.headRef === params.branch &&
       candidate.baseRef === params.baseBranch,
   );
-  if (occupied && occupied.userId !== identity.account.accountId) {
+  if (!params.pullRequest && occupied && occupied.userId !== identity.account.accountId) {
     throw new GitHubPublicationKnownFailure("GitHub pull request is owned by another account.", {
       code: "github_rejected",
       nextAction: "Check pull-request permission for the effective account, then retry.",
@@ -164,10 +271,26 @@ export async function reconcileGitHubPublicationPullRequest(
     workspaceTree: string;
     parentCommit: string;
     pushOnly?: "observed" | "dispatched";
+    beforeRetry?: boolean;
     knownPullRequestUrls: readonly string[];
-    recordPushObserved?: (headCommit: string) => void;
+    readContinuation?: () => Promise<
+      Pick<GitHubPublicationPullRequestLookup, "publishedPullRequest" | "baseBranch"> | undefined
+    >;
+    recordPushObserved?: (headCommit: string) => void | Promise<void>;
   },
 ): Promise<string | undefined> {
+  const lookup = { ...params, baseBranch: params.readContinuation ? undefined : params.baseBranch };
+  const observed = params.beforeRetry ? await loadGitHubPublicationPullRequests(lookup) : undefined;
+  if (
+    observed &&
+    !matchingGitHubPublicationHeads(lookup, observed).some(
+      (candidate) => candidate.state === "open" || !candidate.body.includes(params.marker),
+    )
+  ) {
+    // A prepared commit need not have reached GitHub. A missing match, a closed
+    // first-publication PR or a foreign owner stays with the existing retry guards.
+    return undefined;
+  }
   const { raw } = await readGitHubPublicationApi(
     params,
     `repos/${params.pushRepository}/git/commits/${params.headCommit}`,
@@ -222,21 +345,47 @@ export async function reconcileGitHubPublicationPullRequest(
     }
     return comparison.sha === params.headCommit;
   };
-  const { identity: lookupIdentity, candidates } = await loadGitHubPublicationPullRequests(params);
+  let { identity: lookupIdentity, candidates } =
+    observed ?? (await loadGitHubPublicationPullRequests(lookup));
+  let baseBranch: string | undefined = params.baseBranch;
+  let knownPullRequestUrls = params.knownPullRequestUrls;
+  if (params.readContinuation) {
+    // A request that created a new PR after closure owns its marker. Observe it
+    // before consulting the previous publication, even if either PR was retargeted.
+    candidates = candidates.filter(
+      (candidate) =>
+        candidate.userId === lookupIdentity.account.accountId &&
+        candidate.headRef === params.branch &&
+        candidate.body.includes(params.marker),
+    );
+    baseBranch = undefined;
+    if (candidates.length === 0) {
+      const continuation = await params.readContinuation();
+      if (continuation?.publishedPullRequest) {
+        ({ identity: lookupIdentity, candidates } = await loadGitHubPublicationPullRequests({
+          ...params,
+          ...continuation,
+        }));
+        baseBranch = continuation.baseBranch;
+        knownPullRequestUrls = [continuation.publishedPullRequest.url];
+      }
+    }
+  }
   let unrelated = false;
   for (const candidate of candidates) {
     if (
-      candidate.userId !== lookupIdentity.account.accountId ||
+      (!params.pullRequest && candidate.userId !== lookupIdentity.account.accountId) ||
       candidate.headRef !== params.branch ||
-      candidate.baseRef !== params.baseBranch ||
-      (!candidate.body.includes(params.marker) &&
-        !params.knownPullRequestUrls.includes(candidate.url) &&
+      (baseBranch !== undefined && candidate.baseRef !== baseBranch) ||
+      (!params.pullRequest &&
+        !candidate.body.includes(params.marker) &&
+        !knownPullRequestUrls.includes(candidate.url) &&
         !(params.pushOnly && candidate.state === "open"))
     ) {
       continue;
     }
     if (await includesCommit(candidate.headSha)) {
-      params.recordObserved?.(candidate.url);
+      await params.recordObserved?.(candidate.url);
       return candidate.url;
     }
     unrelated = true;
@@ -264,6 +413,6 @@ export async function reconcileGitHubPublicationPullRequest(
   ) {
     throw new Error("The original GitHub push has not been confirmed.");
   }
-  params.recordPushObserved?.(params.headCommit);
+  await params.recordPushObserved?.(params.headCommit);
   return undefined;
 }

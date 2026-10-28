@@ -1,4 +1,4 @@
-import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
+import { matchesContextOverflowMessage } from "@openclaw/ai/internal/shared";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   hasRateLimitTpmHint,
@@ -11,23 +11,16 @@ import {
   isProviderRequestSizeCeilingError,
   isRateLimitErrorMessage,
 } from "./message-patterns.js";
-import {
-  classifyProviderPluginError,
-  type PreparedProviderFailoverOwner,
-} from "./provider-patterns.js";
+import { classifyProviderPluginError } from "./provider-patterns.js";
 
-export function isContextOverflowError(
-  errorMessage?: string,
-  opts?: { providerPlugin?: PreparedProviderFailoverOwner | null },
-): boolean {
+export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
   return (
     isContextOverflowErrorFromTables(errorMessage) ||
     (looksLikeProviderContextOverflowCandidate(errorMessage) &&
-      classifyProviderPluginError({ errorMessage, providerPlugin: opts?.providerPlugin }) ===
-        "context_overflow")
+      classifyProviderPluginError({ errorMessage }) === "context_overflow")
   );
 }
 
@@ -53,12 +46,10 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   ) {
     return false;
   }
-  if (isContextOverflowError(errorMessage)) {
-    return true;
-  }
   return (
-    !normalizeLowercaseStringOrEmpty(errorMessage).includes("prompt template") &&
-    !matchesContextOverflowMessage(errorMessage, "rate-limit-hint") &&
-    matchesContextOverflowMessage(errorMessage, "failover-hint")
+    isContextOverflowError(errorMessage) ||
+    (!normalizeLowercaseStringOrEmpty(errorMessage).includes("prompt template") &&
+      !matchesContextOverflowMessage(errorMessage, "rate-limit-hint") &&
+      matchesContextOverflowMessage(errorMessage, "failover-hint"))
   );
 }

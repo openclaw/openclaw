@@ -79,7 +79,7 @@ const GatewayGitHubEndpointSchema = z
       });
     }
   });
-const GatewayOperatorRoleDefinitionSchema = z.strictObject({
+export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
   sessions: z.strictObject({
     /** Maximum access to another person's sessions without explicit membership. */
     others: z.enum(["none", "view", "suggest", "write"]),
@@ -93,6 +93,8 @@ const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       .array(z.string().trim().min(1).refine(isValidAgentId, "Invalid agent id"))
       .transform((agents) => uniqueValues(agents.map(normalizeAgentId))),
   ]),
+  /** Cloud profiles this role may explicitly dispatch its own sessions to. */
+  workerProfiles: z.array(z.string().trim().min(1)).transform(uniqueValues).optional(),
   /** Optional model ceiling for this role; defaults to the source agent's primary and fallbacks. */
   modelPolicy: z
     .strictObject({
@@ -105,6 +107,14 @@ const GatewayOperatorRoleDefinitionSchema = z.strictObject({
         .optional(),
       allow: z.array(z.string().trim().min(1)).optional(),
       deny: z.array(z.string().trim().min(1)).optional(),
+    })
+    .optional(),
+  /** Nonstandard Access requires an explicit grant, independent of model membership. */
+  accessPrograms: z
+    .strictObject({
+      cyber: z
+        .array(z.enum(["daybreak_blue", "daybreak_red"]))
+        .transform((programs) => uniqueValues(programs)),
     })
     .optional(),
   /** Ceiling applied to the authenticated profile's granted operator scopes. */
@@ -205,8 +215,19 @@ export const GatewayConfigSchema = z
         basePath: z.string().optional(),
         experimental: z
           .strictObject({
-            /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
+            /** Advanced native UI opt-out (default true; existing false stays off, bundled UI unaffected). */
             customPlugins: z.boolean().optional(),
+            /** Show the official Template catalog and Add flow in Control UI (default false). */
+            templates: z.boolean().optional(),
+            /** Enable experimental speech bubbles in the Control UI (default false). */
+            chatBubbles: z.boolean().optional(),
+            /** Optional, tool-free next-message suggestions (disabled by default). */
+            composerPredictions: z
+              .strictObject({
+                enabled: z.boolean().optional(),
+                model: z.enum(["utility", "conversation", "default"]).optional(),
+              })
+              .optional(),
           })
           .optional(),
         /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
@@ -218,7 +239,7 @@ export const GatewayConfigSchema = z
             color: z.enum(CONTROL_UI_ENVIRONMENT_COLORS),
           })
           .optional(),
-        /** Show the Discord community invitation in this Gateway's Control UI (default true). */
+        /** Show the dismissible Community card in this Gateway's Control UI (default true). */
         communityInvite: z.boolean().optional(),
         /** Seed fresh drafts from configured model/reasoning instead of remembered choices. */
         newSessionModelDefaults: z.enum(["last-used", "configured"]).optional(),
@@ -246,7 +267,7 @@ export const GatewayConfigSchema = z
           .optional(),
         /**
          * DANGEROUS: Allow hosted embeds to load absolute external http(s) URLs.
-         * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
+         * Default off; prefer hosted /__openclaw__/canvas content.
          */
         allowExternalEmbedUrls: z.boolean().optional(),
         /** Fetch public-site favicons through the Gateway for Control UI links (default true). */

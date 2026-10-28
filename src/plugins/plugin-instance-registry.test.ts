@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -47,4 +48,41 @@ describe("ordinary non-joining registry calls", () => {
       }
     },
   );
+
+  it("runs the cleanup owner before draining the background work it stops", async () => {
+    const instance = new PluginInstance("background-owner");
+    const stop = createDeferredCore();
+    const work = instance.lifecycle.runInBackgroundContext(async () => {
+      await stop.promise;
+      return "stopped";
+    });
+    instance.lifecycle.onDispose(async () => {
+      stop.resolve();
+      expect(await work).toBe("stopped");
+    });
+
+    // The drain deadline would report forced retirement instead.
+    await expect(instance.dispose()).resolves.toEqual({ errors: [] });
+  });
+
+  it("still drains joining calls before cleanup starts", async () => {
+    const instance = new PluginInstance("joining-call");
+    const release = createDeferredCore();
+    const events: string[] = [];
+    const call = instance.run(async () => {
+      await release.promise;
+      events.push("call");
+    });
+    instance.lifecycle.onDispose(() => {
+      events.push("cleanup");
+    });
+    const retirement = instance.dispose();
+    await setImmediate();
+    expect(events).toEqual([]);
+    release.resolve();
+
+    await expect(retirement).resolves.toEqual({ errors: [] });
+    await call;
+    expect(events).toEqual(["call", "cleanup"]);
+  });
 });

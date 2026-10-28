@@ -68,6 +68,7 @@ async function runSlackMessageScenario(
 ) {
   const { scenario } = environment;
   let scenarioContext = environment.context;
+  let ownedRequest: { cursor: number; messageId: string } | undefined;
   try {
     const beforeRunResult = await run.beforeRun?.(environment.context);
     const beforeRunDetails =
@@ -80,12 +81,27 @@ async function runSlackMessageScenario(
     const observedMessageStartIndex = environment.observedMessages.length;
     const messageWriteCursor = await environment.getMessageWriteCursor();
     const requestStartedAt = new Date();
-    const sent = await sendSlackChannelMessage({
-      channelId,
-      client: environment.context.driverClient,
-      text: run.input,
-      threadTs: typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined,
-    });
+    const threadTs =
+      typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined;
+    const owned =
+      environment.channelE2e && channelId === environment.channelId
+        ? await environment.channelE2e.send({
+            text: run.input,
+            mention: false,
+            threadId: threadTs,
+          })
+        : undefined;
+    const sent = owned
+      ? { channelId: owned.channelId, ts: owned.id }
+      : await sendSlackChannelMessage({
+          channelId,
+          client: environment.context.driverClient,
+          text: run.input,
+          threadTs,
+        });
+    if (owned) {
+      ownedRequest = { cursor: messageWriteCursor, messageId: owned.id };
+    }
     const requestThreadTs =
       (typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined) ?? sent.ts;
     const observation = {
@@ -94,7 +110,6 @@ async function runSlackMessageScenario(
       matchText: run.matchText,
       observedMessages: environment.observedMessages,
       observationScenarioId: scenario.id,
-      observationScenarioTitle: scenario.title,
       sentTs: sent.ts,
       sutIdentity: environment.sutIdentity,
     };
@@ -159,7 +174,17 @@ async function runSlackMessageScenario(
       ),
     };
   } finally {
-    await run.cleanup?.(scenarioContext);
+    try {
+      if (ownedRequest && environment.recordScenarioMessages) {
+        const messages = await environment.readMessageWrites(ownedRequest.cursor);
+        await environment.recordScenarioMessages(
+          ownedRequest.messageId,
+          messages.map((message) => message.ts).filter((ts): ts is string => Boolean(ts)),
+        );
+      }
+    } finally {
+      await run.cleanup?.(scenarioContext);
+    }
   }
 }
 
@@ -185,11 +210,8 @@ export async function runSlackScenario(
     }
     recordSlackObservedMessage({
       channelId: environment.channelId,
-      matchedScenario: true,
       message,
       observedMessages: environment.observedMessages,
-      scenarioId: scenario.id,
-      scenarioTitle: scenario.title,
     });
     return { details: result.details };
   }
@@ -197,7 +219,6 @@ export async function runSlackScenario(
     const params = {
       channelId: environment.channelId,
       context: environment.context,
-      observedMessages: environment.observedMessages,
       scenario,
       sutAccountId: environment.sutAccountId,
     };
@@ -213,7 +234,6 @@ export async function runSlackScenario(
     const label = run.kind === "approval" ? run.approvalKind : `Codex ${run.appServerMethod}`;
     return {
       details: `${label} approval resolved ${run.decision} in ${approval.rttMs}ms`,
-      artifacts: { approval: approval.artifact },
       ...buildLiveTransportRttResult(approval, "approval-request-to-resolution"),
     };
   }

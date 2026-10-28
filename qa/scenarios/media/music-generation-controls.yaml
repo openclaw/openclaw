@@ -24,7 +24,6 @@ scenario:
   codeRefs:
     - src/agents/tools/music-generate-tool.ts
     - src/music-generation/runtime.ts
-    - src/music-generation/normalization.ts
     - src/media/store.ts
     - test/e2e/qa-lab/media/music-generation-controls.e2e.test.ts
   execution:

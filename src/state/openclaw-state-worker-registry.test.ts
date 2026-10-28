@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import {
   createWorkerOperationRegistry,
   type WorkerOperationContext,
+  type WorkerWriteOperationContext,
 } from "./worker-operation-registry.js";
 
 const { loaded, read } = vi.hoisted(() => ({
@@ -22,16 +23,19 @@ vi.mock("../infra/push-web-store.worker.js", () => {
 vi.mock("../agents/worktrees/dispatch.worker.js", () => {
   throw new Error("APNs preparation loaded worktrees");
 });
-vi.mock("../fleet/registry.worker.js", () => {
-  throw new Error("APNs preparation loaded fleet");
-});
 
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 
 it("loads only the requested domain and routes exact operation names after preparation", async () => {
-  const context: WorkerOperationContext = {
+  const context: WorkerWriteOperationContext = {
     open: () => {
       throw new Error("The registry must leave database opening to its handler");
+    },
+    write: () => {
+      throw new Error("The registry must leave transactions to its handler");
+    },
+    writeAdmitted: () => {
+      throw new Error("The registry must leave transactions to its handler");
     },
     stateOptions: () => ({ path: "synthetic-state.sqlite", env: {} }),
   };
@@ -74,9 +78,18 @@ it("prepares exact operations without loading another kernel under the same name
   );
   const command = { type: "session.read", input: "entry" } as const;
   expect(() => registry.execute(command, { agentId: "agent" })).toThrow("not prepared");
-  await Promise.all([registry.prepare(command.type), registry.prepare(command.type)]);
+  const preparation = registry.prepare(command.type);
+  expect(registry.prepare(command.type)).toBe(preparation);
+  await preparation;
   expect(registry.execute(command, { agentId: "agent" })).toBe("agent:entry");
   expect(loadRead).toHaveBeenCalledOnce();
   expect(loadWrite).not.toHaveBeenCalled();
+  expect(registry.has({ type: "session.write", input: "entry" })).toBe(false);
+  const failure = new Error("worker module unavailable");
+  loadWrite.mockRejectedValue(failure);
+  const refused = registry.prepare("session.write");
+  await expect(refused).rejects.toBe(failure);
+  expect(registry.prepare("session.write")).toBe(refused);
+  expect(loadWrite).toHaveBeenCalledOnce();
   expect(registry.has({ type: "session.write", input: "entry" })).toBe(false);
 });

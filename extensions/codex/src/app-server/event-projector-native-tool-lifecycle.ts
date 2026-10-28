@@ -20,11 +20,9 @@ import {
   emitCodexNativePreToolUseFailureDiagnostic,
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
-import { isCodexNotificationForTurn } from "./notification-correlation.js";
-import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import {
   isJsonObject,
-  type CodexServerNotification,
+  type CodexPreparedServerNotification,
   type CodexThreadItem,
   type JsonObject,
   type JsonValue,
@@ -153,8 +151,7 @@ export class CodexNativeToolLifecycleProjector {
     if (
       !candidate ||
       candidate.status !== "inProgress" ||
-      typeof candidate.server !== "string" ||
-      !candidate.server.trim() ||
+      !serverName.trim() ||
       typeof candidate.tool !== "string" ||
       !candidate.tool.trim() ||
       candidate.arguments === undefined ||
@@ -165,15 +162,15 @@ export class CodexNativeToolLifecycleProjector {
     }
     return {
       id: candidate.id,
-      server: candidate.server,
+      server: serverName,
       tool: candidate.tool,
       arguments: candidate.arguments,
     };
   }
 
-  recordMcpToolCallReceipt(notification: CodexServerNotification): void {
+  recordMcpToolCallReceipt(notification: CodexPreparedServerNotification): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params || !isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
+    if (!params || notification.threadId !== this.threadId || notification.turnId !== this.turnId) {
       return;
     }
     // The route's receipt hook precedes its FIFO projection queue. Refuse stale
@@ -182,15 +179,15 @@ export class CodexNativeToolLifecycleProjector {
       this.pendingMcpNotifications += 1;
     } else if (
       notification.method === "turn/completed" &&
-      readCodexTurnCompletedNotification(params)?.turn.id === this.turnId
+      notification.completedTurn?.id === this.turnId
     ) {
       this.turnCompleted = true;
     }
   }
 
-  handleNotification(notification: CodexServerNotification): void {
+  handleNotification(notification: CodexPreparedServerNotification): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params || !isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
+    if (!params || notification.threadId !== this.threadId || notification.turnId !== this.turnId) {
       return;
     }
     if (
@@ -200,7 +197,7 @@ export class CodexNativeToolLifecycleProjector {
       this.pendingMcpNotifications -= 1;
     }
     if (notification.method === "turn/completed") {
-      const turn = readCodexTurnCompletedNotification(params)?.turn;
+      const turn = notification.completedTurn;
       if (!turn || turn.id !== this.turnId) {
         return;
       }

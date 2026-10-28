@@ -1,39 +1,31 @@
 import { expect, it, vi } from "vitest";
-import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
-import {
-  disposePluginRegistryInstances,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
-import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
 import type { PreparedGatewayModelCatalog } from "./server-model-catalog.types.js";
-import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { createSessionRowProjectionCatalog } from "./session-row-projection-catalog.js";
-import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
 it("retains completed catalog facts during runtime replacement and adopts completed or failed publications", async () => {
   const pluginRegistry = createEmptyPluginRegistry();
   const metadataSnapshot = createPluginMetadataSnapshotFixture();
-  const view = (contextTokens: number) =>
+  const prepared = (
+    entries: PreparedGatewayModelCatalog["entries"],
+    overrides: Partial<Parameters<typeof createPreparedGatewayModelCatalog>[0]> = {},
+  ) =>
+    createPreparedGatewayModelCatalog({ entries, pluginRegistry, metadataSnapshot, ...overrides });
+  const other = prepared([
+    { provider: "unit-test", id: "other", name: "Other", contextTokens: 32_768 },
+  ]);
+  const onlyOther = (value = other) => new Map([["other", value]]);
+  const withMain = (main: PreparedGatewayModelCatalog | undefined) =>
     new Map([
-      [
-        "main",
-        createPreparedGatewayModelCatalog({
-          entries: [{ provider: "unit-test", id: "model", name: "Model", contextTokens }],
-          pluginRegistry,
-          metadataSnapshot,
-        }),
-      ],
+      ["main", main],
+      ["other", other],
     ]);
+  const view = (contextTokens: number) =>
+    withMain(prepared([{ provider: "unit-test", id: "model", name: "Model", contextTokens }]));
   let next: Map<string, PreparedGatewayModelCatalog | undefined> = view(8_192);
   const read = vi.fn(async () => next);
   const refreshed = vi.fn();
@@ -42,183 +34,210 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     onInvalidated: () => catalog.invalidate(),
     onRefreshed: refreshed,
   });
+  const publish = (event: Parameters<typeof notifyPreparedModelRuntimePublication>[0]) => {
+    notifyPreparedModelRuntimePublication(event);
+    return catalog.refresh();
+  };
+  const retained = () => {
+    expect(catalog.current).toBe(original);
+    expect(refreshed).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+  };
+  let original: typeof catalog.current;
+  const adopted = (changed: ReadonlySet<string> | undefined) => {
+    expect(refreshed).toHaveBeenLastCalledWith(changed);
+    expect(catalog.current).toBe(next);
+  };
   try {
     await catalog.refresh();
-    const original = catalog.current;
+    expect(refreshed).toHaveBeenLastCalledWith(undefined);
+    original = catalog.current;
     refreshed.mockClear();
     read.mockClear();
-    notifyPreparedModelRuntimePublication({ phase: "catalog-status", modelFactsChanged: false });
-    await catalog.refresh();
-    expect(catalog.current).toBe(original);
-    expect(read).not.toHaveBeenCalled();
-    expect(refreshed).not.toHaveBeenCalled();
+    await publish({ phase: "catalog-status", modelFactsChanged: false });
+    retained();
     const first = createDeferredCore();
+    const reading = createDeferredCore<typeof next>();
+    read.mockReturnValueOnce(reading.promise);
+    catalog.invalidate();
+    const inFlight = catalog.refresh();
     notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: first.promise });
-    next = new Map([["main", undefined]]);
-    await catalog.refresh();
+    next = withMain(undefined);
+    reading.resolve(next);
+    await inFlight;
     expect(catalog.current).toBe(original);
     expect(refreshed).not.toHaveBeenCalled();
-    expect(read).not.toHaveBeenCalled();
+    read.mockClear();
+    await catalog.refresh();
+    retained();
 
     // Provider publication does not finish the pending runtime replacement.
-    notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
-    await catalog.refresh();
+    await publish({ phase: "catalog-published" });
     expect(catalog.current).toBe(original);
-    const second = createDeferredCore();
-    notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: second.promise });
+    const successor = createDeferredCore();
+    notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: successor.promise });
     first.resolve();
     await first.promise;
     await catalog.refresh();
-    expect(catalog.current).toBe(original);
+    retained();
+
     next = view(8_192);
-    second.resolve();
-    await second.promise;
-    notifyPreparedModelRuntimePublication({ phase: "published" });
-    await catalog.refresh();
-    expect(refreshed).toHaveBeenLastCalledWith(false);
-    expect(catalog.current).toBe(next);
+    successor.resolve();
+    await successor.promise;
+    await publish({ phase: "published" });
+    adopted(new Set());
 
     // A scoped auth refresh can finish without a global publication.
     notifyPreparedModelRuntimePublication({ phase: "invalidated" });
     next = view(16_384);
     await catalog.refresh();
-    expect(refreshed).toHaveBeenLastCalledWith(true);
-    expect(catalog.current).toBe(next);
+    adopted(new Set(["main"]));
 
     const failed = createDeferredCore();
     notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: failed.promise });
-    next = new Map([["main", undefined]]);
+    next = withMain(undefined);
     notifyPreparedModelRuntimePublication({ phase: "failed", error: new Error("Refresh failed") });
     failed.reject(new Error("Refresh failed"));
     await failed.promise.catch(() => {});
     await catalog.refresh();
-    expect(refreshed).toHaveBeenLastCalledWith(true);
-    expect(catalog.current).toBe(next);
+    adopted(undefined);
+
+    next = onlyOther();
+    await publish({ phase: "catalog-published" });
+    adopted(undefined);
+
+    const replacementRegistry = createEmptyPluginRegistry();
+    // Registry and metadata identities alone do not change row policy.
+    for (const nextMetadata of [metadataSnapshot, createPluginMetadataSnapshotFixture()]) {
+      next = onlyOther(
+        prepared(other.entries, {
+          pluginRegistry: replacementRegistry,
+          metadataSnapshot: nextMetadata,
+        }),
+      );
+      await publish({ phase: "catalog-published" });
+      adopted(new Set());
+    }
+    const harnessMetadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "unregistered-harness",
+          origin: "global",
+          activation: { onAgentHarnesses: ["synthetic"] },
+        },
+      ],
+    });
+    for (const config of [
+      {},
+      { plugins: { entries: { "unregistered-harness": { enabled: false } } } },
+    ]) {
+      next = onlyOther(
+        prepared(other.entries, {
+          pluginRegistry: replacementRegistry,
+          metadataSnapshot: harnessMetadata,
+          config,
+        }),
+      );
+      await publish({ phase: "catalog-published" });
+      // Config still controls an unloaded harness even with identical index and registrations.
+      expect(refreshed).toHaveBeenLastCalledWith(new Set(["other"]));
+    }
   } finally {
     catalog.dispose();
   }
 });
 
-it("does not execute a retired prepared thinking policy while adopting its replacement", async () => {
-  const provider = "retired-policy-fixture";
-  const model = "reasoner";
-  const metadataSnapshot = createPluginMetadataSnapshotFixture();
-  const activeRegistry = createEmptyPluginRegistry();
-  activeRegistry.providers.push({
-    pluginId: "active-policy",
-    source: "test",
-    provider: {
-      id: provider,
-      label: "Active policy",
-      auth: [],
-      resolveThinkingProfile: () => ({
-        levels: [{ id: "off" }, { id: "high" }],
-        defaultLevel: "high",
-      }),
-    },
-  });
-  setActivePluginRegistry(activeRegistry);
-
-  const registries: ReturnType<typeof createEmptyPluginRegistry>[] = [];
-  // Build the same process-local policy carrier that prepared runtime publication gives rows.
-  const view = (defaultLevel: "low" | "max") => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    registries.push(pluginRegistry);
-    const record = createPluginRecord({ id: `${defaultLevel}-policy` });
-    pluginRegistry.plugins.push(record);
-    const instance = new PluginInstance(record.id, { record, registry: pluginRegistry });
-    pluginRegistry.providers.push({
-      pluginId: instance.pluginId,
-      source: "test",
-      provider: instance.wrap({
-        id: provider,
-        label: `${defaultLevel} policy`,
-        auth: [],
-        resolveThinkingProfile: () => ({
-          levels: [{ id: "off" as const }, { id: defaultLevel }],
-          defaultLevel,
-        }),
-      }),
+it.each(["abort", "dispose", "reject", "supersede"] as const)(
+  "prepares current catalog without a retired fallback after %s",
+  async (outcome) => {
+    let next = [{ provider: "unit-test", id: "original", name: "Original" }];
+    const catalog = createSessionRowProjectionCatalog({
+      getModelCatalog: async () => next,
+      onInvalidated: () => catalog.invalidate(),
+      onRefreshed: () => {},
     });
-    const modelCatalog: ModelCatalogSnapshot = {
-      entries: [{ provider, id: model, name: "Reasoner", reasoning: true }],
-      routeVariants: [],
-    };
-    const preparation = {
-      catalog: modelCatalog,
-      metadataSnapshot,
-      pluginRegistry,
-    };
-    prepareModelCatalogThinkingPolicies(preparation);
-    return new Map([
-      [
-        "main",
-        createPreparedGatewayModelCatalog({
-          ...modelCatalog,
-          pluginRegistry,
-          metadataSnapshot,
-        }),
-      ],
-    ]);
-  };
+    const replacement = createDeferredCore();
+    const successor = createDeferredCore();
+    const controller = new AbortController();
+    try {
+      await catalog.prepareCurrent();
+      const original = catalog.current;
+      notifyPreparedModelRuntimePublication({
+        phase: "invalidated",
+        replacement: replacement.promise,
+      });
+      let settled = false;
+      const pending = catalog.prepareCurrent(controller.signal).finally(() => {
+        settled = true;
+      });
+      const failure = new Error("replacement failed");
+      if (outcome === "abort") {
+        controller.abort(failure);
+      } else if (outcome === "dispose") {
+        catalog.dispose();
+      } else if (outcome === "reject") {
+        replacement.reject(failure);
+      } else {
+        notifyPreparedModelRuntimePublication({
+          phase: "invalidated",
+          replacement: successor.promise,
+        });
+        replacement.resolve();
+        await replacement.promise;
+        expect(settled).toBe(false);
+        expect(catalog.current).toBe(original);
+        next = [{ provider: "unit-test", id: "successor", name: "Successor" }];
+        successor.resolve();
+        await pending;
+        expect(catalog.current).toBe(next);
+        expect(catalog.needsCurrentRead).toBe(false);
+        return;
+      }
+      await expect(pending).rejects.toThrow(outcome === "reject" ? failure : "Operation aborted");
+      expect(catalog.current).toBe(original);
+    } finally {
+      replacement.resolve();
+      successor.resolve();
+      catalog.dispose();
+    }
+  },
+);
 
-  let next: Map<string, PreparedGatewayModelCatalog | undefined> = view("low");
-  const originalRegistry = registries[0]!;
+it("waits for the successor when replacement begins during catalog preparation", async () => {
+  const original = [{ provider: "unit-test", id: "original", name: "Original" }];
+  const next = [{ provider: "unit-test", id: "successor", name: "Successor" }];
+  const reading = createDeferredCore<typeof original>(),
+    entered = createDeferredCore();
+  const replacement = createDeferredCore();
+  const read = vi.fn(async () => original);
   const catalog = createSessionRowProjectionCatalog({
-    getModelCatalog: async () => next,
+    getModelCatalog: read,
     onInvalidated: () => catalog.invalidate(),
     onRefreshed: () => {},
   });
-  const cfg: OpenClawConfig = {
-    agents: { defaults: { model: { primary: `${provider}/${model}` } } },
-  };
-  const readRow = () =>
-    readSessionRowModelFacts({
-      cfg,
-      key: "agent:main:main",
-      agentId: "main",
-      source: { entry: undefined, readSourceEntry: () => undefined },
-      rowContext: buildSessionListRowMetadataContext({ now: 1 }),
-      modelCatalog: catalog.current,
-    });
-
   try {
-    await catalog.refresh();
-    expect(readRow().thinkingProjection.thinkingDefault).toBe("low");
-
-    // Renewal retains the completed data view while its callback owner retires.
-    const replacement = createDeferredCore();
+    await catalog.prepareCurrent();
+    read.mockImplementationOnce(() => {
+      entered.resolve();
+      return reading.promise;
+    });
+    read.mockResolvedValue(next);
+    catalog.invalidate();
+    const pending = catalog.prepareCurrent();
+    await entered.promise;
     notifyPreparedModelRuntimePublication({
       phase: "invalidated",
       replacement: replacement.promise,
     });
-    next = view("max");
-    const disposalGate = createDeferredCore();
-    const disposal = disposePluginRegistryInstances(originalRegistry, undefined, {
-      beforeDispose: () => disposalGate.promise,
-    });
-
-    // Quiesce closes admission before asynchronous disposal can finish.
-    expect(isPluginRegistryRetired(originalRegistry)).toBe(true);
-    try {
-      expect(() => readRow()).not.toThrow();
-      expect(readRow().thinkingProjection.thinkingDefault).toBe("high");
-    } finally {
-      disposalGate.resolve();
-      await disposal;
-    }
-    expect(() => readRow()).not.toThrow();
-    expect(readRow().thinkingProjection.thinkingDefault).toBe("high");
-
-    // Settling the exact owner gate resumes refresh and adopts the successor policy.
+    reading.resolve([{ provider: "unit-test", id: "abandoned", name: "Abandoned" }]);
+    await reading.promise;
+    expect(catalog.current).toBe(original);
     replacement.resolve();
-    await replacement.promise;
-    await catalog.refresh();
+    await pending;
     expect(catalog.current).toBe(next);
-    expect(readRow().thinkingProjection.thinkingDefault).toBe("max");
   } finally {
+    reading.resolve(original);
+    replacement.resolve();
     catalog.dispose();
-    await Promise.all(registries.map((registry) => disposePluginRegistryInstances(registry)));
-    resetPluginRuntimeStateForTest();
   }
 });

@@ -41,11 +41,6 @@ export type EnvelopeFormatOptions = {
   userTimezone?: string;
 };
 
-type ResolvedEnvelopeTimezone =
-  | { mode: "utc" }
-  | { mode: "local" }
-  | { mode: "iana"; timeZone: string };
-
 function sanitizeEnvelopeHeaderPart(value: string): string {
   // Header parts are metadata and must not be able to break the bracketed prefix.
   // Keep ASCII; collapse newlines/whitespace; neutralize brackets.
@@ -64,7 +59,9 @@ export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeForm
   };
 }
 
-function resolveEnvelopeTimezone(options?: EnvelopeFormatOptions): ResolvedEnvelopeTimezone {
+function resolveEnvelopeTimezone(
+  options?: EnvelopeFormatOptions,
+): { mode: "utc" } | { mode: "local" } | { mode: "iana"; timeZone: string } {
   const trimmed = normalizeOptionalString(options?.timezone);
   if (!trimmed) {
     return { mode: "local" };
@@ -83,12 +80,8 @@ function resolveEnvelopeTimezone(options?: EnvelopeFormatOptions): ResolvedEnvel
   return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
 }
 
-let utcWeekdayFormatter:
-  | {
-      dateTimeFormatConstructor: typeof Intl.DateTimeFormat;
-      formatter: Intl.DateTimeFormat;
-    }
-  | undefined;
+// Intl is process-stable; a filled cache ignores constructor replacement.
+let utcWeekdayFormatter: Intl.DateTimeFormat | undefined;
 
 /** Formats an envelope timestamp using local, UTC, user, or explicit IANA timezone rules. */
 export function formatAgentEnvelopeTimestamp(
@@ -112,28 +105,8 @@ export function formatAgentEnvelopeTimestamp(
     });
   }
   const formatted = formatUtcTimestamp(date, { displaySeconds: true });
-  try {
-    const DateTimeFormat = Intl.DateTimeFormat;
-    const cached = utcWeekdayFormatter;
-    const formatter =
-      cached?.dateTimeFormatConstructor === DateTimeFormat
-        ? cached.formatter
-        : new DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" });
-    const weekday = formatter.format(date);
-    if (formatter !== cached?.formatter) {
-      utcWeekdayFormatter = { dateTimeFormatConstructor: DateTimeFormat, formatter };
-    }
-    return `${weekday} ${formatted}`;
-  } catch {
-    return formatted;
-  }
-}
-
-function resolveDirectEnvelopeBodyLabel(from: string | undefined): string {
-  const label = sanitizeEnvelopeHeaderPart(from || "");
-  const idMarkerIndex = label.search(/\s+id:/i);
-  const displayLabel = idMarkerIndex > 0 ? label.slice(0, idMarkerIndex).trim() : label;
-  return displayLabel.includes(":") ? "(sender)" : displayLabel;
+  utcWeekdayFormatter ??= new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" });
+  return `${utcWeekdayFormatter.format(date)} ${formatted}`;
 }
 
 /** Formats the generic bracketed envelope prepended to agent-visible messages. */
@@ -193,22 +166,18 @@ export function formatInboundEnvelope(params: {
   const resolvedSenderRaw =
     normalizeOptionalString(params.senderLabel) || resolveSenderLabel(params.sender ?? {});
   const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
-  const directSender = resolveDirectEnvelopeBodyLabel(normalizeOptionalString(params.from));
-  const body =
-    isDirect && params.fromMe
-      ? `(self): ${params.body}`
-      : isDirect && directSender
-        ? `${directSender}: ${params.body}`
-        : !isDirect && resolvedSender
-          ? `${resolvedSender}: ${params.body}`
-          : params.body;
+  const label = sanitizeEnvelopeHeaderPart(normalizeOptionalString(params.from) || "");
+  const idMarkerIndex = label.search(/\s+id:/i);
+  const displayLabel = idMarkerIndex > 0 ? label.slice(0, idMarkerIndex).trim() : label;
+  const directSender = displayLabel.includes(":") ? "(sender)" : displayLabel;
+  const bodyLabel = isDirect ? (params.fromMe ? "(self)" : directSender) : resolvedSender;
   return formatAgentEnvelope({
     channel: params.channel,
     from: params.from,
     timestamp: params.timestamp,
     previousTimestamp: params.previousTimestamp,
     envelope: params.envelope,
-    body,
+    body: bodyLabel ? `${bodyLabel}: ${params.body}` : params.body,
   });
 }
 
@@ -222,16 +191,9 @@ export function formatInboundFromLabel(params: {
   groupFallback?: string;
 }): string {
   // Keep envelope headers compact: group labels include id, DMs only add id when it differs.
-  if (params.isGroup) {
-    const label = normalizeOptionalString(params.groupLabel) || params.groupFallback || "Group";
-    const id = params.groupId?.trim();
-    return id ? `${label} id:${id}` : label;
-  }
-
-  const directLabel = params.directLabel.trim();
-  const directId = params.directId?.trim();
-  if (!directId || directId === directLabel) {
-    return directLabel;
-  }
-  return `${directLabel} id:${directId}`;
+  const label = params.isGroup
+    ? normalizeOptionalString(params.groupLabel) || params.groupFallback || "Group"
+    : params.directLabel.trim();
+  const id = (params.isGroup ? params.groupId : params.directId)?.trim();
+  return id && (params.isGroup || id !== label) ? `${label} id:${id}` : label;
 }

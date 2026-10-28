@@ -27,7 +27,7 @@ function connectedStore() {
   const store = createGatewayStoreTestStore();
   cleanups.push(() => store.gateway.stop());
   store.gateway.start();
-  store.current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+  store.current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
   return store;
 }
 
@@ -39,7 +39,7 @@ describe("native dashboard connection health", () => {
       cleanups.push(() => gateway.stop());
       gateway.start();
       if (admitted) {
-        current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+        current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
       }
       const events = vi.fn();
       window.addEventListener(EVENT, events);
@@ -53,14 +53,14 @@ describe("native dashboard connection health", () => {
         gateway.setSessionKey("agent:main:another");
         expect(events).toHaveBeenCalledOnce();
       }
-      current().opts.onClose?.(
+      current().testOptions.onClose?.(
         admitted
           ? { code: 1006, reason: "socket lost", willRetry: true }
           : { code: 4008, reason: "connect failed", willRetry: false },
       );
       expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "error" });
       if (admitted) {
-        current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+        current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
         expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "ok" });
       } else {
         expect(gateway.snapshot.phase).toBe("stopped");
@@ -71,30 +71,24 @@ describe("native dashboard connection health", () => {
       stop();
       events.mockClear();
       gateway.start();
-      current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+      current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
       expect(events).not.toHaveBeenCalled();
       expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "unknown" });
     },
   );
 
-  it("reports endpoint changes and cannot be overwritten by an older reporter or client", () => {
-    const first = connectedStore();
-    const stopFirst = startNativeGatewayHealthReporting(first.gateway);
-    cleanups.push(stopFirst);
-    const second = connectedStore();
-    const stopSecond = startNativeGatewayHealthReporting(second.gateway);
-    cleanups.push(stopSecond);
-    const oldClient = second.current();
+  it("reports endpoint changes and cannot be overwritten by a replaced client", () => {
+    const { gateway, current } = connectedStore();
+    const stop = startNativeGatewayHealthReporting(gateway);
+    cleanups.push(stop);
+    const oldClient = current();
     const gatewayUrl = "wss://other.example/control";
-    second.gateway.connect({ gatewayUrl });
+    gateway.connect({ gatewayUrl });
     expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "unknown" });
-    second.current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
-    oldClient.opts.onClose?.({ code: 1006, reason: "old socket", willRetry: false });
-    first.gateway.stop();
-    stopFirst();
+    current().testOptions.onHello?.(GATEWAY_STORE_TEST_HELLO);
+    oldClient.testOptions.onClose?.({ code: 1006, reason: "old socket", willRetry: false });
     expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "ok" });
-    stopSecond();
-    stopFirst();
+    stop();
     expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "unknown" });
   });
 });

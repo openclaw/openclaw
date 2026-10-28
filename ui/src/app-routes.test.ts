@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   APP_ROUTE_IDS,
   pathForRoute,
@@ -35,6 +35,15 @@ describe("application router registration", () => {
     expect(routeIdFromPath("/tasks")).toBeNull();
     expect(routeIdFromPath("/control/tasks", "/control")).toBeNull();
   });
+
+  it("replaces the Agents overview with Templates while keeping per-agent settings", () => {
+    expect(routeIdFromPath("/agents")).toBeNull();
+    expect(routeIdFromPath("/agents/templates/workflow-operator")).toBeNull();
+    expect(routeIdFromPath("/templates")).toBe("templates");
+    expect(routeIdFromPath("/templates/workflow-operator")).toBe("templates");
+    expect(routeIdFromPath("/settings/agents/research")).toBe("agents");
+    expect(routeIdFromPath("/settings/agents/research/tools")).toBe("agents");
+  });
 });
 
 it("compares optional route locations by pathname, search, and hash", () => {
@@ -45,5 +54,44 @@ it("compares optional route locations by pathname, search, and hash", () => {
   expect(sameRouteLocation(location, { ...location })).toBe(true);
   for (const key of ["pathname", "search", "hash"] as const) {
     expect(sameRouteLocation(location, { ...location, [key]: "changed" })).toBe(false);
+  }
+});
+
+it("prepares a cold page's selected language before returning its renderer", async () => {
+  vi.resetModules();
+  const { en } = await import("./i18n/locales/en.ts");
+  const { i18n } = await import("./i18n/lib/translate.ts");
+  const { createLazyLocaleCatalog } = await import("./i18n/lib/lazy-catalog.ts");
+  const { createDeferred } = await import("../../test/helpers/promise.js");
+  const { createApplicationRouter: createRouter } = await import("./app-routes.ts");
+  expect(en.searchPage).toEqual({});
+  const page = createDeferred<{ default: { searchPage: { queryDefault: string } } }>();
+  const loadPage = vi.fn(() => page.promise);
+  const loadUnopened = vi.fn();
+  i18n.registerTranslation(
+    "de",
+    createLazyLocaleCatalog(structuredClone(en), {
+      searchPage: loadPage,
+      configHints: loadUnopened,
+    }),
+  );
+  await i18n.setLocale("de");
+  expect(loadPage).not.toHaveBeenCalled();
+  let settled = false;
+  const loading = Promise.resolve(createRouter().getRoute("search")!.component()).then((module) => {
+    settled = true;
+    return module;
+  });
+  try {
+    await vi.waitFor(() => expect(loadPage).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    expect(loadUnopened).not.toHaveBeenCalled();
+    page.resolve({ default: { searchPage: { queryDefault: "OpenClaw Dokumentation" } } });
+    await loading;
+    expect(i18n.t("searchPage.queryDefault")).toBe("OpenClaw Dokumentation");
+  } finally {
+    page.resolve({ default: { searchPage: { queryDefault: "OpenClaw Dokumentation" } } });
+    await loading;
+    await i18n.setLocale("en");
   }
 });

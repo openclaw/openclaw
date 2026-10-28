@@ -2,14 +2,24 @@ import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coer
 import type { CronCompactJob } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { cronJobReadView } from "../../cron/job-read-view.js";
+import { toPublicCronJob } from "../../cron/public-job.js";
 import type { CronServiceContract } from "../../cron/service-contract.js";
 import type { CronListPageResult } from "../../cron/service/list-page-types.js";
 import type { CronJob } from "../../cron/types.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { registerSerializedJsonArray } from "../serialized-json.js";
 
 type Page = { key: string; jobs: ReturnType<typeof prepareJobs> };
-const projections = new WeakMap<CronServiceContract, { compact?: Page; full?: Page }>();
+type Projections = {
+  defaultAgentId: string | undefined;
+  rows: WeakMap<
+    CronJob,
+    { compact?: ReturnType<typeof prepareJob>; full?: ReturnType<typeof prepareJob> }
+  >;
+  compact?: Page;
+  full?: Page;
+};
+const projections = new WeakMap<CronServiceContract, Projections>();
 
 /** Each owner's revision covers the filtered rows; the default agent completes presentation identity. */
 export function projectCronListJobs(
@@ -18,30 +28,42 @@ export function projectCronListJobs(
   compact: boolean,
 ) {
   const defaultAgentId = owner.getDefaultAgentId();
-  const key = JSON.stringify([page.snapshotRevision, page.offset, page.limit, defaultAgentId]);
+  const key = JSON.stringify([page.snapshotRevision, page.offset, page.limit]);
   const mode = compact ? "compact" : "full";
   let cached = projections.get(owner);
-  if (!cached) {
-    cached = {};
+  if (!cached || cached.defaultAgentId !== defaultAgentId) {
+    cached = { defaultAgentId, rows: new WeakMap() };
     projections.set(owner, cached);
   }
   if (cached[mode]?.key !== key) {
-    cached[mode] = { key, jobs: prepareJobs(page.jobs, defaultAgentId, compact) };
+    cached[mode] = { key, jobs: prepareJobs(page.jobs, cached, compact) };
   }
   return cached[mode].jobs;
 }
 
-function prepareJobs(jobs: CronJob[], defaultAgentId: string | undefined, compact: boolean) {
-  const rows = jobs.map((job) =>
-    freezeJsonSnapshot({
-      ...(compact ? compactCronListJob(job) : cronJobReadView(job)),
-      effectiveAgentId: tryResolveCronJobEffectiveAgentId(job, defaultAgentId) ?? null,
-    }),
-  );
+function prepareJobs(jobs: CronJob[], cached: Projections, compact: boolean) {
+  const mode = compact ? "compact" : "full";
+  const rows = jobs.map((job) => {
+    // listPage shares detached frozen rows across selections until its read snapshot changes.
+    let prepared = cached.rows.get(job);
+    if (!prepared) {
+      prepared = {};
+      cached.rows.set(job, prepared);
+    }
+    return (prepared[mode] ??= prepareJob(job, cached.defaultAgentId, compact));
+  });
   return registerSerializedJsonArray(
-    Object.freeze(rows),
-    rows.map((row) => JSON.stringify(row)),
+    Object.freeze(rows.map(({ row }) => row)),
+    rows.map(({ json }) => json),
   );
+}
+
+function prepareJob(job: CronJob, defaultAgentId: string | undefined, compact: boolean) {
+  const row = freezeTrustedJsonSnapshot({
+    ...(compact ? compactCronListJob(toPublicCronJob(job)) : cronJobReadView(job)),
+    effectiveAgentId: tryResolveCronJobEffectiveAgentId(job, defaultAgentId) ?? null,
+  });
+  return { row, json: JSON.stringify(row) };
 }
 
 function compactCronListJob(job: CronJob): CronCompactJob {
@@ -58,6 +80,7 @@ function compactCronListJob(job: CronJob): CronCompactJob {
     nextRunAt: timestampMsToIsoString(job.state.nextRunAtMs) ?? null,
     nextRunAtMs: job.state.nextRunAtMs ?? null,
     scheduleKind: job.schedule.kind,
+    ...(job.streamExecutionHost ? { streamExecutionHost: job.streamExecutionHost } : {}),
     // Disabled jobs retain timing without exposing event commands.
     ...(job.schedule.kind === "at" || job.schedule.kind === "every" || job.schedule.kind === "cron"
       ? { schedule: job.schedule }
@@ -65,6 +88,9 @@ function compactCronListJob(job: CronJob): CronCompactJob {
     trigger: job.trigger ? true : undefined,
     lastRunAt: timestampMsToIsoString(job.state.lastRunAtMs) ?? null,
     lastRunAtMs: job.state.lastRunAtMs ?? null,
+    lastDurationMs: job.state.lastDurationMs,
+    lastTriggerEvalAtMs: job.state.lastTriggerEvalAtMs,
+    lastMeaningfulResult: job.state.lastMeaningfulResult,
     lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
     lastRunError: job.state.lastError ?? null,
     runningAtMs: job.state.runningAtMs,

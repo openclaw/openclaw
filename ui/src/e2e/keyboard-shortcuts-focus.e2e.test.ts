@@ -23,8 +23,11 @@ suite.define(() => {
         await page.locator(".agent-chat__composer-combobox > textarea").waitFor();
         // Cover both lazy-loaded and already-loaded shortcut/draft surfaces.
         for (let iteration = 0; iteration < 2; iteration += 1) {
-          // Keep the opening control connected across navigation, like a sidebar session link.
-          await page.locator(".nav-item--home").click();
+          // A fixed rail control keeps the shortcut origin connected across navigation.
+          await page
+            .locator("openclaw-app-sidebar")
+            .getByRole("button", { name: "Sessions", exact: true })
+            .click();
           await page.keyboard.press(`${modifier}+/`);
           const hint = page
             .locator("openclaw-keyboard-shortcuts-dialog .shortcut-row")

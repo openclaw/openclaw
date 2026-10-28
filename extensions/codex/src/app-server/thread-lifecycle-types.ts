@@ -7,23 +7,15 @@ import type { CodexAppServerClient } from "./client.js";
 import type { CodexInferenceProxy } from "./inference-proxy.js";
 import type { CodexInferenceProviderRoutes } from "./inference-routing.js";
 import type { CodexNativeModelInputTools } from "./native-model-input-tools.js";
-import type { CodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
-import type { CodexDynamicToolSpec, JsonObject } from "./protocol.js";
+import type { CodexDynamicToolSpec, CodexServiceTier, JsonObject, JsonValue } from "./protocol.js";
 import type {
   CodexBindingAuthority,
-  CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
-  CodexAppServerContextEngineBinding,
   CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
-import type {
-  CodexThreadLifecycleTimingTracker,
-  CodexThreadLifecycleTimingOptions,
-} from "./thread-lifecycle-timing.js";
-import type { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
 
 type CodexAppServerThreadLifecycle = {
   action: "started" | "resumed" | "forked";
@@ -41,6 +33,8 @@ export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding &
   /** Process-local claim proof; never write this callback into durable binding state. */
   liveThreadOwnership?: CodexAppServerLiveThreadOwnership;
   clearInheritedServiceTier?: true;
+  /** Tier admitted with this attempt's native compaction configuration. */
+  preparedServiceTier?: CodexServiceTier | null;
 };
 
 export type CodexThreadFinalConfigPatchDecision = (
@@ -78,6 +72,8 @@ export type CodexStartOrResumeThreadParams = Omit<
   authority?: CodexBindingAuthority;
   /** Caller liveness; durable lineage is owned by authority. */
   assertCurrent?: () => void;
+  /** Refresh requester lookups immediately before native thread writes. */
+  assertCurrentAsync?: () => Promise<void>;
   /** Private execution identity resolved by this harness's catalog generation. */
   runtimeModelId?: string;
   agentId?: string;
@@ -86,11 +82,10 @@ export type CodexStartOrResumeThreadParams = Omit<
   dynamicTools: CodexDynamicToolSpec[];
   persistentWebSearchAllowed?: boolean;
   agentWorkspaceDeveloperInstructions?: string;
-  finalConfigPatch?: JsonObject;
   buildFinalConfigPatch?: (
     decision: CodexThreadFinalConfigPatchDecision,
+    client: CodexAppServerClient,
   ) => CodexThreadFinalConfigPatchResult | Promise<CodexThreadFinalConfigPatchResult>;
-  nativeHookRelayGeneration?: string;
   /** Session-layer PreToolUse hooks must survive authoritative managed hook requirements. */
   nativeHookRelayRequired?: boolean;
   /** A retained operator source can keep legacy hooks off only while its model policy is absent. */
@@ -103,37 +98,16 @@ export type CodexStartOrResumeThreadParams = Omit<
   appServerRuntimeFingerprint?: string;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
+  /** Selected quoted history, injected before turn/start on the admitted idle thread. */
+  historyBootstrapItems?: JsonValue[] | ((assertCurrent: () => void) => Promise<JsonValue[]>);
+  /** Acknowledged selection suffix for reuse; fresh threads always receive the full bootstrap. */
+  historyDeltaItems?: JsonValue[];
   signal?: AbortSignal;
-  timing?: CodexThreadLifecycleTimingOptions;
-};
-
-export type CodexThreadRequestContext = {
-  nativeModelInputTools?: CodexNativeModelInputTools;
-  bindingIdentity: CodexAppServerBindingIdentity;
-  startModelSelection: ReturnType<typeof resolveCodexAppServerThreadModelSelection>;
-  startModelProvider?: string;
-  userMcpServersConfigPatch?: JsonObject;
-  dynamicToolsFingerprint: string;
-  dynamicToolsContainDeferred: boolean;
-  webSearchThreadConfigFingerprint?: string;
-  nativeSkillIsolationFingerprint?: string;
-  userMcpServersFingerprint?: string;
-  ringZeroConfigFingerprint?: string;
-  ringZeroClientInstanceId?: string;
-  networkProxyConfigFingerprint?: string;
-  contextEngineBinding?: CodexAppServerContextEngineBinding;
-  environmentSelectionFingerprint?: string;
-  hostSystemAgentActive: boolean;
-  ringZeroActive: boolean;
-  restrictedToolSurface: boolean;
-  restrictedToolSurfaceInheritedMcpServerNames: string[];
-  nativeSkillIsolation?: CodexNativeSkillIsolation;
-  lifecycleTiming: CodexThreadLifecycleTimingTracker;
-  normalizeBindingModelProvider: (
-    authProfileId: string | undefined,
-    modelProvider: string | undefined,
-  ) => string | undefined;
-  throwIfAborted: () => void;
+  /**
+   * Runs synchronously when `signal` ends a wait for a previous owner's exit
+   * before `client` wrote thread state, so the caller may keep `client`.
+   */
+  onPrewriteHandoffCancelled?: () => void;
 };
 
 export type CodexThreadResumePreparation = {
@@ -142,23 +116,5 @@ export type CodexThreadResumePreparation = {
   assertCurrent: () => void;
   dispose: () => void;
   settledSystemError: boolean;
-};
-
-export type CodexResumeThreadContext = CodexThreadRequestContext & {
-  binding: CodexAppServerThreadBinding;
-  stageBindingReplacement: (operation: string) => void;
-  prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
-  buildLoadedPluginThreadConfig?: (
-    binding: CodexAppServerThreadBinding,
-  ) => Promise<CodexPluginThreadConfig | undefined>;
-  prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult;
-  prepareResume: () => Promise<CodexThreadResumePreparation>;
-  releaseRetainedThread: (assertCurrent: () => void) => Promise<void>;
-};
-
-export type CodexStartThreadContext = CodexThreadRequestContext & {
-  prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
-  preserveExistingBinding: boolean;
-  rotatedContextEngineBinding: boolean;
-  replacementPredecessor?: CodexAppServerThreadBinding;
+  waitForUnload: (requireClosed?: boolean) => Promise<boolean>;
 };

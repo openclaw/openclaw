@@ -3,8 +3,9 @@ import { vi } from "vitest";
 import { resolveAgentEntry } from "../agents/agent-scope-config.js";
 import * as configModule from "../config/config.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
-import type { GatewayAuthMode } from "../config/types.gateway.js";
+import { materializeRuntimeConfig } from "../config/materialize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 type ConfigSnapshot = {
@@ -127,7 +128,9 @@ export const runtime: RuntimeEnv = {
 export function snapshot(
   hash: string | null,
   sourceConfig: OpenClawConfigWithLegacyRoster,
-  runtimeConfig: OpenClawConfig = sourceConfig,
+  runtimeConfig: OpenClawConfig = materializeRuntimeConfig(sourceConfig, {
+    manifestRegistry: { plugins: [] },
+  }),
 ): ConfigSnapshot {
   return {
     exists: hash !== null,
@@ -137,49 +140,69 @@ export function snapshot(
     parsed: structuredClone(sourceConfig),
     sourceConfigBeforeMigrations: structuredClone(sourceConfig),
     config: runtimeConfig,
-    sourceConfig: runtimeConfig,
+    sourceConfig,
     runtimeConfig,
     issues: [],
   };
 }
 
 export function codexPluginMetadataSnapshot(homeScope: "agent" | "user") {
-  return {
-    manifestRegistry: {
-      diagnostics: [],
-      plugins: [
-        {
-          id: "codex",
-          origin: "global",
-          channels: [],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          settingsFiles: [],
-          hooks: [],
-          rootDir: "/tmp/codex",
-          source: "/tmp/codex/index.js",
-          manifestPath: "/tmp/codex/openclaw.plugin.json",
-          configSchema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              codexDynamicToolsLoading: { type: "string", default: "searchable" },
-              appServer: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  transport: { type: "string", default: "stdio" },
-                  homeScope: { type: "string", default: homeScope },
-                  requestTimeoutMs: { type: "number", default: 60_000 },
-                },
+  return createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "codex",
+        origin: "global",
+        settingsFiles: [],
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            codexDynamicToolsLoading: { type: "string", default: "searchable" },
+            appServer: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                transport: { type: "string", default: "stdio" },
+                homeScope: { type: "string", default: homeScope },
+                requestTimeoutMs: { type: "number", default: 60_000 },
               },
             },
           },
         },
-      ],
-    },
-  } as never;
+      },
+    ],
+  });
+}
+
+export function snapshotSequence(...snapshots: Array<ConfigSnapshot | (() => ConfigSnapshot)>) {
+  let index = 0;
+  return async () => {
+    const next = snapshots[Math.min(index++, snapshots.length - 1)]!;
+    return typeof next === "function" ? next() : next;
+  };
+}
+
+export function transformAttempt(transform: CommitTransform, current: ConfigSnapshot, attempt = 0) {
+  return transform(current.sourceConfig, {
+    previousHash: current.hash,
+    snapshot: current,
+    attempt,
+  });
+}
+
+export function committed(
+  result: Awaited<ReturnType<CommitTransform>>,
+  previousHash: string | null,
+  config = result.nextConfig,
+) {
+  mocks.state.persistedConfig = config;
+  return {
+    nextConfig: config,
+    path: "/tmp/openclaw.json",
+    previousHash,
+    persistedHash: "persisted",
+    result: result.result,
+  };
 }
 
 export function materializePluginDefaults(
@@ -229,7 +252,7 @@ export function resetSetupApplyMocks(): void {
   mocks.ensureOnboardingAgent.mockImplementation(
     async ({ config: current, firstAgent, workspace }) => {
       const name = firstAgent?.name ?? "main";
-      const id = name === "Research Buddy" ? "research-buddy" : name.toLowerCase();
+      const id = name.toLowerCase();
       const team = firstAgent?.team === true;
       const createdAgentIds = team ? [id, "researcher", "writer", "reviewer"] : [id];
       const next = {
@@ -291,30 +314,16 @@ export function resetSetupApplyMocks(): void {
       attempt: 0,
     });
     mocks.events.push("commit");
-    mocks.state.persistedConfig = result.nextConfig;
     mocks.state.initialSnapshot = snapshot("persisted", result.nextConfig);
-    return {
-      nextConfig: result.nextConfig,
-      path: "/tmp/openclaw.json",
-      previousHash: mocks.state.commitPreviousHash,
-      persistedHash: "persisted",
-      result: result.result,
-    };
+    return committed(result, mocks.state.commitPreviousHash);
   });
   mocks.configureGateway.mockImplementation(
     async ({
       nextConfig,
       quickstartGateway,
-    }: {
-      nextConfig: OpenClawConfig;
-      quickstartGateway: {
-        authMode: GatewayAuthMode;
-        bind: "loopback" | "lan";
-        customBindHost?: string;
-        port: number;
-        token?: string;
-      };
-    }) => ({
+    }: Parameters<
+      typeof import("../wizard/setup.gateway-config.js").configureGatewayForSetup
+    >[0]) => ({
       nextConfig,
       settings: {
         authMode: quickstartGateway.authMode,

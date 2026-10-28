@@ -5,6 +5,7 @@ import {
   type PluginInstallRecordMapState,
 } from "../config/plugin-install-record-map.js";
 import {
+  prepareBundledDiscoveryMode,
   readBundledDiscoveryMode,
   readBundledDiscoveryModeMemoized,
 } from "./bundled-discovery-state.js";
@@ -12,6 +13,7 @@ import {
   INSTALLED_PLUGIN_INDEX_STATE_KEY,
   readPluginMetadataStateRowSync,
   readPluginMetadataStateRowsSync,
+  type PluginMetadataStateRow,
 } from "./installed-plugin-index-row.js";
 import {
   resolveInstalledPluginIndexStateDatabaseOptions,
@@ -20,7 +22,10 @@ import {
 } from "./installed-plugin-index-store-path.js";
 import type { PersistedInstalledPluginIndexCacheEntry } from "./plugin-cache-management.js";
 import { getPluginCache, preparePluginCacheFact } from "./plugin-cache.js";
-import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
+import {
+  readPluginMetadataStateRow,
+  readPluginMetadataStateRows,
+} from "./plugin-metadata-state-worker.js";
 
 /** Read failures must escape before either projection can authorize recovery or rebuilding. */
 function readPersistedInstalledPluginIndexRowSync(
@@ -86,9 +91,50 @@ export function preparePluginMetadataMachineState(options: InstalledPluginIndexS
   });
 }
 
+/** Coalesce cold policy and inventory reads without refreshing lifecycle-owned warm facts. */
+export async function preparePluginMetadataMachineStateAsync(
+  options: InstalledPluginIndexStoreOptions,
+): Promise<() => void> {
+  const key = path.resolve(resolveInstalledPluginIndexStorePath(options));
+  const databaseOptions = resolveInstalledPluginIndexStateDatabaseOptions(options);
+  let rows: Promise<PluginMetadataStateRow[]> | undefined;
+  const readRows = () =>
+    (rows ??= readPluginMetadataStateRows(
+      ["plugins.bundledDiscovery", INSTALLED_PLUGIN_INDEX_STATE_KEY],
+      databaseOptions,
+      options.artifactPreservingReadOnly,
+    ));
+  const activateDiscovery = await prepareBundledDiscoveryMode(options.env, async (databasePath) => {
+    const current = getPluginCache().persistedInstalledIndex.get(key);
+    if (path.resolve(databasePath) !== key || options.filePath?.endsWith(".json") || current) {
+      return readPluginMetadataStateRow(
+        "bundled-discovery",
+        { path: databasePath, env: options.env },
+        options.artifactPreservingReadOnly,
+      );
+    }
+    return (await readRows()).find((row) => row.state_key === "plugins.bundledDiscovery");
+  });
+  activateDiscovery();
+  const installed = await preparePersistedInstalledPluginIndexCacheEntry(
+    options,
+    rows
+      ? async () =>
+          (await readRows()).find((row) => row.state_key === INSTALLED_PLUGIN_INDEX_STATE_KEY)
+      : undefined,
+  );
+  activateDiscovery();
+  installed.assertCurrent();
+  return () => {
+    activateDiscovery();
+    installed.assertCurrent();
+  };
+}
+
 /** Await one shared row, retaining its cache generation until publication completes. */
 export async function preparePersistedInstalledPluginIndexCacheEntry(
   options: InstalledPluginIndexStoreOptions = {},
+  readPreparedRow?: () => Promise<{ value_json: string } | undefined>,
 ): Promise<{ entry: PersistedInstalledPluginIndexCacheEntry; assertCurrent: () => void }> {
   const owner = getPluginCache();
   const key = path.resolve(resolveInstalledPluginIndexStorePath(options));
@@ -100,11 +146,13 @@ export async function preparePersistedInstalledPluginIndexCacheEntry(
     async () => {
       const row = options.filePath?.endsWith(".json")
         ? undefined
-        : await readPluginMetadataStateRow(
-            "installed-index",
-            databaseOptions,
-            options.artifactPreservingReadOnly,
-          );
+        : readPreparedRow
+          ? await readPreparedRow()
+          : await readPluginMetadataStateRow(
+              "installed-index",
+              databaseOptions,
+              options.artifactPreservingReadOnly,
+            );
       return {
         state: row
           ? { status: "present", value: safeParseJson(row.value_json) }

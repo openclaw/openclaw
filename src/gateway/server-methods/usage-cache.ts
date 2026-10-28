@@ -16,6 +16,7 @@ function setUsageCache<T extends object>(
   cache: Map<string, UsageCacheEntry<T>>,
   cacheKey: string,
   entry: UsageCacheEntry<T>,
+  maxEntries: number,
 ): void {
   const cutoff = Date.now() - USAGE_CACHE_TTL_MS;
   for (const [key, candidate] of cache) {
@@ -23,7 +24,7 @@ function setUsageCache<T extends object>(
       cache.delete(key);
     }
   }
-  if (!cache.has(cacheKey) && cache.size >= USAGE_CACHE_MAX) {
+  if (!cache.has(cacheKey) && cache.size >= maxEntries) {
     let evictionKey = cache.keys().next().value;
     // Preserve active loads whenever a settled entry can be evicted instead.
     for (const [key, candidate] of cache) {
@@ -46,6 +47,9 @@ export async function loadUsageResultCached<T extends object>(params: {
   revision: string | number;
   load: () => Promise<T>;
   isComplete?: (value: T) => boolean;
+  revisionOnly?: boolean;
+  maxEntries?: number;
+  shareInFlight?: boolean;
 }): Promise<T> {
   const { cache, cacheKey, configRef, revision } = params;
   const now = Date.now();
@@ -55,22 +59,26 @@ export async function loadUsageResultCached<T extends object>(params: {
   if (cached) {
     cached.lastAccessedAt = now;
   }
-  if (cached?.value && cached.updatedAt && now - cached.updatedAt < USAGE_CACHE_TTL_MS) {
+  if (
+    cached?.value &&
+    cached.updatedAt !== undefined &&
+    (params.revisionOnly || now - cached.updatedAt < USAGE_CACHE_TTL_MS)
+  ) {
     return cached.value;
   }
-  if (cached?.inFlight) {
+  if (cached?.inFlight && params.shareInFlight !== false) {
     return cached.value && cached.updatedAt ? cached.value : await cached.inFlight;
   }
 
-  const entry: UsageCacheEntry<T> = cached ?? { configRef, revision, lastAccessedAt: now };
+  // Each request-owned flight may reuse settled data, but owns its publication and cleanup.
+  const entry: UsageCacheEntry<T> = cached
+    ? { ...cached, inFlight: undefined }
+    : { configRef, revision, lastAccessedAt: now };
   // Stale responses and cache eviction do not release the initiating owner's work.
   const inFlight = trackAsyncWork(() =>
     params
       .load()
       .then((value) => {
-        if (cache.get(cacheKey) !== entry) {
-          return value;
-        }
         if (params.isComplete?.(value) ?? true) {
           entry.value = value;
           entry.updatedAt = Date.now();
@@ -88,15 +96,12 @@ export async function loadUsageResultCached<T extends object>(params: {
         throw error;
       })
       .finally(() => {
-        const current = cache.get(cacheKey);
-        if (current === entry && current.inFlight === inFlight) {
-          current.inFlight = undefined;
-          current.lastAccessedAt = Date.now();
-        }
+        entry.inFlight = undefined;
+        entry.lastAccessedAt = Date.now();
       }),
   );
 
   entry.inFlight = inFlight;
-  setUsageCache(cache, cacheKey, entry);
+  setUsageCache(cache, cacheKey, entry, params.maxEntries ?? USAGE_CACHE_MAX);
   return entry.value && entry.updatedAt ? entry.value : await inFlight;
 }

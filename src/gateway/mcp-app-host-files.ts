@@ -1,58 +1,139 @@
-import { createHash, randomUUID } from "node:crypto";
-import { type Stats, stat, unwatchFile, watch, watchFile } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { stat, watch } from "node:fs";
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getMcpAppViewLease,
   type McpAppHostFile,
   type McpAppViewLease,
 } from "../agents/mcp-ui-resource.js";
+import { getRuntimeConfig } from "../config/io.js";
+import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { readRetainedSessionEntryFacts } from "../config/sessions/session-entry-read-facts.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug } from "../logger.js";
 import { retainGatewayDeviceRevocation } from "./device-revocation.js";
 import { requireMcpAppInteraction, resolveMcpAppRequesterId } from "./mcp-app-operations.js";
+import {
+  assertSessionFileReadPolicy,
+  sessionFileWorkspaceMatches,
+} from "./server-methods/session-file-read-authority.js";
 import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
-import { resolveLocalSessionWorkspaceRoot } from "./server-methods/sessions-files.js";
+import { prepareLocalSessionWorkspaceRoot } from "./server-methods/sessions-files.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   updateWorkspaceFile,
   readWorkspaceFile,
   resolveWorkspacePath,
 } from "./server-methods/workspace-fs.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "./workspace-file-limits.js";
 
 export { resolveMcpAppRequesterId } from "./mcp-app-operations.js";
 
+const fileSources = new WeakMap<
+  McpAppHostFile,
+  Awaited<ReturnType<typeof captureHostFileSession>>
+>();
+
 const writeAdmissions = new WeakSet<McpAppViewLease>();
 const subscriptions = new WeakMap<McpAppViewLease, Map<string, () => void>>();
-const etag = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+
+async function captureHostFileSession(
+  target: { sessionKey: string; agentId: string },
+  getConfig = getRuntimeConfig,
+) {
+  // File handles outlive their opening RPC; each file effect owns its request authority.
+  const authority = { assertCurrent() {}, authorize() {} };
+  const memory = captureSessionActorStorageOwner(target, authority);
+  const config = getConfig();
+  const assertRoutingCurrent = captureSessionMutationRouting(config, undefined, [target]);
+  const loaded = memory
+    ? undefined
+    : await loadGatewaySessionEntryReadOnlyAsync(
+        target.sessionKey,
+        {
+          agentId: target.agentId,
+          projection: ["skillsSnapshot"],
+        },
+        config,
+      );
+  const readEntry = () =>
+    memory
+      ? memory.owner?.readSession(target.sessionKey, authority)?.entry
+      : loaded &&
+        readRetainedSessionEntryFacts(
+          {
+            agentId: loaded.readSource?.agentId ?? loaded.agentId,
+            path: loaded.readSource?.path ?? loaded.storePath,
+          },
+          {
+            sessionKeys: [loaded.canonicalKey],
+            projection: "exact",
+            snapshotFields: ["skillsSnapshot"],
+          },
+        )?.entries.find((row) => row.sessionKey === loaded.canonicalKey)?.entry;
+  const initial = readEntry();
+  const workspace = await prepareLocalSessionWorkspaceRoot({
+    ...target,
+    source: { entry: initial, cfg: config },
+  });
+  return {
+    assertCurrent() {
+      assertRoutingCurrent(getConfig());
+      const current = readEntry();
+      if (!sessionFileWorkspaceMatches(initial, current)) {
+        throw new Error("App file session workspace changed");
+      }
+    },
+    readEntry,
+    readRoot: (options?: GatewayRequestHandlerOptions) => {
+      const current = readEntry();
+      if (!current) {
+        return undefined;
+      }
+      workspace?.assertCurrent(getConfig(), current);
+      if (options) {
+        assertSessionFileReadPolicy(options, {
+          agentId: target.agentId,
+          canonicalKey: target.sessionKey,
+          entry: current,
+          unscopedHostRoot: workspace?.unscopedHostRoot,
+        });
+      }
+      return workspace?.root;
+    },
+  };
+}
 
 /** Called only by the authenticated file entrypoint owner, never with an App-provided URI. */
 export async function prepareMcpAppHostFile(
   options: GatewayRequestHandlerOptions,
   target: { sessionKey: string; agentId: string; path: string },
 ): Promise<McpAppHostFile> {
-  const read = retainSessionScopedRead(options, target.sessionKey, target.agentId, {
+  const session = await captureHostFileSession(target, () => options.context.getRuntimeConfig());
+  const read = await retainSessionScopedRead(options, target.sessionKey, target.agentId, {
     requireMaterialized: true,
   });
   try {
-    const rootDir = resolveLocalSessionWorkspaceRoot(target);
-    const loaded = loadGatewaySessionEntryReadOnly(target.sessionKey, { agentId: target.agentId });
-    if (!rootDir || !loaded.entry?.sessionId) {
+    const rootDir = session.readRoot(options);
+    const entry = session.readEntry();
+    if (!rootDir || !entry?.sessionId) {
       throw new Error("Local workspace file access is unavailable");
     }
     const requesterId = resolveMcpAppRequesterId(options.client);
-    const sessionId = loaded.entry.sessionId;
+    const sessionId = entry.sessionId;
     const assertCurrent = () => {
+      session.assertCurrent();
       read?.assertCurrent();
       if (
         options.hasCurrentClientAuthority?.() === false ||
         resolveMcpAppRequesterId(options.client) !== requesterId ||
-        loadGatewaySessionEntryReadOnly(target.sessionKey, { agentId: target.agentId }).entry
-          ?.sessionId !== sessionId ||
-        resolveLocalSessionWorkspaceRoot(target) !== rootDir
+        session.readEntry()?.sessionId !== sessionId ||
+        session.readRoot(options) !== rootDir
       ) {
         throw new Error("App file workspace authority changed");
       }
@@ -69,7 +150,7 @@ export async function prepareMcpAppHostFile(
     if (!result || result === "too-large") {
       throw new Error("File is missing, unsafe, or too large");
     }
-    return {
+    const file = {
       resourceUri: "openclaw-file://" + randomUUID(),
       name: path.basename(result.canonicalPath),
       rootDir,
@@ -77,6 +158,8 @@ export async function prepareMcpAppHostFile(
       sessionId,
       requesterId,
     };
+    fileSources.set(file, session);
+    return file;
   } finally {
     read?.release();
   }
@@ -94,11 +177,17 @@ async function withHostFile<T>(
   if (!file || file.resourceUri !== uri || !sessionKey) {
     throw new Error("Resource is not the file opened by this App");
   }
-  const read = retainSessionScopedRead(options, sessionKey, view.agentId, {
+  const session =
+    fileSources.get(file) ??
+    (await captureHostFileSession({ sessionKey, agentId: view.agentId }, () =>
+      options.context.getRuntimeConfig(),
+    ));
+  const read = await retainSessionScopedRead(options, sessionKey, view.agentId, {
     requireMaterialized: true,
   });
   const assertCurrent = () => {
     view.runtime.assertOwnerCurrent?.();
+    session.assertCurrent();
     read?.assertCurrent();
     options.sessionMutationAuthorization?.assertCurrent();
     if (
@@ -109,9 +198,8 @@ async function withHostFile<T>(
       view.readOnly ||
       view.allowedAppToolNames === undefined ||
       resolveMcpAppRequesterId(options.client) !== file.requesterId ||
-      loadGatewaySessionEntryReadOnly(sessionKey, { agentId: view.agentId }).entry?.sessionId !==
-        file.sessionId ||
-      resolveLocalSessionWorkspaceRoot({ sessionKey, agentId: view.agentId }) !== file.rootDir
+      session.readEntry()?.sessionId !== file.sessionId ||
+      session.readRoot(options) !== file.rootDir
     ) {
       throw new Error("MCP App file authority expired");
     }
@@ -169,7 +257,7 @@ export async function readMcpAppHostFile(
         {
           uri: file.resourceUri,
           ...content,
-          _meta: { "openai/resource": { writable, etag: etag(result.buffer) } },
+          _meta: { "openai/resource": { writable, etag: sha256Hex(result.buffer) } },
         },
       ],
     };
@@ -279,23 +367,28 @@ export async function subscribeMcpAppHostFile(
     if (!result || result === "too-large") {
       throw new Error("Resource cannot be subscribed");
     }
+    const session =
+      fileSources.get(file) ??
+      (await captureHostFileSession({ sessionKey, agentId: view.agentId }, () =>
+        options.context.getRuntimeConfig(),
+      ));
     let closed = false;
     let notifying = false;
-    const isCurrent = () =>
-      !closed &&
-      !client.connectionSignal?.aborted &&
-      options.hasCurrentClientAuthority?.() !== false &&
-      getMcpAppViewLease(view.viewId, view.runtime) === view &&
-      !view.readOnly &&
-      view.allowedAppToolNames !== undefined &&
-      resolveMcpAppRequesterId(client) === file.requesterId &&
-      options.context.getRuntimeConfig().mcp?.apps?.enabled === true &&
-      loadGatewaySessionEntryReadOnly(sessionKey, { agentId: view.agentId }).entry?.sessionId ===
-        file.sessionId &&
-      resolveLocalSessionWorkspaceRoot({
-        sessionKey,
-        agentId: view.agentId,
-      }) === file.rootDir;
+    const isCurrent = () => {
+      session.assertCurrent();
+      return (
+        !closed &&
+        !client.connectionSignal?.aborted &&
+        options.hasCurrentClientAuthority?.() !== false &&
+        getMcpAppViewLease(view.viewId, view.runtime) === view &&
+        !view.readOnly &&
+        view.allowedAppToolNames !== undefined &&
+        resolveMcpAppRequesterId(client) === file.requesterId &&
+        options.context.getRuntimeConfig().mcp?.apps?.enabled === true &&
+        session.readEntry()?.sessionId === file.sessionId &&
+        session.readRoot(options) === file.rootDir
+      );
+    };
     const notify = async () => {
       if (notifying) {
         return;
@@ -326,6 +419,26 @@ export async function subscribeMcpAppHostFile(
     // Bridge rename gaps with stat polling bounded to absence and subscription lifetime.
     const filePath = path.join(file.rootDir, file.path);
     let polling = false;
+    let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    // A change-based poller's initial stat can miss the entire absence window.
+    const poll = () => {
+      stat(filePath, (error, current) => {
+        if (closed || !polling) {
+          return;
+        }
+        if (!error && current.isFile()) {
+          rearm(true);
+        } else if (error && !hasErrnoCode(error, "ENOENT")) {
+          close(error);
+        } else {
+          pollTimer = setTimeout(() => {
+            pollTimer = undefined;
+            poll();
+          }, 250);
+          pollTimer.unref();
+        }
+      });
+    };
     const arm = () =>
       watch(filePath, { persistent: false }, (event) => {
         if (event === "rename") {
@@ -334,28 +447,22 @@ export async function subscribeMcpAppHostFile(
         }
         void notify();
       }).on("error", close);
-    const rearm = (curr?: Stats) => {
-      if (closed || (curr && (!polling || !curr.isFile()))) {
+    const rearm = (recovered = false) => {
+      if (closed || (polling && !recovered)) {
         return;
       }
       polling = false;
-      unwatchFile(filePath, rearm);
+      clearTimeout(pollTimer);
+      pollTimer = undefined;
       try {
         watcher = arm();
-        if (curr) {
+        if (recovered) {
           void notify();
         }
       } catch (error) {
         if (hasErrnoCode(error, "ENOENT")) {
           polling = true;
-          watchFile(filePath, { persistent: false, interval: 250 }, rearm);
-          stat(filePath, (statError, currentStats) => {
-            if (!statError) {
-              rearm(currentStats);
-            } else if (!hasErrnoCode(statError, "ENOENT")) {
-              close(statError);
-            }
-          });
+          poll();
         } else {
           close(error);
         }
@@ -371,7 +478,8 @@ export async function subscribeMcpAppHostFile(
       );
       releaseAuthority?.();
       watcher.close();
-      unwatchFile(filePath, rearm);
+      clearTimeout(pollTimer);
+      pollTimer = undefined;
       client.connectionSignal?.removeEventListener("abort", onDisconnect);
       if (watchers.get(connId) === close) {
         watchers.delete(connId);
@@ -400,12 +508,13 @@ export async function subscribeMcpAppHostFile(
   });
 }
 
-export function canOpenMcpAppFiles(view: McpAppViewLease): boolean {
+export async function canOpenMcpAppFiles(view: McpAppViewLease): Promise<boolean> {
   const sessionKey = view.runtime.sessionKey;
   if (!sessionKey) {
     return false;
   }
-  return Boolean(resolveLocalSessionWorkspaceRoot({ sessionKey, agentId: view.agentId }));
+  const session = await captureHostFileSession({ sessionKey, agentId: view.agentId });
+  return Boolean(session.readRoot());
 }
 
 export async function openMcpAppFile(

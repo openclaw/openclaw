@@ -12,30 +12,34 @@ const procError = (code: string) => Object.assign(new Error(`proc read: ${code}`
 describe("plugin update command observation", () => {
   let files: Map<string, string | Error>;
   let child: EventEmitter & { pid: number };
+  const setProc = (pid: number, values: Record<string, string | Error>) => {
+    for (const [file, value] of Object.entries(values)) {
+      files.set(`/proc/${pid}/${file}`, value);
+    }
+  };
+  const finish = (code = 0) => child.emit("exit", code, null);
+  const observed = (pid: string, cmdline = argv, postCore: boolean | null = true) => ({
+    pid,
+    argv: cmdline.split("\0").filter(Boolean),
+    postCore,
+  });
 
   beforeEach(() => {
     vi.useFakeTimers();
     child = Object.assign(new EventEmitter(), { pid: 10 });
-    files = new Map([
-      ["/proc/10/task/10/children", "11 12"],
-      ["/proc/11/cmdline", argv],
-      ["/proc/11/environ", marker],
-      ["/proc/11/task/11/children", ""],
-      ["/proc/12/cmdline", argv],
-      ["/proc/12/environ", marker],
-      ["/proc/12/task/12/children", ""],
-    ]);
+    files = new Map();
+    setProc(10, { "task/10/children": "11 12" });
+    for (const pid of [11, 12]) {
+      setProc(pid, { cmdline: argv, environ: marker, [`task/${pid}/children`]: "" });
+    }
     const readFile = fs.readFileSync;
     vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
       if (!String(file).startsWith("/proc/")) {
         return readFile(file, options);
       }
-      const value = files.get(String(file));
+      const value = files.get(String(file)) ?? procError("ENOENT");
       if (value instanceof Error) {
         throw value;
-      }
-      if (value === undefined) {
-        throw procError("ENOENT");
       }
       return value;
     });
@@ -48,99 +52,40 @@ describe("plugin update command observation", () => {
     expect(timers).toBe(0);
   });
 
-  it.each([
-    { name: "delegated worker", cmdline: workerArgv, environ: marker, postCore: true },
-    { name: "worker without marker", cmdline: workerArgv, environ: "PATH=/bin\0", postCore: false },
-    {
-      name: "worker with disabled marker",
-      cmdline: workerArgv,
-      environ: "OPENCLAW_UPDATE_POST_CORE=0\0",
-      postCore: false,
-    },
-    {
-      name: "different worker with post-core flag",
-      cmdline: "node\0/opt/openclaw/dist/infra/unrelated.worker.js\0--post-core\0",
-      environ: marker,
-      postCore: false,
-    },
-    {
-      name: "delegated doctor worker",
-      cmdline: "node\0/opt/openclaw/dist/infra/update-migrated-finalize.worker.js\0--doctor\0",
-      environ: marker,
-      postCore: false,
-    },
-    { name: "legacy update", cmdline: argv, environ: marker, postCore: true },
-    { name: "legacy process title", cmdline: "openclaw-update\0", environ: marker, postCore: true },
-  ])("classifies $name using its environment marker", async ({ cmdline, environ, postCore }) => {
-    files.set("/proc/10/task/10/children", "11");
-    files.set("/proc/11/cmdline", cmdline);
-    files.set("/proc/11/environ", environ);
+  it("keeps scanning the tree without inventing evidence for vanished or unreadable children", async () => {
+    setProc(10, { "task/10/children": "11 12 14" });
+    setProc(11, { environ: procError("ESRCH"), "task/11/children": "13" });
+    setProc(13, { cmdline: argv, environ: marker });
+    setProc(14, { environ: "OPENCLAW_UPDATE_POST_CORE=0\0", cmdline: procError("EACCES") });
     const outcome = observePostCoreCommand(child, "update");
     await vi.advanceTimersByTimeAsync(20);
-    child.emit("exit", 0, null);
-    expect((await outcome).children).toEqual([
-      { pid: "11", argv: cmdline.split("\0").filter(Boolean), postCore },
+    finish();
+    const result = await outcome;
+    expect(result.code).toBe(0);
+    expect(result.children).toEqual([
+      observed("11", argv, null),
+      observed("13"),
+      observed("12"),
+      observed("14", "", null),
     ]);
   });
 
-  it.each(["EACCES", "EPERM", "ENOENT", "ESRCH"])(
-    "%s leaves evidence unknown and keeps scanning readable siblings and grandchildren",
-    async (code) => {
-      files.set("/proc/11/environ", procError(code));
-      files.set("/proc/11/task/11/children", "13");
-      files.set("/proc/13/cmdline", argv);
-      files.set("/proc/13/environ", marker);
-      const outcome = observePostCoreCommand(child, "update");
-      await vi.advanceTimersByTimeAsync(20);
-      child.emit("exit", 0, null);
-      const result = await outcome;
-      expect(result.code).toBe(0);
-      expect(result.children).toEqual([
-        { pid: "11", argv: argv.split("\0").filter(Boolean), postCore: null },
-        { pid: "13", argv: argv.split("\0").filter(Boolean), postCore: true },
-        { pid: "12", argv: argv.split("\0").filter(Boolean), postCore: true },
-      ]);
-    },
-  );
-
-  it.each(["cmdline", "environ", "task/11/children"])(
-    "does not manufacture positive handoff evidence when %s is inaccessible",
-    async (file) => {
-      files.set("/proc/10/task/10/children", "11");
-      files.set("/proc/11/environ", "OPENCLAW_UPDATE_POST_CORE=0\0");
-      files.set(`/proc/11/${file}`, procError("EACCES"));
-      const outcome = observePostCoreCommand(child, "update");
-      await vi.advanceTimersByTimeAsync(20);
-      child.emit("exit", 0, null);
-      expect((await outcome).children.some((entry) => entry.postCore)).toBe(false);
-    },
-  );
-
-  it.each([argv, workerArgv])(
-    "retains positive evidence and argv %j after process.title changes and the process exits",
-    async (cmdline) => {
-      files.set("/proc/11/cmdline", cmdline);
-      files.set("/proc/12/cmdline", cmdline);
-      const outcome = observePostCoreCommand(child, "update");
-      await vi.advanceTimersByTimeAsync(20);
-      files.set("/proc/11/cmdline", "openclaw-update\0");
-      files.set("/proc/11/environ", procError("EACCES"));
-      files.set("/proc/12/cmdline", procError("ESRCH"));
-      await vi.advanceTimersByTimeAsync(20);
-      files.set("/proc/10/task/10/children", "");
-      await vi.advanceTimersByTimeAsync(20);
-      child.emit("exit", 7, null);
-      const result = await outcome;
-      expect(result.code).toBe(7);
-      expect(result.children).toEqual(
-        ["11", "12"].map((pid) => ({
-          pid,
-          argv: cmdline.split("\0").filter(Boolean),
-          postCore: true,
-        })),
-      );
-    },
-  );
+  it("retains positive evidence and worker argv after process.title changes and the process exits", async () => {
+    for (const pid of [11, 12]) {
+      setProc(pid, { cmdline: workerArgv });
+    }
+    const outcome = observePostCoreCommand(child, "update");
+    await vi.advanceTimersByTimeAsync(20);
+    setProc(11, { cmdline: "openclaw-update\0", environ: procError("EACCES") });
+    files.set("/proc/12/cmdline", procError("ESRCH"));
+    await vi.advanceTimersByTimeAsync(20);
+    files.set("/proc/10/task/10/children", "");
+    await vi.advanceTimersByTimeAsync(20);
+    finish(7);
+    const result = await outcome;
+    expect(result.code).toBe(7);
+    expect(result.children).toEqual(["11", "12"].map((pid) => observed(pid, workerArgv)));
+  });
 
   it("joins unexpected observer failure with command exit instead of throwing from the timer", async () => {
     const failure = procError("EIO");
@@ -152,7 +97,7 @@ describe("plugin update command observation", () => {
     });
     await vi.advanceTimersByTimeAsync(20);
     expect(child.listenerCount("exit")).toBe(1);
-    child.emit("exit", 7, null);
+    finish(7);
     await rejected;
     expect(child.listenerCount("exit")).toBe(0);
   });

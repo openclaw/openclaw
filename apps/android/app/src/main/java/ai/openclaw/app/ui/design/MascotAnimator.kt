@@ -66,14 +66,12 @@ private class SeededGenerator(
 ) {
   private var state = if (seed == 0uL) NONZERO_SEED else seed
 
-  fun next(): ULong {
+  fun unit(): Double {
     state = state xor (state shr 12)
     state = state xor (state shl 25)
     state = state xor (state shr 27)
-    return state * XORSHIFT_MULTIPLIER
+    return ((state * XORSHIFT_MULTIPLIER) shr 11).toDouble() / 9_007_199_254_740_992.0
   }
-
-  fun unit(): Double = (next() shr 11).toDouble() / 9_007_199_254_740_992.0
 }
 
 /** Pure deterministic mood loops plus randomized blink, gaze, claw-snap, and mood-beat schedules. */
@@ -82,7 +80,7 @@ class MascotAnimator(
 ) {
   private val rng = SeededGenerator(seed)
   private var currentMood = MascotMood.Idle
-  private var startTime: Double? = null
+  private var started = false
   private var lastPoseTime = 0.0
   private var activeGesture: Gesture? = null
   private var activeGestureStart = 0.0
@@ -112,13 +110,13 @@ class MascotAnimator(
   }
 
   fun poseAt(timeSeconds: Double): MascotPose {
-    if (startTime == null) begin(timeSeconds)
+    if (!started) begin(timeSeconds)
     val dt = clamp(timeSeconds - lastPoseTime, 0.0, 0.1)
     lastPoseTime = timeSeconds
     advanceSchedules(timeSeconds)
 
-    // TS and Swift phase ambient loops from their host clocks. startTime only
-    // gates first-run schedules; raw time here preserves cross-platform parity.
+    // TS and Swift phase ambient loops from their host clocks; raw time here
+    // preserves cross-platform parity.
     val pose = basePose(currentMood, timeSeconds)
     applyGaze(pose, currentMood, timeSeconds, dt)
     applyBlinks(pose, timeSeconds)
@@ -136,7 +134,7 @@ class MascotAnimator(
   }
 
   private fun begin(timeSeconds: Double) {
-    startTime = timeSeconds
+    started = true
     lastPoseTime = timeSeconds
     nextBlinkAt = timeSeconds + random(0.8, 2.4)
     nextGlanceAt = timeSeconds + random(1.5, 4.0)

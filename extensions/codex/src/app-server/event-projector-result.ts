@@ -1,11 +1,18 @@
+import { AgentHarnessProjectionSettlement } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   classifyAgentHarnessTerminalOutcome,
+  prepareAgentRunTerminalReply,
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentHarnessToolResultTelemetry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { resolveCodexTtsProvenanceTransfer } from "openclaw/plugin-sdk/codex-mcp-projection";
-import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import {
+  attemptTerminal,
+  type AttemptFailureSource,
+  type EmbeddedRunAttemptResult,
+} from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { CodexAsyncDeliveryProjection } from "./event-projector-async-delivery.js";
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
@@ -14,15 +21,18 @@ import { CodexGeneratedMediaProjection } from "./event-projector-media.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import type { CodexAppServerEventProjectorOptions } from "./event-projector-options.js";
 import { CodexReasoningProjection } from "./event-projector-reasoning.js";
-import { CodexProjectionSettlement } from "./event-projector-settlement.js";
 import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
-import { CodexTerminalFailureProjection } from "./event-projector-terminal-failure.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolSearchEvidenceProjection } from "./event-projector-tool-search-evidence.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import { CodexUsageProjection } from "./event-projector-usage.js";
-import type { CodexTurn } from "./protocol.js";
+import { readCodexProviderRefusal, type CodexProviderRefusal } from "./event-projector-values.js";
+import type { CodexTurn, JsonValue } from "./protocol.js";
 import { CodexTranscriptCheckpoint } from "./transcript-checkpoint.js";
+import { attachCodexAssistantItemIds } from "./upstream-prompt-provenance.js";
+import { resolveCodexPromptError } from "./usage-limit-error.js";
+
+const TERMINAL_REPLY_SNAPSHOT_MAX_CHARS = 4_096;
 
 export type CodexAppServerToolTelemetry = Partial<
   Omit<AgentHarnessToolResultTelemetry, "confirmedMediaDeliveries">
@@ -36,10 +46,33 @@ export type CodexAppServerToolTelemetry = Partial<
   > & {
     didDeliverSourceReplyViaMessageTool?: boolean;
     sourceReplyDelivered?: true;
+    finalSourceReplyDelivered?: true;
     confirmedMediaDeliveries?: Readonly<
       AgentHarnessToolResultTelemetry["confirmedMediaDeliveries"]
     >;
   } & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
+
+class CodexProjectionSettlement extends AgentHarnessProjectionSettlement<EmbeddedRunAttemptParams> {
+  terminalReceipt: CodexTurn | undefined;
+  turnTainted = false;
+
+  constructor(params: EmbeddedRunAttemptParams, isActive: () => boolean) {
+    super(params, isActive, { label: "codex app-server" });
+  }
+
+  get completedAnswer() {
+    const turn = this.terminalReceipt;
+    // Codex 0.153.0 turn/completed carries the last assistant item as a summary.
+    const answer = turn?.items?.findLast(
+      (item) =>
+        item.type === "agentMessage" &&
+        item.phase !== "commentary" &&
+        item.delivery !== "async" &&
+        item.text.trim().length > 0,
+    );
+    return turn?.status === "completed" && answer ? { turn, answer } : undefined;
+  }
+}
 
 /** Owns per-turn projection state and builds results from the same state. */
 export abstract class CodexTurnProjection {
@@ -63,13 +96,62 @@ export abstract class CodexTurnProjection {
   protected readonly projectionController = new AbortController();
   /** Structured overloads may continue once the exact settled transcript is captured. */
   settledTurnFailureFinalizationAllowed = false;
-  protected readonly terminalFailure = new CodexTerminalFailureProjection();
+  protected promptError: unknown;
+  protected promptErrorSource: AttemptFailureSource | null = null;
+  protected providerRefusal: CodexProviderRefusal | undefined;
   protected synthesizedMissingToolResultError: string | null = null;
   protected aborted = false;
   protected contextTokens: number | undefined;
   protected contextTokensSource: "runtime" | "runtime-configured" | "resolved" | undefined;
   protected readonly usageProjection = new CodexUsageProjection();
   protected completedCompactionCount = 0;
+
+  /** Materialize terminal native-tool gaps while the durable checkpoint is still open. */
+  prepareTerminalToolResultCheckpoint(
+    toolTelemetry: CodexAppServerToolTelemetry,
+    options?: { readRetainedNativeCommands?: () => ReadonlyMap<string, string> },
+  ): void {
+    const retainedCommands = new Map<string, string>();
+    if (
+      !this.aborted &&
+      !this.options.runAbortSignal?.aborted &&
+      this.completedTurn?.status === "completed" &&
+      !this.promptError
+    ) {
+      const pending = this.nativeToolLifecycleProjector.pendingCommands();
+      for (const [id, processId] of options?.readRetainedNativeCommands?.() ?? []) {
+        if (pending.has(id) && (pending.get(id) === null || pending.get(id) === processId)) {
+          retainedCommands.set(id, processId);
+        }
+      }
+    }
+    this.nativeToolLifecycleProjector.finalizeActive(undefined, retainedCommands);
+    const rawAssistantTexts = toolTelemetry.finalSourceReplyDelivered
+      ? []
+      : this.assistantProjection.collectAssistantTexts();
+    const hasDeliverableAssistantOnCompletedTurn =
+      this.completedTurn?.status === "completed" &&
+      rawAssistantTexts.some(
+        (text) =>
+          prepareAgentRunTerminalReply({ rawText: text }).terminalReply.disposition === "visible",
+      );
+    const synthesized = this.toolTranscriptProjection.synthesizeMissingToolResults({
+      synthesize:
+        !this.completedTurn ||
+        this.completedTurn.status !== "completed" ||
+        this.assistantProjection.hasAssistantItemTextForSynthesis(),
+      retainedCommands,
+      terminalDisposition: this.aborted
+        ? "tool_error"
+        : hasDeliverableAssistantOnCompletedTurn
+          ? "diagnostic_only"
+          : "prompt_error",
+    });
+    if (synthesized) {
+      this.synthesizedMissingToolResultError = synthesized;
+      this.promptErrorSource ??= "prompt";
+    }
+  }
 
   constructor(
     protected readonly params: EmbeddedRunAttemptParams,
@@ -133,10 +215,15 @@ export abstract class CodexTurnProjection {
     );
     this.assistantProjection = new CodexAssistantProjection(
       this.settlement.params,
-      (event) => this.emitAgentEvent(event),
+      (event) => {
+        if (!options.hasDeliveredFinalSourceReply?.()) {
+          this.emitAgentEvent(event);
+        }
+      },
       (text) => this.toolProgressProjection.matchesEcho(text),
       this.transcriptCheckpoint.nextTimestamp,
       this.transcriptCheckpoint.enqueueCommentary,
+      options.hasDeliveredFinalSourceReply,
     );
     this.reasoningProjection = new CodexReasoningProjection(
       this.settlement.params,
@@ -158,6 +245,7 @@ export abstract class CodexTurnProjection {
     },
   ): EmbeddedRunAttemptResult & { terminalTurnId: string } {
     this.eventProjection.flushPendingGuardianWarning();
+    this.prepareTerminalToolResultCheckpoint(toolTelemetry, options);
     // Finalizing native tools may invoke callbacks; retain this result's terminal snapshot.
     const {
       params: runParams,
@@ -167,13 +255,11 @@ export abstract class CodexTurnProjection {
       contextTokens,
       contextTokensSource,
       completedCompactionCount,
-      synthesizedMissingToolResultError: previousMissingToolResultError,
-    } = this;
-    const {
+      synthesizedMissingToolResultError,
       promptError: initialPromptError,
       promptErrorSource: initialPromptErrorSource,
       providerRefusal,
-    } = this.terminalFailure;
+    } = this;
     const upstreamUserText = this.options.upstreamUserText;
     const turnTainted = this.settlement.turnTainted;
     const observedItemCount = new Set([...this.observedItemIds, ...this.completedItemIds]).size;
@@ -181,25 +267,42 @@ export abstract class CodexTurnProjection {
     const completedItemCount = this.completedItemIds.size;
     const guardianReviewCount = this.eventProjection.guardianReviewCount;
     const yieldDetected = options?.yieldDetected;
-    const retainedCommands = new Map<string, string>();
-    if (
-      !aborted &&
-      !this.options.runAbortSignal?.aborted &&
-      completedTurn?.status === "completed" &&
-      !initialPromptError
-    ) {
-      const pending = this.nativeToolLifecycleProjector.pendingCommands();
-      for (const [id, processId] of options?.readRetainedNativeCommands?.() ?? []) {
-        // A queued native completion wins over the earlier inventory snapshot.
-        if (pending.has(id) && (pending.get(id) === null || pending.get(id) === processId)) {
-          retainedCommands.set(id, processId);
+    const rawAssistantTexts = toolTelemetry.finalSourceReplyDelivered
+      ? []
+      : this.assistantProjection.collectAssistantTexts();
+    const preparedReplies = rawAssistantTexts.map((rawText) =>
+      prepareAgentRunTerminalReply({ rawText }),
+    );
+    const visibleReplies = preparedReplies.filter(
+      (reply) => reply.terminalReply.disposition === "visible",
+    );
+    const assistantTexts = visibleReplies.map((reply) => reply.text);
+    const terminalText = assistantTexts.join("\n\n");
+    const terminalSnapshotText = preparedReplies
+      .flatMap(({ terminalReply }) =>
+        terminalReply.disposition === "visible" ? terminalReply.text : [],
+      )
+      .join("\n\n");
+    const aggregateTruncated = terminalSnapshotText.length > TERMINAL_REPLY_SNAPSHOT_MAX_CHARS;
+    const preparedTerminalReply = visibleReplies.length
+      ? {
+          text: terminalText,
+          terminalReply: {
+            disposition: "visible" as const,
+            text: aggregateTruncated
+              ? `${truncateUtf16Safe(
+                  terminalSnapshotText,
+                  TERMINAL_REPLY_SNAPSHOT_MAX_CHARS - 1,
+                ).trimEnd()}…`
+              : terminalSnapshotText,
+          },
         }
-      }
-    }
-    // Close this turn's audit scope without inventing process completion. The
-    // existing unknown-outcome diagnostic remains distinct from execution failure.
-    this.nativeToolLifecycleProjector.finalizeActive(undefined, retainedCommands);
-    const assistantTexts = this.assistantProjection.collectAssistantTexts();
+      : (preparedReplies.at(-1) ?? prepareAgentRunTerminalReply({}));
+    const rawTranscriptTexts = visibleReplies.length
+      ? rawAssistantTexts.filter(
+          (_, index) => preparedReplies[index]?.terminalReply.disposition === "visible",
+        )
+      : rawAssistantTexts;
     const asyncMessages = this.assistantProjection.collectAsyncMessages();
     const commentaryMessages = this.assistantProjection.collectCommentaryMessages();
     const reasoningText = this.reasoningProjection.reasoningText();
@@ -209,31 +312,8 @@ export abstract class CodexTurnProjection {
     const usage = this.usageProjection.usage;
     const projectedUsage =
       aborted && usage ? { ...usage, contextUsage: { state: "unavailable" } as const } : usage;
-    const hasAssistantItemText = this.assistantProjection.hasAssistantItemTextForSynthesis();
-    const legacyFailClosed =
-      !completedTurn || completedTurn.status !== "completed" || hasAssistantItemText;
-    const hasDeliverableAssistantOnCompletedTurn =
-      completedTurn?.status === "completed" &&
-      assistantTexts.some((text) => text.trim().length > 0);
-    const synthesizedMissingToolResultError =
-      this.toolTranscriptProjection.synthesizeMissingToolResults({
-        synthesize: legacyFailClosed,
-        retainedCommands,
-        // Preserve audit synthesis on every path, but completed answers must not
-        // promote bookkeeping gaps into user-visible terminal failure evidence.
-        terminalDisposition: aborted
-          ? "tool_error"
-          : hasDeliverableAssistantOnCompletedTurn
-            ? "diagnostic_only"
-            : "prompt_error",
-      });
-    const storedMissingToolResultError =
-      synthesizedMissingToolResultError ?? previousMissingToolResultError;
-    let promptErrorSource = initialPromptErrorSource;
-    if (synthesizedMissingToolResultError) {
-      this.synthesizedMissingToolResultError = synthesizedMissingToolResultError;
-      promptErrorSource = promptErrorSource ?? "prompt";
-    }
+    const storedMissingToolResultError = synthesizedMissingToolResultError;
+    const promptErrorSource = initialPromptErrorSource;
     const assistantMessageOptions = {
       tokenUsage: projectedUsage,
       aborted,
@@ -242,15 +322,33 @@ export abstract class CodexTurnProjection {
     };
     const lastAssistant = providerRefusal
       ? this.assistantProjection.createAssistantMessage("", assistantMessageOptions)
-      : assistantTexts.length
+      : rawTranscriptTexts.length
         ? this.assistantProjection.createAssistantMessage(
-            assistantTexts.join("\n\n"),
+            rawTranscriptTexts.join("\n\n"),
             assistantMessageOptions,
           )
         : undefined;
-    const currentAttemptAssistant = providerRefusal
-      ? lastAssistant
-      : this.assistantProjection.createCurrentAttemptAssistantMessage(assistantMessageOptions);
+    let currentAttemptAssistant = toolTelemetry.finalSourceReplyDelivered
+      ? undefined
+      : providerRefusal
+        ? lastAssistant
+        : this.assistantProjection.createCurrentAttemptAssistantMessage(assistantMessageOptions);
+    // Tool-authored completion belongs to this native turn, not another input's
+    // projected answer. Preserve the same identity even for a tool-only turn.
+    if (
+      toolTelemetry.messagingToolSourceReplyPayloads?.some(
+        (reply) => reply.toolAuthoredForTurnId === turnId,
+      )
+    ) {
+      currentAttemptAssistant ??= this.assistantProjection.createAssistantMessage(
+        "",
+        assistantMessageOptions,
+      );
+      currentAttemptAssistant = { ...currentAttemptAssistant, turnId };
+      if (lastAssistant) {
+        lastAssistant.turnId = turnId;
+      }
+    }
     // Stable turn/item identities deduplicate retries and cross-turn replays
     // without collapsing identical text from distinct turns. Codex owns history;
     // this mirror supports OpenClaw history, search, and harness switching.
@@ -263,7 +361,12 @@ export abstract class CodexTurnProjection {
       commentaryMessages,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
       steeringMessages: options?.steeringMessages,
-      lastAssistant,
+      lastAssistant: lastAssistant
+        ? attachCodexAssistantItemIds(
+            lastAssistant,
+            this.assistantProjection.collectTerminalAssistantItemIds(),
+          )
+        : undefined,
       turnTainted,
     });
     const turnFailed = completedTurn?.status === "failed";
@@ -310,6 +413,7 @@ export abstract class CodexTurnProjection {
         : {}),
       messagesSnapshot,
       assistantTexts,
+      preparedTerminalReply,
       toolMetas,
       lastAssistant,
       currentAttemptAssistant,
@@ -323,7 +427,6 @@ export abstract class CodexTurnProjection {
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
       ...mediaDelivery,
       messagingToolSourceReplyPayloads: toolTelemetry.messagingToolSourceReplyPayloads ?? [],
-      heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       acceptedSessionSpawns: toolTelemetry.acceptedSessionSpawns,
@@ -349,6 +452,39 @@ export abstract class CodexTurnProjection {
       transferTtsProvenance?.(toolResult, result, toolAutoDeliveryMediaUrls ?? []);
     }
     return result;
+  }
+
+  protected recordTerminalFailure(params: {
+    message: string | undefined;
+    codexErrorInfo: JsonValue | null | undefined;
+    misalignment?: unknown;
+    nativeThreadId?: string;
+    nativeTurnId?: string;
+    rateLimits: JsonValue | undefined;
+    fallbackMessage: string;
+    promptErrorSource: AttemptFailureSource;
+  }): void {
+    const refusal = readCodexProviderRefusal(params.message, params.codexErrorInfo, params);
+    // Error notifications can precede a richer terminal snapshot for this same turn.
+    // Explicitly changed details also retire a previously valid continuation.
+    if (
+      !this.providerRefusal ||
+      (refusal?.category === "misalignment" &&
+        this.providerRefusal.category === "misalignment" &&
+        params.misalignment != null)
+    ) {
+      this.providerRefusal = refusal;
+    }
+    if (this.providerRefusal) {
+      return;
+    }
+    this.promptError =
+      resolveCodexPromptError({
+        message: params.message,
+        codexErrorInfo: params.codexErrorInfo,
+        rateLimits: params.rateLimits,
+      }) ?? params.fallbackMessage;
+    this.promptErrorSource = params.promptErrorSource;
   }
 
   protected emitAgentEvent(

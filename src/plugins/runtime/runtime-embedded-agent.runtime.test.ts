@@ -191,7 +191,7 @@ describe("plugin embedded-agent runtime admission", () => {
   });
 
   it.each(["legacy-send", "legacy-send-then-throw", "collector", "no-send"] as const)(
-    "keeps %s ownership across a required NO_REPLY after settled tools",
+    "keeps %s ownership across a result-required NO_REPLY after settled tools",
     async (owner) => {
       const delivered: string[] = [];
       const collected: string[] = [];
@@ -241,7 +241,6 @@ describe("plugin embedded-agent runtime admission", () => {
       const result = await withPluginRuntimePluginScope({ pluginId: "reply-plugin" }, () =>
         runPluginEmbeddedAgent({
           ...params,
-          terminalReplyExpectation: "required",
           ...(!callerOwnsDelivery ? { resolveReplyDelivery: async () => "missing" as const } : {}),
           onBlockReply: ({ text }) => {
             if (text && owner !== "no-send") {
@@ -530,6 +529,8 @@ describe("plugin embedded-agent runtime admission", () => {
       "onRetryWait",
       "compactionCountOwner",
       "onCompactionAccounting",
+      "beforeRecoveryCompaction",
+      "disableCompactionRecovery",
       "onContextAccountingEvent",
     ].map((field) => ({
       name: field,

@@ -1,8 +1,16 @@
 import { GitCommandTimeoutError } from "../../infra/git-exec.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { WorktreeWorkerOperations } from "./dispatch.worker.js";
-import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
-import type { ManagedWorktreeRecord, WorktreeRemovalDeferral } from "./types.js";
+import { readRegistryWorktreeForMutation } from "./registry-read.js";
+import { runWorktreeRegistryCommand } from "./registry-run-end.js";
+import { createWorktreeRemovalClaimsGuard } from "./registry.js";
+import {
+  captureWorktreeRunEndContext,
+  captureWorktreeRegistryMutation,
+  retainWorktreeRunEndFailure,
+  withWorktreeRunEnd,
+} from "./run-end-lifecycle.js";
+import type { WorktreeRemovalDeferral } from "./types.js";
 
 export function isWorktreeRemovalTimeout(error: unknown): boolean {
   for (let cause = error; cause instanceof Error; cause = cause.cause) {
@@ -13,17 +21,35 @@ export function isWorktreeRemovalTimeout(error: unknown): boolean {
   return false;
 }
 
-/** Keep a timed-out attempt with the registry revision that still owns its checkout. */
-export async function deferTimedOutWorktreeRemoval(params: {
+/** Keep a failed attempt with the registry revision that still owns its checkout. */
+export async function deferFailedWorktreeRemoval(params: {
   env: NodeJS.ProcessEnv;
-  observed: ManagedWorktreeRecord;
+  id: string;
   stage: string;
+  reason: string;
   elapsedMs: number;
   now: number;
   previousAttempts: number;
-  claimToken: string;
+  claimToken?: string;
   assertCurrent: () => void;
 }): Promise<WorktreeRemovalDeferral | undefined> {
+  const assertClaim = params.claimToken
+    ? createWorktreeRemovalClaimsGuard(params.env, [params.id], params.claimToken)
+    : undefined;
+  const assertCurrent = () => {
+    params.assertCurrent();
+    assertClaim?.();
+  };
+  // An admitted deletion can outlive cancellation and update its snapshot before
+  // failing. Capture the revision under retained custody before releasing the claim.
+  const observed = await readRegistryWorktreeForMutation({
+    env: params.env,
+    id: params.id,
+    commitGuard: assertCurrent,
+  });
+  if (!observed || observed.removedAt !== undefined) {
+    return undefined;
+  }
   const attempts = Math.min(params.previousAttempts + 1, Number.MAX_SAFE_INTEGER);
   const retry: WorktreeRemovalDeferral = {
     stage: params.stage,
@@ -34,12 +60,12 @@ export async function deferTimedOutWorktreeRemoval(params: {
   const recorded = await deferWorktreeCleanup(
     params.env,
     {
-      observed: params.observed,
-      reason: `Git ${params.stage} timed out; cleanup deferred`,
+      observed,
+      reason: params.reason,
       retry,
       removalToken: params.claimToken,
     },
-    params.assertCurrent,
+    assertCurrent,
   );
   return recorded ? retry : undefined;
 }
@@ -79,16 +105,32 @@ async function mutateCleanupRecord<Key extends keyof WorktreeRetirementOperation
   assertCurrent?: () => void,
 ) {
   const context = captureWorktreeRunEndContext(env);
-  const { runOpenClawStateWorkerOperation } =
-    await import("../../state/openclaw-state-worker-store.js");
-  return await runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
-    createAdmission: () => ({
-      nativeLocations: [context.admission.databasePath],
-      admission: createSqliteWorkerOperationAdmission((_request, grant) => {
-        context.admission.assertCurrent();
-        assertCurrent?.();
-        grant();
-      }),
-    }),
+  const mutation = captureWorktreeRegistryMutation(context, [
+    {
+      id: command.input.observed.id,
+      fields: [command.type === "worktrees.retireMissing" ? "removal" : "cleanup"],
+    },
+  ]);
+  return await withWorktreeRunEnd(env, async () => {
+    try {
+      return await runWorktreeRegistryCommand(context, (scope) => scope.execute(command), {
+        assertCurrent: () => mutation.assertAuthority(() => assertCurrent?.()),
+        mutation,
+        unknownMessage: "Worktree retirement outcome is unknown",
+        recover: (committed) => {
+          if (committed.result.kind === "unknown") {
+            throw new SqliteWorkerError(
+              "Worktree retirement committed but its result is unavailable; reread the registry",
+              "unavailable",
+            );
+          }
+          // SAFETY: The retained admission owns this typed command and its worker's captured result.
+          return { value: committed.result.value as WorktreeRetirementOperations[Key]["output"] };
+        },
+      });
+    } catch (error) {
+      retainWorktreeRunEndFailure(error);
+      throw error;
+    }
   });
 }

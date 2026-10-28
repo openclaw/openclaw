@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -36,59 +36,40 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function hashPathComponent(value: string, length: number): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, length);
-}
-
-function sessionRoot(bundleRoot: string, input: ReturnType<typeof testWorkerLaunchInput>): string {
-  return path.join(
+type Launch = ReturnType<typeof testWorkerLaunchInput>;
+type Retain = NodeWorkerWorkspaceRetainInput["retain"];
+function workspaceFiles(bundleRoot: string, input: Launch) {
+  const hash = (value: string, length: number) =>
+    createHash("sha256").update(value).digest("hex").slice(0, length);
+  const session = path.join(
     bundleRoot,
     input.gatewayNamespace,
     "workspaces",
-    hashPathComponent(input.descriptor.admission.environmentId, 16),
-    hashPathComponent(input.descriptor.admission.sessionId, 32),
+    hash(input.descriptor.admission.environmentId, 16),
+    hash(input.descriptor.admission.sessionId, 32),
   );
-}
-
-function generationPath(
-  bundleRoot: string,
-  input: ReturnType<typeof testWorkerLaunchInput>,
-  generation: number,
-): string {
-  return path.join(sessionRoot(bundleRoot, input), String(generation));
-}
-
-function seedGeneration(
-  bundleRoot: string,
-  input: ReturnType<typeof testWorkerLaunchInput>,
-  generation: number,
-): string {
-  const generationDir = generationPath(bundleRoot, input, generation);
-  fs.mkdirSync(generationDir, { recursive: true });
-  fs.writeFileSync(path.join(generationDir, "sentinel.txt"), String(generation));
-  return generationDir;
-}
-
-function seedManifest(
-  bundleRoot: string,
-  input: ReturnType<typeof testWorkerLaunchInput>,
-  digest: string,
-): string {
-  const manifest = path.join(
-    sessionRoot(bundleRoot, input),
-    ".openclaw-worker",
-    "manifests",
-    `${digest}.json`,
-  );
-  fs.mkdirSync(path.dirname(manifest), { recursive: true });
-  fs.writeFileSync(manifest, "{}\n");
-  return manifest;
+  const directory = (generation = input.descriptor.admission.ownerEpoch) =>
+    path.join(session, String(generation));
+  const write = (file: string, content: string) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, content);
+  };
+  const seed = (generation = input.descriptor.admission.ownerEpoch) => {
+    write(path.join(directory(generation), "sentinel.txt"), String(generation));
+    return directory(generation);
+  };
+  const manifest = (digest: string) => {
+    const file = path.join(session, ".openclaw-worker", "manifests", `${digest}.json`);
+    write(file, "{}\n");
+    return file;
+  };
+  return { session, directory, seed, manifest };
 }
 
 function retainInput(
-  input: ReturnType<typeof testWorkerLaunchInput>,
+  input: Launch,
   sequence: number,
-  retain: NodeWorkerWorkspaceRetainInput["retain"],
+  retain: Retain = [],
 ): NodeWorkerWorkspaceRetainInput {
   return {
     version: 1,
@@ -99,577 +80,376 @@ function retainInput(
   };
 }
 
+function fixture(name: string) {
+  const root = fs.realpathSync.native(tempDirs.make(`node-worker-${name}-`));
+  const workspace = new NodeWorkerWorkspaceRuntime({ root });
+  const input = testWorkerLaunchInput("/unused", name);
+  const generation = input.descriptor.admission.ownerEpoch;
+  const entry = {
+    environmentId: input.descriptor.admission.environmentId,
+    sessionId: input.descriptor.admission.sessionId,
+    generation,
+    manifestRefs: [],
+  };
+  const collect = (sequence: number, retain: Retain = [], signal?: AbortSignal) =>
+    workspace.applyRetainSnapshot(retainInput(input, sequence, retain), async () => [], signal);
+  return { root, workspace, input, generation, entry, collect, ...workspaceFiles(root, input) };
+}
+
+function managedFixture(name: string) {
+  const f = fixture(name);
+  const workspaceDir = f.seed();
+  const request = {
+    workspaceDir,
+    environmentId: f.entry.environmentId,
+    sessionId: f.entry.sessionId,
+    ownerEpoch: f.generation,
+    sessionKey: "agent:main:managed",
+  };
+  return { ...f, workspaceDir, request };
+}
+
+function supervisorFixture(name: string) {
+  const root = tempDirs.make(`node-worker-${name}-`);
+  const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
+  const input = testWorkerLaunchInput(workspaceDir, name);
+  return {
+    input,
+    ...workspaceFiles(bundleRoot, input),
+    supervisor: createNodeWorkerSupervisor({ bundleRoot, env }),
+  };
+}
+
+function expectPaths(paths: string[], exists: boolean) {
+  expect(paths.map((file) => fs.existsSync(file))).toEqual(paths.map(() => exists));
+}
+
+function holdLstat(target: string) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const original = fsp.lstat.bind(fsp);
+  let blocked = false;
+  vi.spyOn(fsp, "lstat").mockImplementation(async (candidate) => {
+    if (!blocked && String(candidate) === target) {
+      blocked = true;
+      entered.resolve();
+      await release.promise;
+    }
+    return await original(candidate);
+  });
+  return { entered, release };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("node worker workspace retention", () => {
-  it("preserves legacy synchronous plugin acquisition for the exact canonical placement workspace identity", () => {
-    const root = fs.realpathSync.native(tempDirs.make("node-worker-workspace-managed-identity-"));
-    const workspace = new NodeWorkerWorkspaceRuntime({ root });
-    const input = testWorkerLaunchInput("/unused", "managed-identity");
-    const ownerEpoch = input.descriptor.admission.ownerEpoch;
-    const workspaceDir = seedGeneration(root, input, ownerEpoch);
-    const request = {
-      workspaceDir,
-      environmentId: input.descriptor.admission.environmentId,
-      sessionId: input.descriptor.admission.sessionId,
-      ownerEpoch,
-      sessionKey: "agent:main:managed",
-    };
+it("preserves legacy synchronous plugin acquisition for the exact canonical placement workspace identity", () => {
+  const { root, workspace, workspaceDir, request } = managedFixture("managed-identity");
 
-    const claim = workspace.acquireManagedWorkspace(request);
-    expect(claim.workspaceDir).toBe(workspaceDir);
-    claim.release();
-    claim.release();
+  const claim = workspace.acquireManagedWorkspace(request);
+  expect(claim.workspaceDir).toBe(workspaceDir);
+  claim.release();
+  claim.release();
 
-    for (const changed of [
-      { workspaceDir: root },
-      { environmentId: "different-environment" },
-      { sessionId: "different-session" },
-      { ownerEpoch: ownerEpoch + 1 },
-      { sessionKey: "" },
-    ]) {
-      expect(() => workspace.acquireManagedWorkspace({ ...request, ...changed })).toThrow(
-        "does not own the requested workspace",
-      );
-    }
-
-    const linked = path.join(path.dirname(workspaceDir), "linked-workspace");
-    fs.symlinkSync(workspaceDir, linked, process.platform === "win32" ? "junction" : "dir");
-    expect(() => workspace.acquireManagedWorkspace({ ...request, workspaceDir: linked })).toThrow(
+  for (const changed of [
+    { workspaceDir: root },
+    { environmentId: "different-environment" },
+    { sessionId: "different-session" },
+    { ownerEpoch: request.ownerEpoch + 1 },
+    { sessionKey: "" },
+  ]) {
+    expect(() => workspace.acquireManagedWorkspace({ ...request, ...changed })).toThrow(
       "does not own the requested workspace",
     );
+  }
+
+  const linked = path.join(path.dirname(workspaceDir), "linked-workspace");
+  fs.symlinkSync(workspaceDir, linked, process.platform === "win32" ? "junction" : "dir");
+  expect(() => workspace.acquireManagedWorkspace({ ...request, workspaceDir: linked })).toThrow(
+    "does not own the requested workspace",
+  );
+});
+
+it("keeps an in-flight removal fenced until it settles after cancellation", async () => {
+  const { workspace, collect, workspaceDir, request } = managedFixture("managed-removal-race");
+  const removalStarted = createDeferred();
+  const finishRemoval = createDeferred();
+  const controller = new AbortController();
+  const remove = fsp.rm.bind(fsp);
+  vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
+    if (String(target) === workspaceDir) {
+      removalStarted.resolve();
+      await finishRemoval.promise;
+    }
+    return await remove(target, options);
   });
+  const retention = collect(1, [], controller.signal).catch((error: unknown) => error);
 
-  it("protects a claimed placement workspace until its owner releases it", async () => {
-    const root = fs.realpathSync.native(tempDirs.make("node-worker-workspace-managed-retention-"));
-    const workspace = new NodeWorkerWorkspaceRuntime({ root });
-    const input = testWorkerLaunchInput("/unused", "managed-retention");
-    const ownerEpoch = input.descriptor.admission.ownerEpoch;
-    const workspaceDir = seedGeneration(root, input, ownerEpoch);
-    const claim = await workspace.acquireManagedWorkspaceAsync({
-      workspaceDir,
-      environmentId: input.descriptor.admission.environmentId,
-      sessionId: input.descriptor.admission.sessionId,
-      ownerEpoch,
-      sessionKey: "agent:main:managed",
-    });
-
-    await workspace.applyRetainSnapshot(retainInput(input, 1, []), async () => []);
+  try {
+    await removalStarted.promise;
+    controller.abort(new Error("retention cancelled"));
     expect(fs.existsSync(workspaceDir)).toBe(true);
+    await expect(workspace.acquireManagedWorkspaceAsync(request)).rejects.toThrow(
+      "workspace is being removed",
+    );
+  } finally {
+    finishRemoval.resolve();
+  }
+  expect(await retention).toBe(controller.signal.reason);
+  expect(fs.existsSync(workspaceDir)).toBe(false);
+});
 
-    claim.release();
-    claim.release();
-    await workspace.applyRetainSnapshot(retainInput(input, 2, []), async () => []);
-    expect(fs.existsSync(workspaceDir)).toBe(false);
-  });
-
-  it("keeps an in-flight removal fenced until it settles after cancellation", async () => {
-    const root = fs.realpathSync.native(tempDirs.make("node-worker-workspace-removal-race-"));
-    const workspace = new NodeWorkerWorkspaceRuntime({ root });
-    const input = testWorkerLaunchInput("/unused", "managed-removal-race");
-    const ownerEpoch = input.descriptor.admission.ownerEpoch;
-    const workspaceDir = seedGeneration(root, input, ownerEpoch);
-    const request = {
-      workspaceDir,
-      environmentId: input.descriptor.admission.environmentId,
-      sessionId: input.descriptor.admission.sessionId,
-      ownerEpoch,
-      sessionKey: "agent:main:managed",
-    };
-    let started!: () => void;
-    let finish!: () => void;
-    const removalStarted = new Promise<void>((resolve) => {
-      started = resolve;
-    });
-    const finishRemoval = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
+it.each(["manifest", "metadata"] as const)(
+  "cancels before deleting a %s verified after cancellation and resumes on replay",
+  async (kind) => {
+    const { collect, entry, seed, manifest, session } = fixture("cancel-retention");
+    const retained = kind === "metadata" ? undefined : seed(2);
+    const retainedEntries = retained ? [{ ...entry, generation: 2 }] : [];
+    const target =
+      kind === "manifest" ? manifest("b".repeat(64)) : path.join(session, ".openclaw-worker");
+    if (kind === "metadata") {
+      fs.mkdirSync(target, { recursive: true });
+      fs.writeFileSync(path.join(target, "sentinel.txt"), "preserve until resumed");
+    }
+    const { entered, release } = holdLstat(target);
     const controller = new AbortController();
-    const remove = fsp.rm.bind(fsp);
-    vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
-      if (String(target) === workspaceDir) {
-        started();
-        await finishRemoval;
-      }
-      return await remove(target, options);
-    });
-    const retention = workspace
-      .applyRetainSnapshot(retainInput(input, 1, []), async () => [], controller.signal)
-      .then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-
+    const retention = collect(1, retainedEntries, controller.signal).catch(
+      (error: unknown) => error,
+    );
     try {
-      await removalStarted;
+      await entered.promise;
       controller.abort(new Error("retention cancelled"));
-      expect(fs.existsSync(workspaceDir)).toBe(true);
-      await expect(workspace.acquireManagedWorkspaceAsync(request)).rejects.toThrow(
-        "workspace is being removed",
-      );
     } finally {
-      finish();
+      release.resolve();
     }
     expect(await retention).toBe(controller.signal.reason);
-    expect(fs.existsSync(workspaceDir)).toBe(false);
-  });
+    expect(fs.existsSync(target)).toBe(true);
 
-  it.each(["generation", "transfer", "manifest", "metadata"] as const)(
-    "cancels before deleting a %s verified after cancellation and resumes on replay",
-    async (kind) => {
-      const root = tempDirs.make("node-worker-workspace-retention-cancel-");
-      const workspace = new NodeWorkerWorkspaceRuntime({ root });
-      const input = testWorkerLaunchInput("/unused", "cancel-retention");
-      const retained = kind === "metadata" ? undefined : seedGeneration(root, input, 2);
-      const snapshot = retainInput(
-        input,
-        1,
-        retained
-          ? [
-              {
-                environmentId: input.descriptor.admission.environmentId,
-                sessionId: input.descriptor.admission.sessionId,
-                generation: 2,
-                manifestRefs: [],
-              },
-            ]
-          : [],
-      );
-      const target =
-        kind === "generation"
-          ? seedGeneration(root, input, 1)
-          : kind === "manifest"
-            ? seedManifest(root, input, "b".repeat(64))
-            : path.join(
-                sessionRoot(root, input),
-                kind === "transfer" ? ".1.workspace-transfer-stale" : ".openclaw-worker",
-              );
-      if (kind === "transfer" || kind === "metadata") {
-        fs.mkdirSync(target, { recursive: true });
-        fs.writeFileSync(path.join(target, "sentinel.txt"), "preserve until resumed");
-      }
-      const entered = createDeferred();
-      const release = createDeferred();
-      const controller = new AbortController();
-      const originalLstat = fsp.lstat.bind(fsp);
-      let blocked = false;
-      vi.spyOn(fsp, "lstat").mockImplementation(async (candidate) => {
-        if (!blocked && String(candidate) === target) {
-          blocked = true;
-          entered.resolve();
-          await release.promise;
-        }
-        return await originalLstat(candidate);
-      });
-      const retention = workspace
-        .applyRetainSnapshot(snapshot, async () => [], controller.signal)
-        .then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-      try {
-        await entered.promise;
-        controller.abort(new Error("retention cancelled"));
-      } finally {
-        release.resolve();
-      }
-      expect(await retention).toBe(controller.signal.reason);
-      expect(fs.existsSync(target)).toBe(true);
-
-      await expect(workspace.applyRetainSnapshot(snapshot, async () => [])).resolves.toMatchObject({
-        applied: true,
-        hasMore: false,
-      });
-      expect(fs.existsSync(target)).toBe(false);
-      if (retained) {
-        expect(fs.existsSync(retained)).toBe(true);
-      }
-    },
-  );
-
-  it("settles an issued deletion but leaves empty parents when cancelled", async () => {
-    const root = tempDirs.make("node-worker-workspace-retention-cancel-parents-");
-    const workspace = new NodeWorkerWorkspaceRuntime({ root });
-    const input = testWorkerLaunchInput("/unused", "cancel-parent-retention");
-    const manifest = seedManifest(root, input, "b".repeat(64));
-    const controller = new AbortController();
-    const reason = new Error("retention cancelled");
-    const originalRemove = fsp.rm.bind(fsp);
-    vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
-      await originalRemove(target, options);
-      if (String(target) === manifest) {
-        controller.abort(reason);
-      }
-    });
-    const snapshot = retainInput(input, 1, []);
-    await expect(
-      workspace.applyRetainSnapshot(snapshot, async () => [], controller.signal),
-    ).rejects.toBe(reason);
-    expect(fs.existsSync(manifest)).toBe(false);
-    expect(fs.existsSync(path.dirname(manifest))).toBe(true);
-
-    await workspace.applyRetainSnapshot(snapshot, async () => []);
-    expect(fs.existsSync(sessionRoot(root, input))).toBe(false);
-  });
-
-  it("does not delete workspaces before the first Gateway snapshot", async () => {
-    const root = tempDirs.make("node-worker-workspace-retention-startup-");
-    const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
-    const input = testWorkerLaunchInput(workspaceDir, "startup-retention");
-    const first = seedGeneration(bundleRoot, input, 1);
-    const second = seedGeneration(bundleRoot, input, 2);
-    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-
-    await supervisor.initialize();
-
-    expect(fs.existsSync(first)).toBe(true);
-    expect(fs.existsSync(second)).toBe(true);
-    await supervisor.close();
-  });
-
-  it("replaces the full retain set and deletes the latest orphan", async () => {
-    const root = tempDirs.make("node-worker-workspace-retention-snapshot-");
-    const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
-    const input = testWorkerLaunchInput(workspaceDir, "snapshot-retention");
-    const first = seedGeneration(bundleRoot, input, 1);
-    const latest = seedGeneration(bundleRoot, input, 2);
-    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-
-    await expect(
-      supervisor.retainWorkspaces(
-        retainInput(input, 1, [
-          {
-            environmentId: input.descriptor.admission.environmentId,
-            sessionId: input.descriptor.admission.sessionId,
-            generation: 1,
-            manifestRefs: null,
-          },
-        ]),
-      ),
-    ).resolves.toMatchObject({ applied: true, hasMore: false });
-
-    expect(fs.existsSync(first)).toBe(true);
-    expect(fs.existsSync(latest)).toBe(false);
-
-    await expect(supervisor.retainWorkspaces(retainInput(input, 2, []))).resolves.toMatchObject({
+    await expect(collect(1, retainedEntries)).resolves.toMatchObject({
       applied: true,
       hasMore: false,
     });
-    expect(fs.existsSync(first)).toBe(false);
-    await supervisor.close();
-  });
-
-  it("continues a bounded backlog with an idempotent snapshot replay", async () => {
-    const root = tempDirs.make("node-worker-workspace-retention-backlog-");
-    const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
-    const input = testWorkerLaunchInput(workspaceDir, "backlog-retention");
-    for (let generation = 0; generation <= 260; generation += 1) {
-      seedGeneration(bundleRoot, input, generation);
+    expect(fs.existsSync(target)).toBe(false);
+    if (retained) {
+      expect(fs.existsSync(retained)).toBe(true);
     }
-    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-    const snapshot = retainInput(input, 1, []);
+  },
+);
 
-    const first = await supervisor.retainWorkspaces(snapshot);
-    const second = await supervisor.retainWorkspaces(snapshot);
-
-    expect(first).toMatchObject({ applied: true, deleted: 256, hasMore: true });
-    expect(second).toMatchObject({ applied: true, hasMore: false });
-    expect(fs.existsSync(sessionRoot(bundleRoot, input))).toBe(false);
-    await supervisor.close();
-  });
-
-  it("cleans transfer siblings, unreachable manifests, and empty parents", async () => {
-    const root = tempDirs.make("node-worker-workspace-retention-artifacts-");
-    const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
-    const input = testWorkerLaunchInput(workspaceDir, "artifact-retention");
-    const generation = seedGeneration(bundleRoot, input, 3);
-    const rootForSession = sessionRoot(bundleRoot, input);
-    const staging = path.join(rootForSession, ".3.workspace-transfer-stale");
-    const backup = path.join(rootForSession, "3.previous-123-stale");
-    fs.mkdirSync(staging);
-    fs.mkdirSync(backup);
-    const manifest = seedManifest(bundleRoot, input, "a".repeat(64));
-    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-
-    await supervisor.retainWorkspaces(retainInput(input, 1, []));
-
-    for (const target of [generation, staging, backup, manifest, rootForSession]) {
-      expect(fs.existsSync(target)).toBe(false);
-    }
-    await supervisor.close();
-  });
-
-  it("keeps only reachable manifests for a retained workspace", async () => {
-    const root = tempDirs.make("node-worker-workspace-retention-manifests-");
-    const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
-    const input = testWorkerLaunchInput(workspaceDir, "manifest-retention");
-    seedGeneration(bundleRoot, input, 4);
-    const retainedDigest = "b".repeat(64);
-    const retained = seedManifest(bundleRoot, input, retainedDigest);
-    const stale = seedManifest(bundleRoot, input, "c".repeat(64));
-    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-
-    await supervisor.retainWorkspaces(
-      retainInput(input, 1, [
-        {
-          environmentId: input.descriptor.admission.environmentId,
-          sessionId: input.descriptor.admission.sessionId,
-          generation: 4,
-          manifestRefs: [`sha256:${retainedDigest}`],
-        },
-      ]),
-    );
-
-    expect(fs.existsSync(retained)).toBe(true);
-    expect(fs.existsSync(stale)).toBe(false);
-    await supervisor.close();
-  });
-
-  it.each(["upload", "download"] as const)(
-    "retains the latest %s manifest across command gaps until superseded or retired",
-    async (direction) => {
-      const root = fs.realpathSync.native(tempDirs.make("node-worker-workspace-transfer-retain-"));
-      const workspace = new NodeWorkerWorkspaceRuntime({ root });
-      const input = testWorkerLaunchInput("/unused", "transfer-retention");
-      const generation = input.descriptor.admission.ownerEpoch;
-      const workspaceDir = seedGeneration(root, input, generation);
-      const baseDigest = "b".repeat(64);
-      const baseManifest = seedManifest(root, input, baseDigest);
-      const retainedEntry = {
-        environmentId: input.descriptor.admission.environmentId,
-        sessionId: input.descriptor.admission.sessionId,
-        generation,
-        manifestRefs: [`sha256:${baseDigest}`],
-      };
-      const runTransfer = vi.spyOn(workspaceTransfer, "runNodeWorkerWorkspaceTransfer");
-      const transferManifest = async (digest: string) => {
-        const manifestRef = `sha256:${digest}`;
-        const manifest = seedManifest(root, input, digest);
-        runTransfer.mockResolvedValueOnce(manifestRef);
-        await workspace.exec(
-          {
-            gatewayNamespace: input.gatewayNamespace,
-            environmentId: retainedEntry.environmentId,
-            sessionId: retainedEntry.sessionId,
-            generation,
-            argv: ["node"],
-            transfer:
-              direction === "upload"
-                ? {
-                    direction,
-                    token: "test-token",
-                    baseManifestRef: `sha256:${baseDigest}`,
-                    referenceManifestRef: `sha256:${baseDigest}`,
-                  }
-                : { direction, token: "test-token", manifestRef },
-          },
-          undefined,
-          { url: "http://127.0.0.1:1" },
-        );
-        return manifest;
-      };
-
-      const first = await transferManifest("c".repeat(64));
-      const artifacts = [
-        `.${generation}.workspace-transfer-stale`,
-        `${generation}.previous-123-stale`,
-      ].map((name) => path.join(sessionRoot(root, input), name));
-      for (const artifact of artifacts) {
-        fs.mkdirSync(artifact);
-      }
-      await workspace.applyRetainSnapshot(retainInput(input, 1, [retainedEntry]), async () => []);
-
-      expect(fs.existsSync(first)).toBe(true);
-      expect(artifacts.every((artifact) => !fs.existsSync(artifact))).toBe(true);
-
-      const latest = await transferManifest("d".repeat(64));
-      await workspace.applyRetainSnapshot(retainInput(input, 2, [retainedEntry]), async () => []);
-
-      expect(fs.existsSync(first)).toBe(false);
-      expect(fs.existsSync(latest)).toBe(true);
-      expect(fs.existsSync(baseManifest)).toBe(true);
-
-      const sibling = seedGeneration(root, input, generation + 1);
-      await workspace.applyRetainSnapshot(
-        retainInput(input, 3, [{ ...retainedEntry, generation: generation + 1 }]),
-        async () => [],
-      );
-
-      expect(fs.existsSync(workspaceDir)).toBe(false);
-      expect(fs.existsSync(latest)).toBe(false);
-      expect(fs.existsSync(sibling)).toBe(true);
-    },
-  );
-
-  it("keeps a retained worker workspace after turn completion until environment teardown", async () => {
-    const root = tempDirs.make("node-worker-workspace-retention-active-");
-    const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
-    const input = testWorkerLaunchInput(workspaceDir, "active-retention", "background-start");
-    const active = seedGeneration(bundleRoot, input, input.descriptor.admission.ownerEpoch);
-    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-
-    try {
-      await supervisor.launch(input, TEST_WORKER_ENDPOINT);
-      await vi.waitFor(
-        async () => expect((await supervisor.status(input.launchId))?.state).toBe("completed"),
-        { timeout: 5_000 },
-      );
-      await supervisor.retainWorkspaces(retainInput(input, 1, []));
-      expect(fs.existsSync(active)).toBe(true);
-
-      await supervisor.stopEnvironment(testNodeWorkerEnvironmentIdentity(input));
-      await supervisor.retainWorkspaces(retainInput(input, 2, []));
-      expect(fs.existsSync(active)).toBe(false);
-    } finally {
-      await supervisor.close();
+it("settles an issued deletion but leaves empty parents when cancelled", async () => {
+  const { collect, manifest: seedManifest, session } = fixture("cancel-parent-retention");
+  const manifest = seedManifest("b".repeat(64));
+  const controller = new AbortController();
+  const reason = new Error("retention cancelled");
+  const originalRemove = fsp.rm.bind(fsp);
+  vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
+    await originalRemove(target, options);
+    if (String(target) === manifest) {
+      controller.abort(reason);
     }
   });
+  await expect(collect(1, [], controller.signal)).rejects.toBe(reason);
+  expect(fs.existsSync(manifest)).toBe(false);
+  expect(fs.existsSync(path.dirname(manifest))).toBe(true);
 
-  it("rereads a launch reservation immediately before deleting", async () => {
-    const root = tempDirs.make("node-worker-workspace-retention-race-");
-    const workspace = new NodeWorkerWorkspaceRuntime({ root });
-    const input = testWorkerLaunchInput("/unused", "reservation-race");
-    const generation = seedGeneration(root, input, input.descriptor.admission.ownerEpoch);
-    let reservations: Array<{
-      gatewayNamespace: string;
-      environmentId: string;
-      sessionId: string;
-      ownerEpoch: number;
-    }> = [];
-    let markStarted!: () => void;
-    let release!: () => void;
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
-    const released = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const originalLstat = fs.promises.lstat.bind(fs.promises);
-    let blocked = false;
-    vi.spyOn(fs.promises, "lstat").mockImplementation(async (target) => {
-      if (!blocked && String(target) === generation) {
-        blocked = true;
-        markStarted();
-        await released;
-      }
-      return await originalLstat(target);
-    });
-    const retention = workspace.applyRetainSnapshot(
-      retainInput(input, 1, []),
-      async () => reservations,
-    );
-    await started;
-    reservations = [
+  await collect(1);
+  expect(fs.existsSync(session)).toBe(false);
+});
+
+it("preserves workspaces until the first snapshot and continues a bounded backlog on replay", async () => {
+  const { seed, session, input, supervisor } = supervisorFixture("backlog-retention");
+  const generations = Array.from({ length: 261 }, (_, generation) => seed(generation));
+  await supervisor.initialize();
+  expectPaths(generations, true);
+  const snapshot = retainInput(input, 1);
+
+  const first = await supervisor.retainWorkspaces(snapshot);
+  const second = await supervisor.retainWorkspaces(snapshot);
+
+  expect(first).toMatchObject({ applied: true, deleted: 256, hasMore: true });
+  expect(second).toMatchObject({ applied: true, hasMore: false });
+  expect(fs.existsSync(session)).toBe(false);
+  await supervisor.close();
+});
+
+it("retains transferred manifests across command gaps until superseded or retired", async () => {
+  const f = fixture("transfer-retention");
+  const { workspace, input, generation, entry, collect } = f;
+  const workspaceDir = f.seed();
+  const baseDigest = "b".repeat(64);
+  const baseManifest = f.manifest(baseDigest);
+  const retainedEntry = {
+    ...entry,
+    manifestRefs: [`sha256:${baseDigest}`],
+  };
+  const runTransfer = vi.spyOn(workspaceTransfer, "runNodeWorkerWorkspaceTransfer");
+  const transferManifest = async (direction: "upload" | "download", digest: string) => {
+    const manifestRef = `sha256:${digest}`;
+    const manifest = f.manifest(digest);
+    runTransfer.mockResolvedValueOnce(manifestRef);
+    await workspace.exec(
       {
         gatewayNamespace: input.gatewayNamespace,
-        environmentId: input.descriptor.admission.environmentId,
-        sessionId: input.descriptor.admission.sessionId,
-        ownerEpoch: input.descriptor.admission.ownerEpoch,
+        environmentId: retainedEntry.environmentId,
+        sessionId: retainedEntry.sessionId,
+        generation,
+        argv: ["node"],
+        transfer:
+          direction === "upload"
+            ? {
+                direction,
+                token: "test-token",
+                baseManifestRef: `sha256:${baseDigest}`,
+                referenceManifestRef: `sha256:${baseDigest}`,
+              }
+            : { direction, token: "test-token", manifestRef },
       },
-    ];
-    release();
-
-    await retention;
-
-    expect(fs.existsSync(generation)).toBe(true);
-  });
-
-  it("protects an in-flight workspace command admitted during collection", async ({ signal }) => {
-    const root = tempDirs.make("node-worker-workspace-retention-command-");
-    const workspace = new NodeWorkerWorkspaceRuntime({ root });
-    const input = testWorkerLaunchInput("/unused", "command-retention");
-    const started = path.join(
-      generationPath(root, input, input.descriptor.admission.ownerEpoch),
-      "started",
+      undefined,
+      { url: "http://127.0.0.1:1" },
     );
-    const receipts = await openFixtureReceiptChannel();
-    const command = workspace.exec({
-      gatewayNamespace: input.gatewayNamespace,
-      environmentId: input.descriptor.admission.environmentId,
-      sessionId: input.descriptor.admission.sessionId,
-      generation: input.descriptor.admission.ownerEpoch,
-      argv: [
-        "node",
-        "--input-type=module",
-        "-e",
-        `${fixtureReceiptClientSource(receipts.endpoint)}
+    return manifest;
+  };
+
+  const first = await transferManifest("upload", "c".repeat(64));
+  const artifacts = [
+    `.${generation}.workspace-transfer-stale`,
+    `${generation}.previous-123-stale`,
+  ].map((name) => path.join(f.session, name));
+  for (const artifact of artifacts) {
+    fs.mkdirSync(artifact);
+  }
+  await collect(1, [retainedEntry]);
+
+  expect(fs.existsSync(first)).toBe(true);
+  expect(artifacts.every((artifact) => !fs.existsSync(artifact))).toBe(true);
+
+  const latest = await transferManifest("download", "d".repeat(64));
+  await collect(2, [retainedEntry]);
+
+  expect(fs.existsSync(first)).toBe(false);
+  expectPaths([latest, baseManifest], true);
+
+  const sibling = f.seed(generation + 1);
+  await collect(3, [{ ...retainedEntry, generation: generation + 1 }]);
+
+  expectPaths([workspaceDir, latest], false);
+  expect(fs.existsSync(sibling)).toBe(true);
+});
+
+it("keeps a retained worker workspace after turn completion until environment teardown", async () => {
+  const root = tempDirs.make("node-worker-workspace-retention-active-");
+  const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
+  const input = testWorkerLaunchInput(workspaceDir, "active-retention", "background-start");
+  const active = workspaceFiles(bundleRoot, input).seed();
+  input.descriptor.assignment.workspaceDir = fs.realpathSync.native(active);
+  const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
+
+  try {
+    await supervisor.launch(input, TEST_WORKER_ENDPOINT);
+    await vi.waitFor(
+      async () => expect((await supervisor.status(input.launchId))?.state).toBe("completed"),
+      { timeout: 5_000 },
+    );
+    await supervisor.retainWorkspaces(retainInput(input, 1, []));
+    expect(fs.existsSync(active)).toBe(true);
+
+    await supervisor.stopEnvironment(testNodeWorkerEnvironmentIdentity(input));
+    await supervisor.retainWorkspaces(retainInput(input, 2, []));
+    expect(fs.existsSync(active)).toBe(false);
+  } finally {
+    await supervisor.close();
+  }
+});
+
+it("rereads a launch reservation immediately before deleting", async () => {
+  const { workspace, input, seed } = fixture("reservation-race");
+  const generation = seed();
+  let reservations: ReturnType<typeof testNodeWorkerEnvironmentIdentity>[] = [];
+  const { entered, release } = holdLstat(generation);
+  const retention = workspace.applyRetainSnapshot(
+    retainInput(input, 1, []),
+    async () => reservations,
+  );
+  await entered.promise;
+  reservations = [testNodeWorkerEnvironmentIdentity(input)];
+  release.resolve();
+
+  await retention;
+
+  expect(fs.existsSync(generation)).toBe(true);
+});
+
+it("protects an in-flight workspace command admitted during collection", async ({ signal }) => {
+  const { directory, workspace, input, entry, collect } = fixture("command-retention");
+  const started = path.join(directory(), "started");
+  const receipts = await openFixtureReceiptChannel();
+  const command = workspace.exec({
+    gatewayNamespace: input.gatewayNamespace,
+    environmentId: entry.environmentId,
+    sessionId: entry.sessionId,
+    generation: entry.generation,
+    argv: [
+      "node",
+      "--input-type=module",
+      "-e",
+      `${fixtureReceiptClientSource(receipts.endpoint)}
 import fs from "node:fs";
 fs.writeFileSync("started", "");
 sendReceipt("command", "started");
 await awaitRelease("command", "release");`,
-      ],
-    });
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          receipts.waitFor("command", "started"),
-          command,
-          "Workspace command settled before starting",
-        ).catch((error: unknown) => {
-          // The command can settle before its receipt crosses the separate socket.
-          if (!fs.existsSync(started)) {
-            throw error;
-          }
-        }),
-        signal,
-      );
-      const retention = workspace.applyRetainSnapshot(retainInput(input, 1, []), async () => []);
-      receipts.release("command", "release");
-
-      await withinTest(Promise.all([command, retention]), signal);
-      expect(fs.existsSync(path.dirname(started))).toBe(true);
-
-      await withinTest(
-        workspace.applyRetainSnapshot(retainInput(input, 2, []), async () => []),
-        signal,
-      );
-      expect(fs.existsSync(path.dirname(started))).toBe(false);
-    } finally {
-      receipts.release("command", "release");
-      await command.catch(() => {});
-      await receipts.close();
-    }
+    ],
   });
-
-  it("rejects conflicting replay and ignores an older sequence", async () => {
-    const root = tempDirs.make("node-worker-workspace-retention-sequence-");
-    const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);
-    const input = testWorkerLaunchInput(workspaceDir, "sequence-retention");
-    const generation = seedGeneration(bundleRoot, input, 5);
-    const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
-    const retainedEntry = {
-      environmentId: input.descriptor.admission.environmentId,
-      sessionId: input.descriptor.admission.sessionId,
-      generation: 5,
-      manifestRefs: null,
-    } as const;
-
-    await supervisor.retainWorkspaces(retainInput(input, 2, [retainedEntry]));
-    await expect(supervisor.retainWorkspaces(retainInput(input, 1, []))).resolves.toEqual({
-      applied: false,
-      deleted: 0,
-      hasMore: false,
-    });
-    await expect(supervisor.retainWorkspaces(retainInput(input, 2, []))).rejects.toThrow(
-      "sequence changed contents",
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        receipts.waitFor("command", "started"),
+        command,
+        "Workspace command settled before starting",
+      ).catch((error: unknown) => {
+        // The command can settle before its receipt crosses the separate socket.
+        if (!fs.existsSync(started)) {
+          throw error;
+        }
+      }),
+      signal,
     );
-    expect(fs.existsSync(generation)).toBe(true);
-    await supervisor.close();
+    const retention = collect(1);
+    receipts.release("command", "release");
+
+    await withinTest(Promise.all([command, retention]), signal);
+    expect(fs.existsSync(path.dirname(started))).toBe(true);
+
+    await withinTest(collect(2), signal);
+    expect(fs.existsSync(path.dirname(started))).toBe(false);
+  } finally {
+    receipts.release("command", "release");
+    await command.catch(() => {});
+    await receipts.close();
+  }
+});
+
+it("rejects conflicting replay and ignores an older sequence", async () => {
+  const { seed, entry, collect } = fixture("sequence-retention");
+  const generation = seed(5);
+  await collect(2, [{ ...entry, generation: 5, manifestRefs: null }]);
+  await expect(collect(1)).resolves.toEqual({
+    applied: false,
+    deleted: 0,
+    hasMore: false,
   });
+  await expect(collect(2)).rejects.toThrow("sequence changed contents");
+  expect(fs.existsSync(generation)).toBe(true);
+});
 
-  it("keeps other Gateway namespaces isolated", async () => {
-    const root = tempDirs.make("node-worker-workspace-retention-namespace-");
-    const workspace = new NodeWorkerWorkspaceRuntime({ root });
-    const first = testWorkerLaunchInput("/unused", "namespace-a");
-    const second = testWorkerLaunchInput("/unused", "namespace-b");
-    second.gatewayNamespace = "gateway-other";
-    seedGeneration(root, first, 1);
-    const other = seedGeneration(root, second, 1);
+it("keeps other Gateway namespaces isolated", async () => {
+  const { root, workspace, input: first, seed } = fixture("namespace-a");
+  const second = testWorkerLaunchInput("/unused", "namespace-b");
+  second.gatewayNamespace = "gateway-other";
+  seed(1);
+  const other = workspaceFiles(root, second).seed(1);
 
-    await workspace.applyRetainSnapshot(retainInput(first, 1, []), async () => []);
+  await workspace.applyRetainSnapshot(retainInput(first, 1, []), async () => []);
 
-    expect(fs.existsSync(other)).toBe(true);
-  });
+  expect(fs.existsSync(other)).toBe(true);
 });

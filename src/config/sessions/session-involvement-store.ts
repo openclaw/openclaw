@@ -1,29 +1,13 @@
-import { isDeepStrictEqual } from "node:util";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
-import {
-  prepareUserProfileCatalog,
-  readUserProfileAliases,
-} from "../../state/user-profile-list.js";
-import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
-import { updatePreparedSessionProfileInvolvement } from "./session-accessor.sqlite-involvement.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
-import { runSessionCollaborationWrite } from "./session-sharing-store.async.js";
+import {
+  publishSessionCollaborationChanges,
+  runSessionCollaborationWrite,
+} from "./session-sharing-store.async.js";
 import type { SessionInvolvementMutation } from "./session-sharing-store.types.js";
 
 type InvolvementParams = SessionInvolvementMutation & { assertCurrent?: () => void };
-
-/** Released v2026.9.8 MentionInbox.recordCommittedInput completion contract. */
-export function updateSessionProfileInvolvement(
-  scope: SessionAccessScope,
-  params: InvolvementParams,
-): boolean {
-  const profiles = [...new Set(params.profileIds)].map((profileId) => ({
-    profileId,
-    aliases: [...readUserProfileAliases(profileId, { env: scope.env })],
-  }));
-  return updatePreparedSessionProfileInvolvement(scope, params, profiles).accepted;
-}
 
 export async function updateSessionProfileInvolvementAsync(
   scope: SessionCollaborationScope,
@@ -31,7 +15,6 @@ export async function updateSessionProfileInvolvementAsync(
 ): Promise<boolean> {
   const captured = structuredClone(params);
   let catalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
-  let profiles: { profileId: string; aliases: string[] }[] | undefined;
   const selectProfiles = (prepared: NonNullable<typeof catalog>) =>
     [...new Set(captured.profileIds)].map((profileId) => {
       const identity = prepared.readCurrentIdentity(profileId);
@@ -45,14 +28,12 @@ export async function updateSessionProfileInvolvementAsync(
     return await runSessionCollaborationWrite(
       scope,
       { type: "involvement", input: { scope, params: captured, profiles: [] } },
-      // Personal involvement never writes process-held incognito stores.
-      () => false,
-      (result, location, database) => {
-        if (result.changed && database) {
-          publishSessionEntryCacheInvalidation(database, {
-            sessionKey: location.sessionKey,
-            facts: { kind: "unchanged" },
-          });
+      (result, location, database, currentKeys) => {
+        if (result.changed && database && (!currentKeys || currentKeys.has(location.sessionKey))) {
+          publishSessionCollaborationChanges(
+            [{ ...location, facts: { kind: "unchanged" } }],
+            database,
+          );
           emitSessionLifecycleEvent({
             agentId: location.agentId,
             sessionKey: location.sessionKey,
@@ -61,16 +42,10 @@ export async function updateSessionProfileInvolvementAsync(
         }
         return result.accepted;
       },
-      () => {
-        assertCurrent?.();
-        if (catalog && profiles && !isDeepStrictEqual(selectProfiles(catalog), profiles)) {
-          throw new Error("Session involvement profile aliases changed before commit");
-        }
-      },
+      assertCurrent,
       async (_operation, capturedScope) => {
         catalog = await prepareUserProfileCatalog({ env: capturedScope.env });
-        profiles = selectProfiles(catalog);
-        return { scope: capturedScope, params: captured, profiles };
+        return { scope: capturedScope, params: captured, profiles: selectProfiles(catalog) };
       },
     );
   } finally {

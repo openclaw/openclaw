@@ -109,11 +109,12 @@ export function createSessionPatchGroupWriter(params: {
     const admitted = await applySessionEntryCanonicalReplacements<GroupAdmissionResult>({
       ...store,
       update: (entries) => {
+        // Archive removal belongs to maintenance; only restore prepares a checkout here.
         const needsExternalPreparation =
           typeof params.patch.agentRuntime === "string" ||
           typeof params.patch.model === "string" ||
           typeof params.patch.nativeRuntimeConsent === "string" ||
-          (typeof params.patch.archived === "boolean" &&
+          (params.patch.archived === false &&
             entries.some(({ sessionKey, entry }) => targetKeys.has(sessionKey) && entry.worktree));
         if (needsExternalPreparation) {
           return { result: { kind: "detached", snapshot: entries } };

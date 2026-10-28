@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -13,7 +14,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
-import type { MemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import {
   acquireEmbeddingProviderLease,
   closeEmbeddingProvider,
@@ -35,7 +35,7 @@ import {
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
 } from "./http-utils.js";
-import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
+import { type OpenAiCompatError, resolveOpenAiCompatError } from "./openai-compat-errors.js";
 
 type OpenAiEmbeddingsHttpOptions = GatewayHttpRequestAuthOptions & {
   maxBodyBytes?: number;
@@ -53,11 +53,30 @@ const DEFAULT_EMBEDDINGS_BODY_BYTES = 5 * 1024 * 1024;
 const MAX_EMBEDDING_INPUTS = 128;
 const MAX_EMBEDDING_INPUT_CHARS = 8_192;
 const MAX_EMBEDDING_TOTAL_CHARS = 65_536;
-const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
-type MemorySearchEmbeddingConfig = Pick<
-  NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
-  "local" | "remote" | "inputType" | "queryInputType" | "documentInputType"
->;
+
+// Built only from the two sizes so provider URLs and response text stay in the Gateway log.
+function resolveEmbeddingDimensionsError(err: unknown): OpenAiCompatError | undefined {
+  const record = asOptionalRecord(err);
+  const expected = record?.expectedDimensions;
+  const actual = record?.actualDimensions;
+  if (
+    record?.code !== "INVALID_EMBEDDING_RESPONSE" ||
+    typeof expected !== "number" ||
+    typeof actual !== "number" ||
+    !Number.isSafeInteger(expected) ||
+    !Number.isSafeInteger(actual)
+  ) {
+    return undefined;
+  }
+  return {
+    status: 400,
+    error: {
+      message: `The embedding provider returned ${actual} dimensions, but ${expected} were requested. Omit \`dimensions\` and \`memory.search.outputDimensionality\`, or use a model and server that support them.`,
+      type: "invalid_request_error",
+      code: "embedding_dimensions_mismatch",
+    },
+  };
+}
 
 function encodeEmbeddingBase64(embedding: number[]): string {
   // OpenAI-compatible base64 embeddings are raw float32 bytes, not JSON.
@@ -88,47 +107,7 @@ function validateInputTexts(texts: string[]): string | undefined {
 }
 
 function isLocalEmbeddingProvider(cfg: OpenClawConfig, provider: string): boolean {
-  const providerId = provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : provider;
-  return getMemoryEmbeddingProvider(providerId, cfg)?.transport === "local";
-}
-
-async function createConfiguredEmbeddingProvider(params: {
-  cfg: OpenClawConfig;
-  agentDir: string;
-  provider: string;
-  model: string;
-  dimensions?: number;
-  memorySearch?: MemorySearchEmbeddingConfig;
-}): Promise<MemoryEmbeddingProvider> {
-  const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(() => params.cfg);
-  const providerId =
-    params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
-  const adapter = getMemoryEmbeddingProvider(providerId, params.cfg);
-  if (!adapter) {
-    throw new Error(`Unknown memory embedding provider: ${providerId}`);
-  }
-  const remote = params.memorySearch?.remote;
-  const createOptions = {
-    config: params.cfg,
-    agentDir: params.agentDir,
-    provider: providerId,
-    model: params.model || adapter.defaultModel || "",
-    local: params.memorySearch?.local,
-    remote: remote
-      ? { baseUrl: remote.baseUrl, apiKey: remote.apiKey, headers: remote.headers }
-      : undefined,
-    inputType: params.memorySearch?.inputType,
-    queryInputType: params.memorySearch?.queryInputType,
-    documentInputType: params.memorySearch?.documentInputType,
-    dimensions: params.dimensions,
-    fallback: "none",
-    acquireLocalService,
-  };
-  const { provider } = await adapter.create(createOptions);
-  if (!provider) {
-    throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
-  }
-  return provider;
+  return getMemoryEmbeddingProvider(provider, cfg)?.transport === "local";
 }
 
 // Request model overrides are constrained to the configured memory provider so
@@ -136,11 +115,9 @@ async function createConfiguredEmbeddingProvider(params: {
 function resolveEmbeddingsTarget(params: {
   requestModel: string;
   configuredProvider: string;
+  cfg: OpenClawConfig;
 }): { provider: string; model: string } | { errorMessage: string } {
-  const configuredProvider =
-    params.configuredProvider === "auto"
-      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
-      : params.configuredProvider;
+  const configuredProvider = params.configuredProvider;
   const raw = params.requestModel.trim();
   const slash = raw.indexOf("/");
   if (slash === -1) {
@@ -148,6 +125,10 @@ function resolveEmbeddingsTarget(params: {
   }
 
   const provider = normalizeLowercaseStringOrEmpty(raw.slice(0, slash));
+  // Unrecognized prefixes belong to the model ID, for example `library/bge-m3`.
+  if (!getMemoryEmbeddingProvider(provider, params.cfg)) {
+    return { provider: configuredProvider, model: raw };
+  }
   const model = raw.slice(slash + 1).trim();
   if (!model) {
     return { errorMessage: "Unsupported embedding model reference." };
@@ -233,6 +214,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   const target = resolveEmbeddingsTarget({
     requestModel: overrideModel,
     configuredProvider,
+    cfg,
   });
   if ("errorMessage" in target) {
     sendInvalidRequest(res, target.errorMessage);
@@ -250,16 +232,39 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     const { provider, release } = await acquireEmbeddingProviderLease(
       providerScopeKey,
       abortController.signal,
-      async () =>
-        await createConfiguredEmbeddingProvider({
-          cfg,
+      async () => {
+        const providerId = target.provider;
+        const model = target.model;
+        // Request dimensions apply even when the agent has disabled memory search.
+        const dimensions = payload.dimensions ?? memorySearch?.outputDimensionality;
+        const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(() => cfg);
+        const adapter = getMemoryEmbeddingProvider(providerId, cfg);
+        if (!adapter) {
+          throw new Error(`Unknown memory embedding provider: ${providerId}`);
+        }
+        const remote = memorySearch?.remote;
+        const createOptions = {
+          config: cfg,
           agentDir,
-          provider: target.provider,
-          model: target.model,
-          // Request dimensions apply even when the agent has disabled memory search.
-          dimensions: payload.dimensions ?? memorySearch?.outputDimensionality,
-          memorySearch: memorySearch ?? undefined,
-        }),
+          provider: providerId,
+          model: model || adapter.defaultModel || "",
+          local: memorySearch?.local,
+          remote: remote
+            ? { baseUrl: remote.baseUrl, apiKey: remote.apiKey, headers: remote.headers }
+            : undefined,
+          inputType: memorySearch?.inputType,
+          queryInputType: memorySearch?.queryInputType,
+          documentInputType: memorySearch?.documentInputType,
+          dimensions,
+          fallback: "none",
+          acquireLocalService,
+        };
+        const { provider: createdProvider } = await adapter.create(createOptions);
+        if (!createdProvider) {
+          throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
+        }
+        return createdProvider;
+      },
       (createdProvider) =>
         requestedProviderNeedsCleanup || isLocalEmbeddingProvider(cfg, createdProvider.id),
     );
@@ -268,9 +273,16 @@ export async function handleOpenAiEmbeddingsHttpRequest(
         await handled.requestAuth.revalidate?.();
         return true;
       }
+      const usage = { prompt_tokens: 0, total_tokens: 0 };
+      let completeUsage = true;
       const embeddings = await provider.embedBatch(texts, {
         signal: abortController.signal,
         inputType: "document",
+        onUsage: (reported) => {
+          completeUsage &&= reported !== undefined;
+          usage.prompt_tokens += reported?.promptTokens ?? 0;
+          usage.total_tokens += reported?.totalTokens ?? 0;
+        },
       });
       if (abortController.signal.aborted) {
         return true;
@@ -285,10 +297,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
           embedding: encodingFormat === "base64" ? encodeEmbeddingBase64(embedding) : embedding,
         })),
         model: requestModel,
-        usage: {
-          prompt_tokens: 0,
-          total_tokens: 0,
-        },
+        usage: completeUsage ? usage : { prompt_tokens: 0, total_tokens: 0 },
       });
     } finally {
       try {
@@ -300,7 +309,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   } catch (err) {
     if (!abortController.signal.aborted && !res.writableEnded && !res.destroyed) {
       logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
-      const mapped = resolveOpenAiCompatError(err);
+      const mapped = resolveEmbeddingDimensionsError(err) ?? resolveOpenAiCompatError(err);
       sendJson(res, mapped?.status ?? 500, {
         error: mapped?.error ?? { message: "internal error", type: "api_error" },
       });

@@ -1,4 +1,3 @@
-// Line helper module supports config schema behavior.
 import {
   ChannelDeliveryStreamingConfigSchema,
   DmPolicySchema,

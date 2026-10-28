@@ -1,4 +1,5 @@
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { CodexAppServerStartupError } from "./attempt-timeouts.js";
 import { withTimeout } from "./timeout.js";
 import { isCodexWebSocketOpenFailure } from "./transport-websocket.js";
@@ -53,13 +54,9 @@ export async function withCodexAppServerAcquireDeadline<T>(
     timeoutMessage,
     () => timeoutErrorFactory?.() ?? new CodexAppServerStartupError("timed_out", timeoutMessage),
   );
-  if (!signal) {
-    return await timed;
-  }
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = () =>
-      reject(new CodexAppServerStartupError("aborted", "codex app-server initialize aborted"));
-    signal.addEventListener("abort", onAbort, { once: true });
-    timed.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
-  });
+  return await racePromiseWithAbortSignal(
+    timed,
+    signal,
+    () => new CodexAppServerStartupError("aborted", "codex app-server initialize aborted"),
+  );
 }

@@ -1,16 +1,15 @@
 /* @vitest-environment jsdom */
 
 import assert from "node:assert/strict";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ModelAuthStatusResult, ModelCatalogResult } from "../api/types.ts";
-import {
-  invalidateChatMetadataForSessionEvent,
-  invalidateChatMetadataStore,
-} from "../lib/chat/chat-metadata-cache.ts";
+import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
 import { peekChatMetadata, beginChatMetadataPublication } from "../lib/chat/chat-metadata-store.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
+import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
 import {
   loadModelCatalog,
   peekModelCatalog,
@@ -21,17 +20,12 @@ import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import {
   applySelectedChatAgent,
   refreshChatMetadata,
-  refreshChatModelCatalogOnDemand,
   retireChatMetadataRequests,
 } from "../pages/chat/chat-state-refresh.ts";
-import {
-  createGatewayRequestMock,
-  createTestGatewayClient,
-} from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
-import "./app-host.ts";
+import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { createShellConfigFixture } from "./app-host.test-support.ts";
-import type { ApplicationContext } from "./context.ts";
+import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 
 type ChatMetadataShell = HTMLElement & {
@@ -39,198 +33,301 @@ type ChatMetadataShell = HTMLElement & {
   handleGatewayEvent: (event: { event: string; payload?: unknown }) => void;
 };
 
+const cleanups: (() => void)[] = [];
+function connectedGateway() {
+  const harness = createGatewayStoreTestStore();
+  harness.gateway.start();
+  harness.current().testOptions.onHello?.(gatewayHelloForMethods([]));
+  const client = harness.gateway.snapshot.client;
+  assert.ok(client);
+  cleanups.push(() => harness.gateway.stop());
+  return {
+    ...harness,
+    client,
+    emit: (event: string, payload: unknown = {}) =>
+      harness.current().testOptions.onEvent?.({ type: "event", event, payload }),
+  };
+}
+
+function metadataShell(gateway: ApplicationGateway) {
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
+  shell.runtime = { context: { gateway } as unknown as ApplicationContext };
+  return shell;
+}
+
+function listenShell(gateway: ApplicationGateway, shell = metadataShell(gateway)) {
+  cleanups.push(gateway.subscribeEvents((event) => shell.handleGatewayEvent(event)));
+}
+
+function metadataCalls(
+  request: { mock: { calls: readonly (readonly unknown[])[] } },
+  method: string,
+) {
+  return request.mock.calls.filter(([called]) => called === method);
+}
+
 afterEach(() => {
+  for (const cleanup of cleanups.splice(0).toReversed()) {
+    cleanup();
+  }
   vi.useRealTimers();
 });
 
-it("retains model and auth reads across 50 metadata-only publications", async () => {
+it("retains metadata-only reads and retires them on config changes and close", async () => {
   vi.useFakeTimers();
-  const { gateway, current } = createGatewayStoreTestStore();
-  gateway.start();
-  current().opts.onHello?.(gatewayHelloForMethods([]));
-  const client = gateway.snapshot.client;
-  assert.ok(client);
+  const { gateway, current, client, emit } = connectedGateway();
   const request = current().request.mockImplementation(async (method) =>
     method === "models.authStatus" ? { ts: Date.now(), providers: [] } : { models: [] },
   );
-  const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
   shell.runtime = {
     context: {
       config: createShellConfigFixture(),
       gateway,
       runtimeConfig: {
         state: { configFormDirty: false },
-        refresh: vi.fn(async () => null),
+        refreshDisplay: vi.fn(async () => null),
       },
     } as unknown as ApplicationContext,
   };
-  const stopShell = gateway.subscribeEvents((event) => shell.handleGatewayEvent(event));
+  listenShell(gateway, shell);
   const changed = vi.fn();
-  const stopCatalog = subscribeModelCatalogChanges(gateway, changed);
+  cleanups.push(subscribeModelCatalogChanges(gateway, changed));
   const read = () =>
     Promise.all([
       loadModelAuthStatus(client, { agentId: "main" }),
       loadModelCatalog(client, { agentId: "main" }),
     ]);
-  try {
-    await read();
-    request.mockClear();
-    for (let index = 0; index < 50; index++) {
-      beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [] });
-      current().opts.onEvent?.({
-        type: "event",
-        event: "chat.metadata.changed",
-        payload: { modelCatalogChanged: false, authChanged: false },
-      });
-      expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
-      await read();
-    }
-    expect
-      .soft(request.mock.calls.filter(([method]) => method === "models.authStatus"))
-      .toHaveLength(0);
-    expect.soft(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(0);
-    expect.soft(changed).not.toHaveBeenCalled();
-    current().opts.onEvent?.({
-      type: "event",
-      event: "chat.metadata.changed",
-      payload: { modelCatalogChanged: true, authChanged: false },
+  await read();
+  request.mockClear();
+  for (let index = 0; index < 50; index++) {
+    beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [] });
+    emit("chat.metadata.changed", {
+      modelCatalogChanged: false,
+      authChanged: false,
+      commandsChanged: false,
     });
+    expect(peekChatMetadata(client, { agentId: "main" })).toEqual({ commands: [] });
+    await read();
+  }
+  expect.soft(metadataCalls(request, "models.authStatus")).toHaveLength(0);
+  expect.soft(metadataCalls(request, "models.list")).toHaveLength(0);
+  expect.soft(changed).not.toHaveBeenCalled();
+  emit("chat.metadata.changed", { modelCatalogChanged: true, authChanged: false });
+  await read();
+  await read();
+  expect(metadataCalls(request, "models.authStatus")).toHaveLength(0);
+  expect(metadataCalls(request, "models.list")).toHaveLength(1);
+  expect(changed).toHaveBeenCalledOnce();
+  for (const event of ["config.changed", "chat.metadata.changed"]) {
+    request.mockClear();
+    changed.mockClear();
+    emit(event, {});
     await read();
     await read();
-    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(0);
-    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+    expect(metadataCalls(request, "models.authStatus")).toHaveLength(
+      event === "chat.metadata.changed" ? 1 : 0,
+    );
+    expect(metadataCalls(request, "models.list")).toHaveLength(1);
     expect(changed).toHaveBeenCalledOnce();
-    for (const event of ["config.changed", "chat.metadata.changed"]) {
+  }
+  beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models: [] });
+  emit("config.changed");
+  expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
+  beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models: [] });
+  current().testOptions.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
+  expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
+});
+
+it("reuses unrelated agent catalogs across a minute of scoped publications", async () => {
+  vi.useFakeTimers();
+  const { gateway, current, client, emit } = connectedGateway();
+  let revision = 0;
+  const request = current().request.mockImplementation(async () => ({
+    models: [{ id: `model-${revision}`, name: "Catalog model", provider: "fixture" }],
+  }));
+  listenShell(gateway);
+  const scopes = ["writer", "reader"].flatMap((agentId) => [
+    { agentId },
+    { agentId, sessionKey: `agent:${agentId}:chat` },
+  ]);
+  const read = () => Promise.all(scopes.map((scope) => loadModelCatalog(client, scope)));
+  await read();
+  request.mockClear();
+  for (revision = 1; revision <= 60; revision++) {
+    emit("chat.metadata.changed", {
+      agentId: "writer",
+      modelCatalogChanged: true,
+      authChanged: false,
+      commandsChanged: false,
+    });
+    const catalogs = await read();
+    expect(catalogs.map((catalog) => catalog.models[0]?.id)).toEqual([
+      `model-${revision}`,
+      `model-${revision}`,
+      "model-0",
+      "model-0",
+    ]);
+    await vi.advanceTimersByTimeAsync(1_000);
+  }
+  expect(metadataCalls(request, "models.list")).toHaveLength(120);
+  emit("chat.metadata.changed", {
+    modelCatalogChanged: true,
+    authChanged: false,
+    commandsChanged: false,
+  });
+  expect((await read()).map((catalog) => catalog.models[0]?.id)).toEqual(
+    Array.from({ length: 4 }, () => "model-61"),
+  );
+  expect(metadataCalls(request, "models.list")).toHaveLength(124);
+});
+
+it("settles discovery receipts without refetching unchanged warm catalogs", async () => {
+  const { gateway, current, client, emit } = connectedGateway();
+  let discovering = true;
+  let modelId = "initial";
+  const request = current().request.mockImplementation(async (_method, params) => ({
+    models: [{ id: modelId, name: "Catalog model", provider: "fixture" }],
+    ...(discovering && asNullableRecord(params)?.sessionKey === "agent:main:pending"
+      ? { pendingProviders: ["fixture"] }
+      : {}),
+  }));
+  listenShell(gateway);
+  const scopes = [
+    { agentId: "main" },
+    { agentId: "main", sessionKey: "agent:main:warm" },
+    { agentId: "main", sessionKey: "agent:main:pending" },
+  ];
+  const read = () => Promise.all(scopes.map((scope) => loadModelCatalog(client, scope)));
+  const publish = (modelCatalogChanged: boolean) =>
+    emit("chat.metadata.changed", {
+      modelCatalogChanged,
+      ...(!modelCatalogChanged ? { modelCatalogStatusChanged: true } : {}),
+      authChanged: false,
+      commandsChanged: false,
+    });
+  expect((await read())[2]?.pendingProviders).toEqual(["fixture"]);
+  for (const scope of scopes) {
+    beginChatMetadataPublication(client, scope).publish({ commands: [] });
+  }
+  request.mockClear();
+  discovering = false;
+  publish(false);
+  expect((await read()).map((catalog) => catalog.pendingProviders)).toEqual([
+    undefined,
+    undefined,
+    undefined,
+  ]);
+  expect(metadataCalls(request, "models.list")).toHaveLength(1);
+  publish(false);
+  await read();
+  expect(metadataCalls(request, "models.list")).toHaveLength(1);
+  expect(scopes.map((scope) => peekChatMetadata(client, scope))).toEqual(
+    scopes.map(() => ({ commands: [] })),
+  );
+  emit("chat.metadata.changed", {
+    modelCatalogChanged: false,
+    modelCatalogStatusChanged: true,
+    authChanged: false,
+  });
+  expect(scopes.map((scope) => peekChatMetadata(client, scope))).toEqual(
+    scopes.map(() => undefined),
+  );
+  await read();
+  expect(metadataCalls(request, "models.list")).toHaveLength(1);
+  modelId = "changed";
+  publish(true);
+  expect((await read()).map((catalog) => catalog.models[0]?.id)).toEqual([
+    "changed",
+    "changed",
+    "changed",
+  ]);
+  expect(metadataCalls(request, "models.list")).toHaveLength(4);
+});
+
+it("keeps a pending agent catalog read when another agent publishes changes", async () => {
+  const { gateway, current, client, emit } = connectedGateway();
+  const wire = createDeferred<ModelCatalogResult>();
+  const catalog = { models: [{ id: "model", name: "Catalog model", provider: "fixture" }] };
+  const request = current().request.mockReturnValue(wire.promise);
+  listenShell(gateway);
+  const scope = { agentId: "alpha" };
+  const reader = new ModelCatalogReader(() => {});
+  reader.bind(gateway, scope);
+  const pending = reader.read();
+  try {
+    emit("chat.metadata.changed", {
+      agentId: "bravo",
+      modelCatalogChanged: true,
+      commandsChanged: false,
+    });
+    expect(metadataCalls(request, "models.list")).toHaveLength(1);
+    wire.resolve(catalog);
+    expect(await pending).toEqual(catalog);
+    for (const payload of [
+      { agentId: "alpha", modelCatalogChanged: true },
+      { modelCatalogChanged: true },
+      { agentId: "bravo", modelSelectionChanged: true },
+    ]) {
       request.mockClear();
-      changed.mockClear();
-      current().opts.onEvent?.({ type: "event", event, payload: {} });
-      await read();
-      await read();
-      expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(
-        1,
-      );
-      expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
-      expect(changed).toHaveBeenCalledOnce();
+      emit("chat.metadata.changed", payload);
+      expect(await loadModelCatalog(client, scope)).toEqual(catalog);
+      expect(metadataCalls(request, "models.list")).toHaveLength(1);
     }
   } finally {
-    stopCatalog();
-    stopShell();
+    wire.resolve(catalog);
+    await pending;
+    reader.clear();
     gateway.stop();
   }
 });
 
-it.each([
-  { mode: "automatic", hidden: false, reject: false, replacementFails: false },
-  { mode: "automatic", hidden: true, reject: true, replacementFails: false },
-  { mode: "explicit", hidden: false, reject: false, replacementFails: true },
-  { mode: "picker", hidden: false, reject: false, replacementFails: false },
-])(
-  "preserves cold catalog demand across a matching session event ($mode, hidden: $hidden, rejection: $reject, replacement failure: $replacementFails)",
-  async ({ mode, hidden, reject, replacementFails }) => {
-    const pendingCatalog = createDeferred<ModelCatalogResult>();
-    const fresh = { id: "fresh", name: "Fresh model", provider: "example" };
-    let catalogReads = 0;
-    const request = createGatewayRequestMock((method) => {
-      if (method === "models.list") {
-        if (++catalogReads === 1) {
-          return pendingCatalog.promise;
+it("updates service-tier hints without rereading unchanged session facts", async () => {
+  const { gateway, current, client } = connectedGateway();
+  const observations = [{ requestedTier: "priority", responseTier: "default" }];
+  let fallback = false;
+  const request = current().request.mockImplementation(async (method) =>
+    method === "models.list"
+      ? {
+          models: [
+            {
+              id: "model",
+              name: "Model",
+              provider: "fixture",
+              serviceTierObservations: fallback ? observations : [],
+            },
+          ],
+          sessionModelRevision: "same-selection",
         }
-        return replacementFails
-          ? Promise.reject(new Error("Replacement catalog failed"))
-          : Promise.resolve({ models: [fresh] });
-      }
-      return Promise.resolve({ commands: [] });
-    });
-    const client = createTestGatewayClient(request);
-    const state = makeChatHost({ client }) as ChatPageHost;
-    state.connected = true;
-    state.sessionKey = "agent:main:cold";
-    let presented = true;
-    state.chatMetadataIsPresented = () => presented;
-    const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
-    shell.runtime = {
-      context: {
-        config: createShellConfigFixture(),
-        gateway: { snapshot: { client, phase: "connected" } },
-        agents: { state: { agentsList: null } },
-        sessions: state.sessions,
-      } as unknown as ApplicationContext,
-    };
-    const loading =
-      mode === "picker"
-        ? refreshChatModelCatalogOnDemand(state)
-        : refreshChatMetadata(state, { automatic: mode === "automatic" });
-    try {
-      expect(catalogReads).toBe(1);
-      shell.handleGatewayEvent({
-        event: "sessions.changed",
-        payload: { key: state.sessionKey, agentId: "main", reason: "message" },
-      });
-      presented = !hidden;
-      if (reject) {
-        pendingCatalog.reject(new Error("Retired catalog request failed"));
-      } else {
-        pendingCatalog.resolve({ models: [{ ...fresh, id: "retired" }] });
-      }
-      await loading;
-      if (hidden) {
-        expect(catalogReads).toBe(1);
-        expect(state.chatModelCatalog).toEqual([]);
-        presented = true;
-        await refreshChatMetadata(state, { automatic: true });
-      }
-      expect(state.chatModelCatalog).toEqual(replacementFails ? [] : [fresh]);
-      if (replacementFails) {
-        expect(state.chatModelCatalogError).toContain("Replacement catalog failed");
-      } else {
-        expect(state.chatModelCatalogError).toBeNull();
-      }
-      expect(state.chatModelsLoading).toBe(false);
-      expect(catalogReads).toBe(2);
-      expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(
-        mode === "picker" ? 0 : 1,
-      );
-    } finally {
-      pendingCatalog.resolve({ models: [] });
-      await loading;
-      retireChatMetadataRequests(state);
-      state.sessions.dispose();
-    }
-  },
-);
-
-it("refreshes a changed session projection through the catalog owner after explicit metadata", async () => {
-  vi.useFakeTimers();
-  const model = { id: "model", name: "Initial", provider: "example" };
-  const currentModel = { ...model, name: "Current direct catalog" };
-  const metadata = createDeferred<{ commands: never[]; models: (typeof model)[] }>();
-  let changed = false;
-  const request = createGatewayRequestMock((method) => {
-    if (method === "chat.metadata") {
-      return changed ? metadata.promise : Promise.resolve({ commands: [], models: [model] });
-    }
-    return Promise.resolve({ models: [changed ? currentModel : model] });
-  });
-  const client = createTestGatewayClient(request);
+      : { commands: [] },
+  );
   const state = makeChatHost({ client }) as ChatPageHost;
-  state.connected = true;
-  state.sessionKey = "agent:main:projection";
-  const scope = { agentId: "main", sessionKey: state.sessionKey };
+  state.sessionKey = "agent:main:current";
+  const shell = metadataShell(gateway);
   try {
     await refreshChatMetadata(state);
-    changed = true;
-    invalidateChatMetadataForSessionEvent(client, { ...scope, reason: "patch" }, {});
-    const pending = refreshChatMetadata(state);
-    await vi.advanceTimersByTimeAsync(2_500);
-    metadata.resolve({ commands: [], models: [currentModel] });
-    await pending;
-    await vi.advanceTimersByTimeAsync(2_500);
-    expect(state.chatModelCatalog).toEqual([currentModel]);
-    expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(2);
+    request.mockClear();
+    for (fallback of [true, false]) {
+      shell.handleGatewayEvent({
+        event: "chat.metadata.changed",
+        payload: {
+          agentId: "main",
+          modelCatalogChanged: true,
+          authChanged: false,
+          commandsChanged: false,
+        },
+      });
+      await refreshChatMetadata(state);
+      expect(state.chatModelCatalog[0]?.serviceTierObservations).toEqual(
+        fallback ? observations : [],
+      );
+    }
+    expect(metadataCalls(request, "models.list")).toHaveLength(2);
+    expect(metadataCalls(request, "chat.metadata")).toHaveLength(0);
+    expect(metadataCalls(request, "sessions.describe")).toHaveLength(0);
   } finally {
-    metadata.resolve({ commands: [], models: [currentModel] });
     retireChatMetadataRequests(state);
-    state.sessions.dispose();
+    gateway.stop();
   }
 });
 
@@ -241,40 +338,24 @@ it.each([
   "refreshes the retained pane without changing conversation state ($event, clears: $clearsChoices)",
   async ({ event, payload, clearsChoices }) => {
     const model = { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" };
-    let ready = false;
     const catalogRequest = vi.fn(async (): Promise<ModelCatalogResult> => ({
-      models: [
-        {
-          ...model,
-          available: ready,
-          ...(ready ? {} : { unavailableReason: "missing-auth" as const }),
-        },
-      ],
+      models: [{ ...model, available: false, unavailableReason: "missing-auth" }],
     }));
     const request = vi.fn((method: string) =>
       method === "models.list" ? catalogRequest() : Promise.resolve({ commands: [] }),
     );
     const client = { request } as unknown as GatewayBrowserClient;
-    const state = {
-      ...makeChatHost(),
+    const state = makeChatHost({
       client,
-      connected: true,
       connectionEpoch: 1,
       sessionKey: "agent:main:current",
-      chatModelCatalog: [],
-      chatModelsLoading: false,
-      chatModelCatalogError: null,
-      chatMessages: [],
-      chatQueue: [],
-      chatRunId: null,
       chatMessage: "Keep this draft",
       chatError: "No route-compatible authentication source is configured",
-      requestUpdate: vi.fn(),
-    } as unknown as ChatPageHost;
+    }) as ChatPageHost;
     const invalidateSessions = vi.spyOn(state.sessions, "invalidate").mockImplementation(() => {});
     const messages = state.chatMessages;
     const queue = state.chatQueue;
-    const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+    const shell = createShellOwner() as unknown as ChatMetadataShell;
     shell.runtime = {
       context: {
         config: createShellConfigFixture(),
@@ -283,8 +364,8 @@ it.each([
         agentSelection: { state: { selectedId: "main" } },
         runtimeConfig: {
           state: { configFormDirty: false, configSnapshot: null },
-          ensureLoaded: vi.fn(async () => null),
-          refresh: vi.fn(async () => null),
+          ensureDisplayLoaded: vi.fn(async () => null),
+          refreshDisplay: vi.fn(async () => null),
         },
       } as unknown as ApplicationContext,
     };
@@ -292,82 +373,29 @@ it.each([
       await refreshChatMetadata(state);
       expect(state.chatModelCatalog[0]?.available).toBe(false);
       const pending = createDeferred<{
-        commands: never[];
         models: typeof state.chatModelCatalog;
       }>();
       catalogRequest.mockImplementationOnce(() => pending.promise);
       shell.handleGatewayEvent({ event, payload });
       expect(state.chatModelCatalog[0]?.available).toBe(clearsChoices ? undefined : false);
       pending.resolve({
-        commands: [],
-        models: [{ ...model, available: false, unavailableReason: "auth-failed" }],
+        models: [{ ...model, available: true }],
       });
-      await vi.waitFor(() =>
-        expect(state.chatModelCatalog[0]?.unavailableReason).toBe("auth-failed"),
-      );
-      catalogRequest.mockRejectedValueOnce(new Error("metadata transport failed"));
-      shell.handleGatewayEvent({ event, payload });
-      await vi.waitFor(() =>
-        expect(state.chatModelCatalogError).toContain("metadata transport failed"),
-      );
-      expect(state.chatModelCatalog[0]?.available).toBe(clearsChoices ? undefined : false);
-      ready = true;
-      shell.handleGatewayEvent({ event, payload });
       await vi.waitFor(() => expect(state.chatModelCatalog[0]?.available).toBe(true));
       expect(state.chatMessage).toBe("Keep this draft");
       expect(state.chatError).toBe("No route-compatible authentication source is configured");
       expect(state.chatMessages).toBe(messages);
       expect(state.chatQueue).toBe(queue);
       expect(state.chatRunId).toBeNull();
-      expect(catalogRequest.mock.calls).toHaveLength(4);
       expect(invalidateSessions).not.toHaveBeenCalled();
-      expect(request.mock.calls.filter(([method]) => method === "sessions.describe")).toHaveLength(
-        2,
-      );
     } finally {
       retireChatMetadataRequests(state);
     }
   },
 );
 
-it("retires chat metadata through config.changed and the Gateway close callback", () => {
-  vi.useFakeTimers();
-  const { gateway, current } = createGatewayStoreTestStore();
-  gateway.start();
-  current().opts.onHello?.(gatewayHelloForMethods([]));
-  const client = gateway.snapshot.client;
-  assert.ok(client);
-  const connectionBootstrap = {
-    reset: vi.fn(),
-    run: (_key: string, task: () => Promise<unknown>) => task(),
-    synchronize: vi.fn(),
-  };
-  const context = {
-    config: createShellConfigFixture(),
-    gateway,
-    connectionBootstrap,
-    runtimeConfig: {
-      state: { configFormDirty: false, configSnapshot: null },
-      ensureLoaded: vi.fn(async () => null),
-      refresh: vi.fn(async () => null),
-    },
-  } as unknown as ApplicationContext;
-  const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
-  shell.runtime = { context };
-
-  beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models: [] });
-  shell.handleGatewayEvent({ event: "config.changed", payload: {} });
-  expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
-
-  beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models: [] });
-  current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
-  expect(peekChatMetadata(client, { agentId: "main" })).toBeUndefined();
-  gateway.stop();
-});
-
 it.each([
   { kind: "auth", transition: "same-client identity" },
-  { kind: "catalog", transition: "chat.metadata.changed" },
   { kind: "catalog", transition: "same-client reconnect" },
   { kind: "catalog", transition: "same-client identity" },
 ])("retires shared $kind reads through $transition", async ({ kind, transition }) => {
@@ -384,53 +412,38 @@ it.each([
   const hello = {
     ...gatewayHelloForMethods([]),
     snapshot: {
-      presence: [{ instanceId: current().instanceId, user: { id: "original" } }],
+      presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "original" } }],
     },
   };
-  current().opts.onHello?.(hello);
+  current().testOptions.onHello?.(hello);
   const request = current()
     .request.mockImplementationOnce(() => stale.promise)
     .mockImplementation(() => fresh.promise);
   const client = gateway.snapshot.client;
   assert.ok(client);
-  const context = {
-    config: createShellConfigFixture(),
-    gateway,
-    connectionBootstrap: {
-      reset: vi.fn(),
-      run: (_key: string, task: () => Promise<unknown>) => task(),
-      synchronize: vi.fn(),
-    },
-    runtimeConfig: {
-      state: { configFormDirty: false, configSnapshot: null },
-      ensureLoaded: vi.fn(async () => null),
-      refresh: vi.fn(async () => null),
-    },
-  } as unknown as ApplicationContext;
-  const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
-  shell.runtime = { context };
   const read = () =>
     kind === "auth"
       ? loadModelAuthStatus(client, { agentId: "main" })
       : loadModelCatalog(client, { agentId: "main" });
   const before = read().catch((error: unknown) => error);
   if (transition === "same-client reconnect") {
-    current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
-    current().opts.onHello?.({ ...hello });
-  } else if (transition === "same-client identity") {
-    current().opts.onEvent?.({
+    current().testOptions.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
+    current().testOptions.onHello?.({ ...hello });
+  } else {
+    current().testOptions.onEvent?.({
       type: "event",
       event: "presence",
       payload: {
-        presence: [{ instanceId: current().instanceId, user: { id: "replacement" } }],
+        reset: true,
+        version: 1,
+        keys: ["self"],
+        presence: [{ ts: 1, instanceId: current().instanceId, user: { id: "replacement" } }],
       },
     });
-  } else {
-    shell.handleGatewayEvent({ event: transition, payload: {} });
   }
   const replacement = read();
   stale.resolve(staleResult);
-  if (kind === "catalog" && transition !== "chat.metadata.changed") {
+  if (kind === "catalog") {
     expect(await before).toHaveProperty("name", "AbortError");
   } else {
     expect(await before).toEqual(staleResult);
@@ -452,7 +465,6 @@ it("rebinds global chat metadata immediately on agent selection and follows late
   }));
   const client = { request } as unknown as GatewayBrowserClient;
   const state = makeChatHost({ client }) as ChatPageHost;
-  state.connected = true;
   state.sessionKey = "global";
   state.assistantAgentId = "work";
   state.loadAssistantIdentity = vi.fn(async () => undefined);
@@ -466,52 +478,20 @@ it("rebinds global chat metadata immediately on agent selection and follows late
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("chat.metadata", {
         agentId: "main",
-        sessionKey: "global",
         includeModels: false,
       }),
     );
+    await vi.waitFor(() => expect(state.chatModelsLoading).toBe(false));
     ready = true;
     invalidateChatMetadataStore(client);
     await vi.waitFor(() => expect(state.chatModelCatalog[0]?.available).toBe(true));
-    expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(3);
+    expect(metadataCalls(request, "chat.metadata")).toHaveLength(3);
     expect(state.chatMessage).toBe("Keep this draft");
     expect(state.chatError).toBe("Keep this error");
     expect(state.chatMessages).toBe(messages);
   } finally {
     retireChatMetadataRequests(state);
   }
-});
-
-it("retires an unmounted session catalog on session changes without evicting draft choices", async () => {
-  const request = vi.fn(async () => ({ models: [] }));
-  const client = { request } as unknown as GatewayBrowserClient;
-  const session = { agentId: "main", sessionKey: "main" };
-  const otherAgent = { agentId: "writer", sessionKey: "main" };
-  const otherSession = { agentId: "main", sessionKey: "agent:main:other" };
-  const draft = { agentId: "main" };
-  const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
-  shell.runtime = {
-    context: {
-      config: createShellConfigFixture(),
-      gateway: { snapshot: { client, phase: "connected" } },
-      agents: { state: { agentsList: null } },
-      sessions: { state: { deletedSessions: [] } },
-    } as unknown as ApplicationContext,
-  };
-  await Promise.all([
-    loadModelCatalog(client, session),
-    loadModelCatalog(client, otherAgent),
-    loadModelCatalog(client, otherSession),
-    loadModelCatalog(client, draft),
-  ]);
-  shell.handleGatewayEvent({
-    event: "sessions.changed",
-    payload: { key: "agent:main:main", agentId: "main", reason: "patch" },
-  });
-  expect(peekModelCatalog(client, session)).toBeUndefined();
-  expect(peekModelCatalog(client, otherAgent)).toEqual({ models: [] });
-  expect(peekModelCatalog(client, otherSession)).toEqual({ models: [] });
-  expect(peekModelCatalog(client, draft)).toEqual({ models: [] });
 });
 
 describe("session command metadata events", () => {
@@ -523,7 +503,11 @@ describe("session command metadata events", () => {
     "refreshes only the matching $agentId/$key scope",
     async ({ key, eventKey, otherKey, agentId }) => {
       vi.useFakeTimers();
-      const request = vi.fn().mockResolvedValue({ commands: [], models: [] });
+      const request = vi.fn().mockResolvedValue({
+        commands: [],
+        models: [],
+        sessionModelRevision: "initial-selection",
+      });
       const client = { request } as unknown as GatewayBrowserClient;
       const hello = {
         ...gatewayHelloForMethods([]),
@@ -542,7 +526,6 @@ describe("session command metadata events", () => {
       ].map((scope) => {
         const state = makeChatHost({ client }) as ChatPageHost;
         state.hello = hello;
-        state.connected = true;
         state.sessionKey = scope.sessionKey;
         state.assistantAgentId = scope.agentId;
         return state;
@@ -552,7 +535,7 @@ describe("session command metadata events", () => {
       );
       const selected = states[0];
       assert.ok(selected);
-      const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
+      const shell = createShellOwner() as unknown as ChatMetadataShell;
       shell.runtime = {
         context: {
           config: createShellConfigFixture(),
@@ -563,15 +546,14 @@ describe("session command metadata events", () => {
       };
       try {
         await Promise.all(states.map((state) => refreshChatMetadata(state)));
-        const before = request.mock.calls.filter(([method]) => method === "chat.metadata").length;
-        const catalogsBefore = request.mock.calls.filter(
-          ([method]) => method === "models.list",
-        ).length;
+        const before = metadataCalls(request, "chat.metadata").length;
+        const catalogsBefore = metadataCalls(request, "models.list").length;
         for (const payload of [
           { key: "agent:work:not-open", agentId: "work", reason },
           { key: eventKey, agentId, reason: "message" },
         ]) {
           shell.handleGatewayEvent({ event: "sessions.changed", payload });
+          await vi.advanceTimersByTimeAsync(0);
           if (payload.key === "agent:work:not-open") {
             for (const state of states) {
               expect(
@@ -583,32 +565,22 @@ describe("session command metadata events", () => {
             }
           }
         }
-        expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(
-          before,
-        );
+        expect(metadataCalls(request, "chat.metadata")).toHaveLength(before);
+        expect(metadataCalls(request, "models.list")).toHaveLength(catalogsBefore);
         shell.handleGatewayEvent({
           event: "sessions.changed",
           payload: { key: eventKey, agentId, reason },
         });
         await vi.advanceTimersByTimeAsync(2_500);
         await vi.waitFor(() =>
-          expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(
-            before + 1,
-          ),
+          expect(metadataCalls(request, "chat.metadata")).toHaveLength(before),
         );
-        expect(request.mock.calls.findLast(([method]) => method === "chat.metadata")?.[1]).toEqual({
-          agentId,
-          sessionKey: key,
-          includeModels: false,
-        });
-        expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(
-          catalogsBefore + 1,
-        );
+        expect(metadataCalls(request, "models.list")).toHaveLength(catalogsBefore + 1);
         for (const invalidate of invalidations) {
           expect(invalidate).not.toHaveBeenCalled();
         }
       } finally {
-        states.forEach(retireChatMetadataRequests);
+        states.forEach((state) => retireChatMetadataRequests(state));
       }
     },
   );

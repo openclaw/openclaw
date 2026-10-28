@@ -1,28 +1,64 @@
 import { retireInitialChatSubmission } from "../../app/chat-submissions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   scopedAgentParamsForSession,
   visibleSessionMatches,
-  type SessionCapability,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/navigation.ts";
 import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
+import { requestChatAbort } from "./chat-abort-request.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection, setChatError } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
   captureChatComposerReplacement,
-  loadChatComposerCommittedDraftRevision,
+  loadChatComposerState,
   persistChatComposerState,
-} from "./composer-persistence.ts";
-import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
+} from "./composer-draft-storage.ts";
+import { chatAttachmentDraftSignature } from "./composer-draft.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 import type { SessionSnapshotInvalidationReason } from "./session-snapshot-invalidation-events.ts";
+
+export function cancelPendingQueuedChatInput(state: ChatHistoryHost, id: string): boolean {
+  const view = getChatPendingInputs(state);
+  const input = view?.queuedInputs.find(
+    (item) => `pending-input:${item.id}` === id && item.queued && item.state === "queued",
+  );
+  const client = state.client;
+  if (!view || !input?.runId) {
+    return false;
+  }
+  if (!client || !state.connected) {
+    return true;
+  }
+  const connectionIsCurrent = captureChatConnectionOwner(state);
+  const current = () => getChatPendingInputs(state) === view && connectionIsCurrent();
+  void requestChatAbort(client, {
+    sessionKey: view.sessionKey,
+    agentId: view.agentId,
+    runId: input.runId,
+    ...(isIncognitoComposerScope(state, view) ? {} : { discardPendingInput: true }),
+  }).then(async (result) => {
+    if (!current()) {
+      return;
+    }
+    if (!result.ok) {
+      state.chatError = formatUiError(result.error);
+      return;
+    }
+    await loadChatHistory(state, { supersedeInFlight: true });
+  });
+  return true;
+}
 
 type ClearChatHistoryState = ChatHistoryHost &
   Parameters<typeof reconcileChatRunLifecycle>[0] &
@@ -31,13 +67,6 @@ type ClearChatHistoryState = ChatHistoryHost &
   };
 
 type ClearChatHistoryResult = "completed" | "failed" | "uncertain";
-
-type ClearChatViewOwner = {
-  client: ClearChatHistoryState["client"];
-  connectionEpoch: number;
-  sessionKey: string;
-  agentId?: string;
-};
 
 type RewindChatHistoryState = ChatHistoryHost &
   Parameters<typeof persistChatComposerState>[0] &
@@ -57,7 +86,7 @@ function hasAbortableChatSessionRun(state: ClearChatHistoryState): boolean {
   }
   return Boolean(
     state.sessionsResult?.sessions.some(
-      (session) => session.key === state.sessionKey && isSessionRunActive(session),
+      (session) => session.key === state.sessionKey && isSessionRunStateActive(session),
     ),
   );
 }
@@ -74,17 +103,9 @@ function clearCachedChatMessagesForSession(
   clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey, agentId }, reason);
 }
 
-function ownsClearChatView(state: ClearChatHistoryState, owner: ClearChatViewOwner): boolean {
-  return (
-    state.client === owner.client &&
-    state.connectionEpoch === owner.connectionEpoch &&
-    visibleSessionMatches(state, owner.sessionKey, owner.agentId)
-  );
-}
-
 function clearPostResetBranchPrecondition(
   state: ClearChatHistoryState,
-  target: ClearChatViewOwner,
+  sameView: () => boolean,
   history: ChatHistoryResult | undefined,
 ) {
   if (
@@ -92,13 +113,13 @@ function clearPostResetBranchPrecondition(
     !Object.hasOwn(history.sessionInfo ?? {}, "activeLeafEntryId") ||
     history.sessionInfo?.activeLeafEntryId !== null ||
     !state.connected ||
-    !ownsClearChatView(state, target)
+    !sameView()
   ) {
     return;
   }
   // Reset can leave old branch metadata visible after the transcript becomes
   // empty. The first post-reset send must establish the new branch itself.
-  delete state.chatDisplayedLeafEntryId;
+  state.chatDisplayedLeafEntryId = undefined;
 }
 
 export async function clearChatHistory(
@@ -109,14 +130,7 @@ export async function clearChatHistory(
   }
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
-  const sessionKey = state.sessionKey;
-  const agentParams = scopedAgentParamsForSession(state, sessionKey);
-  const originalViewOwner: ClearChatViewOwner = {
-    client,
-    connectionEpoch,
-    sessionKey,
-    agentId: agentParams.agentId,
-  };
+  const { sessionKey, agentParams, sameView: ownsOriginalView } = captureChatHistoryView(state);
   const runId = state.chatRunId;
   const initialSubmission = state.chatSubmissions?.readInitial(sessionKey, client);
   const hadActiveRun = hasAbortableChatSessionRun(state);
@@ -140,12 +154,7 @@ export async function clearChatHistory(
       state.connectionEpoch !== connectionEpoch ||
       !state.connected
     ) {
-      const feedbackOwner: ClearChatViewOwner = {
-        client: state.client,
-        connectionEpoch: state.connectionEpoch,
-        sessionKey,
-        agentId: agentParams.agentId,
-      };
+      const { sameView: ownsFeedbackView } = captureChatHistoryView(state, sessionKey, agentParams);
       let historyRefreshed = false;
       if (
         state.client &&
@@ -158,9 +167,9 @@ export async function clearChatHistory(
         resetChatHistoryProjection(state, agentParams.agentId);
         const history = await loadChatHistory(state);
         historyRefreshed = Boolean(history);
-        clearPostResetBranchPrecondition(state, originalViewOwner, history);
+        clearPostResetBranchPrecondition(state, ownsOriginalView, history);
       }
-      if (ownsClearChatView(state, feedbackOwner)) {
+      if (ownsFeedbackView()) {
         setChatError(
           state,
           historyRefreshed
@@ -174,7 +183,7 @@ export async function clearChatHistory(
       return "uncertain";
     }
   } catch (err) {
-    if (ownsClearChatView(state, originalViewOwner)) {
+    if (ownsOriginalView()) {
       setChatError(state, formatUiError(err));
       scheduleChatScroll(state);
     }
@@ -192,16 +201,28 @@ export async function clearChatHistory(
     runId,
     sessionKey,
     clearLocalRun: true,
-    clearChatStream: true,
     clearToolStream: true,
     clearRunStatus: !hadActiveRun,
   });
   const history = await loadChatHistory(state);
-  clearPostResetBranchPrecondition(state, originalViewOwner, history);
-  if (ownsClearChatView(state, originalViewOwner)) {
+  clearPostResetBranchPrecondition(state, ownsOriginalView, history);
+  if (ownsOriginalView()) {
     scheduleChatScroll(state);
   }
   return "completed";
+}
+
+function captureChatHistoryView(
+  state: ChatState,
+  sessionKey = state.sessionKey,
+  agentParams = scopedAgentParamsForSession(state, sessionKey),
+) {
+  const sameConnection = captureChatConnectionOwner(state, false);
+  const connectionIsCurrent = () => state.connected && sameConnection();
+  const viewMatches = () => visibleSessionMatches(state, sessionKey, agentParams.agentId);
+  const sameView = () => sameConnection() && viewMatches();
+  const viewIsCurrent = () => state.connected && sameView();
+  return { sessionKey, agentParams, connectionIsCurrent, viewMatches, sameView, viewIsCurrent };
 }
 
 export async function rewindChatHistory(
@@ -212,14 +233,8 @@ export async function rewindChatHistory(
   if (!state.client || !state.connected) {
     return null;
   }
-  const sessionKey = state.sessionKey;
-  const agentParams = scopedAgentParamsForSession(state, sessionKey);
-  const client = state.client;
-  const connectionEpoch = state.connectionEpoch;
-  const connectionIsCurrent = () =>
-    state.connected && state.client === client && state.connectionEpoch === connectionEpoch;
-  const viewMatches = () => visibleSessionMatches(state, sessionKey, agentParams.agentId);
-  const viewIsCurrent = () => connectionIsCurrent() && viewMatches();
+  const { sessionKey, agentParams, connectionIsCurrent, viewMatches, viewIsCurrent } =
+    captureChatHistoryView(state);
   const readComposer = () =>
     chatAttachmentDraftSignature(
       state.chatMessage,
@@ -250,11 +265,8 @@ export async function rewindChatHistory(
       mentions: [],
       goalMode: null,
       replyTarget: null,
-      expectedDraftRevision: loadChatComposerCommittedDraftRevision(
-        state,
-        sessionKey,
-        agentParams.agentId,
-      ),
+      expectedDraftRevision: loadChatComposerState(state, sessionKey, agentParams.agentId).revisions
+        .committed,
     });
     if (!viewMatches()) {
       return null;
@@ -287,14 +299,7 @@ export async function switchChatHistoryBranch(
   if (!state.client || !state.connected) {
     return false;
   }
-  const sessionKey = state.sessionKey;
-  const agentParams = scopedAgentParamsForSession(state, sessionKey);
-  const client = state.client;
-  const connectionEpoch = state.connectionEpoch;
-  const connectionIsCurrent = () =>
-    state.connected && state.client === client && state.connectionEpoch === connectionEpoch;
-  const viewMatches = () => visibleSessionMatches(state, sessionKey, agentParams.agentId);
-  const viewIsCurrent = () => connectionIsCurrent() && viewMatches();
+  const { sessionKey, agentParams, viewMatches, viewIsCurrent } = captureChatHistoryView(state);
   try {
     await state.sessions.switchBranch(sessionKey, leafEntryId, agentParams);
     clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId, "cache-eviction");

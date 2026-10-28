@@ -11,11 +11,10 @@ import {
   normalizeSingleOrTrimmedStringList,
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
-import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 import type { ReplyDeliveryState } from "../reply-completion.js";
 import { collectMediaUrlsFromRecord, hasVisibleAgentPayload } from "./message-visibility.js";
-export { hasExplicitlyVisibleAgentPayload, hasVisibleAgentPayload } from "./message-visibility.js";
+export { hasVisibleAgentPayload } from "./message-visibility.js";
 
 // Preserve delivery and side-effect evidence so fallback cannot repeat messages,
 // media, cron entries, or accepted child sessions.
@@ -51,6 +50,7 @@ export type AgentDeliveryEvidence = {
     aborted?: unknown;
     finalAssistantVisibleText?: unknown;
     terminalReply?: unknown;
+    terminalReplyExpectation?: unknown;
     toolSummary?: {
       calls?: unknown;
     };
@@ -69,25 +69,20 @@ type ExplicitFinalSourceReplyEvidence = {
   messagingToolSourceReplyPayloads?: unknown;
 };
 
-function collectSourceReplyFinalMarkers(value: unknown): boolean[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((entry) => {
-    const marker = asOptionalRecord(entry)?.sourceReplyFinal;
-    return typeof marker === "boolean" ? [marker] : [];
-  });
-}
-
 /** Resolve explicit progress/final evidence, or undefined for legacy runtimes. */
 export function resolveExplicitFinalSourceReplyDeliveryEvidence(
   result: ExplicitFinalSourceReplyEvidence,
 ): boolean | undefined {
-  const markers = [
-    ...collectSourceReplyFinalMarkers(result.messagingToolSentTargets),
-    ...collectSourceReplyFinalMarkers(result.messagingToolSourceReplyPayloads),
-  ];
-  return markers.length > 0 ? markers.some(Boolean) : undefined;
+  let final: boolean | undefined;
+  for (const value of [result.messagingToolSentTargets, result.messagingToolSourceReplyPayloads]) {
+    for (const entry of Array.isArray(value) ? value : []) {
+      const marker = asOptionalRecord(entry)?.sourceReplyFinal;
+      if (typeof marker === "boolean") {
+        final = final || marker;
+      }
+    }
+  }
+  return final;
 }
 
 /** Preserve legacy completion semantics unless the runtime emitted progress/final markers. */
@@ -150,14 +145,11 @@ function hasVisibleMessagingToolTarget(value: unknown): boolean {
   );
 }
 
-function collectPayloadMediaUrls(
-  payloads: unknown,
-  include?: (payload: unknown) => boolean,
-): string[] {
+function collectPayloadMediaUrls(payloads: unknown): string[] {
   const urls = new Set<string>();
   for (const payload of Array.isArray(payloads) ? payloads : []) {
     const record = asOptionalRecord(payload);
-    if (record && (!include || include(payload))) {
+    if (record) {
       collectMediaUrlsFromRecord(record, urls);
     }
   }
@@ -188,113 +180,6 @@ function getPayloadDeliveryOutcomes(
 ): unknown[] | undefined {
   const outcomes = asOptionalObjectRecord(result.deliveryStatus)?.payloadOutcomes;
   return Array.isArray(outcomes) ? outcomes : undefined;
-}
-
-function collectPayloadOutcomeMediaUrls(
-  result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads">,
-  statuses: (outcome: Record<string, unknown>) => boolean,
-): string[] {
-  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  const outcomes = getPayloadDeliveryOutcomes(result) ?? [];
-  const urls = new Set<string>();
-  for (const outcome of outcomes) {
-    const record = asOptionalRecord(outcome);
-    if (!record || !statuses(record)) {
-      continue;
-    }
-    const index =
-      typeof record.index === "number" && Number.isInteger(record.index) ? record.index : undefined;
-    const payload = asOptionalRecord(index === undefined ? undefined : payloads[index]);
-    if (payload && hasDeliverableAgentPayload(payload)) {
-      collectMediaUrlsFromRecord(payload, urls);
-    }
-  }
-  return Array.from(urls);
-}
-
-function hasDeliverableAgentPayload(payload: unknown): boolean {
-  if (asOptionalRecord(payload)?.visible === false) {
-    return false;
-  }
-  return hasVisibleAgentPayload(
-    { payloads: [payload] },
-    { includeErrorPayloads: false, includeReasoningPayloads: false },
-  );
-}
-
-/** Collect automatic-delivery media proven sent by aggregate or per-payload evidence. */
-export function collectAutomaticDeliveredMediaUrls(
-  result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads">,
-): string[] {
-  if (getPayloadDeliveryOutcomes(result)) {
-    return collectPayloadOutcomeMediaUrls(
-      result,
-      (outcome) =>
-        normalizeEvidenceStatus(outcome.status) === "sent" ||
-        normalizeEvidenceStatus(outcome.status) === "suppressed",
-    );
-  }
-  const status = normalizeEvidenceStatus(result.deliveryStatus?.status);
-  return status === "sent" || status === "suppressed"
-    ? collectPayloadMediaUrls(result.payloads, hasDeliverableAgentPayload)
-    : [];
-}
-
-/** Collect media whose send may have committed before a per-payload failure. */
-export function collectAmbiguousAutomaticMediaUrls(
-  result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads">,
-): string[] {
-  return collectPayloadOutcomeMediaUrls(
-    result,
-    (outcome) =>
-      normalizeEvidenceStatus(outcome.status) === "failed" && outcome.sentBeforeError === true,
-  );
-}
-
-/** Check that a partial automatic send classifies every expected-media payload. */
-export function hasCompleteAutomaticMediaDeliveryOutcomeEvidence(
-  result: Pick<AgentDeliveryEvidence, "deliveryStatus" | "payloads" | "payloadsTruncated">,
-  expectedMediaUrls: readonly string[],
-): boolean {
-  if (result.payloadsTruncated === true) {
-    return false;
-  }
-  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  const outcomes = Array.isArray(result.deliveryStatus?.payloadOutcomes)
-    ? result.deliveryStatus.payloadOutcomes
-    : [];
-  if (payloads.length === 0 || outcomes.length === 0) {
-    return false;
-  }
-  const classifiedIndexes = new Set<number>();
-  for (const outcome of outcomes) {
-    const record = asOptionalRecord(outcome);
-    if (!record) {
-      continue;
-    }
-    const index =
-      typeof record.index === "number" &&
-      Number.isInteger(record.index) &&
-      record.index >= 0 &&
-      record.index < payloads.length
-        ? record.index
-        : undefined;
-    const status = normalizeEvidenceStatus(record.status);
-    const classified =
-      status === "sent" ||
-      status === "suppressed" ||
-      (status === "failed" && typeof record.sentBeforeError === "boolean");
-    if (index !== undefined && classified) {
-      classifiedIndexes.add(index);
-    }
-  }
-  const expected = new Set(expectedMediaUrls.map(normalizeMediaReferenceForComparison));
-  return payloads.every((payload, index) => {
-    const containsExpectedMedia = collectPayloadMediaUrls([payload]).some((url) =>
-      expected.has(normalizeMediaReferenceForComparison(url)),
-    );
-    return !containsExpectedMedia || classifiedIndexes.has(index);
-  });
 }
 
 /** Preserve batch send evidence and policy reasons hidden by the first suppressed payload. */

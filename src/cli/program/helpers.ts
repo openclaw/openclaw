@@ -6,7 +6,6 @@ export function collectOption(value: string, previous: string[] = []): string[] 
   return [...previous, value];
 }
 
-/** Commander argument parser for required positive integer options. */
 export function parseStrictPositiveIntOption(value: string, flag: string): number {
   const parsed = parseStrictPositiveInteger(value);
   if (parsed === undefined) {

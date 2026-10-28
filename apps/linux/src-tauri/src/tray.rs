@@ -1,6 +1,6 @@
 use crate::gateway::{GatewayAction, GatewaySnapshot};
 use crate::gateway_operation_queue::GatewayOperationQueue;
-use crate::keep_awake::{KeepAwake, Status as KeepAwakeStatus};
+use crate::keep_awake::{Error as KeepAwakeError, KeepAwake, Status as KeepAwakeStatus};
 use crate::quickchat;
 use crate::DesktopState;
 use std::sync::{
@@ -27,7 +27,7 @@ const QUICKCHAT_SHORTCUT_ID: &str = "quickchat-shortcut";
 const START_ID: &str = "start-gateway";
 const STOP_ID: &str = "stop-gateway";
 const RESTART_ID: &str = "restart-gateway";
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 const ADOPT_RUNTIME_ID: &str = "adopt-bundled-runtime";
 const QUIT_ID: &str = "quit";
 
@@ -44,7 +44,7 @@ pub struct TrayHandles {
     start: MenuItem<tauri::Wry>,
     stop: MenuItem<tauri::Wry>,
     restart: MenuItem<tauri::Wry>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     runtime_action: MenuItem<tauri::Wry>,
 }
 
@@ -69,13 +69,10 @@ fn linux_global_shortcuts_supported(
 pub fn global_shortcuts_supported() -> bool {
     #[cfg(target_os = "linux")]
     {
-        let session_type = std::env::var("XDG_SESSION_TYPE").ok();
-        let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
-        let display = std::env::var("DISPLAY").ok();
         linux_global_shortcuts_supported(
-            session_type.as_deref(),
-            wayland_display.as_deref(),
-            display.as_deref(),
+            std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
+            std::env::var("WAYLAND_DISPLAY").ok().as_deref(),
+            std::env::var("DISPLAY").ok().as_deref(),
         )
     }
     #[cfg(not(target_os = "linux"))]
@@ -118,11 +115,13 @@ impl TrayHandles {
         }
         drop(status_line);
         self.refresh_status(self._tray.app_handle());
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         {
-            let current = crate::bundled_runtime::expected_bun_path().ok();
-            let enabled =
-                snapshot.installed && current.is_some() && snapshot.runtime_path != current;
+            let current = crate::bundled_runtime::expected_executable_path().ok();
+            let enabled = !crate::test_profile::enabled()
+                && snapshot.installed
+                && current.is_some()
+                && snapshot.runtime_path != current;
             let item = self.runtime_action.clone();
             let _ = self._tray.app_handle().run_on_main_thread(move || {
                 let _ = item.set_enabled(enabled);
@@ -189,62 +188,45 @@ pub fn build(
     state: DesktopState,
     global_shortcuts_supported: bool,
 ) -> tauri::Result<TrayHandles> {
-    let status = MenuItem::with_id(
-        app,
-        "gateway-status",
-        "Gateway: Checking…",
-        false,
-        None::<&str>,
-    )?;
-    let update_action = MenuItem::with_id(
-        app,
-        UPDATE_ACTION_ID,
-        NO_UPDATE_ACTION_LABEL,
-        false,
-        None::<&str>,
-    )?;
-    let autostart_enabled = match app.autolaunch().is_enabled() {
-        Ok(enabled) => enabled,
-        Err(error) => {
-            eprintln!("Could not read autostart state: {error}");
-            false
-        }
+    let disabled_item = |id, label| MenuItem::with_id(app, id, label, false, None::<&str>);
+    let check_item = |id, label, enabled, checked| {
+        CheckMenuItem::with_id(app, id, label, enabled, checked, None::<&str>)
     };
-    let start_at_login = CheckMenuItem::with_id(
-        app,
+    let status = disabled_item("gateway-status", "Gateway: Checking…")?;
+    let update_action = disabled_item(UPDATE_ACTION_ID, NO_UPDATE_ACTION_LABEL)?;
+    let autostart_enabled = !crate::test_profile::enabled()
+        && match app.autolaunch().is_enabled() {
+            Ok(enabled) => enabled,
+            Err(error) => {
+                eprintln!("Could not read autostart state: {error}");
+                false
+            }
+        };
+    let start_at_login = check_item(
         START_AT_LOGIN_ID,
         "Start at Login",
-        true,
+        !crate::test_profile::enabled(),
         autostart_enabled,
-        None::<&str>,
     )?;
-    let keep_awake = CheckMenuItem::with_id(
-        app,
-        KEEP_AWAKE_ID,
-        "Keep computer awake",
-        false,
-        false,
-        None::<&str>,
-    )?;
+    let keep_awake = check_item(KEEP_AWAKE_ID, "Keep computer awake", false, false)?;
     let quickchat_shortcut_enabled =
         global_shortcuts_supported.then(|| quickchat::quickchat_shortcut_enabled(app));
     let quickchat_shortcut = quickchat_shortcut_enabled
-        .map(|enabled| {
-            CheckMenuItem::with_id(
-                app,
-                QUICKCHAT_SHORTCUT_ID,
-                "Quick Chat shortcut",
-                true,
-                enabled,
-                None::<&str>,
-            )
-        })
+        .map(|enabled| check_item(QUICKCHAT_SHORTCUT_ID, "Quick Chat shortcut", true, enabled))
         .transpose()?;
-    let start = MenuItem::with_id(app, START_ID, "Start Gateway", false, None::<&str>)?;
-    let stop = MenuItem::with_id(app, STOP_ID, "Stop Gateway", false, None::<&str>)?;
-    let restart = MenuItem::with_id(app, RESTART_ID, "Restart Gateway", false, None::<&str>)?;
+    let start = disabled_item(START_ID, "Start Gateway")?;
+    let stop = disabled_item(STOP_ID, "Stop Gateway")?;
+    let restart = disabled_item(RESTART_ID, "Restart Gateway")?;
+    let runtime_label = format!(
+        "Bundled runtime: {}",
+        crate::bundled_runtime::flavor_label()
+    );
+    let profile_label =
+        crate::test_profile::profile().map(|profile| format!("Isolated profile: {profile}"));
+    let runtime_info = disabled_item("bundled-runtime-info", &runtime_label)?;
     let menu_builder = MenuBuilder::new(app)
         .item(&status)
+        .item(&runtime_info)
         .item(&crate::gateway_windows::menu(app.handle())?)
         .separator()
         .text(QUICKCHAT_ID, "Quick Chat")
@@ -255,21 +237,20 @@ pub fn build(
         .item(&update_action)
         .item(&start_at_login)
         .item(&keep_awake);
+    let menu_builder = if let Some(label) = profile_label.as_deref() {
+        menu_builder.item(&disabled_item("test-profile-info", label)?)
+    } else {
+        menu_builder
+    };
     let menu_builder = if let Some(quickchat_shortcut) = quickchat_shortcut.as_ref() {
         menu_builder.item(quickchat_shortcut)
     } else {
         menu_builder
     };
     let menu_builder = menu_builder.separator().items(&[&start, &stop, &restart]);
-    #[cfg(target_os = "linux")]
-    let runtime_action = MenuItem::with_id(
-        app,
-        ADOPT_RUNTIME_ID,
-        "Use bundled runtime…",
-        false,
-        None::<&str>,
-    )?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+    let runtime_action = disabled_item(ADOPT_RUNTIME_ID, "Use bundled runtime…")?;
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     let menu_builder = menu_builder.item(&runtime_action);
     let menu = menu_builder
         .separator()
@@ -357,7 +338,7 @@ pub fn build(
         start,
         stop,
         restart,
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         runtime_action,
     })
 }
@@ -453,7 +434,7 @@ fn handle_menu(
                 state.with_tray(|tray| {
                     let _ = tray.keep_awake.set_enabled(true);
                 });
-                show_keep_awake_error(app, error);
+                show_keep_awake_error(app, KeepAwakeError::Power(error));
             }
         }
         QUICKCHAT_SHORTCUT_ID => {
@@ -461,25 +442,21 @@ fn handle_menu(
                 toggle_quickchat_shortcut(app, quickchat_shortcut);
             }
         }
-        START_ID => {
-            app.state::<GatewayOperationQueue>()
-                .submit_action(GatewayAction::Start);
+        START_ID | STOP_ID | RESTART_ID => {
+            let action = match id {
+                START_ID => GatewayAction::Start,
+                STOP_ID => GatewayAction::Stop,
+                _ => GatewayAction::Restart,
+            };
+            app.state::<GatewayOperationQueue>().submit_action(action);
         }
-        STOP_ID => {
-            app.state::<GatewayOperationQueue>()
-                .submit_action(GatewayAction::Stop);
-        }
-        RESTART_ID => {
-            app.state::<GatewayOperationQueue>()
-                .submit_action(GatewayAction::Restart);
-        }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         ADOPT_RUNTIME_ID => confirm_runtime_action(app),
         _ => {}
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 pub(crate) fn show_runtime_error(app: &AppHandle, error: &str) {
     let current_app = app.clone();
     let error = error.to_owned();
@@ -497,7 +474,7 @@ pub(crate) fn show_runtime_error(app: &AppHandle, error: &str) {
     });
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 fn confirm_runtime_action(app: &AppHandle) {
     use tauri_plugin_dialog::MessageDialogButtons;
     let current_app = app.clone();
@@ -511,6 +488,8 @@ fn confirm_runtime_action(app: &AppHandle) {
                 return Err("Select the local Gateway before changing its runtime.".to_string());
             }
             let cli = state.resolve_cli().map_err(|error| error.to_string())?;
+            let runtime = crate::bundled_runtime::seed(&current_app)?;
+            let cli = crate::runtime_action::select_cli(&cli, &runtime)?;
             let observation = crate::runtime_action::inspect(&cli)?;
             Ok(crate::RuntimeAction { cli, observation })
         })();
@@ -522,8 +501,9 @@ fn confirm_runtime_action(app: &AppHandle) {
             }
         };
         let message = format!(
-            "Current runtime: {}\n\nUse this app's bundled Bun runtime for the Gateway? This reinstalls and restarts the service. Future app updates will ask you to choose this action again.",
+            "Current runtime: {}\n\nUse this app's bundled {} runtime for the Gateway? This reinstalls and restarts the service. Future app updates will ask you to choose this action again.",
             action.observation.current_runtime(),
+            crate::bundled_runtime::flavor_label(),
         );
         let dialog_app = current_app.clone();
         let _ = current_app.run_on_main_thread(move || {
@@ -577,11 +557,11 @@ pub fn publish_keep_awake(app: &AppHandle, status: KeepAwakeStatus) {
     }
 }
 
-fn show_keep_awake_error(app: &AppHandle, error: String) {
-    eprintln!("Keep computer awake: {error}");
+fn show_keep_awake_error(app: &AppHandle, error: KeepAwakeError) {
+    eprintln!("{}: {}", error.title(), error.message());
     app.dialog()
-        .message(error)
-        .title("Keep computer awake")
+        .message(error.message())
+        .title(error.title())
         .kind(MessageDialogKind::Error)
         .show(|_| {});
 }
@@ -621,6 +601,9 @@ fn set_quickchat_shortcut_checked(item: &CheckMenuItem<tauri::Wry>, checked: boo
 }
 
 fn toggle_autostart(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) {
+    if crate::test_profile::enabled() {
+        return;
+    }
     let manager = app.autolaunch();
     let enabled = match manager.is_enabled() {
         Ok(enabled) => enabled,
@@ -635,15 +618,14 @@ fn toggle_autostart(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) {
     } else {
         manager.disable()
     };
-    match result {
-        Ok(()) => {
-            let _ = item.set_checked(next);
-        }
+    let checked = match result {
+        Ok(()) => next,
         Err(error) => {
             eprintln!("Could not update autostart state: {error}");
-            let _ = item.set_checked(enabled);
+            enabled
         }
-    }
+    };
+    let _ = item.set_checked(checked);
 }
 
 #[cfg(test)]

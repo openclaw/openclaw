@@ -40,20 +40,6 @@ export function openXGuestUsage(runtime: {
       limit: number;
       assertCurrent: () => void;
     }): Promise<boolean> {
-      if (
-        !Number.isInteger(params.limit) ||
-        params.limit < 0 ||
-        params.limit > MAX_X_GUEST_MENTIONS_PER_AUTHOR_PER_DAY
-      ) {
-        throw new XGuestUsageUnavailableError(
-          "X guest mode requires a daily mention limit from 0 to 1000.",
-        );
-      }
-      if (!store.withCurrent) {
-        throw new XGuestUsageUnavailableError(
-          "X guest mode requires host-enforced atomic usage accounting.",
-        );
-      }
       const now = Date.now();
       const prefix = accountDayPrefix(params.accountId, now);
       const assertCurrent = () => {
@@ -62,7 +48,7 @@ export function openXGuestUsage(runtime: {
           throw new Error("X guest usage day changed during admission; retrying mention");
         }
       };
-      const writer = store.withCurrent({ assertCurrent });
+      const writer = store.withCurrent!({ assertCurrent });
       const key = `${prefix}${params.authorId}`;
       let observed = await writer.observe(key);
       if (params.limit > 0) {
@@ -128,11 +114,8 @@ export function openXGuestUsage(runtime: {
       }
     },
     async counts(accountId: string): Promise<{ admittedToday: number; rateLimitedToday: number }> {
-      if (!store.entriesInKeyRange) {
-        throw new XGuestUsageUnavailableError("X guest mode requires bounded host usage reads.");
-      }
       const prefix = accountDayPrefix(accountId);
-      const rows = await store.entriesInKeyRange({
+      const rows = await store.entriesInKeyRange!({
         keyStartInclusive: prefix,
         keyEndExclusive: `${prefix}\uffff`,
         limit: MAX_AUTHOR_DAYS,

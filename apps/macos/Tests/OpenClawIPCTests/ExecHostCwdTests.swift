@@ -7,14 +7,9 @@ import Testing
 struct ExecHostCwdTests {
     @Test(.execApprovalsStateIsolated, arguments: ["/tmp", "/private/tmp"])
     func `native full execution uses the physical temporary directory`(cwd: String) async throws {
-        let stateDirectoryURL = ExecApprovalsStore.databaseURL()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        try ExecApprovalsSQLiteStore.withImmediateTransaction(stateDirectoryURL: stateDirectoryURL) { record in
-            var file = record?.document ?? ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-            file.defaults = ExecApprovalsDefaults(security: .full, ask: .off)
-            return ExecApprovalsSQLiteMutation(value: (), documentToWrite: file)
-        }
+        try await ExecApprovalsSocketTestSupport.seedPolicy(
+            ExecApprovalsFile(version: 1, defaults: ExecApprovalsDefaults(security: .full, ask: .off)),
+            in: ExecApprovalsStore.stateDirURL())
         let response = await ExecHostExecutor.handle(ExecHostRequest(
             command: ["/bin/pwd", "-P"],
             cwd: cwd,
@@ -47,7 +42,7 @@ struct ExecHostCwdTests {
     }
 
     @Test func `cwd snapshot refuses files symlink loops and inaccessible paths`() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("openclaw-cwd-\(UUID().uuidString)")
+        let root = temporaryDirectoryForTests().appendingPathComponent("openclaw-cwd-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("file")

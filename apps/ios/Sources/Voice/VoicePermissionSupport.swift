@@ -1,38 +1,21 @@
 import AVFAudio
 import Foundation
-import OpenClawKit
 import Speech
 
 enum VoicePermissionSupport {
-    static func requestMicrophonePermission(timeoutErrorDomain: String) async -> Bool {
-        switch AVAudioApplication.shared.recordPermission {
-        case .granted:
-            return true
-        case .denied:
-            return false
-        case .undetermined:
-            return await self.requestPermissionWithTimeout(errorDomain: timeoutErrorDomain) { completion in
-                AVAudioApplication.requestRecordPermission(completionHandler: completion)
-            }
-        @unknown default:
-            return false
+    static func requestMicrophonePermission() async -> Bool {
+        let status = AVAudioApplication.shared.recordPermission
+        guard status == .undetermined else { return status == .granted }
+        // The OS prompt owns its lifetime; the bridge handles cancellation.
+        return await PermissionRequestBridge.awaitRequest { completion in
+            AVAudioApplication.requestRecordPermission(completionHandler: completion)
         }
     }
 
-    static func requestSpeechPermission(timeoutErrorDomain: String) async -> Bool {
+    static func requestSpeechPermission() async -> Bool {
         let status = SFSpeechRecognizer.authorizationStatus()
-        switch status {
-        case .authorized:
-            return true
-        case .denied, .restricted:
-            return false
-        case .notDetermined:
-            break
-        @unknown default:
-            return false
-        }
-
-        return await self.requestPermissionWithTimeout(errorDomain: timeoutErrorDomain) { completion in
+        guard status == .notDetermined else { return status == .authorized }
+        return await PermissionRequestBridge.awaitRequest { completion in
             SFSpeechRecognizer.requestAuthorization { authStatus in
                 completion(authStatus == .authorized)
             }
@@ -43,39 +26,14 @@ enum VoicePermissionSupport {
         kind: String,
         status: SFSpeechRecognizerAuthorizationStatus) -> String
     {
-        switch status {
-        case .denied, .authorized:
-            return String(
-                format: String(localized: "%@ permission denied"),
-                kind)
+        let format = switch status {
         case .restricted:
-            return String(
-                format: String(localized: "%@ permission restricted"),
-                kind)
+            String(localized: "%@ permission restricted")
         case .notDetermined:
-            return String(
-                format: String(localized: "%@ permission not granted"),
-                kind)
-        @unknown default:
-            return String(
-                format: String(localized: "%@ permission denied"),
-                kind)
+            String(localized: "%@ permission not granted")
+        default:
+            String(localized: "%@ permission denied")
         }
-    }
-
-    private static func requestPermissionWithTimeout(
-        errorDomain: String,
-        operation: @escaping @Sendable (@escaping @Sendable (Bool) -> Void) -> Void) async -> Bool
-    {
-        do {
-            return try await AsyncTimeout.withTimeout(
-                seconds: 8,
-                onTimeout: { NSError(domain: errorDomain, code: 6, userInfo: [
-                    NSLocalizedDescriptionKey: "permission request timed out",
-                ]) },
-                operation: { await PermissionRequestBridge.awaitRequest(operation) })
-        } catch {
-            return false
-        }
+        return String(format: format, kind)
     }
 }

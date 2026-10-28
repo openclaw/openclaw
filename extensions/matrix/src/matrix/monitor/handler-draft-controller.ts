@@ -3,7 +3,7 @@ import {
   createLivePreviewLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type {
-  BlockReplyContext,
+  ReplyDispatchRuntimeInfo,
   GetReplyOptions,
   ReplyPayload,
 } from "openclaw/plugin-sdk/reply-runtime";
@@ -11,6 +11,11 @@ import type { CoreConfig, MatrixConfig, MatrixStreamingMode, ReplyToMode } from 
 import type { MatrixClient } from "../sdk.js";
 import { formatMatrixToolProgressMarkdownCode } from "./handler-helpers.js";
 import { loadMatrixDraftStream, type MatrixDraftStreamHandle } from "./handler-runtime.js";
+
+/** Host-owned source coverage projected onto block deliveries, not a public SDK field. */
+export type MatrixReplyDispatchInfo = ReplyDispatchRuntimeInfo & {
+  blockSourceRange?: readonly [start: number, end: number];
+};
 
 export async function createMatrixDraftController(params: {
   streaming: MatrixStreamingMode;
@@ -59,18 +64,9 @@ export async function createMatrixDraftController(params: {
     : undefined;
   const shouldSuppressDefaultToolProgressMessages =
     Boolean(draftStream) && (previewToolProgressEnabled || progressDraftStreaming);
-  type PendingDraftBoundary = {
-    messageGeneration: number;
-    endOffset: number;
-  };
-  // Track the current draft block start plus any queued block-end offsets
-  // inside the model's cumulative partial text so multiple block
-  // boundaries can drain in order even when Matrix delivery lags behind.
   let currentDraftMessageGeneration = 0;
   let currentDraftBlockOffset = 0;
   let latestDraftFullText = "";
-  const pendingDraftBoundaries: PendingDraftBoundary[] = [];
-  const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
   let currentDraftReplyToId = draftReplyToId;
   const progressConfigEntry = accountConfig ?? cfg.channels?.matrix;
   const progressSeed = `${accountId}:${roomId}`;
@@ -136,48 +132,26 @@ export async function createMatrixDraftController(params: {
   };
 
   const updateDraftFromLatestFullText = () => {
-    const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
-      (boundary) => boundary.messageGeneration === currentDraftMessageGeneration,
-    )?.endOffset;
-    const blockText = latestDraftFullText.slice(currentDraftBlockOffset, nextDraftBoundaryOffset);
+    const blockText = latestDraftFullText.slice(currentDraftBlockOffset);
     if (blockText) {
       draftStream?.update(blockText);
     }
   };
 
-  const queueDraftBlockBoundary = (payload: ReplyPayload, context?: BlockReplyContext) => {
-    const payloadTextLength = payload.text?.length ?? 0;
-    const messageGeneration = context?.assistantMessageIndex ?? currentDraftMessageGeneration;
-    const lastQueuedDraftBoundaryOffset =
-      latestQueuedDraftBoundaryOffsets.get(messageGeneration) ?? 0;
-    // Logical block boundaries must follow emitted block text, not whichever
-    // later partial preview has already arrived by the time the async
-    // boundary callback drains.
-    const nextDraftBoundaryOffset = lastQueuedDraftBoundaryOffset + payloadTextLength;
-    latestQueuedDraftBoundaryOffsets.set(messageGeneration, nextDraftBoundaryOffset);
-    pendingDraftBoundaries.push({
-      messageGeneration,
-      endOffset: nextDraftBoundaryOffset,
-    });
-  };
+  const captureDraftBlockBoundary = (
+    text: string | undefined,
+    info: Pick<MatrixReplyDispatchInfo, "assistantMessageIndex" | "blockSourceRange">,
+  ) => ({
+    messageGeneration: info.assistantMessageIndex ?? currentDraftMessageGeneration,
+    previewMessageGeneration: currentDraftMessageGeneration,
+    previewEndOffset: latestDraftFullText.length,
+    // Source positions include stripped separators and exclude synthetic Markdown framing.
+    endOffset: info.blockSourceRange?.[1] ?? currentDraftBlockOffset + (text?.length ?? 0),
+  });
 
-  const advanceDraftBlockBoundary = (options?: { fallbackToLatestEnd?: boolean }) => {
-    const completedBoundary = pendingDraftBoundaries.shift();
-    if (completedBoundary) {
-      if (
-        !pendingDraftBoundaries.some(
-          (entry) => entry.messageGeneration === completedBoundary.messageGeneration,
-        )
-      ) {
-        latestQueuedDraftBoundaryOffsets.delete(completedBoundary.messageGeneration);
-      }
-      if (completedBoundary.messageGeneration === currentDraftMessageGeneration) {
-        currentDraftBlockOffset = completedBoundary.endOffset;
-      }
-      return;
-    }
-    if (options?.fallbackToLatestEnd) {
-      currentDraftBlockOffset = latestDraftFullText.length;
+  const advanceDraftBlockBoundary = (boundary: ReturnType<typeof captureDraftBlockBoundary>) => {
+    if (boundary.messageGeneration === currentDraftMessageGeneration) {
+      currentDraftBlockOffset = Math.max(currentDraftBlockOffset, boundary.endOffset);
     }
   };
 
@@ -194,8 +168,6 @@ export async function createMatrixDraftController(params: {
     currentDraftMessageGeneration = 0;
     currentDraftBlockOffset = 0;
     latestDraftFullText = "";
-    pendingDraftBoundaries.length = 0;
-    latestQueuedDraftBoundaryOffsets.clear();
     currentDraftReplyToId = draftReplyToId;
     progressDraft.beginNewTurn({ force: true });
   };
@@ -205,7 +177,7 @@ export async function createMatrixDraftController(params: {
     previewLifecycle,
     cancelProgressDraft: () => progressDraft.cancel(),
     buildPreviewToolProgressReplyOptions,
-    queueDraftBlockBoundary,
+    captureDraftBlockBoundary,
     advanceDraftBlockBoundary,
     resetDraftBlockOffsets,
     beginAssistantMessage: () => progressDraft.beginAssistantMessage(),

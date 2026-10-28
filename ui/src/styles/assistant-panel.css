@@ -76,7 +76,6 @@ openclaw-assistant-panel {
 
 @media (max-width: 640px) {
   .assistant-panel--right {
-    top: var(--shell-topbar-height, 0);
     right: 0;
     bottom: 0;
     left: 0;

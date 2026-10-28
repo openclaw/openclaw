@@ -9,10 +9,10 @@ import {
   buildApiKeyCredential,
   ensureApiKeyFromEnvOrPrompt,
   normalizeOptionalSecretInput,
-  upsertAuthProfileWithLock,
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
+import { upsertAuthProfileWithLockOrThrow } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
   removeAuthProfileConfig,
   removeProviderAuthProfilesWithLock,
@@ -27,11 +27,8 @@ import {
   LLAMA_CPP_DEFAULT_PROFILE_ID as PROFILE_ID,
 } from "../auth-config.js";
 import { LLAMA_CPP_PROVIDER_ID, LLAMA_CPP_PROVIDER_LABEL } from "../defaults.js";
-import {
-  hasLlamaServerAuthorizationHeader,
-  resolveLlamaServerProviderHeaders,
-  resolveLlamaServerRuntimeApiKey,
-} from "./auth.js";
+import { hasLlamaServerAuthorizationHeader } from "./auth-policy.js";
+import { resolveLlamaServerProviderHeaders, resolveLlamaServerRuntimeApiKey } from "./auth.js";
 import { LLAMA_SERVER_DEFAULT_API_KEY_ENV_VAR, LLAMA_SERVER_DEFAULT_ORIGIN } from "./defaults.js";
 import { discoverLlamaServer, type LlamaServerDiscoveryResult } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
@@ -244,7 +241,9 @@ async function discoverForSetup(
       baseUrl: provider?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN,
       apiKey,
       headers,
+      allowPrivateNetwork: provider?.request?.allowPrivateNetwork,
       signal: ctx.signal,
+      useRuntimeDefaults: false,
     });
     return discovery.kind === "success" ? discovery : null;
   } catch {
@@ -292,17 +291,18 @@ export async function prepareLlamaServerSetup(
   });
 }
 
-/** Interactive setup for an existing llama-server endpoint. */
 export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  const defaultOrigin = resolveLlamaServerEndpoint(existing?.baseUrl).origin;
   const baseUrl = await ctx.prompter.text({
     message: `${LLAMA_CPP_PROVIDER_LABEL} URL`,
-    initialValue: defaultOrigin,
+    // Prefill only a saved URL: a prefilled default makes typed input append to it.
+    initialValue: existing?.baseUrl
+      ? resolveLlamaServerEndpoint(existing.baseUrl).origin
+      : undefined,
     placeholder: LLAMA_SERVER_DEFAULT_ORIGIN,
     validate: (value) => {
-      if (!value?.trim()) {
-        return "Required";
+      if (!value.trim()) {
+        return undefined;
       }
       try {
         resolveLlamaServerEndpoint(value);
@@ -312,7 +312,7 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
       }
     },
   });
-  const endpoint = resolveLlamaServerEndpoint(baseUrl);
+  const endpoint = resolveLlamaServerEndpoint(baseUrl.trim() || existing?.baseUrl);
   const endpointChanged =
     Boolean(existing?.localService) || hasEndpointChanged(existing, endpoint.inferenceBaseUrl);
   const resolvedHeaders = endpointChanged
@@ -374,7 +374,9 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     baseUrl: endpoint.inferenceBaseUrl,
     apiKey,
     headers,
+    allowPrivateNetwork: existing?.request?.allowPrivateNetwork,
     signal: ctx.signal,
+    useRuntimeDefaults: false,
   });
   if (discovery.kind !== "success") {
     throw new Error(describeDiscoveryFailure(discovery));
@@ -447,7 +449,13 @@ async function validateNonInteractiveDiscovery(
   } else {
     persistence = { kind: "remove" };
   }
-  const discovery = await discoverLlamaServer({ baseUrl, apiKey, headers });
+  const discovery = await discoverLlamaServer({
+    baseUrl,
+    apiKey,
+    headers,
+    allowPrivateNetwork: configuredProvider?.request?.allowPrivateNetwork,
+    useRuntimeDefaults: false,
+  });
   if (discovery.kind !== "success") {
     throw new Error(describeDiscoveryFailure(discovery));
   }
@@ -505,7 +513,7 @@ export async function configureLlamaServerNonInteractive(
     if (!credential) {
       return null;
     }
-    await upsertAuthProfileWithLock({
+    await upsertAuthProfileWithLockOrThrow({
       profileId: PROFILE_ID,
       credential,
       agentDir: ctx.agentDir,

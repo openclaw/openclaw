@@ -3,8 +3,9 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
@@ -31,7 +32,7 @@ import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 type SummaryCandidate = {
   sessionKey: string;
   entryValid: number | null;
-  agent?: SessionStoreSummary;
+  agent: SessionStoreSummary;
 };
 
 type SessionStoreSummary = { count: number; recent: SessionEntrySummary[] };
@@ -56,8 +57,8 @@ export function readSessionStoreSummaryReadOnly(
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, options.continuation, () =>
-        withSqlitePostCommitPublications(database.db, () =>
-          runSqliteDeferredTransactionSync(database.db, () => {
+        withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
+          runSqliteReadSnapshotSync(database.db, () => {
             assertCanonicalSqliteSessionKeysCurrent(database);
             const db = getSessionKysely(database.db);
             // The read transaction keeps count, ordering, and selected payloads on one
@@ -89,15 +90,13 @@ export function readSessionStoreSummaryReadOnly(
               for (const { sessionKey, entryValid, agent } of rows) {
                 const needsRecent =
                   summary.recent.length < options.recentLimit ||
-                  (agent !== undefined && agent.recent.length < options.recentLimit);
+                  agent.recent.length < options.recentLimit;
                 if (entryValid === 1 && !needsRecent) {
                   summary.count += 1;
-                  if (agent) {
-                    agent.count += 1;
-                  }
+                  agent.count += 1;
                   continue;
                 }
-                // Raw updates clear entry_valid. Preserve listing's warm-row semantics:
+                // Uncertified rows retain entry_valid = 0. Preserve listing's warm-row semantics:
                 // skip unreadable JSON/retained placeholders, but include readable pending rows.
                 const stored = storedRows.get(sessionKey);
                 if (!stored) {
@@ -114,13 +113,10 @@ export function readSessionStoreSummaryReadOnly(
                 if (summary.recent.length < options.recentLimit) {
                   summary.recent.push(selected);
                 }
-                if (agent) {
-                  agent.count += 1;
-                  // The global newest rows may all belong to another agent. Select each
-                  // requested owner's window in this scan, sharing each parsed payload.
-                  if (agent.recent.length < options.recentLimit) {
-                    agent.recent.push(selected);
-                  }
+                agent.count += 1;
+                // Retain each namespace's window so publication can refill after deletion.
+                if (agent.recent.length < options.recentLimit) {
+                  agent.recent.push(selected);
                 }
               }
               if (selectedEntries.length === 0) {
@@ -155,16 +151,18 @@ export function readSessionStoreSummaryReadOnly(
               if (!owner || isInternalSessionEffectsKey(row.session_key)) {
                 continue;
               }
-              const agent = summary.byAgent.get(owner);
+              let agent = summary.byAgent.get(owner);
+              if (!agent) {
+                agent = { count: 0, recent: [] };
+                summary.byAgent.set(owner, agent);
+              }
               if (
                 row.entry_valid === 1 &&
                 summary.recent.length >= options.recentLimit &&
-                (!agent || agent.recent.length >= options.recentLimit)
+                agent.recent.length >= options.recentLimit
               ) {
                 summary.count += 1;
-                if (agent) {
-                  agent.count += 1;
-                }
+                agent.count += 1;
                 continue;
               }
               candidates.push({ sessionKey: row.session_key, entryValid: row.entry_valid, agent });

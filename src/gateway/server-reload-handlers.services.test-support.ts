@@ -8,12 +8,7 @@ import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createServiceRegistration } from "../plugins/services.test-support.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import type {
-  GatewayReloadHandlerParams,
-  ManagedGatewayConfigReloaderHandle,
-  ManagedGatewayConfigReloaderParams,
-} from "./server-reload-contracts.js";
-import { nextGatewayReloadGeneration } from "./server-reload-generation.js";
+import { beginGatewayReloadLifecycle } from "./server-reload-generation.js";
 import {
   captureConfigWriteListener,
   createConfigWriteListenerRef,
@@ -21,25 +16,14 @@ import {
   createHotTailPlan,
   createValidConfigSnapshot,
   makePluginReloadResult,
+  type ReloadTestFactories,
 } from "./server-reload-handlers.config.test-support.js";
-import type { createGatewayReloadHandlers as createGatewayReloadHandlersImpl } from "./server-reload-hot.js";
 import * as modelRuntime from "./server-reload-model-runtime-scope.js";
 
 export function registerGatewayTargetedServiceReloadTests({
   createGatewayReloadHandlers,
   startManagedGatewayConfigReloader,
-}: {
-  createGatewayReloadHandlers: (
-    params: Partial<GatewayReloadHandlerParams>,
-  ) => ReturnType<typeof createGatewayReloadHandlersImpl>;
-  startManagedGatewayConfigReloader: (
-    params: Pick<
-      ManagedGatewayConfigReloaderParams,
-      "initialConfig" | "readSnapshot" | "subscribeToWrites"
-    > &
-      Partial<ManagedGatewayConfigReloaderParams>,
-  ) => ManagedGatewayConfigReloaderHandle;
-}): void {
+}: ReloadTestFactories): void {
   describe("gateway targeted service reload", () => {
     it("forwards the service owner through managed config publication", async () => {
       vi.useFakeTimers();
@@ -115,7 +99,7 @@ export function registerGatewayTargetedServiceReloadTests({
             modelsSettled = true;
             events.push("models-settled");
             if (outcome === "retired gateway") {
-              nextGatewayReloadGeneration();
+              beginGatewayReloadLifecycle();
             }
             if (outcome === "model failure" || outcome === "model recovery failure") {
               throw new Error("Model preparation failed");

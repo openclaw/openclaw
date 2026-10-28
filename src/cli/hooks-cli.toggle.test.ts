@@ -1,4 +1,3 @@
-// Hook command tests cover metadata config keys and missing-hook exit status.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
@@ -6,11 +5,11 @@ import type { TransformConfigFileParams } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
+import { makeHookStatusEntry } from "./cli-fixtures.test-support.js";
 import { ExpectedCliError } from "./failure-output.js";
-import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
+  foreignOwner: false,
   callGateway: vi.fn(),
   buildWorkspaceHookStatus: vi.fn(),
   getRuntimeConfig: vi.fn(),
@@ -24,7 +23,31 @@ const mocks = vi.hoisted(() => ({
   tryResolveLegacyCompatibilityAgentId: vi.fn(),
 }));
 
-const capture = createCliRuntimeCapture();
+vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
+  readActiveGatewayLockIdentity: async () =>
+    mocks.foreignOwner ? { pid: 12345, port: 18789, ownerId: "synthetic-owner" } : null,
+  acquireGatewayLock: async () => ({ assertCurrent() {}, release: async () => {} }),
+}));
+// mock-isolation: Keep physical database custody outside the hook command fixture.
+vi.mock("../infra/gateway-state-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-state-owner.js")>()),
+  captureGatewayStateOwner: () => undefined,
+  tryBorrowGatewayStateOwner: () => undefined,
+}));
+// mock-isolation: The real ownership guard runs against synthetic config effects.
+vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-db-async-lifecycle.js")>()),
+  createOpenClawDatabaseMaintenanceScope: () => ({
+    run: async (run: () => Promise<unknown>) => run(),
+    close: async () => {},
+  }),
+}));
+
+const capture = await vi.hoisted(async () => {
+  const { createCliRuntimeCapture } = await import("./test-runtime-capture.js");
+  return createCliRuntimeCapture();
+});
 const readConfigMachineStateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../state/config-machine-state.js", () => ({
@@ -39,19 +62,26 @@ vi.mock("../agents/agent-scope.js", () => ({
   tryResolveLegacyCompatibilityAgentId: mocks.tryResolveLegacyCompatibilityAgentId,
 }));
 
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
-  transformConfigFile: async ({ transform }: TransformConfigFileParams<HookStatusEntry>) => {
-    const snapshot = await mocks.readConfigFileSnapshot();
-    const transformed = await transform(
-      snapshot.sourceConfig,
-      { snapshot, previousHash: snapshot.hash, attempt: 0 },
-      {},
-    );
-    await mocks.replaceConfigFile({ nextConfig: transformed.nextConfig, baseHash: snapshot.hash });
-    return transformed;
-  },
-}));
+// mock-isolation: Hook toggle fixtures own the config snapshot and write receipt without touching operator state.
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "getRuntimeConfig"),
+    transformConfigFile: async ({ transform }: TransformConfigFileParams<HookStatusEntry>) => {
+      const snapshot = await mocks.readConfigFileSnapshot();
+      const transformed = await transform(
+        snapshot.sourceConfig,
+        { snapshot, previousHash: snapshot.hash, attempt: 0 },
+        {},
+      );
+      await mocks.replaceConfigFile({
+        nextConfig: transformed.nextConfig,
+        baseHash: snapshot.hash,
+      });
+      return transformed;
+    },
+  };
+});
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
@@ -122,23 +152,13 @@ const sourceConfig = {
   },
 };
 
-const hook: HookStatusEntry = {
+const hook = makeHookStatusEntry({
   name: "display-name",
   description: "Hook with a metadata config-key override",
   source: "openclaw-workspace",
-  filePath: "/tmp/openclaw-hook-workspace/HOOK.md",
   baseDir: "/tmp/openclaw-hook-workspace",
-  handlerPath: "/tmp/openclaw-hook-workspace/handler.js",
   hookKey: "metadata-key",
-  events: ["command:new"],
-  unknownEvents: [],
-  always: false,
-  enabledByConfig: true,
-  requirementsSatisfied: true,
-  loadable: true,
-  managedByPlugin: false,
-  ...createEmptyInstallChecks(),
-};
+});
 
 const report: HookStatusReport = {
   workspaceDir: "/tmp/openclaw-hook-workspace",
@@ -148,10 +168,23 @@ const report: HookStatusReport = {
 
 const { registerHooksCli } = await import("./hooks-cli.js");
 
-function createHooksProgram(): Command {
+function runHooks(...args: string[]) {
   const program = new Command().enablePositionalOptions();
   registerHooksCli(program);
-  return program;
+  return program.parseAsync(["hooks", ...args], { from: "user" });
+}
+
+async function expectToggleFailure(command: string, identifier: string, message: string) {
+  await expect(runHooks(command, identifier)).rejects.toThrow("__exit__:1");
+  expect(capture.runtimeErrors.at(-1)).toBe(message);
+  expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+}
+
+function expectOneShotOutput(json: boolean, code: number) {
+  expect(capture.runtimeLogs).toHaveLength(1);
+  expect(capture.defaultRuntime.writeStdout).toHaveBeenCalledTimes(json ? 1 : 0);
+  expect(mocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(capture.defaultRuntime, code);
+  expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
 }
 
 function createGatewayCloseError(code = 1006) {
@@ -184,12 +217,14 @@ function configureExplicitFleet() {
   mocks.resolveAgentWorkspaceDir.mockImplementation(
     (_config: unknown, agentId: string) => `/tmp/openclaw-${agentId}-workspace`,
   );
+  mocks.readConfigFileSnapshot.mockResolvedValue({ sourceConfig: config, hash: "config-hash" });
   return config;
 }
 
 describe("hooks CLI metadata config keys", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.foreignOwner = false;
     capture.resetRuntimeCapture();
     mocks.callGateway.mockRejectedValue(createGatewayCloseError());
     mocks.buildWorkspaceHookStatus.mockReturnValue(report);
@@ -211,6 +246,12 @@ describe("hooks CLI metadata config keys", () => {
     readConfigMachineStateMock.mockReturnValue(undefined);
   });
 
+  it("refuses hook enable while the Gateway owns state", async () => {
+    mocks.foreignOwner = true;
+    await expect(runHooks("enable", "display-name")).rejects.toThrow("stop the Gateway");
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
   it("rejects the ambiguous hook identifier shared-key without mutation", async () => {
     mocks.buildWorkspaceHookStatus.mockReturnValue({
       ...report,
@@ -219,26 +260,21 @@ describe("hooks CLI metadata config keys", () => {
         { ...hook, name: "second-hook", hookKey: "shared-key" },
       ],
     });
-    await expect(
-      createHooksProgram().parseAsync(["hooks", "disable", "shared-key"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-    expect(capture.runtimeErrors.at(-1)).toBe(
+    await expectToggleFailure(
+      "disable",
+      "shared-key",
       'Error: Hook "shared-key" is ambiguous; matches: first-hook (shared-key), second-hook (shared-key). Use a unique hook name or hook key.',
     );
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("gives the recovery command for an unknown hook", async () => {
     mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks: [] });
 
-    await expect(
-      createHooksProgram().parseAsync(["hooks", "enable", "missing-hook"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(capture.runtimeErrors.at(-1)).toBe(
+    await expectToggleFailure(
+      "enable",
+      "missing-hook",
       'Error: Hook "missing-hook" not found. Run `openclaw hooks list` to see available hooks.',
     );
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("names missing requirements and the available install route", async () => {
@@ -260,98 +296,59 @@ describe("hooks CLI metadata config keys", () => {
     };
     mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks: [ineligibleHook] });
 
-    await expect(
-      createHooksProgram().parseAsync(["hooks", "enable", "display-name"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(capture.runtimeErrors.at(-1)).toBe(
+    await expectToggleFailure(
+      "enable",
+      "display-name",
       'Error: Hook "display-name" is not eligible; missing bins: missing-bin; anyBins: missing-any-a, missing-any-b; env: MISSING_ENV; config: hooks.demo.enabled; os: linux. Install options: Install @openclaw/demo-hook (npm). Run `openclaw hooks info display-name` for details.',
     );
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
-  describe("info selection", () => {
-    const argv = (identifier: string, output: string) => [
-      "hooks",
-      ...(output === "parent JSON" ? ["--json"] : []),
-      "info",
-      identifier,
-      ...(output === "leaf JSON" ? ["--json"] : []),
-    ];
-    const exactNameHook = { ...hook, name: "shared" };
-    const collidingKeyHook = { ...hook, name: "another-hook", hookKey: "shared" };
+  it.each<[string[], HookStatusEntry[], string, boolean]>([
+    [
+      ["info", "shared"],
+      [
+        { ...hook, name: "another-hook", hookKey: "shared" },
+        { ...hook, name: "shared" },
+      ],
+      "shared",
+      false,
+    ],
+    [["info", "metadata-key", "--json"], [hook], hook.name, true],
+    [
+      ["info", "metadata-key"],
+      [{ ...hook, source: "openclaw-plugin", managedByPlugin: true, pluginId: "demo-plugin" }],
+      hook.name,
+      false,
+    ],
+  ])("inspects %j without mutation", async (args, hooks, name, json) => {
+    mocks.callGateway.mockResolvedValue({ ...report, hooks });
+    await runHooks(...args);
+    expectOneShotOutput(json, 0);
+    const output = capture.runtimeLogs[0] ?? "";
+    if (json) {
+      expect(JSON.parse(output)).toMatchObject({ name, hookKey: "metadata-key" });
+    } else {
+      expect(output).toContain(`${name} `);
+      expect(output).not.toContain("another-hook");
+    }
+    expect(capture.runtimeErrors).toEqual([]);
+  });
 
-    it.each([
-      {
-        label: "key before name",
-        output: "human",
-        hooks: [collidingKeyHook, exactNameHook],
-        identifier: "shared",
-        selected: exactNameHook,
-      },
-      {
-        label: "unique key alias",
-        output: "leaf JSON",
-        hooks: [hook],
-        identifier: "metadata-key",
-        selected: hook,
-      },
-      {
-        label: "plugin-managed hook",
-        output: "human",
-        hooks: [
-          { ...hook, source: "openclaw-plugin", managedByPlugin: true, pluginId: "demo-plugin" },
-        ],
-        identifier: "metadata-key",
-        selected: hook,
-      },
-    ])("inspects $label without mutation", async ({ hooks, identifier, selected, output }) => {
-      const json = output !== "human";
-      mocks.callGateway.mockResolvedValue({ ...report, hooks });
-
-      await createHooksProgram().parseAsync(argv(identifier, output), { from: "user" });
-
-      expect(capture.runtimeLogs).toHaveLength(1);
-      if (json) {
-        expect(JSON.parse(capture.runtimeLogs[0] ?? "")).toMatchObject({
-          name: selected.name,
-          hookKey: selected.hookKey,
-        });
-        expect(capture.defaultRuntime.writeStdout).toHaveBeenCalledOnce();
-      } else {
-        expect(capture.runtimeLogs[0]).toContain(`${selected.name} `);
-        expect(capture.runtimeLogs[0]).not.toContain("another-hook");
-        expect(capture.defaultRuntime.writeStdout).not.toHaveBeenCalled();
-      }
-      expect(mocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(capture.defaultRuntime, 0);
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-      expect(capture.runtimeErrors).toEqual([]);
-    });
-
-    it.each(["human", "parent JSON"])(
-      "preserves missing-hook output and requests a failing exit (%s)",
-      async (output) => {
-        const json = output !== "human";
-        await createHooksProgram().parseAsync(argv("missing-hook", output), { from: "user" });
-
-        expect(capture.runtimeLogs).toHaveLength(1);
-        if (json) {
-          expect(JSON.parse(capture.runtimeLogs[0] ?? "")).toEqual({
-            ok: false,
-            error: { type: "cli_error", message: 'Hook "missing-hook" not found.' },
-            hook: "missing-hook",
-          });
-          expect(capture.defaultRuntime.writeStdout).toHaveBeenCalledOnce();
-        } else {
-          expect(capture.runtimeLogs[0]).toBe(
-            'Hook "missing-hook" not found. Run `openclaw hooks list` to see available hooks.',
-          );
-          expect(capture.defaultRuntime.writeStdout).not.toHaveBeenCalled();
-        }
-        expect(mocks.requestExitAfterOneShotOutput).toHaveBeenCalledWith(capture.defaultRuntime, 1);
-        expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-      },
-    );
+  it.each([false, true])("reports a missing hook (parent JSON=%s)", async (json) => {
+    await runHooks(...(json ? ["--json"] : []), "info", "missing-hook");
+    expectOneShotOutput(json, 1);
+    const output = capture.runtimeLogs[0] ?? "";
+    if (json) {
+      expect(JSON.parse(output)).toEqual({
+        ok: false,
+        error: { type: "cli_error", message: 'Hook "missing-hook" not found.' },
+        hook: "missing-hook",
+      });
+    } else {
+      expect(output).toBe(
+        'Hook "missing-hook" not found. Run `openclaw hooks list` to see available hooks.',
+      );
+    }
   });
 
   it("still rejects disabling plugin-managed hooks", async () => {
@@ -361,18 +358,34 @@ describe("hooks CLI metadata config keys", () => {
         { ...hook, source: "openclaw-plugin", managedByPlugin: true, pluginId: "demo-plugin" },
       ],
     });
-    await expect(
-      createHooksProgram().parseAsync(["hooks", "disable", "metadata-key"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
+    await expect(runHooks("disable", "metadata-key")).rejects.toThrow("__exit__:1");
     expect(capture.runtimeErrors.at(-1)).toContain('managed by plugin "demo-plugin"');
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes ambiguous hook metadata only in the human error", async () => {
+    const escape = "\u001b]0;untrusted-title\u0007\u009f";
+    mocks.callGateway.mockResolvedValue({
+      ...report,
+      hooks: [
+        { ...hook, name: `first${escape}`, hookKey: "shared-key" },
+        { ...hook, name: "second", hookKey: "shared-key" },
+      ],
+    });
+    const execution = runHooks("info", "shared-key");
+    await expect(execution).rejects.toMatchObject({
+      humanOutput: expect.stringContaining("first (shared-key), second (shared-key)"),
+      machineOutput: expect.stringContaining(escape),
+    });
+    await expect(execution).rejects.toMatchObject({
+      humanOutput: expect.not.stringContaining(escape),
+    });
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("propagates blank leaf agent failures to the root CLI renderer", async () => {
     const message = "--agent must not be blank";
-    const execution = createHooksProgram().parseAsync(["hooks", "list", "--agent", "", "--json"], {
-      from: "user",
-    });
+    const execution = runHooks("list", "--agent", "", "--json");
     await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
     await expect(execution).rejects.toMatchObject({
       message,
@@ -392,10 +405,7 @@ describe("hooks CLI metadata config keys", () => {
   it("uses hooks.status for the check read command", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "research"]);
     mocks.callGateway.mockResolvedValue({ ...report, workspaceDir: "/gateway/research" });
-    mocks.buildWorkspaceHookStatus.mockClear();
-    await createHooksProgram().parseAsync(["hooks", "check", "--agent", "research", "--json"], {
-      from: "user",
-    });
+    await runHooks("check", "--agent", "research", "--json");
     expect(mocks.getRuntimeConfig).toHaveBeenCalledWith({ skipPluginValidation: true });
     expect(mocks.callGateway).toHaveBeenCalledWith({
       config: sourceConfig,
@@ -414,12 +424,27 @@ describe("hooks CLI metadata config keys", () => {
     mocks.callGateway.mockRejectedValue(
       new GatewayClientRequestError({ code: "INVALID_REQUEST", message }),
     );
-    await expect(
-      createHooksProgram().parseAsync(["hooks", "check"], { from: "user" }),
-    ).rejects.toMatchObject({ name: "ExpectedCliError", message });
+    await expect(runHooks("check")).rejects.toMatchObject({ name: "ExpectedCliError", message });
     expect(mocks.buildWorkspaceHookStatus).not.toHaveBeenCalled();
     expect(capture.defaultRuntime.writeStdout).not.toHaveBeenCalled();
     expect(mocks.requestExitAfterOneShotOutput).not.toHaveBeenCalled();
+  });
+
+  it("keeps multi-line remote failures on separate human lines without controls", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({ ...sourceConfig, gateway: { mode: "remote" } });
+    const message = [
+      "gateway remote mode misconfigured: gateway.remote.url missing",
+      "Fix: set gateway.remote.url\u001b]0;untrusted-title\u0007",
+    ].join("\n");
+    mocks.callGateway.mockRejectedValue(new Error(message));
+
+    await expect(runHooks("list", "--json")).rejects.toMatchObject({
+      humanOutput: [
+        "Error: gateway remote mode misconfigured: gateway.remote.url missing",
+        "Fix: set gateway.remote.url",
+      ].join("\n"),
+      machineOutput: message,
+    });
   });
 
   it.each([
@@ -434,9 +459,7 @@ describe("hooks CLI metadata config keys", () => {
   ])("does not substitute implicit-local hooks after $label", async ({ error }) => {
     mocks.callGateway.mockRejectedValue(error);
 
-    await expect(
-      createHooksProgram().parseAsync(["hooks", "list", "--json"], { from: "user" }),
-    ).rejects.toMatchObject({ message: error.message });
+    await expect(runHooks("list", "--json")).rejects.toMatchObject({ message: error.message });
 
     expect(mocks.buildWorkspaceHookStatus).not.toHaveBeenCalled();
     expect(mocks.requestExitAfterOneShotOutput).not.toHaveBeenCalled();
@@ -444,33 +467,13 @@ describe("hooks CLI metadata config keys", () => {
 
   it("uses --agent for enable hook discovery", async () => {
     const explicitFleet = configureExplicitFleet();
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      sourceConfig: explicitFleet,
-      hash: "config-hash",
-    });
-    await createHooksProgram().parseAsync(
-      ["hooks", "--agent", "research", "enable", "display-name"],
-      {
-        from: "user",
-      },
-    );
+    await runHooks("--agent", "research", "enable", "display-name");
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(explicitFleet, "research");
+    const nextConfig = structuredClone(explicitFleet);
+    Object.assign(nextConfig.hooks.internal.entries["metadata-key"], { enabled: true });
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: {
-        ...explicitFleet,
-        hooks: {
-          internal: {
-            enabled: true,
-            entries: {
-              "metadata-key": {
-                env: { HOOK_ENV: "preserved" },
-                enabled: true,
-              },
-            },
-          },
-        },
-      },
+      nextConfig,
       baseHash: "config-hash",
     });
   });
@@ -478,16 +481,9 @@ describe("hooks CLI metadata config keys", () => {
   it("leaves config unchanged when the selected hook agent is invalid", async () => {
     const explicitFleet = configureExplicitFleet();
     const initialConfig = structuredClone(explicitFleet);
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      sourceConfig: explicitFleet,
-      hash: "config-hash",
-    });
-
-    await expect(
-      createHooksProgram().parseAsync(["hooks", "enable", "display-name", "--agent", "retired"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("__exit__:1");
+    await expect(runHooks("enable", "display-name", "--agent", "retired")).rejects.toThrow(
+      "__exit__:1",
+    );
 
     expect(capture.runtimeErrors.at(-1)).toContain('Unknown agent id "retired"');
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
@@ -495,9 +491,7 @@ describe("hooks CLI metadata config keys", () => {
   });
 
   it("rejects a blank parent hook agent before dispatching a subcommand", async () => {
-    await expect(
-      createHooksProgram().parseAsync(["hooks", "--agent", "", "list"], { from: "user" }),
-    ).rejects.toThrow("--agent must not be blank");
+    await expect(runHooks("--agent", "", "list")).rejects.toThrow("--agent must not be blank");
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
@@ -510,9 +504,7 @@ describe("hooks CLI metadata config keys", () => {
         message: "invalid hooks.status params: at root: unexpected property 'agentId'",
       }),
     );
-    await createHooksProgram().parseAsync(["hooks", "list", "--agent", "research", "--json"], {
-      from: "user",
-    });
+    await runHooks("list", "--agent", "research", "--json");
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(explicitFleet, "research");
     expect(mocks.buildWorkspaceHookStatus).toHaveBeenCalledWith(

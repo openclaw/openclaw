@@ -147,8 +147,7 @@ enum GatewayOnboardingReset {
         if gatewayStableID == nil {
             GatewaySettingsStore.clearGatewayRegistry()
         }
-        GatewaySettingsStore.clearPreferredGatewayStableID(defaults: defaults)
-        GatewaySettingsStore.clearLastDiscoveredGatewayStableID(defaults: defaults)
+        GatewaySettingsStore.clearGatewaySelectors(defaults: defaults)
         defaults.set(false, forKey: "gateway.autoconnect")
         return true
     }

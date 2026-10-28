@@ -22,9 +22,9 @@ scenario:
     - docs/web/control-ui.md
   codeRefs:
     - packages/markdown-core/src/assistant-transcript.ts
-    - src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts
+    - src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts
     - ui/src/components/markdown-assistant-transcript.ts
-    - ui/src/pages/chat/components/chat-message.ts
+    - ui/src/pages/chat/components/chat-message-bubble-view.tsx
   execution:
     kind: flow
     providerMode: mock-openai

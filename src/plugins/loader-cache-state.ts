@@ -1,16 +1,5 @@
 import { LruCache } from "../infra/lru-cache.js";
 
-/** Error thrown when one plugin registry cache key attempts nested loading. */
-class PluginLoadReentryError extends Error {
-  readonly cacheKey: string;
-
-  constructor(cacheKey: string) {
-    super(`plugin load reentry detected for cache key: ${cacheKey}`);
-    this.name = "PluginLoadReentryError";
-    this.cacheKey = cacheKey;
-  }
-}
-
 /** Small registry cache with reentry detection and per-key warning memory. */
 export class PluginLoaderCacheState<T> {
   readonly #registryCache: LruCache<T>;
@@ -55,7 +44,7 @@ export class PluginLoaderCacheState<T> {
 
   beginLoad(cacheKey: string): void {
     if (this.#inFlightLoads.has(cacheKey)) {
-      throw new PluginLoadReentryError(cacheKey);
+      throw new Error(`plugin load reentry detected for cache key: ${cacheKey}`);
     }
     this.#inFlightLoads.add(cacheKey);
   }

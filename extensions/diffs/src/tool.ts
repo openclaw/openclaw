@@ -13,7 +13,7 @@ import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { Static } from "typebox";
 import { resolveDiffImageRenderOptions } from "./config.js";
-import { DiffRenderInputError, renderDiffDocument } from "./render.js";
+import { DiffInputError, renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
 import {
   type DiffArtifactContext,
@@ -25,7 +25,6 @@ import {
   DIFF_OUTPUT_FORMATS,
   DIFF_THEMES,
   type DiffInput,
-  type DiffMode,
 } from "./types.js";
 import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
 
@@ -157,7 +156,8 @@ export function createDiffsTool(params: {
         fileScale,
         fileMaxWidth,
       });
-      const renderTarget = resolveRenderTarget(mode);
+      const artifactOnly = mode === "image" || mode === "file";
+      const renderTarget = mode === "view" ? "viewer" : artifactOnly ? "image" : "both";
 
       const rendered = await renderDiffDocument(
         input,
@@ -172,14 +172,9 @@ export function createDiffsTool(params: {
           languagePackAvailable: params.languagePackAvailable,
         },
         renderTarget,
-      ).catch((error: unknown) => {
-        if (error instanceof DiffRenderInputError) {
-          throw new PluginToolInputError(error.message);
-        }
-        throw error;
-      });
+      );
 
-      const artifact = isArtifactOnlyMode(mode)
+      const artifact = artifactOnly
         ? undefined
         : await params.store.createArtifact({
             html: requireRenderedHtml(rendered.html, "viewer"),
@@ -227,8 +222,9 @@ export function createDiffsTool(params: {
           context: artifactContext,
         });
         let fileBytes: number;
+        let renderedScale: number;
         try {
-          await screenshotter.screenshotHtml({
+          renderedScale = await screenshotter.screenshotHtml({
             html,
             outputPath: artifactFile.filePath,
             theme,
@@ -264,7 +260,7 @@ export function createDiffsTool(params: {
             fileBytes,
             fileFormat: image.format,
             fileQuality: image.qualityPreset,
-            fileScale: image.scale,
+            fileScale: renderedScale,
             fileMaxWidth: image.maxWidth,
           },
         );
@@ -283,20 +279,6 @@ export function createDiffsTool(params: {
       }
     },
   };
-}
-
-function isArtifactOnlyMode(mode: DiffMode): mode is "image" | "file" {
-  return mode === "image" || mode === "file";
-}
-
-function resolveRenderTarget(mode: DiffMode): DiffRenderTarget {
-  if (mode === "view") {
-    return "viewer";
-  }
-  if (isArtifactOnlyMode(mode)) {
-    return "image";
-  }
-  return "both";
 }
 
 function requireRenderedHtml(html: string | undefined, target: DiffRenderTarget): string {
@@ -325,14 +307,14 @@ function buildArtifactContext(
 }
 
 function normalizeDiffInput(params: DiffsToolParams): DiffInput {
-  const patch = params.patch?.trim();
+  const patch = params.patch;
   const before = params.before;
   const after = params.after;
 
-  if (patch) {
+  if (patch?.trim()) {
     assertMaxBytes(patch, "patch", MAX_PATCH_BYTES);
     if (before !== undefined || after !== undefined) {
-      throw new PluginToolInputError("Provide either patch or before/after input, not both.");
+      throw new DiffInputError("Provide either patch or before/after input, not both.");
     }
     const title = params.title?.trim();
     if (title) {
@@ -346,7 +328,7 @@ function normalizeDiffInput(params: DiffsToolParams): DiffInput {
   }
 
   if (before === undefined || after === undefined) {
-    throw new PluginToolInputError("Provide patch or both before and after text.");
+    throw new DiffInputError("Provide patch or both before and after text.");
   }
   assertMaxBytes(before, "before", MAX_BEFORE_AFTER_BYTES);
   assertMaxBytes(after, "after", MAX_BEFORE_AFTER_BYTES);
@@ -377,7 +359,7 @@ function assertMaxBytes(value: string, label: string, maxBytes: number): void {
   if (Buffer.byteLength(value, "utf8") <= maxBytes) {
     return;
   }
-  throw new PluginToolInputError(`${label} exceeds maximum size (${maxBytes} bytes).`);
+  throw new DiffInputError(`${label} exceeds maximum size (${maxBytes} bytes).`);
 }
 
 function normalizeBaseUrl(baseUrl?: string): string | undefined {
@@ -388,20 +370,10 @@ function normalizeBaseUrl(baseUrl?: string): string | undefined {
   try {
     return normalizeViewerBaseUrl(normalized);
   } catch {
-    throw new PluginToolInputError(`Invalid baseUrl: ${normalized}`);
+    throw new DiffInputError(`Invalid baseUrl: ${normalized}`);
   }
 }
 
-function normalizeTtlMs(ttlSeconds?: number): number | undefined {
-  if (!Number.isFinite(ttlSeconds) || ttlSeconds === undefined) {
-    return undefined;
-  }
+function normalizeTtlMs(ttlSeconds: number): number {
   return Math.floor(Math.min(Math.max(ttlSeconds, 1), MAX_DIFF_ARTIFACT_TTL_SECONDS) * 1000);
-}
-
-class PluginToolInputError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ToolInputError";
-  }
 }

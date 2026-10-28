@@ -92,9 +92,6 @@ export async function patchMatrixQaGatewayMatrixAccount(params: {
 }
 
 function requireMatrixQaAccountReload(context: MatrixQaScenarioContext) {
-  if (!context.readGatewayAccountStartAt || !context.waitGatewayAccountReady) {
-    throw new Error("Matrix QA allowlist reload requires gateway generation readiness support");
-  }
   const readStartAt = context.readGatewayAccountStartAt;
   return {
     readStartAt: async (accountId: string) => {
@@ -152,7 +149,7 @@ export async function runMatrixQaAllowlistHotReloadScenario(
       timeoutMs: context.timeoutMs,
     });
     const token = buildMatrixQaToken("MATRIX_QA_GROUP_RELOAD_REMOVED");
-    const blocked = await runNoReplyExpectedScenario({
+    await runNoReplyExpectedScenario({
       ...resolveMatrixQaActorSyncParams(context, "observer"),
       accessToken,
       actorUserId: context.observerUserId,
@@ -165,16 +162,6 @@ export async function runMatrixQaAllowlistHotReloadScenario(
     });
 
     return {
-      artifacts: {
-        accepted: {
-          actorUserId: context.observerUserId,
-          driverEventId: accepted.driverEventId,
-          reply: accepted.reply,
-          token: accepted.token,
-          triggerBody: accepted.body,
-        },
-        blocked: blocked.artifacts,
-      },
       details: `${accepted.token} accepted; ${token} blocked after hot reload`,
     };
   } finally {

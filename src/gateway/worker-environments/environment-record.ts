@@ -35,7 +35,7 @@ export type PreparedEnvironmentSelection = WorkerSessionPlacementDispatchIdentit
   nodeDeviceId: string;
   leaseId: string;
   bundleHash: string;
-  assertCurrent: () => void;
+  assertCurrent: import("./placement-authorization.js").WorkerPlacementAuthorization;
 };
 type RecordIdentity = { environmentId: string; providerId: string; profileId: string };
 type RecordBase = RecordIdentity & {

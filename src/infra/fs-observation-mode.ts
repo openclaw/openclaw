@@ -1,3 +1,6 @@
+// Native hints remain immediate; this pass recovers missed events without frequent idle wakeups.
+export const FS_RECONCILE_MS = 5 * 60_000;
+
 /** Preserve operator polling overrides while letting fs-safe choose the native backend. */
 export function resolveFsObservationMode(env: NodeJS.ProcessEnv = process.env): "auto" | "poll" {
   const value = env.CHOKIDAR_USEPOLLING?.toLowerCase();

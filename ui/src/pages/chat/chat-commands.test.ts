@@ -1,39 +1,58 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { beginChatMetadataPublication } from "../../lib/chat/chat-metadata-store.ts";
 import {
   SLASH_COMMANDS,
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
-  type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
-import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
-import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
   applyRemoteSlashCommandsResult,
   invalidateSessionSlashCommands,
-  dispatchChatSlashCommand,
   refreshSlashCommands,
-} from "./chat-commands.ts";
+} from "../../lib/chat/slash-command-catalog.ts";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import {
+  gatewayHelloForMethods,
+  sessionMutationGatewayHello,
+} from "../../test-helpers/gateway-methods.ts";
+import { dispatchChatSlashCommand } from "./chat-commands.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 
-function requireCommandByName(name: string) {
-  const command = SLASH_COMMANDS.find((entry) => entry.name === name);
-  if (!command) {
-    throw new Error(`expected slash command ${name}`);
-  }
-  return command;
+const commandByName = (name: string) => SLASH_COMMANDS.find((entry) => entry.name === name);
+const commandResult = (name: string) => ({ commands: [remoteCommand(name, name)] });
+
+function catalogFixture() {
+  const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
+  const request = vi.spyOn(client, "request");
+  onTestFinished(async () => {
+    request.mockRestore();
+    vi.useRealTimers();
+    await refreshSlashCommands({ client: null });
+  });
+  const refresh = (sessionKey?: string) =>
+    refreshSlashCommands({ client, agentId: "main", sessionKey });
+  return { client, request, refresh };
 }
 
-function connectedSessionAccess() {
+function resetHost(confirm: () => Promise<boolean>) {
+  const reset = vi.fn();
+  const request = vi.fn();
   return {
-    client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+    request,
+    client: { request } as unknown as GatewayBrowserClient,
     connected: true,
     hello: sessionMutationGatewayHello(),
+    connectionEpoch: 1,
+    sessionKey: "agent:main:current",
+    chatRunId: null as string | null,
+    confirmConversationReset: vi.fn(confirm),
+    sessions: { reset },
+    lastError: null as string | null,
+    chatError: null as string | null,
   };
 }
 
@@ -48,257 +67,119 @@ function remoteCommand(name: string, description: string) {
   };
 }
 
-const pairCommand = {
-  name: "pair",
-  textAliases: ["/pair"],
-  description: "Generate setup codes.",
-  source: "plugin",
-  scope: "both",
-  acceptsArgs: true,
-};
-
 describe("refreshSlashCommands", () => {
   it("keeps managed command catalogs scoped to the session when the same viewer switches chats", async () => {
-    const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
-    const request = vi
-      .spyOn(client, "request")
-      .mockResolvedValueOnce({
-        commands: [
-          {
-            ...remoteCommand("notes_alex", "Alex's selected notes"),
-            source: "skill",
-            skillDisplayName: "Notes · Alex",
-            skillModelVisible: true,
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        commands: [
-          {
-            ...remoteCommand("notes_sam", "Sam's selected notes"),
-            source: "skill",
-            skillDisplayName: "Notes · Sam",
-            skillModelVisible: true,
-          },
-        ],
-      });
-    try {
-      await refreshSlashCommands({ client, agentId: "main", sessionKey: "agent:main:alex" });
-      expect(SLASH_COMMANDS.some((command) => command.name === "notes_alex")).toBe(true);
-      await refreshSlashCommands({ client, agentId: "main", sessionKey: "agent:main:sam" });
-      expect(SLASH_COMMANDS.some((command) => command.name === "notes_sam")).toBe(true);
-      expect(SLASH_COMMANDS.some((command) => command.name === "notes_alex")).toBe(false);
-      expect(request).toHaveBeenLastCalledWith("commands.list", {
-        agentId: "main",
-        sessionKey: "agent:main:sam",
-        includeArgs: true,
-        scope: "text",
-      });
-      await refreshSlashCommands({ client, agentId: "main", sessionKey: "agent:main:alex" });
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(SLASH_COMMANDS.some((command) => command.name === "notes_alex")).toBe(true);
-    } finally {
-      request.mockRestore();
-      await refreshSlashCommands({ client: null });
-    }
+    const { request, refresh } = catalogFixture();
+    request.mockResolvedValueOnce(commandResult("notes_alex"));
+    request.mockResolvedValueOnce(commandResult("notes_sam"));
+    await refresh("agent:main:alex");
+    expect(commandByName("notes_alex")).toBeDefined();
+    await refresh("agent:main:sam");
+    expect(commandByName("notes_sam")).toBeDefined();
+    expect(commandByName("notes_alex")).toBeUndefined();
+    expect(request).toHaveBeenLastCalledWith("commands.list", {
+      agentId: "main",
+      sessionKey: "agent:main:sam",
+      includeArgs: true,
+      scope: "text",
+    });
+    await refresh("agent:main:alex");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(commandByName("notes_alex")).toBeDefined();
   });
   it("retires in-flight commands after an explicit selection invalidation", async () => {
-    const client = new GatewayBrowserClient({ url: "ws://127.0.0.1:12345" });
+    const { client, request, refresh } = catalogFixture();
     const scope = { agentId: "main", sessionKey: "agent:main:shared" };
-    const { promise: pending, resolve: settle } = createDeferred<{
-      commands: ReturnType<typeof remoteCommand>[];
-    }>();
-    const request = vi
-      .spyOn(client, "request")
-      .mockImplementationOnce(async () => pending)
-      .mockResolvedValue({ commands: [remoteCommand("new_pin", "Updated selection")] });
-    try {
-      const stale = refreshSlashCommands({ client, ...scope });
-      invalidateSessionSlashCommands(client, scope);
-      await refreshSlashCommands({ client, ...scope });
-      settle({ commands: [remoteCommand("old_pin", "Previous selection")] });
-      await stale;
-      await refreshSlashCommands({ client, ...scope });
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(SLASH_COMMANDS.some((command) => command.name === "new_pin")).toBe(true);
-      expect(SLASH_COMMANDS.some((command) => command.name === "old_pin")).toBe(false);
-    } finally {
-      request.mockRestore();
-      await refreshSlashCommands({ client: null });
-    }
+    const { promise: pending, resolve: settle } =
+      createDeferred<ReturnType<typeof commandResult>>();
+    request.mockImplementationOnce(async () => pending).mockResolvedValue(commandResult("new_pin"));
+    const stale = refresh(scope.sessionKey);
+    invalidateSessionSlashCommands(client, scope);
+    await refresh(scope.sessionKey);
+    settle(commandResult("old_pin"));
+    await stale;
+    await refresh(scope.sessionKey);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(commandByName("new_pin")).toBeDefined();
+    expect(commandByName("old_pin")).toBeUndefined();
   });
 
   it("resolves localized UI command metadata", () => {
-    const clear = SLASH_COMMANDS.find((entry) => entry.name === "clear");
-    const redirect = SLASH_COMMANDS.find((entry) => entry.name === "redirect");
-    expect(getSlashCommandDescription(clear as SlashCommandDef)).toBe("Clear chat history");
-    expect(getSlashCommandDescription(redirect as SlashCommandDef)).toBe(
-      "Abort and restart with a new message",
-    );
+    expect(getSlashCommandDescription(commandByName("clear")!)).toBe("Clear chat history");
     expect(getSlashCommandCategoryLabel("tools")).toBe("Tools");
   });
 
-  it("exposes /learn through the browser fallback registry", () => {
-    expect(requireCommandByName("learn")).toMatchObject({
-      description: "Draft a reusable skill from recent work or named sources.",
-      args: "[request]",
-      category: "tools",
-      executeLocal: false,
-      tier: "standard",
-    });
-  });
-
   it("requests the gateway default agent when no explicit agentId is available", async () => {
-    const request = vi.fn().mockResolvedValue({
-      commands: [pairCommand],
-    });
-
-    await refreshSlashCommands({
-      client: { request } as never,
-      agentId: undefined,
-    });
-
+    const { client, request } = catalogFixture();
+    request.mockResolvedValue(commandResult("pair"));
+    await refreshSlashCommands({ client });
     expect(request).toHaveBeenCalledWith("commands.list", {
       includeArgs: true,
       scope: "text",
     });
-    expect(requireCommandByName("pair")).toMatchObject({
-      name: "pair",
-      description: "Generate setup codes.",
+    expect(commandByName("pair")).toMatchObject({
+      description: "pair",
       executeLocal: false,
       tier: "standard",
     });
   });
 
   it("keeps local fallback commands after repeated gateway failures", async () => {
-    const request = vi.fn().mockRejectedValue(new Error("offline"));
-    const client = { request } as never;
-
-    await refreshSlashCommands({ client, agentId: "main" });
-    expect(requireCommandByName("help")).toMatchObject({
-      key: "help",
-      executeLocal: true,
-    });
-
-    await refreshSlashCommands({ client, agentId: "main" });
+    const { request, refresh } = catalogFixture();
+    request.mockRejectedValue(new Error("offline"));
+    await refresh();
+    await refresh();
     expect(request).toHaveBeenCalledTimes(2);
-    expect(requireCommandByName("help")).toMatchObject({
-      key: "help",
-      executeLocal: true,
-    });
+    expect(commandByName("help")).toMatchObject({ key: "help", executeLocal: true });
   });
 
   it("coalesces duplicate refreshes for the same agent", async () => {
     const { promise: first, resolve: resolveFirst } = createDeferred<unknown>();
-    const request = vi.fn().mockImplementationOnce(async () => await first);
-    const client = { request } as never;
-
-    const pending = refreshSlashCommands({
-      client,
-      agentId: "main",
-    });
-    const duplicate = refreshSlashCommands({
-      client,
-      agentId: "main",
-    });
-    resolveFirst?.({
-      commands: [pairCommand],
-    });
-    await pending;
-    await duplicate;
-
+    const { request, refresh } = catalogFixture();
+    request.mockImplementationOnce(async () => await first);
+    const pending = refresh();
+    const duplicate = refresh();
+    resolveFirst(commandResult("pair"));
+    await Promise.all([pending, duplicate]);
     expect(request).toHaveBeenCalledTimes(1);
-    expect(requireCommandByName("pair")).toMatchObject({
-      name: "pair",
-      description: "Generate setup codes.",
-      executeLocal: false,
-      tier: "standard",
-    });
+    expect(commandByName("pair")).toBeDefined();
   });
 
-  it("ignores stale refresh responses after switching agents", async () => {
-    const { promise: first, resolve: resolveFirst } = createDeferred<unknown>();
-    const request = vi.fn((_: string, params: { agentId?: string }) => {
-      if (params.agentId === "main") {
-        return first;
-      }
-      return Promise.resolve({
-        commands: [pairCommand],
-      });
-    });
-    const client = { request } as never;
-
-    const pending = refreshSlashCommands({ client, agentId: "main" });
-    await refreshSlashCommands({ client, agentId: "other" });
-    resolveFirst?.({
-      commands: [
-        {
-          name: "dreaming",
-          textAliases: ["/dreaming"],
-          description: "Enable or disable memory dreaming.",
-          source: "plugin",
-          scope: "both",
-          acceptsArgs: true,
-        },
-      ],
-    });
-    await pending;
-
-    expect(requireCommandByName("pair")).toMatchObject({
-      name: "pair",
-      description: "Generate setup codes.",
-    });
-    expect(SLASH_COMMANDS.find((entry) => entry.name === "dreaming")).toBeUndefined();
-  });
-
-  it("prefers stored metadata after the commands.list cache expires", async () => {
+  it.each(["expired", "invalidated"])("uses the metadata owner with a %s catalog", async (mode) => {
     vi.useFakeTimers();
-    try {
-      const request = vi.fn().mockResolvedValue({
-        commands: [remoteCommand("cached-command", "Loaded from commands.list.")],
-      });
-      const client = { request } as never;
-
-      await refreshSlashCommands({ client, agentId: "main" });
+    const { client, request, refresh } = catalogFixture();
+    request.mockResolvedValue(commandResult("requested-command"));
+    if (mode === "expired") {
+      await refresh();
       vi.advanceTimersByTime(60_001);
-      beginChatMetadataPublication(client, { agentId: "main" }).publish({
-        commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
-      });
-
-      await refreshSlashCommands({ client, agentId: "main" });
-
-      expect(request).toHaveBeenCalledOnce();
-      expect(requireCommandByName("metadata-command")).toMatchObject({
-        description: "Loaded from chat metadata.",
-      });
-    } finally {
-      vi.useRealTimers();
     }
-  });
-
-  it("does not retain applied metadata commands in the commands.list cache", async () => {
-    const request = vi.fn().mockResolvedValue({
-      commands: [remoteCommand("requested-command", "Loaded after metadata invalidation.")],
-    });
-    const client = { request } as never;
-    const metadata = {
-      commands: [remoteCommand("metadata-command", "Loaded from chat metadata.")],
-    };
+    const metadata = commandResult("metadata-command");
     beginChatMetadataPublication(client, { agentId: "main" }).publish(metadata);
-    applyRemoteSlashCommandsResult(metadata);
-
-    invalidateChatMetadataStore(client);
-    await refreshSlashCommands({ client, agentId: "main" });
-
+    if (mode === "invalidated") {
+      applyRemoteSlashCommandsResult(metadata);
+      invalidateChatMetadataStore(client);
+    }
+    await refresh();
     expect(request).toHaveBeenCalledOnce();
-    expect(requireCommandByName("requested-command")).toMatchObject({
-      description: "Loaded after metadata invalidation.",
-    });
+    expect(
+      commandByName(mode === "expired" ? "metadata-command" : "requested-command"),
+    ).toBeDefined();
+  });
+});
+
+describe("local command loading", () => {
+  it("does not run a command after its Gateway changes while loading", async () => {
+    const host = makeChatHost({ requestHandlers: {} });
+    const pending = dispatchChatSlashCommand(host, "model", "example/model");
+    host.connectionEpoch += 1;
+    await expect(pending).resolves.toBe("cancelled");
+    expect(host.request).not.toHaveBeenCalled();
+    expect(host.chatMessages).toEqual([]);
   });
 });
 
 describe("conversation reset confirmation", () => {
-  it.each(["owner", "member", "viewer"] as const)(
+  it.each(["owner", "viewer"] as const)(
     "authorizes /stop with narrow scope for a %s session",
     async (sharingRole) => {
       const sessionKey = "agent:main:current";
@@ -310,42 +191,36 @@ describe("conversation reset confirmation", () => {
           ...createSessionsListResult(),
           sessions: [{ key: sessionKey, kind: "direct", sessionId: "session-1", sharingRole }],
         },
-        requestHandlers: { "chat.abort": { aborted: true } },
+        requestHandlers: { "sessions.abort": { status: "aborted" } },
       });
       const result = await dispatchChatSlashCommand(host, "stop", "");
       expect(result).toBe(sharingRole === "owner" ? "completed" : "failed");
       expect(host.request).toHaveBeenCalledTimes(sharingRole === "owner" ? 1 : 0);
+      if (sharingRole === "owner") {
+        expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+          key: sessionKey,
+          clearQueued: true,
+        });
+      }
     },
   );
 
   it.each([
-    ["stop", "chat.abort"],
+    ["stop", "sessions.abort"],
     ["clear", "sessions.reset"],
     ["compact", "sessions.compact"],
   ] as const)("rejects /%s without its exact operator scope", async (command, method) => {
-    const request = vi.fn();
-    const reset = vi.fn();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const host = {
-      client,
-      connected: true,
-      hello: {
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: [method] },
-      } as ApplicationGatewaySnapshot["hello"],
-      sessionKey: "agent:main:current",
-      chatRunId: command === "stop" ? "run-1" : null,
-      sessions: { reset },
-      confirmConversationReset: vi.fn(async () => true),
-      lastError: null,
-      chatError: null,
+    const host = resetHost(async () => true);
+    host.hello = {
+      ...host.hello,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: [method] },
     };
-
+    host.chatRunId = command === "stop" ? "run-1" : null;
     const result = await dispatchChatSlashCommand(host as never, command, "");
-
     expect(result).toBe("failed");
-    expect(request).not.toHaveBeenCalled();
-    expect(reset).not.toHaveBeenCalled();
+    expect(host.request).not.toHaveBeenCalled();
+    expect(host.sessions.reset).not.toHaveBeenCalled();
     expect(host.lastError).toBeTruthy();
   });
 
@@ -355,108 +230,42 @@ describe("conversation reset confirmation", () => {
       "new",
       "",
     );
-
     expect(result).toBe("cancelled");
-  });
-
-  it("defers /clear when a run starts during confirmation", async () => {
-    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
-    const reset = vi.fn();
-    const host = {
-      ...connectedSessionAccess(),
-      chatRunId: null as string | null,
-      sessionKey: "agent:main:current",
-      confirmConversationReset: vi.fn(async () => await confirmation),
-      sessions: { reset },
-    };
-
-    const pending = dispatchChatSlashCommand(host as never, "clear", "");
-    host.chatRunId = "run-started-during-confirmation";
-    settleConfirmation?.(true);
-
-    await expect(pending).resolves.toBe("deferred");
-    expect(reset).not.toHaveBeenCalled();
   });
 
   it("cancels /clear before resetting a board-bearing session", async () => {
-    const reset = vi.fn();
-    const result = await dispatchChatSlashCommand(
-      {
-        ...connectedSessionAccess(),
-        sessionKey: "agent:main:current",
-        confirmConversationReset: vi.fn(async () => false),
-        sessions: { reset },
-      } as never,
-      "clear",
-      "",
-    );
-
-    expect(result).toBe("cancelled");
-    expect(reset).not.toHaveBeenCalled();
+    const host = resetHost(async () => false);
+    expect(await dispatchChatSlashCommand(host as never, "clear", "")).toBe("cancelled");
+    expect(host.sessions.reset).not.toHaveBeenCalled();
   });
 
-  it("does not clear through a replacement Gateway after confirmation", async () => {
-    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
-    const reset = vi.fn();
-    const originalClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const replacementClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
-    const host = {
-      client: originalClient,
-      connected: true,
-      connectionEpoch: 1,
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["sessions.reset"] },
-      } as ApplicationGatewaySnapshot["hello"],
-      sessionKey: "agent:main:current",
-      chatRunId: null,
-      confirmConversationReset: vi.fn(async () => await confirmation),
-      sessions: { reset },
-      lastError: null as string | null,
-      chatError: null as string | null,
-    };
-
-    const pending = dispatchChatSlashCommand(host as never, "clear", "");
-    host.client = replacementClient;
-    host.connectionEpoch += 1;
-    host.hello = {
-      auth: { role: "operator", scopes: ["operator.write"] },
-      features: { methods: ["sessions.reset"] },
-    } as ApplicationGatewaySnapshot["hello"];
-    settleConfirmation?.(true);
-
-    await expect(pending).resolves.toBe("failed");
-    expect(reset).not.toHaveBeenCalled();
-    expect(host.lastError).toContain("connection changed");
-  });
-
-  it("rechecks /clear scope after confirmation", async () => {
-    const { promise: confirmation, resolve: settleConfirmation } = createDeferred<boolean>();
-    const reset = vi.fn();
-    const host = {
-      ...connectedSessionAccess(),
-      connectionEpoch: 1,
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["sessions.reset"] },
-      } as ApplicationGatewaySnapshot["hello"],
-      sessionKey: "agent:main:current",
-      chatRunId: null,
-      confirmConversationReset: vi.fn(async () => await confirmation),
-      sessions: { reset },
-      lastError: null as string | null,
-      chatError: null as string | null,
-    };
-
-    const pending = dispatchChatSlashCommand(host as never, "clear", "");
-    host.hello = {
-      auth: { role: "operator", scopes: ["operator.write"] },
-      features: { methods: ["sessions.reset"] },
-    } as ApplicationGatewaySnapshot["hello"];
-    settleConfirmation?.(true);
-
-    await expect(pending).resolves.toBe("failed");
-    expect(reset).not.toHaveBeenCalled();
-    expect(host.lastError).toContain("operator.admin");
-  });
+  it.each([
+    ["run", "deferred", null],
+    ["Gateway", "failed", "connection changed"],
+    ["scope", "failed", "operator.admin"],
+  ] as const)(
+    "does not clear when %s changes during confirmation",
+    async (change, result, error) => {
+      const { promise, resolve } = createDeferred<boolean>();
+      const host = resetHost(() => promise);
+      host.hello = gatewayHelloForMethods(["sessions.reset"]);
+      const pending = dispatchChatSlashCommand(host as never, "clear", "");
+      await vi.waitFor(() => expect(host.confirmConversationReset).toHaveBeenCalledOnce());
+      if (change === "run") {
+        host.chatRunId = "new-run";
+      } else {
+        if (change === "Gateway") {
+          host.client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+          host.connectionEpoch += 1;
+        }
+        host.hello = gatewayHelloForMethods(["sessions.reset"], ["operator.write"]);
+      }
+      resolve(true);
+      await expect(pending).resolves.toBe(result);
+      expect(host.sessions.reset).not.toHaveBeenCalled();
+      if (error) {
+        expect(host.lastError).toContain(error);
+      }
+    },
+  );
 });

@@ -6,6 +6,7 @@ import {
   type EnvHttpProxyAgentProxyOptions,
 } from "./proxy-env.js";
 import { resolveActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
+import { setGlobalUndiciStreamTimeoutMs } from "./undici-dispatcher-options.js";
 import {
   createUndiciAutoSelectFamilyConnectOptions,
   resolveUndiciAutoSelectFamily,
@@ -22,9 +23,6 @@ export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
 const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
   allowH2: false as const,
 });
-
-/** Shares the global timeout with guarded fetch without reading Undici's private options. */
-export let globalUndiciStreamTimeoutMs: number | undefined;
 
 let lastAppliedTimeoutKey: string | null = null;
 let lastAppliedProxyBootstrapKey: string | null = null;
@@ -209,7 +207,7 @@ export function ensureGlobalUndiciDispatcherStreamTimeouts(opts?: { timeoutMs?: 
     return;
   }
   const timeoutMs = Math.max(DEFAULT_UNDICI_STREAM_TIMEOUT_MS, Math.floor(timeoutMsRaw));
-  globalUndiciStreamTimeoutMs = timeoutMs;
+  setGlobalUndiciStreamTimeoutMs(timeoutMs);
   const runtime = loadUndiciGlobalDispatcherDeps();
   const current = resolveCurrentDispatcherInfo(runtime);
   if (current === null) {
@@ -235,10 +233,14 @@ export function ensureGlobalUndiciDispatcherStreamTimeouts(opts?: { timeoutMs?: 
       const proxyOptions = {
         ...resolveEnvHttpProxyAgentOptions(),
         ...(connect ? { connect } : {}),
+        bodyTimeout: timeoutMs,
+        headersTimeout: timeoutMs,
       };
-      runtime.setGlobalDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions, timeoutMs));
+      runtime.setGlobalDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions));
     } else {
-      runtime.setGlobalDispatcher(createHttp1Agent(connect ? { connect } : undefined, timeoutMs));
+      runtime.setGlobalDispatcher(
+        createHttp1Agent({ connect, bodyTimeout: timeoutMs, headersTimeout: timeoutMs }),
+      );
     }
     lastAppliedTimeoutKey = nextKey;
   } catch {
@@ -250,7 +252,7 @@ export function ensureGlobalUndiciDispatcherStreamTimeouts(opts?: { timeoutMs?: 
 export function resetGlobalUndiciStreamTimeoutsForTests(): void {
   lastAppliedTimeoutKey = null;
   lastAppliedProxyBootstrapKey = null;
-  globalUndiciStreamTimeoutMs = undefined;
+  setGlobalUndiciStreamTimeoutMs(undefined);
 }
 
 /**

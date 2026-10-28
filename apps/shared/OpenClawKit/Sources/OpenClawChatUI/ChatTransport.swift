@@ -5,7 +5,7 @@ import OpenClawProtocol
 public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
-    case chatMetadataChanged
+    case chatMetadataChanged(modelCatalogChanged: Bool = true, agentID: String? = nil)
     case modelSelectionChanged
     case sessionsChanged(OpenClawChatSessionsChangedEvent)
     case sessionObserver(SessionObserverDigest)
@@ -19,6 +19,20 @@ public enum OpenClawChatTransportEvent: Sendable {
     case routeChanged
     case reconnected
     case seqGap
+
+    public func refreshesModelCatalog(forAgentID agentID: String?) -> Bool {
+        switch self {
+        case let .chatMetadataChanged(modelCatalogChanged, changedAgentID):
+            guard modelCatalogChanged else { return false }
+            guard let changedAgentID = ChatPayloadDecoding.trimmedNonEmptyString(changedAgentID),
+                  let agentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID) else { return true }
+            return changedAgentID.lowercased() == agentID.lowercased()
+        case .modelSelectionChanged:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 public struct OpenClawQuestionResolvedEvent: Codable, Sendable {
@@ -58,6 +72,13 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     public let kind: String?
     public let text: String?
     public let swarmPhase: String?
+    // Decoded events are partial patches; constructed roster snapshots are authoritative.
+    private typealias SessionPayload = [String: AnyCodable]
+    private let sessionPayload: SessionPayload?
+    var sessionFields: Set<String>? {
+        self.sessionPayload.map { Set($0.keys) }
+    }
+
     let colorPresent: Bool
     let agentStatusPresent: Bool
     let observerDigestPresent: Bool
@@ -104,6 +125,7 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         self.phase = phase
         self.runId = runId
         self.session = session
+        self.sessionPayload = nil
         self.updatedAt = updatedAt
         self.lastReadAt = lastReadAt
         self.color = colorPresent == true ? color : (color ?? session?.color)
@@ -129,7 +151,24 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.session = try container.decodeIfPresent(OpenClawChatSessionEntry.self, forKey: .session)
+        var session = try container.decodeIfPresent(OpenClawChatSessionEntry.self, forKey: .session)
+        var sessionPayload = try container.decodeIfPresent(SessionPayload.self, forKey: .session)
+        // The Gateway emits sidebar clearing receipts on the outer envelope. Carry their
+        // presence into the row patch so projection and replay do not restore stale values.
+        func overlay<T: Decodable>(
+            _ key: CodingKeys,
+            _ path: WritableKeyPath<OpenClawChatSessionEntry, T?>) throws
+        {
+            guard container.contains(key) else { return }
+            session?[keyPath: path] = try container.decodeIfPresent(T.self, forKey: key)
+            sessionPayload?[key.rawValue] = try container.decode(AnyCodable.self, forKey: key)
+        }
+        try overlay(.label, \.label)
+        try overlay(.icon, \.icon)
+        try overlay(.category, \.category)
+        try overlay(.snoozedUntil, \.snoozedUntil)
+        self.session = session
+        self.sessionPayload = sessionPayload
         let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .session)
 
         func decode<T: Decodable>(_ type: T.Type, forKey key: CodingKeys) throws -> T? {
@@ -186,7 +225,12 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         try container.encodeIfPresent(self.reason, forKey: .reason)
         try container.encodeIfPresent(self.phase, forKey: .phase)
         try container.encodeIfPresent(self.runId, forKey: .runId)
-        try container.encodeIfPresent(self.session, forKey: .session)
+        if let sessionPayload = self.sessionPayload {
+            // Keep omitted fields and explicit nulls distinct across event replay.
+            try container.encode(sessionPayload, forKey: .session)
+        } else {
+            try container.encodeIfPresent(self.session, forKey: .session)
+        }
         try container.encodeIfPresent(self.updatedAt, forKey: .updatedAt)
         try container.encodeIfPresent(self.lastReadAt, forKey: .lastReadAt)
         if self.colorPresent {
@@ -209,6 +253,10 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case label
+        case icon
+        case category
+        case snoozedUntil
         case session
         case key
         case sessionKey
@@ -240,17 +288,9 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
 /// transports bind both sends and confirmation reads to the same connection;
 /// a gateway switch then cancels the old work instead of retargeting it.
 public struct OpenClawChatTransportRouteLease: Sendable {
-    public typealias SendMessage = @Sendable (
+    public typealias SendTargetedMessage = @Sendable (
         _ sessionKey: String,
-        _ message: String,
-        _ thinking: String,
-        _ idempotencyKey: String,
-        _ attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
-    public typealias RequestHistory = @Sendable (String) async throws -> OpenClawChatHistoryPayload
-    public typealias SendTargetedMessageWithSettings = @Sendable (
-        _ sessionKey: String,
-        _ agentID: String?,
-        _ expectedSessionSettings: OpenClawChatSessionSettingsExpectation?,
+        _ target: OpenClawChatSendTarget,
         _ message: String,
         _ thinking: String,
         _ idempotencyKey: String,
@@ -259,36 +299,20 @@ public struct OpenClawChatTransportRouteLease: Sendable {
         _ sessionKey: String,
         _ agentID: String?) async throws -> OpenClawChatHistoryPayload
 
-    private let sendTargetedMessageImpl: SendTargetedMessageWithSettings
+    private let sendTargetedMessageImpl: SendTargetedMessage
     private let requestTargetedHistoryImpl: RequestTargetedHistory
     public let sessionRoutingContract: String?
     public let supportsSessionSettingsCAS: Bool
 
     public init(
-        sendMessage: @escaping SendMessage,
-        requestHistory: @escaping RequestHistory,
-        sessionRoutingContract: String? = nil,
-        supportsSessionSettingsCAS: Bool = false)
-    {
-        self.sessionRoutingContract = sessionRoutingContract
-        self.supportsSessionSettingsCAS = supportsSessionSettingsCAS
-        self.sendTargetedMessageImpl = { sessionKey, _, _, message, thinking, idempotencyKey, attachments in
-            try await sendMessage(sessionKey, message, thinking, idempotencyKey, attachments)
-        }
-        self.requestTargetedHistoryImpl = { sessionKey, _ in
-            try await requestHistory(sessionKey)
-        }
-    }
-
-    public init(
-        sendTargetedMessageWithSettings: @escaping SendTargetedMessageWithSettings,
+        sendTargetedMessage: @escaping SendTargetedMessage,
         requestTargetedHistory: @escaping RequestTargetedHistory,
         sessionRoutingContract: String? = nil,
         supportsSessionSettingsCAS: Bool = false)
     {
         self.sessionRoutingContract = sessionRoutingContract
         self.supportsSessionSettingsCAS = supportsSessionSettingsCAS
-        self.sendTargetedMessageImpl = sendTargetedMessageWithSettings
+        self.sendTargetedMessageImpl = sendTargetedMessage
         self.requestTargetedHistoryImpl = requestTargetedHistory
     }
 
@@ -296,19 +320,34 @@ public struct OpenClawChatTransportRouteLease: Sendable {
         sessionKey: String,
         agentID: String? = nil,
         expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
+        queueMode: OpenClawChatQueueMode? = nil,
         message: String,
         thinking: String,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        try await self.sendTargetedMessageImpl(
-            sessionKey,
-            agentID,
-            expectedSessionSettings,
-            message,
-            thinking,
-            idempotencyKey,
-            attachments)
+        try await self.sendMessage(
+            sessionKey: sessionKey,
+            target: OpenClawChatSendTarget(
+                agentID: agentID,
+                expectedSessionRoutingContract: self.sessionRoutingContract,
+                expectedSessionSettings: expectedSessionSettings,
+                queueMode: queueMode),
+            message: message,
+            thinking: thinking,
+            idempotencyKey: idempotencyKey,
+            attachments: attachments)
+    }
+
+    public func sendMessage(
+        sessionKey: String,
+        target: OpenClawChatSendTarget,
+        message: String,
+        thinking: String,
+        idempotencyKey: String,
+        attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        try await self.sendTargetedMessageImpl(sessionKey, target, message, thinking, idempotencyKey, attachments)
     }
 
     public func requestHistory(
@@ -543,6 +582,12 @@ public enum OpenClawChatTransportSendError: Error, Sendable {
     case notDispatched
 }
 
+struct OpenClawChatQueueModeUnsupportedError: LocalizedError, Sendable {
+    var errorDescription: String? {
+        String(localized: "This connection cannot send with Steer or Queue. Send normally or reconnect to the gateway.")
+    }
+}
+
 public enum OpenClawChatProgressCardError: LocalizedError, Sendable {
     case ownerScopeUnavailable
 
@@ -651,10 +696,6 @@ public enum OpenClawChatRunObservation: Sendable, Equatable {
 
 public struct OpenClawChatMetadataCapabilities: Codable, Sendable, Equatable {
     public let swarmEnabled: Bool
-
-    private enum CodingKeys: String, CodingKey {
-        case swarmEnabled
-    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -801,6 +842,11 @@ public protocol OpenClawChatTransport: Sendable {
     func gatewayAdvertisesMethod(_ method: String) async -> Bool?
     func attachmentLimits() async -> GatewayAttachmentLimits?
     func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard?
+    func clearProgressCard(sessionKey: String, agentID: String?, expectedRevision: Int) async throws
+    func refreshProgressCard(
+        sessionKey: String,
+        agentID: String?,
+        idempotencyKey: String) async throws -> OpenClawChatProgressCardRefreshResult
     func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
@@ -971,6 +1017,18 @@ extension OpenClawChatTransport {
         nil
     }
 
+    public func clearProgressCard(sessionKey _: String, agentID _: String?, expectedRevision _: Int) async throws {
+        throw CancellationError()
+    }
+
+    public func refreshProgressCard(
+        sessionKey _: String,
+        agentID _: String?,
+        idempotencyKey _: String) async throws -> OpenClawChatProgressCardRefreshResult
+    {
+        throw CancellationError()
+    }
+
     public func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
         nil
     }
@@ -1036,8 +1094,18 @@ extension OpenClawChatTransport {
 
     public func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {
         .available(OpenClawChatTransportRouteLease(
-            sendMessage: self.sendMessage,
-            requestHistory: self.requestHistory))
+            sendTargetedMessage: { sessionKey, target, message, thinking, idempotencyKey, attachments in
+                try await self.sendMessage(
+                    sessionKey: sessionKey,
+                    target: target,
+                    message: message,
+                    thinking: thinking,
+                    idempotencyKey: idempotencyKey,
+                    attachments: attachments)
+            },
+            requestTargetedHistory: { sessionKey, _ in
+                try await self.requestHistory(sessionKey: sessionKey)
+            }))
     }
 
     public func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease? {
@@ -1099,7 +1167,8 @@ extension OpenClawChatTransport {
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        try await self.sendMessage(
+        guard target.queueMode == nil else { throw OpenClawChatQueueModeUnsupportedError() }
+        return try await self.sendMessage(
             sessionKey: sessionKey,
             agentID: target.agentID,
             expectedSessionRoutingContract: target.expectedSessionRoutingContract,

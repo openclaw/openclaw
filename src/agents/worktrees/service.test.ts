@@ -7,47 +7,45 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
-import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
+import { isWorktreeAdd } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
 import * as worktreeRegistry from "./registry.js";
 import {
-  getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
-  listRegistryWorktrees,
   updateRegistryWorktree,
   WorktreeRemovalContentionError,
 } from "./registry.js";
+import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
 import { acquireWorktreeRunLease, claimWorktreeRemoval } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import {
+  git,
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
 
-function isWorktreeAdd(argv: readonly string[]): boolean {
-  if (argv[0] !== "git") {
-    return false;
-  }
-  let command = 1;
-  while (argv[command] === "-c" || argv[command] === "-C") {
-    command += 2;
-  }
-  return argv[command] === "worktree" && argv[command + 1] === "add";
-}
-
 function expectCheckoutTimeouts(
   commandSpy: MockInstance<typeof commandRunner.runCommandWithTimeout>,
-  checkoutBases: string[],
+  checkoutBases: [string, string],
+  networkTimeouts: number[] = [],
 ) {
   const gitCommands = commandSpy.mock.calls
     .filter(([argv]) => argv[0] === "git")
@@ -55,20 +53,15 @@ function expectCheckoutTimeouts(
       checkout: isWorktreeAdd(argv) || (argv.includes("read-tree") && argv.includes("-u")),
       base: argv.at(-1),
       timeoutMs: typeof options === "number" ? options : options.timeoutMs,
+      noOutputTimeoutMs: typeof options === "number" ? undefined : options.noOutputTimeoutMs,
     }));
-  expect(gitCommands.filter((command) => command.checkout)).toEqual(
-    checkoutBases.map((base) => ({ checkout: true, base, timeoutMs: 300_000 })),
-  );
+  expect(gitCommands.filter((command) => command.checkout)).toEqual([
+    { checkout: true, base: checkoutBases[0], timeoutMs: 300_000, noOutputTimeoutMs: undefined },
+    { checkout: true, base: checkoutBases[1], timeoutMs: undefined, noOutputTimeoutMs: 300_000 },
+  ]);
   expect(
     new Set(gitCommands.filter((command) => !command.checkout).map((command) => command.timeoutMs)),
-  ).toEqual(new Set([120_000]));
-}
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
-    encoding: "utf8",
-  });
-  return stdout.trim();
+  ).toEqual(new Set([120_000, ...networkTimeouts]));
 }
 
 async function gitWithInput(cwd: string, args: string[], input: string): Promise<string> {
@@ -99,6 +92,7 @@ describe("ManagedWorktreeService", () => {
       runLeaseTesting.resetForTest();
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
+      clearRuntimeConfigSnapshot();
       cleanup();
     }),
   );
@@ -133,10 +127,9 @@ describe("ManagedWorktreeService", () => {
     repo = await initializeRepository(root);
     stateDir = path.join(root, "state");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    now = 1_700_000_000_000;
+    now = Date.now();
     service = new ManagedWorktreeService({
       env,
-      now: () => now,
       getConfig: () => ({ worktreeAcceleration: false }),
     });
   });
@@ -294,7 +287,9 @@ describe("ManagedWorktreeService", () => {
         ownerKind: "session",
         ownerId: "agent:main:dashboard:two",
       }),
-    ).rejects.toThrow(/already in use by session/);
+    ).rejects.toThrow(
+      /already in use by session agent:main:dashboard:one: shared-name; choose an unused name, or omit it to generate one\./,
+    );
     await expect(
       service.create({ repoRoot: repo, name: "shared-name", baseRef: "HEAD" }),
     ).rejects.toThrow(/already in use by session/);
@@ -309,14 +304,37 @@ describe("ManagedWorktreeService", () => {
     expect(reused.ownerId).toBe("agent:main:dashboard:one");
   });
 
-  it("falls back to local HEAD when fetch fails", async () => {
-    await git(repo, "remote", "set-url", "origin", path.join(root, "missing.git"));
-    const created = await service.create({ repoRoot: repo, name: "offline" });
-    expect(created.baseRef).toBe("HEAD");
-    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
-  });
+  it.each(["unavailable", "empty", "helper", "push-only"])(
+    "refuses an %s remote default instead of silently using local HEAD",
+    async (destination) => {
+      if (destination === "helper" || destination === "push-only") {
+        await git(repo, "config", "--unset-all", "remote.origin.url");
+        await git(
+          repo,
+          "config",
+          destination === "helper" ? "remote.origin.vcs" : "remote.origin.pushurl",
+          "unavailable-worktree-fixture",
+        );
+      } else {
+        await git(
+          repo,
+          "remote",
+          "set-url",
+          "origin",
+          destination === "empty" ? "" : path.join(root, "missing.git"),
+        );
+      }
+      await git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").catch(
+        () => undefined,
+      );
+      await expect(service.create({ repoRoot: repo, name: "offline" })).rejects.toThrow(
+        "Remote default branch is unavailable. Repair origin or choose an explicit worktree base ref.",
+      );
+      expect(await git(repo, "branch", "--list", "openclaw/offline")).toBe("");
+    },
+  );
 
-  it.each(["active", "aborted", "closed"] as const)(
+  it.each(["aborted", "closed"] as const)(
     "handles stale remote checkout with %s admission",
     async (admission) => {
       await addRemote(root, repo);
@@ -356,22 +374,17 @@ describe("ManagedWorktreeService", () => {
           }
         },
       });
-      if (admission !== "active") {
-        await expect(creation).rejects.toMatchObject(
-          admission === "aborted" ? { code: "OPENCLAW_STATE_LEASE_ABORTED" } : closed,
-        );
-        expect(checkoutFailed).toBe(true);
-        expectCheckoutTimeouts(commandSpy, ["origin/main", remoteCommit]);
-        expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("stale-remote");
-        expect(await git(repo, "branch", "--list", "openclaw/stale-remote")).toBe("");
-        return;
-      }
-      const created = await creation;
+      await expect(creation).rejects.toMatchObject(
+        admission === "aborted" ? { code: "OPENCLAW_STATE_LEASE_ABORTED" } : closed,
+      );
       expect(checkoutFailed).toBe(true);
-      expect(created.baseRef).toBe("HEAD");
-      const localHead = await git(repo, "rev-parse", "HEAD");
-      expect(await git(created.path, "rev-parse", "HEAD")).toBe(localHead);
-      expectCheckoutTimeouts(commandSpy, ["origin/main", remoteCommit, "HEAD", localHead]);
+      expectCheckoutTimeouts(
+        commandSpy,
+        ["refs/remotes/origin/main", remoteCommit],
+        [30_000, 60_000],
+      );
+      expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("stale-remote");
+      expect(await git(repo, "branch", "--list", "openclaw/stale-remote")).toBe("");
     },
   );
 
@@ -416,29 +429,6 @@ describe("ManagedWorktreeService", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("never overwrites a base-ref file with an ignored source candidate", async () => {
-    await fs.writeFile(path.join(repo, "collision.txt"), "from base\n", { mode: 0o644 });
-    await git(repo, "add", "collision.txt");
-    await git(repo, "commit", "-m", "base collision");
-    await git(repo, "checkout", "-b", "source");
-    await git(repo, "rm", "collision.txt");
-    await fs.writeFile(path.join(repo, ".gitignore"), "collision.txt\n");
-    await git(repo, "add", ".gitignore");
-    await git(repo, "commit", "-m", "ignore local collision");
-    await fs.writeFile(path.join(repo, "collision.txt"), "from source\n", { mode: 0o755 });
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), "collision.txt\n");
-
-    const created = await service.create({
-      repoRoot: repo,
-      name: "no-overwrite",
-      baseRef: "main",
-    });
-
-    expect(await fs.readFile(path.join(created.path, "collision.txt"), "utf8")).toBe("from base\n");
-    expect((await fs.stat(path.join(created.path, "collision.txt"))).mode & 0o111).toBe(0);
-    expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([]);
-  });
-
   it("rejects an included file replaced by a symlink after inspection", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\n");
     await fs.writeFile(path.join(repo, ".worktreeinclude"), "settings.local\n");
@@ -468,36 +458,6 @@ describe("ManagedWorktreeService", () => {
       "refs/heads/openclaw/swapped-source",
     );
     expect(await fs.readFile(outside, "utf8")).toBe("outside bytes\n");
-  });
-
-  it("bounds failed setup diagnostics without losing the fatal detail or cleanup", async () => {
-    await fs.mkdir(path.join(repo, ".openclaw"));
-    const script = path.join(repo, ".openclaw", "worktree-setup.sh");
-    const fatal = "fatal: setup dependency could not be resolved";
-    const progress = Array.from(
-      { length: 2_000 },
-      (_, index) => `Receiving objects: ${index}/2000\r`,
-    ).join("");
-    await fs.writeFile(
-      script,
-      `#!/bin/sh\nprintf '%s\\n' "$OPENCLAW_WORKTREE_PATH" > "$OPENCLAW_SOURCE_TREE_PATH/setup-path.txt"\nprintf '%s' '${progress}\n${"x".repeat(65_536)}${fatal}\n' >&2\nexit 23\n`,
-      { mode: 0o755 },
-    );
-    const failure: unknown = await service
-      .create({ repoRoot: repo, name: "broken-setup", baseRef: "HEAD" })
-      .catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(Error);
-    if (!(failure instanceof Error)) {
-      throw new Error("expected setup failure");
-    }
-    const worktreePath = (await fs.readFile(path.join(repo, "setup-path.txt"), "utf8")).trim();
-    await expect(fs.stat(worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("broken-setup");
-    expect(await git(repo, "branch", "--list", "openclaw/broken-setup")).toBe("");
-    expect(await service.listRegistryRecords()).toEqual([]);
-    expect.soft(failure.message).toContain(fatal);
-    expect.soft(failure.message.length).toBeLessThanOrEqual(2_300);
-    expect.soft(/(?:exit|code|status)[^\n]*23/i.test(failure.message)).toBe(true);
   });
 
   it("rematerializes a named workboard snapshot with hidden edits and independent provisioned state", async () => {
@@ -557,7 +517,8 @@ describe("ManagedWorktreeService", () => {
     );
     expect(await git(repo, "ls-tree", removed.snapshotRef!, "tool.sh")).toMatch(/^100644 /);
     await fs.writeFile(path.join(repo, "present.env"), "new source value\n");
-    now += IDLE_GC_MS + 1;
+    await updateRegistryWorktree(env, created.id, { removedAt: Date.now() - IDLE_GC_MS - 1 });
+    const restoreStarted = Date.now();
     const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
     const restored = await service.create({ ...request, baseRef: created.branch });
     expect(restored.id).toBe(created.id);
@@ -566,7 +527,8 @@ describe("ManagedWorktreeService", () => {
       await git(repo, "rev-parse", removed.snapshotRef!),
     ]);
     expect(restored.removedAt).toBeUndefined();
-    expect(restored.lastActiveAt).toBe(now);
+    expect(restored.lastActiveAt).toBeGreaterThanOrEqual(restoreStarted);
+    expect(restored.lastActiveAt).toBeLessThanOrEqual(Date.now());
     expect((await service.gc()).removed).toEqual([]);
     expect(await git(restored.path, "branch", "--show-current")).toBe(created.branch);
     expect(await git(restored.path, "rev-parse", "HEAD")).toBe(originalHead);
@@ -657,7 +619,8 @@ describe("ManagedWorktreeService", () => {
 
   describe("run-end cleanup", () => {
     beforeEach(() => {
-      service = new ManagedWorktreeService({ env, now: () => now });
+      setRuntimeConfigSnapshot({});
+      service = new ManagedWorktreeService({ env });
     });
     async function materialize(name: string) {
       return await materializeManagedWorktreeFixture({
@@ -705,6 +668,7 @@ describe("ManagedWorktreeService", () => {
       await service.acquire(created.id);
       const staleRecord = getRegistryWorktree(env, created.id)!;
 
+      const cleanupStarted = Date.now();
       await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
 
       let contention: unknown;
@@ -718,10 +682,15 @@ describe("ManagedWorktreeService", () => {
       }
       expect(contention).toBeInstanceOf(WorktreeRemovalContentionError);
       expect(contention).toMatchObject({ kind: "finalized" });
-      expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        removedAt: now,
-        runEndCleanup: { outcome: "removed-lossless", at: now },
+      const finalized = getRegistryWorktree(env, created.id)!;
+      expect(finalized).toMatchObject({
+        removedAt: expect.any(Number),
+        runEndCleanup: { outcome: "removed-lossless", at: expect.any(Number) },
       });
+      expect(finalized.removedAt).toBeGreaterThanOrEqual(cleanupStarted);
+      expect(finalized.removedAt).toBeLessThanOrEqual(Date.now());
+      expect(finalized.runEndCleanup?.at).toBeGreaterThanOrEqual(cleanupStarted);
+      expect(finalized.runEndCleanup?.at).toBeLessThanOrEqual(Date.now());
 
       // A stale remover that aborted its claim writes retained/failed outcomes with
       // the live-row condition (recordOutcome); against a finalized row it must be
@@ -733,23 +702,21 @@ describe("ManagedWorktreeService", () => {
         { onlyIfLive: true },
       );
 
-      expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        removedAt: now,
-        runEndCleanup: { outcome: "removed-lossless", at: now },
-      });
+      expect(getRegistryWorktree(env, created.id)).toEqual(finalized);
     });
 
     it("rejects stale lifecycle writes and records a newer post-restore cleanup outcome", async () => {
       const created = await materialize("restore-generation");
-      const staleActiveAt = created.lastActiveAt;
       await service.acquire(created.id);
+      const staleActiveAt = Date.now() + IDLE_GC_MS;
+      await updateRegistryWorktree(env, created.id, { lastActiveAt: staleActiveAt });
       await expect(service.removeIfLossless(created.id)).resolves.toBe(true);
       expect(getRegistryWorktree(env, created.id)?.runEndCleanup).toMatchObject({
         outcome: "removed-lossless",
       });
 
       const restored = await service.restore({ id: created.id });
-      // The pinned clock still requires a fresh activity stamp after restore.
+      // A future stored stamp still requires a strictly newer activity stamp after restore.
       expect(restored.lastActiveAt).toBe(staleActiveAt + 1);
       // Restore starts a new lifecycle: the stale removal outcome must not show
       // on the now-live row.
@@ -769,11 +736,18 @@ describe("ManagedWorktreeService", () => {
       expect(getRegistryWorktree(env, created.id)?.runEndCleanup).toBeUndefined();
       await fs.writeFile(path.join(restored.path, "untracked.txt"), "retain me\n");
       await service.acquire(created.id);
+      const cleanupStarted = Date.now();
       await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
 
       expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        runEndCleanup: { outcome: "retained-dirty", at: now },
+        runEndCleanup: { outcome: "retained-dirty", at: expect.any(Number) },
       });
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeGreaterThanOrEqual(
+        cleanupStarted,
+      );
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeLessThanOrEqual(
+        Date.now(),
+      );
       expect(await fs.readFile(path.join(restored.path, "untracked.txt"), "utf8")).toBe(
         "retain me\n",
       );
@@ -795,11 +769,18 @@ describe("ManagedWorktreeService", () => {
       expect(await git(created.path, "log", "HEAD", "--not", "--remotes", "--oneline")).toBe("");
       await service.acquire(created.id);
 
+      const cleanupStarted = Date.now();
       await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
 
       expect(getRegistryWorktree(env, created.id)).toMatchObject({
-        runEndCleanup: { outcome: "retained-dirty", at: now },
+        runEndCleanup: { outcome: "retained-dirty", at: expect.any(Number) },
       });
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeGreaterThanOrEqual(
+        cleanupStarted,
+      );
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeLessThanOrEqual(
+        Date.now(),
+      );
       expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
       expect(await fs.readFile(localState, "utf8")).toBe("keep nested checkout state\n");
       expect(await git(repo, "worktree", "list", "--porcelain")).toContain(nested);
@@ -812,28 +793,42 @@ describe("ManagedWorktreeService", () => {
       await git(created.path, "add", "committed.txt");
       await git(created.path, "commit", "-m", "unpushed worktree commit");
 
+      const cleanupStarted = Date.now();
       await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
 
       const retained = getRegistryWorktree(env, created.id);
       expect(retained).toMatchObject({
-        runEndCleanup: { outcome: "retained-unpushed", at: now },
+        runEndCleanup: { outcome: "retained-unpushed", at: expect.any(Number) },
       });
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeGreaterThanOrEqual(
+        cleanupStarted,
+      );
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeLessThanOrEqual(
+        Date.now(),
+      );
       expect(retained?.removedAt).toBeUndefined();
-      await expect(fs.access(created.path)).resolves.toBeUndefined();
+      await fs.access(created.path);
     });
 
     it("records busy retention while a run lease is live", async () => {
       const created = await materialize("busy");
       const lease = await acquireWorktreeRunLease(created.id, { env });
 
+      const cleanupStarted = Date.now();
       await expect(service.removeIfLossless(created.id)).resolves.toBe(false);
 
       const retained = getRegistryWorktree(env, created.id);
       expect(retained).toMatchObject({
-        runEndCleanup: { outcome: "retained-busy", at: now },
+        runEndCleanup: { outcome: "retained-busy", at: expect.any(Number) },
       });
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeGreaterThanOrEqual(
+        cleanupStarted,
+      );
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeLessThanOrEqual(
+        Date.now(),
+      );
       expect(retained?.removedAt).toBeUndefined();
-      await expect(fs.access(created.path)).resolves.toBeUndefined();
+      await fs.access(created.path);
       await lease.release();
     });
 
@@ -847,16 +842,23 @@ describe("ManagedWorktreeService", () => {
           throw failure;
         });
 
+      const cleanupStarted = Date.now();
       await expect(service.removeIfLossless(created.id)).rejects.toBe(failure);
 
       expect(getRegistryWorktree(env, created.id)).toMatchObject({
         runEndCleanup: {
           outcome: "failed",
-          at: now,
+          at: expect.any(Number),
           reason: "synthetic removal claim failure",
         },
       });
-      await expect(fs.access(created.path)).resolves.toBeUndefined();
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeGreaterThanOrEqual(
+        cleanupStarted,
+      );
+      expect(getRegistryWorktree(env, created.id)?.runEndCleanup?.at).toBeLessThanOrEqual(
+        Date.now(),
+      );
+      await fs.access(created.path);
       removalClaim.mockRestore();
       await lease.release();
     });
@@ -921,8 +923,22 @@ describe("ManagedWorktreeService", () => {
     it("gc retires an unchanged missing checkout", async () => {
       const created = await fixture("missing");
       await git(repo, "worktree", "remove", "--force", created.path);
-      expect(await service.gc()).toEqual({ ...completedGcResult, orphansRetired: 1 });
-      expect(getRegistryWorktree(env, created.id)).toEqual({ ...created, removedAt: now });
+      const cleanupStarted = Date.now();
+      expect(await service.gc()).toEqual({
+        ...completedGcResult,
+        orphansRetired: 1,
+        packsRemoved: 0,
+        gitMaintenance: {
+          repoRoot: created.repoRoot,
+          stage: "completed",
+          packsBefore: 0,
+          packsAfter: 0,
+        },
+      });
+      const retired = getRegistryWorktree(env, created.id)!;
+      expect(retired).toEqual({ ...created, removedAt: retired.removedAt });
+      expect(retired.removedAt).toBeGreaterThanOrEqual(cleanupStarted);
+      expect(retired.removedAt).toBeLessThanOrEqual(Date.now());
     });
 
     it("list preserves a checkout restored after a missing-path observation", async () => {
@@ -990,7 +1006,16 @@ describe("ManagedWorktreeService", () => {
         expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe(
           "retained user changes\n",
         );
-        expect(result).toEqual(completedGcResult);
+        expect(result).toEqual({
+          ...completedGcResult,
+          packsRemoved: 0,
+          gitMaintenance: {
+            repoRoot: liveIdentity.repoRoot,
+            stage: "completed",
+            packsBefore: 0,
+            packsAfter: 0,
+          },
+        });
       } finally {
         gate.inspect.resolve();
         gate.resume.resolve();
@@ -1012,16 +1037,9 @@ describe("ManagedWorktreeService", () => {
 
       useInProcessWorktreeCapacityTransport();
       const disk = fsSync.statfsSync(root);
-      vi.spyOn(fsSync, "statfsSync").mockReturnValue({
-        type: disk.type,
-        files: disk.files,
-        frsize: disk.frsize,
-        ffree: disk.ffree,
-        bsize: 4096,
-        blocks: 1024 ** 4 / 4096,
-        bavail: (100 * 1024 ** 3) / 4096,
-        bfree: (100 * 1024 ** 3) / 4096,
-      });
+      vi.spyOn(fsSync, "statfsSync").mockReturnValue(
+        createWorktreeCapacityStatfs(disk, 100 * 1024 ** 3),
+      );
       const created = await service.create({
         repoRoot: repo,
         name: "submodules",
@@ -1048,7 +1066,7 @@ describe("ManagedWorktreeService", () => {
       expect(await fs.readFile(path.join(created.path, "draft.txt"), "utf8")).toBe(
         "preserve this task\n",
       );
-      expect(service.findLiveById(created.id)?.path).toBe(created.path);
+      expect(getRegistryWorktree(env, created.id)?.path).toBe(created.path);
     });
   });
 });

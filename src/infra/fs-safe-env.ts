@@ -35,11 +35,9 @@ export function fsSafeEnvInput(env: Readonly<NodeJS.ProcessEnv>): Readonly<NodeJ
   if (!fallback) {
     return env;
   }
-  const input = { ...env };
+  const input = { ...env, [fallback.key]: fallback.previous };
   if (!fallback.existed) {
     delete input[fallback.key];
-  } else {
-    input[fallback.key] = fallback.previous;
   }
   return input;
 }

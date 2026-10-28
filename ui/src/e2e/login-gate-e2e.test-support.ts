@@ -8,6 +8,7 @@ import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/
 import {
   installMockGateway,
   startProductionControlUiE2eServer,
+  startCopiedProductionControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
 const RECORDED_GATEWAY_REQUESTS_KEY = "openclaw.control-ui-e2e.phone-recovery-requests";
@@ -41,16 +42,19 @@ export type ServiceWorkerObservation = {
 
 export type ObservedGatewayRequest = {
   documentOrdinal: number;
-  method: "chat.history" | "chat.send" | "chat.startup" | "connect" | "sessions.assignOwner";
+  method:
+    | "chat.history"
+    | "chat.send"
+    | "chat.startup"
+    | "connect"
+    | "sessions.assignOwner"
+    | "sessions.messages.subscribe";
   requestId: string;
 };
 
 export type PhoneRecoveryObservation = {
-  schemaVersion: 3;
   proofRevision: "base" | "head" | "local";
   serviceWorker: "normal" | "blocked";
-  targetPath: string;
-  scenarioCompleted: boolean;
   documentRequests: Array<{
     method: string;
     pathname: string;
@@ -64,79 +68,6 @@ export type PhoneRecoveryObservation = {
     status: number;
   }>;
   expectedRevisionSha: string | null;
-  gatewayRequests: ObservedGatewayRequest[];
-  installedArtifacts: Array<
-    InstalledArtifactObservation & {
-      documentOrdinal: number;
-    }
-  >;
-  serviceWorkerState?: {
-    final: ServiceWorkerObservation;
-    initial: ServiceWorkerObservation;
-  };
-  reloadRequired?: {
-    actionCount: number;
-    access: {
-      ariaLive: string | null | undefined;
-      disabled: boolean;
-      height: number;
-      insideFencedOutlet: boolean;
-      tabIndex: number;
-      width: number;
-    };
-    focused: boolean;
-    terminalInvocationCount: number;
-  };
-  recovered?: {
-    actionCount: number;
-    routePath: string;
-  };
-  assignment?: {
-    assignmentMutationCount: number;
-    expectedOwner: string;
-    modelWakeCount: number;
-    selectedOwners: string[];
-    visible: boolean;
-  };
-  failureRetention?: {
-    generatedImage: {
-      alt: string;
-      artifactId: string;
-      artifactDownloadRequestCount: number;
-      blockedUnticketedRequestCount: number;
-      loadedAfterReconnect: boolean;
-      loadedBeforeReconnect: boolean;
-      mediaRequestUrls: string[];
-      naturalWidth: number;
-      renderedSrc: string;
-      requestCount: number;
-      sourcePathname: string;
-    };
-    reconnect: {
-      assignmentMutationCount: number;
-      connectRequestCount: number;
-      connectRequestIds: string[];
-      modelWakeCount: number;
-      transcriptRequestCount: number;
-    };
-    timeoutDelivery: {
-      retainedAfterReconnect: boolean;
-      text: string;
-      visibleBeforeReconnect: boolean;
-    };
-  };
-  final?: {
-    appShellCount: number;
-    connectRequestCount: number;
-    loginGateCount: number;
-    mainInert: boolean | null;
-    modelWakeCount: number;
-    recoveryActionCount: number;
-    reloadCount: number | null;
-    routePath: string;
-    routerOutletInert: boolean | null;
-    terminalInvocationCount: number;
-  };
 };
 
 function isPhoneProofRevision(
@@ -204,10 +135,12 @@ export function phoneProofIdentity(): Pick<
   };
 }
 
-export async function startPhoneProofServer(buildId: string) {
+export async function startPhoneProofServer(buildId: string, productionRoot?: string) {
   const buildDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-login-gate-e2e-"));
   try {
-    const server = await startProductionControlUiE2eServer(buildDir, buildId);
+    const server = productionRoot
+      ? await startCopiedProductionControlUiE2eServer(productionRoot, buildDir, buildId)
+      : await startProductionControlUiE2eServer(buildDir, buildId);
     return {
       baseUrl: server.baseUrl,
       close: async () => {
@@ -224,9 +157,7 @@ export async function startPhoneProofServer(buildId: string) {
   }
 }
 
-export async function observePhoneProofServiceWorker(
-  page: Page,
-): Promise<ServiceWorkerObservation> {
+async function observePhoneProofServiceWorker(page: Page): Promise<ServiceWorkerObservation> {
   return page.evaluate(async () => {
     if (!("serviceWorker" in navigator)) {
       return {
@@ -359,6 +290,7 @@ export async function installPhoneRecoveryRequestObserver(
                 id?: unknown;
                 method?: unknown;
                 type?: unknown;
+                params?: Record<string, unknown>;
               };
               if (
                 frame.type === "req" &&
@@ -367,6 +299,8 @@ export async function installPhoneRecoveryRequestObserver(
                   frame.method === "chat.history" ||
                   frame.method === "chat.send" ||
                   frame.method === "chat.startup" ||
+                  (frame.method === "sessions.messages.subscribe" &&
+                    frame.params?.initialHistory) ||
                   frame.method === "sessions.assignOwner")
               ) {
                 const existing = JSON.parse(
@@ -426,47 +360,17 @@ export async function renderLoginGate(
 }
 
 async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
+  await page.waitForFunction(() => window.openclawControlUi?.snapshot().booted === true);
   await page.evaluate(async (failureMessage) => {
     await customElements.whenDefined("openclaw-login-gate");
-    const app = document.querySelector<
-      HTMLElement & {
-        runtime: { context: { gateway: { stop(): void } } };
-        requestUpdate(): void;
-        updateComplete: Promise<unknown>;
-      }
-    >("openclaw-app")!;
-    if (failureMessage === null) {
-      // The app must also own the no-error state before it can render the gate again.
-      app.runtime.context.gateway.stop();
-      await app.updateComplete;
-    }
-    // Keep the production app wrapper: it owns the safe-area and viewport budget.
+    // This remaining Lit component owns its fixture props; keep all real root callbacks.
     const gate = document.querySelector("openclaw-login-gate") as
       | (HTMLElement & { props: Record<string, unknown>; updateComplete: Promise<unknown> })
       | null;
     if (!gate) {
       throw new Error("Missing mounted login gate");
     }
-    gate.props = {
-      resourceBasePath: "",
-      connected: false,
-      lastError: failureMessage,
-      lastErrorCode: null,
-      hasToken: false,
-      hasPassword: false,
-      gatewayUrl: "ws://127.0.0.1:18789",
-      secret: "",
-      showGatewaySecret: false,
-      onGatewayUrlChange: () => {},
-      onSecretChange: () => {},
-      onToggleGatewaySecret: () => {},
-      onConnect: gate.props.onConnect,
-    };
+    gate.props = { ...gate.props, lastError: failureMessage, lastErrorCode: null };
     await gate.updateComplete;
-    if (failureMessage === null) {
-      app.requestUpdate();
-      await app.updateComplete;
-      await gate.updateComplete;
-    }
   }, lastError);
 }

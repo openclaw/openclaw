@@ -1,8 +1,7 @@
 import { hash } from "node:crypto";
 import { type WebClientOptions, WebClient } from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
-import type { SlackLookupClientOptions, SlackProxyDispatcher } from "./client-options.js";
+import type { SlackProxyDispatcher } from "./client-options.js";
 import {
   resolveSlackLookupClientOptions,
   resolveSlackReadClientOptions,
@@ -19,7 +18,7 @@ const SLACK_STARTUP_AUTH_RETRY_BUDGET_MS = 35_000;
 const slackWriteClientCache = new Map<string, WebClient>();
 const slackListenerWriteClientCache = new WeakMap<
   WebClient,
-  { teamId: string | undefined; client?: WebClient }
+  { teamId: string | undefined; client: WebClient }
 >();
 
 type SlackWriteClientCacheOptions = Pick<WebClientOptions, "slackApiUrl" | "teamId">;
@@ -32,18 +31,21 @@ export {
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
 
-export function createSlackWebClient(
-  token: string,
-  options: WebClientOptions = {},
-  assertDirectAdapterHandoff?: () => void,
+function createSlackClientFactory<Options extends WebClientOptions>(
+  resolveOptions: (
+    options?: Options,
+    dispatcher?: SlackProxyDispatcher,
+    assertDirectAdapterHandoff?: () => void,
+  ) => WebClientOptions,
 ) {
-  // Shared or mixed-operation clients stay timeout-free unless the caller opts in.
-  // Slack can commit a mutation before a late response, so a default deadline is unsafe here.
-  return new WebClient(
-    token,
-    resolveSlackWebClientOptions(options, undefined, assertDirectAdapterHandoff),
-  );
+  return (token: string, options?: Options, assertDirectAdapterHandoff?: () => void) =>
+    new WebClient(token, resolveOptions(options, undefined, assertDirectAdapterHandoff));
 }
+
+// Shared clients stay timeout-free: Slack can commit a mutation before a late response.
+export const createSlackWebClient = createSlackClientFactory(resolveSlackWebClientOptions);
+export const createSlackLookupClient = createSlackClientFactory(resolveSlackLookupClientOptions);
+export const createSlackWriteClient = createSlackClientFactory(resolveSlackWriteClientOptions);
 
 export function createSlackReadClient(
   token: string,
@@ -58,14 +60,14 @@ export function createSlackReadClient(
 }
 
 function createSlackStartupAuthFetch(baseFetch: SlackFetch): SlackFetch {
-  const deadline = Date.now() + SLACK_STARTUP_AUTH_RETRY_BUDGET_MS;
+  const deadline = performance.now() + SLACK_STARTUP_AUTH_RETRY_BUDGET_MS;
   return async (input, init) => {
     const response = await baseFetch(input, init);
     if (response.status !== 429) {
       return response;
     }
     const retryAfter = Number.parseInt(response.headers.get("retry-after") ?? "", 10);
-    const remainingMs = Math.max(0, deadline - Date.now());
+    const remainingMs = Math.max(0, deadline - performance.now());
     if (!Number.isFinite(retryAfter) || retryAfter * 1000 <= remainingMs) {
       return response;
     }
@@ -95,28 +97,6 @@ export function createSlackStartupAuthClient(token: string, options: WebClientOp
   });
 }
 
-export function createSlackLookupClient(
-  token: string,
-  options: SlackLookupClientOptions = {},
-  assertDirectAdapterHandoff?: () => void,
-) {
-  return new WebClient(
-    token,
-    resolveSlackLookupClientOptions(options, undefined, assertDirectAdapterHandoff),
-  );
-}
-
-export function createSlackWriteClient(
-  token: string,
-  options: WebClientOptions = {},
-  assertDirectAdapterHandoff?: () => void,
-) {
-  return new WebClient(
-    token,
-    resolveSlackWriteClientOptions(options, undefined, assertDirectAdapterHandoff),
-  );
-}
-
 export function createSlackTokenCacheKey(token: string): string {
   return `sha256:${hash("sha256", token, "base64url")}`;
 }
@@ -132,9 +112,6 @@ export function getSlackWriteClient(
   token: string,
   options: SlackWriteClientCacheOptions = {},
 ): WebClient {
-  if (captureEffectAuthority().active) {
-    return createSlackWriteClient(token, options);
-  }
   const resolvedOptions = resolveSlackWriteClientOptions(options);
   const tokenKey = slackWriteClientCacheKey(token, resolvedOptions);
   const cached = readLruMapEntry(slackWriteClientCache, tokenKey);
@@ -157,7 +134,6 @@ export function getSlackListenerWriteClient(params: {
   if (!token) {
     return undefined;
   }
-  const effectScoped = captureEffectAuthority().active;
   const cached = slackListenerWriteClientCache.get(params.listenerClient);
   if (cached) {
     // Bolt pools listener clients by authorized team. Reusing one for a
@@ -165,9 +141,7 @@ export function getSlackListenerWriteClient(params: {
     if (cached.teamId !== teamId) {
       return undefined;
     }
-    if (!effectScoped && cached.client) {
-      return cached.client;
-    }
+    return cached.client;
   }
   const headers = Object.fromEntries(
     Object.entries(params.clientOptions?.headers ?? {}).filter(
@@ -187,10 +161,6 @@ export function getSlackListenerWriteClient(params: {
       timeout: 0,
     }),
   );
-  if (!effectScoped) {
-    slackListenerWriteClientCache.set(params.listenerClient, { teamId, client });
-  } else if (!cached) {
-    slackListenerWriteClientCache.set(params.listenerClient, { teamId });
-  }
+  slackListenerWriteClientCache.set(params.listenerClient, { teamId, client });
   return client;
 }

@@ -446,9 +446,9 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Verify release workflow evidence
@@ -665,6 +665,27 @@ jobs:
             '{print $1 "  " asset}' \
             > "$CLOSEOUT_DIR/stable-main-closeout.json.sha256"
 
+      - name: Verify the production website downloads
+        timeout-minutes: 25
+        env:
+          GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "OPENCLAW_GH_TOKEN must permit Actions dispatch/read on openclaw/openclaw.ai." >&2
+            exit 1
+          fi
+          # The website owns deployment and readback. Dispatch once and wait for
+          # the returned run ID; never substitute an unrelated successful run.
+          run_id="$(gh api --method POST \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            repos/openclaw/openclaw.ai/actions/workflows/companion-downloads-deployed.yml/dispatches \
+            -f ref=main -F return_run_details=true \
+            -f 'inputs[site_url]=https://openclaw.ai/' --jq '.workflow_run_id')"
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || { echo "Website dispatch did not return a run ID." >&2; exit 1; }
+          echo "Website verification: https://github.com/openclaw/openclaw.ai/actions/runs/$run_id" >> "$GITHUB_STEP_SUMMARY"
+          gh run watch "$run_id" --repo openclaw/openclaw.ai --exit-status --interval 15
+
       - name: Attach immutable closeout evidence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -702,7 +723,7 @@ jobs:
             "openclaw-${release_version}-stable-main-closeout.json.sha256"
 
       - name: Upload closeout workflow evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-stable-main-closeout-${{ needs.resolve.outputs.tag }}
           path: ${{ runner.temp }}/openclaw-stable-main-closeout

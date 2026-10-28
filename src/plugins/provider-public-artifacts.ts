@@ -1,5 +1,4 @@
 import path from "node:path";
-// Extracts provider public artifacts from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
@@ -23,7 +22,7 @@ import {
   type ProviderPolicySurface,
 } from "./provider-policy-surface.js";
 import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
-import { resolvePluginRootPublicSurfacePath } from "./public-surface-runtime.js";
+import { resolvePluginRootPublicSurfaceLocation } from "./public-surface-runtime.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
 
 export { listProviderPolicyOwners } from "./provider-policy-owners.js";
@@ -138,18 +137,17 @@ export function resolveProviderPolicySurfaceForOwner(
   if (record.origin !== "bundled" && record.trustedOfficialInstall !== true) {
     return null;
   }
-  const modulePath = resolvePluginRootPublicSurfacePath({
+  const resolved = resolvePluginRootPublicSurfaceLocation({
     pluginRoot: record.rootDir,
     pluginId: record.id,
     entrySource: record.source,
     artifactBasename: PROVIDER_POLICY_ARTIFACT,
   });
-  if (!modulePath) {
+  if (!resolved) {
     return null;
   }
   const location = {
-    modulePath,
-    boundaryRoot: record.rootDir,
+    ...resolved,
     surfaceLabel: `plugin public surface ${PROVIDER_POLICY_ARTIFACT}`,
     origin: record.origin,
     pluginId: record.id,
@@ -166,7 +164,7 @@ export function resolveProviderPolicySurfaceForOwner(
     boundaryLabel: "plugin root",
     rejectHardlinks: shouldRejectHardlinkedPluginFiles(record),
   }).modulePath;
-  const loader = getPluginSetupModuleLoader(record, source, record.rootDir);
+  const loader = getPluginSetupModuleLoader(record, source, resolved.boundaryRoot);
   return loader.initialize(() =>
     // SAFETY: The public-artifact extractor validates each named export before exposing it.
     extractProviderPolicySurface(loader(source) as Record<string, unknown>),

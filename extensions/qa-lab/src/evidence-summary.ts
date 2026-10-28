@@ -317,12 +317,8 @@ function buildQaEvidenceSummaryFields(params: QaEvidenceSummaryInput<QaEvidenceS
 function buildQaEvidenceSummary(
   params: QaEvidenceSummaryInput<QaEvidenceSummaryV2Entry>,
 ): QaEvidenceSummaryV2Json {
-  const profileOptions = readQaScorecardProfileOptions(params.profile);
   return qaEvidenceSummarySchema.parse({
-    ...buildQaEvidenceSummaryFields({
-      ...params,
-      evidenceMode: params.evidenceMode ?? profileOptions.evidenceMode,
-    }),
+    ...buildQaEvidenceSummaryFields(params),
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   });
 }

@@ -23,6 +23,13 @@ complete message remains queued for a follow-up turn. Preparation and the
 `turn/steer` acknowledgment do not confirm transcript commitment. A message sent
 to Codex without a confirmed transcript commit is not replayed automatically.
 
+Before a terminal tool result interrupts the native turn, OpenClaw closes new
+steering admission and waits up to one second for already submitted input to
+receive its consumption notification. If the notification arrives, the input
+is confirmed committed. If the grace period expires, it retains the uncertain,
+non-replayable outcome. Explicit cancellation and aborts do not wait for this
+grace period.
+
 When Codex confirms the transcript commit, OpenClaw saves completed visible assistant
 items before the steered user message, including items before a tool or sleep
 handoff. Each item keeps its own identity so later steers do not duplicate it.
@@ -37,6 +44,34 @@ Codex buffers the input for the next model boundary.
 
 Use `/queue followup` or `/queue collect` when messages should queue
 by default instead of steering. See [Steering queue](/concepts/queue-steering).
+
+## Configuration and policy warnings
+
+The Codex warning about an unknown `ultrafast_mode` feature requirement appears
+once per OpenClaw chat session, including bursts of separate native notifications
+in one response. Later turns, retries, and replacement native threads or
+app-server connections reuse the chat's receipt. Different text, details, or
+diagnostic locations still get their own first notice. Other operational and
+policy warnings, and Guardian events, keep their normal delivery even when their
+wording repeats.
+
+Receipts contain hashes, not private policy names or warning text, in the chat's
+existing plugin-owned session state. They survive Gateway restart. A new chat or
+an actual reset gets its own first warning, including resets that retain the
+session ID but rotate its lifecycle revision. Incognito state follows the chat's
+existing process-lifetime contract; it is not copied to durable storage. Existing
+plugin-state cleanup on reset, deletion, or plugin disablement clears receipts.
+
+Only successful projection is acknowledged. Failed or ignored projection can
+retry. Storage failure, or a crash between projection and receipt persistence,
+can allow a repeat rather than hide an unseen warning. Each chat retains at most
+256 distinct variants of this diagnostic without evicting acknowledged receipts;
+additional variants remain visible but are not remembered for deduplication.
+
+This changes duplicate delivery, not Codex feature support or enterprise policy
+enforcement. The managed-app-server Doctor check validates the selected binary
+and version; a passing result does not certify that Codex recognizes every feature
+in the account's policy.
 
 ## Diagnostic-log warnings
 

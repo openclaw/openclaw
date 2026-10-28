@@ -5,9 +5,10 @@ Official OpenClaw provider plugin for the **Meta API** — an OpenAI-compatible
 
 - **Base URL:** `https://api.meta.ai/v1`
 - **Auth:** `Authorization: Bearer $MODEL_API_KEY`
-- **Models:** `muse-spark-1.3`, `muse-spark-1.3-contributor`, `muse-spark-1.2`, `muse-spark-1.2-contributor`, `muse-spark-1.1` (reasoning models)
+- **Models:** `muse-wonder-1.0`, `muse-spark-1.3`, `muse-spark-1.3-contributor`, `muse-spark-1.2`, `muse-spark-1.2-contributor`, `muse-spark-1.1` (reasoning models)
   - Context window: 1,048,576 tokens (input + output share the budget)
   - Reasoning effort: `minimal | low | medium | high | xhigh` (OpenClaw default: `high`)
+  - `max` effort on Muse Wonder and Muse Spark 1.3 Standard
   - Vision: image input in `user` messages
   - Tool calling + streaming
   - Stateless encrypted reasoning replay (`store: false`)
@@ -34,6 +35,13 @@ Meta's [model catalog](https://dev.meta.ai/docs/models) lists text, image, video
 audio, and PDF input for these models. OpenClaw's model catalog directly represents
 text and image input only; the other upstream modalities are not model-manifest input
 values. Meta does not publish an exact maximum-output figure for these catalog rows.
+OpenClaw uses a 131,072-token catalog output cap, including reasoning tokens.
+
+Muse Wonder is Standard-only on the public API. Muse Wonder Full
+(`muse-wonder-full-1.0`) is exclusive to the native Muse Code CLI on Power Usage
+and Maximum Usage subscriptions; this API plugin does not expose it. `max`
+effort does not upgrade Wonder to Full. See
+[model availability](https://dev.meta.ai/docs/models#muse-wonder-availability).
 
 ## Usage
 
@@ -55,13 +63,14 @@ export MODEL_API_KEY=<key>
 {
   agents: {
     defaults: {
-      model: { primary: "meta/muse-spark-1.3" },
+      model: { primary: "meta/muse-wonder-1.0" },
     },
   },
 }
 ```
 
-Or run onboarding and choose **Meta**.
+Or run onboarding and choose **Meta**. Onboarding keeps Muse Spark 1.3 as the
+lower-cost default; choose Muse Wonder explicitly for the premium tier.
 
 ## Thinking / reasoning
 
@@ -69,7 +78,7 @@ Or run onboarding and choose **Meta**.
 OpenClaw defaults to `high`. Meta's
 [reasoning documentation](https://dev.meta.ai/docs/reasoning/) says that an
 omitted effort uses a model-determined level, so `high` is an OpenClaw policy rather
-than Meta's omitted-parameter default. `off` maps to `minimal` because Muse Spark does
+than Meta's omitted-parameter default. `off` maps to `minimal` because Muse Wonder and Muse Spark do
 not accept `none`.
 
 ## Docs
@@ -84,3 +93,4 @@ pnpm test:live -- extensions/meta/meta.live.test.ts
 ```
 
 The live suite exercises enabled Meta cases against `POST /v1/responses`.
+Use `-t muse-wonder-1.0` to run just Wonder's text, image, reasoning, and tool/replay cases.

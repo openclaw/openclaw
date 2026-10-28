@@ -2,15 +2,16 @@ import {
   SSEClientTransport,
   SseError,
   type SSEClientTransportOptions,
-} from "@modelcontextprotocol/sdk/client/sse.js";
-import {
   StreamableHTTPClientTransport,
-  StreamableHTTPError,
+  SdkHttpError,
+  SdkErrorCode,
   type StreamableHTTPClientTransportOptions,
-} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { STDIO_DEFAULT_MAX_BUFFER_SIZE } from "@modelcontextprotocol/sdk/shared/stdio.js";
-import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+  STDIO_DEFAULT_MAX_BUFFER_SIZE,
+  type FetchLike,
+  type Transport,
+  type JSONRPCMessage,
+} from "@modelcontextprotocol/client";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 
 const STREAM_RETRY_EXHAUSTED_RE = /^Maximum reconnection attempts \(\d+\) exceeded\.$/;
 const SESSION_TERMINATION_TIMEOUT_MS = 5_000;
@@ -38,6 +39,7 @@ function isEventStreamResponse(response: Response): boolean {
 function limitMcpResponseStream<Chunk extends Uint8Array>(
   body: ReadableStream<Chunk>,
   eventStream: boolean,
+  onSseLine?: (bytes: Uint8Array, complete: boolean) => void,
 ): ReadableStream<Chunk> {
   // Match the SDK stdio cap per MCP message. Resetting at each SSE event keeps
   // long-lived streams healthy without allowing one event to grow unbounded.
@@ -108,6 +110,7 @@ function limitMcpResponseStream<Chunk extends Uint8Array>(
             previousByteWasCr = false;
             checkEventLimit();
           }
+          onSseLine?.(bytes.subarray(cursor, end), delimiter >= 0);
           if (delimiter < 0) {
             break;
           }
@@ -183,7 +186,10 @@ function toEventSourceByteStream(
   });
 }
 
-function limitMcpEventSourceResponse(response: EventSourceResponse): Response {
+function limitMcpEventSourceResponse(
+  response: EventSourceResponse,
+  onEndpoint: (data: string) => void,
+): Response {
   // EventSource needs redirect and auth response metadata. Replace only the
   // body so the size boundary does not change its connection behavior.
   if (!response.body && response instanceof Response) {
@@ -198,8 +204,13 @@ function limitMcpEventSourceResponse(response: EventSourceResponse): Response {
       }
     }
   }
+  const observeLine =
+    response.status === 200 &&
+    headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream"
+      ? createSseEndpointObserver(onEndpoint)
+      : undefined;
   const body = response.body
-    ? limitMcpResponseStream(toEventSourceByteStream(response.body), true)
+    ? limitMcpResponseStream(toEventSourceByteStream(response.body), true, observeLine)
     : null;
   const limitedResponse = new Response(body, {
     status: response.status,
@@ -211,6 +222,39 @@ function limitMcpEventSourceResponse(response: EventSourceResponse): Response {
     redirected: { value: response.redirected },
   });
   return limitedResponse;
+}
+
+// Reuse the size limiter's linear CR/LF scanner, including split CRLF handling.
+function createSseEndpointObserver(onEndpoint: (data: string) => void) {
+  const decoder = new TextDecoder();
+  const fragments: string[] = [];
+  let eventType = "";
+  const dataLines: string[] = [];
+  return (bytes: Uint8Array, complete: boolean) => {
+    const text = decoder.decode(bytes, { stream: true });
+    if (!complete) {
+      fragments.push(text);
+      return;
+    }
+    const line = fragments.length > 0 ? fragments.join("") + text : text;
+    fragments.length = 0;
+    if (line === "") {
+      if (eventType === "endpoint" && dataLines.length > 0) {
+        onEndpoint(dataLines.join("\n"));
+      }
+      eventType = "";
+      dataLines.length = 0;
+      return;
+    }
+    const colon = line.indexOf(":");
+    const field = colon < 0 ? line : line.slice(0, colon);
+    const value = colon < 0 ? "" : line.slice(colon + (line[colon + 1] === " " ? 2 : 1));
+    if (field === "event") {
+      eventType = value;
+    } else if (field === "data") {
+      dataLines.push(value);
+    }
+  };
 }
 
 abstract class OpenClawMcpHttpTransport implements Transport {
@@ -267,6 +311,8 @@ abstract class OpenClawMcpHttpTransport implements Transport {
 /** Converts legacy SSE terminal HTTP failures into the lifecycle close the SDK omits. */
 export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
   protected readonly transport: SSEClientTransport;
+  private announcedEndpoint?: string;
+  private sessionReplacedError?: McpSseSessionExpiredError;
 
   constructor(url: URL, options?: SSEClientTransportOptions) {
     super();
@@ -292,10 +338,39 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
           const raw = configuredEventSourceFetch
             ? await configuredEventSourceFetch(eventUrl, init)
             : await baseFetch(eventUrl, init);
-          return limitMcpEventSourceResponse(raw);
+          return limitMcpEventSourceResponse(raw, (data) =>
+            this.handleAnnouncedEndpoint(data, url),
+          );
         },
       },
     });
+  }
+
+  // The SDK changes its POST endpoint on reconnect without reinitializing it.
+  // Retire a replacement session before a tool call can reach that endpoint.
+  private handleAnnouncedEndpoint(data: string, url: URL): void {
+    let endpoint: string;
+    try {
+      endpoint = new URL(data, url).href;
+    } catch {
+      return;
+    }
+    if (this.announcedEndpoint === undefined) {
+      this.announcedEndpoint = endpoint;
+      return;
+    }
+    if (endpoint === this.announcedEndpoint || this.sessionReplacedError) {
+      return;
+    }
+    this.sessionReplacedError = new McpSseSessionExpiredError(
+      `MCP SSE server reconnected onto a replacement session endpoint: ${endpoint}`,
+    );
+    materializeErrorStack(this.sessionReplacedError);
+    this.emitError(this.sessionReplacedError);
+    void this.close();
+    // EventSource can arm its reconnect timer after this callback returns.
+    // Close again on the next turn so that new timer cannot survive.
+    setTimeout(() => void this.transport.close(), 0).unref();
   }
 
   protected onTransportError(error: Error): void {
@@ -307,11 +382,14 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
       void this.close();
       // EventSource schedules reconnect after its error callback returns.
       // Close again on the next turn so that new timer cannot survive.
-      setTimeout(() => void this.transport.close(), 0).unref?.();
+      setTimeout(() => void this.transport.close(), 0).unref();
     }
   }
 
   async send(message: JSONRPCMessage): Promise<void> {
+    if (this.sessionReplacedError) {
+      throw this.sessionReplacedError;
+    }
     if (this.closed) {
       throw new Error("MCP SSE transport is closed");
     }
@@ -319,12 +397,13 @@ export class OpenClawSSEClientTransport extends OpenClawMcpHttpTransport {
   }
 }
 
-/** Owns Streamable HTTP notification recovery and stateful cleanup around SDK 1.30.0. */
+/** Owns Streamable HTTP notification recovery and stateful cleanup. */
 export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransport {
   protected readonly transport: StreamableHTTPClientTransport;
   private readonly url: URL;
   private readonly cleanupFetch: FetchLike;
   private readonly requestInit?: RequestInit;
+  private failedStartupSessionId?: string;
   private pendingExpiredNotificationGet = false;
   private terminatedSessionId?: string;
 
@@ -338,6 +417,15 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
         throw new Error("MCP Streamable HTTP transport is closed");
       }
       const response = limitMcpHttpResponse(await this.cleanupFetch(input, init));
+      if (init?.method === "GET" && !response.ok) {
+        // Notification GETs have no error-body contract. Do not let a body that stays open block recovery.
+        void response.body?.cancel().catch(() => undefined);
+      }
+      if (init?.method === "POST" && !response.ok && this.transport.sessionId === undefined) {
+        // V2 only records successful handshakes. A failed startup can still allocate a session.
+        this.failedStartupSessionId =
+          response.headers.get("mcp-session-id") || this.failedStartupSessionId;
+      }
       if (init?.method === "GET" && response.status === 404 && this.sessionId !== undefined) {
         this.pendingExpiredNotificationGet = true;
       }
@@ -350,7 +438,7 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
   }
 
   get sessionId(): string | undefined {
-    return this.transport.sessionId;
+    return this.transport.sessionId ?? this.failedStartupSessionId;
   }
 
   get protocolVersion(): string | undefined {
@@ -361,14 +449,12 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
     if (this.closed) {
       // SDK reconnect callbacks can finish after close() cleared their old timer.
       // Defer a second close so any timer armed later in that callback is cancelled.
-      setTimeout(() => void this.transport.close(), 0).unref?.();
+      setTimeout(() => void this.transport.close(), 0).unref();
       return;
     }
     this.emitError(error);
     const sessionExpired =
-      this.pendingExpiredNotificationGet &&
-      error instanceof StreamableHTTPError &&
-      error.code === 404;
+      this.pendingExpiredNotificationGet && error instanceof SdkHttpError && error.status === 404;
     if (sessionExpired) {
       this.pendingExpiredNotificationGet = false;
     }
@@ -406,9 +492,10 @@ export class OpenClawStreamableHTTPClientTransport extends OpenClawMcpHttpTransp
     // A terminated session is no longer addressable; MCP servers report 404
     // for that id, which is already the desired outcome of cleanup.
     if (!response.ok && response.status !== 404 && response.status !== 405) {
-      throw new StreamableHTTPError(
-        response.status,
+      throw new SdkHttpError(
+        SdkErrorCode.ClientHttpFailedToTerminateSession,
         `Failed to terminate session: ${response.statusText}`,
+        { status: response.status, statusText: response.statusText },
       );
     }
     this.terminatedSessionId = sessionId;

@@ -21,20 +21,13 @@ export function resolveCodexLocalRuntimeAttribution(
   const authProfileProvider = normalizeRuntimeId(
     params.runtimePlan?.auth?.authProfileProviderForAuth,
   );
-  if (
+  const useCodexResponsesApi =
     normalizeRuntimeId(params.runtimePlan?.observability.harnessId) === "codex" &&
     authProfileProvider !== OPENAI_PROVIDER_ID &&
     normalizeRuntimeId(params.model.provider) === OPENAI_PROVIDER_ID &&
-    normalizeRuntimeId(params.model.api) === OPENAI_RESPONSES_API
-  ) {
-    return {
-      provider: OPENAI_PROVIDER_ID,
-      api: OPENAI_CODEX_RESPONSES_API,
-    };
-  }
-
+    normalizeRuntimeId(params.model.api) === OPENAI_RESPONSES_API;
   return {
-    provider: params.provider,
-    api: params.model.api,
+    provider: useCodexResponsesApi ? OPENAI_PROVIDER_ID : params.provider,
+    api: useCodexResponsesApi ? OPENAI_CODEX_RESPONSES_API : params.model.api,
   };
 }

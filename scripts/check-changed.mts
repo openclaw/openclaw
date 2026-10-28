@@ -20,6 +20,7 @@ import {
   hasConfigDocInput,
   isConfigDocSchemaSourcePath,
   hasDeadcodeScannedSource,
+  hasLineCapRatchetInput,
   hasProtocolEventCoverageInput,
   listChangedPathsFromGit,
   listStagedChangedPaths,
@@ -140,6 +141,8 @@ const EXTENSION_TEST_CORE_IMPORT_PATH_RE =
   /^(?:extensions\/|test\/helpers\/|scripts\/(?:check-no-extension-test-core-imports|check-file-utils)\.ts$|scripts\/check-changed\.m[jt]s$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/(?:control-ui-i18n-[^/]+\.ts|control-ui-i18n-config\.json))$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
+const CONTROL_UI_CONTROLLERS_PATH_RE =
+  /^(?:package\.json$|ui\/src\/|extensions\/(?:(?:workboard|memory-core|nostr|whatsapp)\/browser\/|(?:clawrouter|x)\/src\/control-ui\.tsx$)|config\/(?:control|plugin)-ui-\w+-baseline\.txt$|scripts\/(?:check-control-ui-controllers|control-ui-solid-inventory)\.mts$|scripts\/lib\/shrink-ratchet\.mts$|test\/scripts\/check-control-ui-controllers\.test\.ts$)/u;
 const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "extensions/tsconfig.json";
@@ -150,7 +153,7 @@ const CORE_LINT_ARGV_BYTES = 24 * 1024;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
-const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|ts)|public\/themes\/[^/]+\.css)$/u;
+const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.css|public\/themes\/[^/]+\.css)$/u;
 // These baselines are checked by their ratchets, not consumed by Oxlint.
 const LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:docs\/|README\.md$|.*\.mdx?$|config\/(?:assertion-safety-baseline|env-var-count-budget|max-lines-baseline|test-timeout-race-baseline|test-mock-exports-baseline)\.txt$)/u;
@@ -343,7 +346,10 @@ function shouldRunPromptSnapshotOwnerTest(paths: string[]) {
 }
 
 function shouldRunControlUiI18nVerify(paths: string[]) {
-  return paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath));
+  return (
+    detectChangedScope(paths).runControlUiI18n ||
+    paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath))
+  );
 }
 
 function shouldRunRuntimeSidecarBaselineCheck(paths: string[]) {
@@ -487,8 +493,22 @@ export function createChangedCheckPlan(
   const typechecks = new Set<ChangedCheckCommand>();
   const lintChecks = new Set<ChangedCheckCommand>();
   const baseEnv = { ...resolveLocalCheckEnv(options.env ?? process.env) };
+  const controllerGuardArgs = [
+    "check:control-ui-controllers",
+    ...(options.staged ? ["--staged"] : []),
+    ...(!options.staged && baseEnv.CHECKOUT_BASE_SHA
+      ? ["--base", baseEnv.CHECKOUT_BASE_SHA, "--no-merge-base"]
+      : options.base
+        ? ["--base", options.base]
+        : []),
+  ];
   delete baseEnv.OPENCLAW_OXLINT_CHANGED_PATHS;
+  delete baseEnv.OPENCLAW_OXLINT_CHANGED_BASE;
   const cwd = process.cwd();
+  const changedOxlintContext = {
+    base: !options.staged ? baseEnv.CHECKOUT_BASE_SHA || options.base : undefined,
+    cwd,
+  };
   if (
     result.paths.some((changedPath) => LINTABLE_EXTENSION_PATH_RE.test(changedPath)) &&
     cachedGeneratedExtensionAssetPaths?.cwd !== cwd
@@ -554,10 +574,14 @@ export function createChangedCheckPlan(
       );
     }
     for (const command of [...lintChecks].filter(isOxlintCommand)) {
-      command.env = createChangedOxlintEnv(result.paths, command.env ?? baseEnv);
+      command.env = createChangedOxlintEnv(
+        result.paths,
+        command.env ?? baseEnv,
+        changedOxlintContext,
+      );
     }
     if (options.lintOnly) {
-      const lintEnv = createChangedOxlintEnv(result.paths, baseEnv);
+      const lintEnv = createChangedOxlintEnv(result.paths, baseEnv, changedOxlintContext);
       const lintCommands = commands.filter((command) => lintChecks.has(command));
       const selection = options.lintSelection;
       const selectedCentralCommands = selection?.central
@@ -587,6 +611,7 @@ export function createChangedCheckPlan(
             }
             if (command.args[0] === "lint") {
               return [
+                { ...command, name: "Control UI controller guard", args: controllerGuardArgs },
                 { ...command, name: "Control UI i18n catalog", args: ["lint:ui:i18n"] },
                 {
                   ...command,
@@ -597,7 +622,6 @@ export function createChangedCheckPlan(
                     "tsx",
                     "scripts/run-stylelint.mts",
                     "ui/src/**/*.css",
-                    "ui/src/**/*.ts",
                     "ui/public/themes/*.css",
                   ],
                 },
@@ -708,9 +732,7 @@ export function createChangedCheckPlan(
     );
   }
   add("conflict markers", ["check:no-conflict-markers"]);
-  if (
-    result.paths.some((file) => /\.(?:ts|tsx|mts|mjs)$/u.test(file) || file === ".oxlintrc.json")
-  ) {
+  if (hasLineCapRatchetInput(result.paths)) {
     add("line-cap growth ratchet", [
       "check:line-cap-ratchet",
       ...(options.staged ? ["--staged"] : []),
@@ -753,6 +775,12 @@ export function createChangedCheckPlan(
   if (result.paths.some((file) => /^(?:src|extensions|packages|scripts)\//u.test(file))) {
     add("SQLite worker ratchet", [
       "check:database-worker-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
+    add("SQLite dialect ratchet", [
+      "check:database-dialect-ratchet",
       ...(options.staged ? ["--staged"] : []),
       "--base",
       options.base ?? (options.staged ? "HEAD" : "origin/main"),
@@ -995,6 +1023,9 @@ export function createChangedCheckPlan(
   } else if (shouldRunControlUiI18nVerify(result.paths)) {
     addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
   }
+  if (!runAll && result.paths.some((file) => CONTROL_UI_CONTROLLERS_PATH_RE.test(file))) {
+    addLint("Control UI controller guard", controllerGuardArgs);
+  }
 
   if (typeLanes.all) {
     addTypecheck("typecheck all", ["tsgo:all"]);
@@ -1026,7 +1057,11 @@ export function createChangedCheckPlan(
   }
 
   if (runAll) {
-    addLint("lint", ["lint"]);
+    addLint("lint", [
+      "lint",
+      ...(options.staged ? ["--staged"] : []),
+      ...(options.base ? ["--base", options.base] : []),
+    ]);
     add("runtime import cycles", ["check:import-cycles"]);
     return finishPlan("all");
   }
@@ -1622,16 +1657,19 @@ export async function runChangedCheck(
       )
     : undefined;
   const timings: ChangedCheckTiming[] = [];
+  let failure = 0;
   for (const command of plan.commands) {
     const status = await runPlanCommand(command, timings, coreTestCheck);
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
+    failure ||= status;
+    // Timeouts and cancellation deliberately stop admitting new work.
+    if (status === 124 || status >= 128) {
+      failure = status;
+      break;
     }
   }
 
   printSummary(timings, options);
-  return 0;
+  return failure;
 }
 
 function sameArgs(left: string[], right: string[]) {
@@ -1861,8 +1899,7 @@ function isDirectRun() {
   return isDirectRunUrl(process.argv[1], import.meta.url);
 }
 
-async function main() {
-  const argv = process.argv.slice(2);
+export async function main(argv = process.argv.slice(2)) {
   let args: ReturnType<typeof parseArgs>;
   try {
     args = parseArgs(argv);
@@ -1937,19 +1974,11 @@ async function main() {
       ) {
         const delegated = await runChangedCheckViaCrabbox(argv, process.env);
         if (delegated.backendUnavailable) {
-          // Say this loudly: the proof below is local, so whoever reads the run
-          // knows which machine produced it and that Linux-only lanes are unproven.
           console.error(
-            "[check:changed] the remote backend never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
+            "[check:changed] remote proof is unavailable. Use PR CI or explicitly select a qualified local scope; platform-specific requirements remain unproven. Local checks were not started.",
           );
         }
-        process.exitCode = delegated.backendUnavailable
-          ? await runChangedCheck(result, {
-              ...args,
-              typecheckResult,
-              explicitPaths: args.paths.length > 0,
-            })
-          : delegated.exitCode;
+        process.exitCode = delegated.exitCode;
       } else {
         process.exitCode = await runChangedCheck(result, {
           ...args,

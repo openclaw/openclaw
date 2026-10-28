@@ -15,7 +15,17 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-const BASETEN_MANIFEST_CATALOG = manifest.modelCatalog.providers.baseten;
+const declaredCatalog = manifest.modelCatalog.providers.baseten;
+export const BASETEN_DECISION_MODEL_IDS = new Set(
+  declaredCatalog.models
+    .filter((model) => model.inference?.chat === false)
+    .map((model) => model.id),
+);
+// Decision-only rows have no conversational token budget or chat transport.
+const BASETEN_MANIFEST_CATALOG = {
+  ...declaredCatalog,
+  models: declaredCatalog.models.filter((model) => model.inference?.chat !== false),
+};
 const BASETEN_MODEL_COMPAT = new Map(
   buildManifestModelProviderConfig({
     providerId: "baseten",
@@ -37,6 +47,7 @@ const CHAT_TEMPLATE_THINKING_MODEL_IDS = new Set([
 const BASE_COMPAT: ModelCompatConfig = {
   supportsStore: false,
   supportsDeveloperRole: false,
+  supportsReasoningEffort: false,
   supportsUsageInStreaming: true,
   supportsStrictMode: true,
   supportsTools: true,
@@ -55,7 +66,7 @@ export function usesBasetenChatTemplateThinking(modelId: string): boolean {
 export function buildBasetenModelCompat(modelId: string): ModelCompatConfig {
   return {
     ...BASE_COMPAT,
-    ...structuredClone(BASETEN_MODEL_COMPAT.get(modelId)),
+    ...BASETEN_MODEL_COMPAT.get(modelId),
   };
 }
 
@@ -76,20 +87,6 @@ function readPerTokenPrice(value: unknown): number | undefined {
     : undefined;
 }
 
-function applyLiveReasoningEffortCompat(
-  fallbackCompat: ModelCompatConfig,
-  supportsReasoningEffort: boolean,
-): ModelCompatConfig {
-  if (supportsReasoningEffort) {
-    return { ...fallbackCompat, supportsReasoningEffort: true };
-  }
-  const compat = { ...fallbackCompat };
-  delete compat.supportsReasoningEffort;
-  delete compat.supportedReasoningEfforts;
-  delete compat.reasoningEffortMap;
-  return compat;
-}
-
 function projectLiveModel(
   row: Record<string, unknown>,
   fallback: ModelDefinitionConfig | undefined,
@@ -98,7 +95,7 @@ function projectLiveModel(
     return undefined;
   }
   const id = normalizeOptionalString(row.id);
-  if (!id) {
+  if (!id || id.startsWith("decision-models/")) {
     return undefined;
   }
 
@@ -118,9 +115,14 @@ function projectLiveModel(
   const supportsReasoningEffort =
     features.has("reasoning_effort") ||
     (hasDocumentedSparseFeatures && fallbackCompat.supportsReasoningEffort === true);
-  const compat = hasLiveFeatures
-    ? applyLiveReasoningEffortCompat(fallbackCompat, supportsReasoningEffort)
-    : fallbackCompat;
+  let compat = fallbackCompat;
+  if (hasLiveFeatures) {
+    compat = { ...fallbackCompat, supportsReasoningEffort };
+    if (!supportsReasoningEffort) {
+      delete compat.supportedReasoningEfforts;
+      delete compat.reasoningEffortMap;
+    }
+  }
 
   return {
     id,
@@ -174,7 +176,11 @@ export function projectBasetenLiveModels(rows: readonly unknown[]): ModelDefinit
 /** Resolves a forward-compatible Baseten model id not yet in the bundled catalog. */
 export function resolveBasetenDynamicModel(modelId: string) {
   const id = modelId.trim();
-  if (!id || BASETEN_MODEL_CATALOG.some((model) => model.id === id)) {
+  if (
+    !id ||
+    id.startsWith("decision-models/") ||
+    BASETEN_MODEL_CATALOG.some((model) => model.id === id)
+  ) {
     return undefined;
   }
   return {

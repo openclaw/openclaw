@@ -26,6 +26,13 @@ Related: [Browser tool](/tools/browser)
   `openclaw browser status --json` also works when the selected child command does not
   define its own `--json`.
 
+With `--json`, local action-input, state, and viewport validation refusals write one JSON error document to
+stdout (`ok: false`, `error.type: "cli_error"`) and exit with status 1. Without
+`--json`, the diagnostic remains on stderr.
+
+Malformed request timeouts, invalid tab indexes, and Gateway request rejections
+also use this JSON failure envelope, including navigation, resize, and cookie requests.
+
 The CLI reserves 10 additional seconds beyond the request timeout for node and
 Gateway transport, allowing browser timeout diagnostics to reach the caller.
 
@@ -75,7 +82,7 @@ openclaw browser --browser-profile openclaw reset-profile
   Passive status never launches Chrome just to collect these facts.
 - `stop` closes the active control session and clears temporary emulation overrides. This applies even to `attachOnly` and remote CDP profiles, where OpenClaw did not launch the browser process itself. For local managed profiles, `stop` also stops the spawned browser process.
 - `start --headless` applies only to that start request, and only when OpenClaw launches a local managed browser. It does not rewrite `browser.headless` or profile config, and is a no-op for an already-running browser.
-- On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles run headless automatically unless `OPENCLAW_BROWSER_HEADLESS=0`, `browser.headless=false`, or `browser.profiles.<name>.headless=false` explicitly requests a visible browser.
+- Local managed profiles run headless by default on every platform. `OPENCLAW_BROWSER_HEADLESS=0`, `browser.headless=false`, or `browser.profiles.<name>.headless=false` explicitly requests a visible browser; Linux then needs `DISPLAY` or `WAYLAND_DISPLAY`. Externally owned browsers keep their current mode.
 
 ## If the command is missing
 
@@ -116,6 +123,8 @@ openclaw browser delete-profile --name work
 Use a specific profile with `--browser-profile <name>` on any subcommand, for example `openclaw browser --browser-profile work tabs`.
 
 On macOS, `system-profiles` lists real Chrome, Brave, Edge, or Chromium profiles available on the host. `import-profile` decrypts their cookies after one macOS Keychain/Touch ID consent prompt and injects them into a fresh OpenClaw-managed profile. It imports cookies only. Local storage and IndexedDB are unchanged. Some Google sessions use device-bound session credentials (DBSC) and can still require re-authentication after import.
+
+Newer macOS versions can also ask whether the Gateway's Node process may access the browser's data. Until someone answers that prompt on the Gateway host, system-profile discovery and import time out while the rest of the Gateway keeps running.
 
 When the macOS app uses a local Gateway, it can offer this import once and make the isolated imported profile the default for agent browsing. Import always requires an explicit click. Successful import or dismissal suppresses later automatic prompts, and **Settings → General → Browser login** remains available for re-import.
 
@@ -204,7 +213,7 @@ openclaw browser extension cdp --json
 - `extension pair` remains the advanced manual flow. `--gateway-url` creates a
   direct remote-Gateway pairing URL. Non-loopback URLs must use `wss://`.
 - `extension pair --local-gateway --json` lets desktop native helpers obtain
-  the canonical local pairing through the Gateway’s `/browser/extension` wake-up
+  the existing local pairing through the Gateway’s `/browser/extension` wake-up
   route. It requires a local Gateway configuration and cannot be combined with
   `--gateway-url`. The JSON contains a credential: consume it privately, never log it.
 - `extension cdp` prints non-secret Browser Relay Authentication v2 metadata:
@@ -263,6 +272,11 @@ openclaw browser close t1
 ```
 
 `tabs` returns `suggestedTargetId` first, then the stable `tabId` (such as `t1`), the optional label, and the raw `targetId`. Pass `suggestedTargetId` back into `focus`, `close`, snapshots, and actions. Assign a label with `open --label`, `tab new --label`, or `tab label`. Labels, tab ids, raw target ids, and unique target-id prefixes are all accepted. The request field is still named `targetId` for compatibility, but it accepts any of these tab references.
+
+For HTTP CDP profiles, `close` confirms that the tab disappears before reporting
+success. If a page prompt keeps it open, resolve the prompt and retry. If the tab
+list cannot be read after the close request, confirm the tab's state in the
+browser before retrying; the close may already have succeeded.
 
 Profiles configured with `driver: "extension"` can additionally return a numeric
 `webExtensionTabId`. It is scoped to the current browser runtime and is intended
@@ -339,6 +353,8 @@ Managed Chrome profiles save ordinary click-triggered downloads into the OpenCla
 
 For remote browser nodes, OpenClaw stages private copies and normalizes filenames for portability, including Windows device names and trailing dots or spaces. File bytes remain unchanged.
 
+Explicit download paths and `trace stop --out` preserve filename whitespace where the filesystem supports it. Quote these paths, for example `openclaw browser download <ref> " report.pdf "`. Output paths must stay inside their managed download or trace directory.
+
 If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.
 
 When an action opens a modal dialog, text output reports the block and pending dialog IDs. The JSON response returns `blockedByDialog` with `browserState.dialogs.pending`. Pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
@@ -356,6 +372,13 @@ openclaw browser batch --actions-file - --continue
 If navigation or a closed page stops the batch, text output reports the action number and skipped count. Take a fresh snapshot before continuing with dependent actions.
 
 `--actions-file` and `--actions-file -` stdin input are capped at 1,000,000 bytes. Split larger plans into multiple `openclaw browser batch` commands.
+
+`fill --fields-file`, `batch --actions-file`, and batch stdin require valid UTF-8.
+Malformed bytes are rejected before any browser action runs. Save the input as
+UTF-8 and retry; valid Unicode values, including emoji and CJK text, are preserved.
+
+`fill --fields-file` requires a regular file or a symlink to one. Pipes and other
+special files are rejected before dispatch. Fields files have no size cap.
 
 ## State and storage
 

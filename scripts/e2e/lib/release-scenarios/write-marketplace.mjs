@@ -1,4 +1,3 @@
-// Writes a marketplace fixture for release scenario E2E tests.
 import path from "node:path";
 import { writeJson } from "../fixtures/common.mjs";
 

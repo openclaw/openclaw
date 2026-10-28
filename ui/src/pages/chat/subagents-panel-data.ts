@@ -1,15 +1,19 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { NativeSubagentsSnapshot } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { SidebarSessionNarrationController } from "../../components/app-sidebar-session-narration.ts";
-import type { SidebarToolActivity } from "../../components/app-sidebar-session-types.ts";
+import { createSidebarNarration } from "../../components/app-sidebar-session-narration.ts";
 import { readSidebarToolActivity } from "../../components/sidebar-tool-activity.ts";
-import { resolveToolDisplay } from "../../lib/chat/tool-display.ts";
+import { resolveToolDisplayIdentity } from "../../lib/chat/tool-display-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import { childSessionListQuery } from "../../lib/sessions/child-session-data.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
+import {
+  childSessionListQuery,
+  fetchChildSessionRows,
+} from "../../lib/sessions/child-session-data.ts";
 import type {
   SessionCapability,
   SessionListSnapshot,
@@ -17,7 +21,6 @@ import type {
 } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
-  isSubagentSessionKey,
   normalizeAgentId,
   resolveUiConversationIdentity,
   resolveUiSessionRowAgentId,
@@ -27,21 +30,22 @@ import { requestChatAbort } from "./chat-abort-request.ts";
 import { requestSharedHistory } from "./chat-history-request.ts";
 import { historySessionId, isHistoryCursor } from "./chat-history-snapshot.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
+import { isSubagentsPanelSession } from "./chat-spawned-subagent.ts";
+import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
 import {
   readSubagentActivitySnapshot,
   readSubagentToolEvent,
   subagentToolCallCount,
   type SubagentActivitySnapshot,
 } from "./subagents-panel-activity.ts";
-import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { buildToolStreamIdentity, toolStreamIdentityRunId } from "./tool-stream-identity.ts";
 
-const PAGE_SIZE = 20;
 const HISTORY_CONCURRENCY = 2;
 const MAX_RETAINED_CALLS = 1024;
 
 export type SubagentsPanelRow = {
   session: GatewaySessionRow;
-  callCount?: number;
+  callCount?: { count: number; exact: boolean };
   activity?: string;
   toolDisplayName?: string;
   canStop: boolean;
@@ -81,12 +85,27 @@ function createMetrics(identity: string): Metrics {
   };
 }
 
-/** Presentation-scoped child discovery. Shared owners retain wire subscriptions and roster facts. */
 export class SubagentsPanelData {
   rows: readonly SubagentsPanelRow[] = [];
+  nativeSnapshot: NativeSubagentsSnapshot | undefined;
+  nativeError: string | null = null;
   loading = false;
-  error: string | null = null;
-  hasMore = false;
+  private failure: { kind: "read" | "stop"; message: string } | null = null;
+  get error(): string | null {
+    return this.failure?.message ?? null;
+  }
+  get readError(): string | null {
+    return this.failure?.kind === "read" ? this.failure.message : null;
+  }
+  get stopError(): string | null {
+    return this.failure?.kind === "stop" ? this.failure.message : null;
+  }
+  readResult: Promise<void> = Promise.resolve();
+  private readCompletion: ReturnType<typeof Promise.withResolvers<void>> | null = null;
+  private lifetime = Promise.withResolvers<void>();
+  get retired(): Promise<void> {
+    return this.lifetime.promise;
+  }
   hasResult = false;
 
   private input: SubagentsPanelInput | null = null;
@@ -94,22 +113,22 @@ export class SubagentsPanelData {
   private observation: ReturnType<SessionCapability["observeList"]> | null = null;
   private pendingListRead: Promise<void> | null = null;
   private generation = 0;
+  private nativeRead: Promise<void> | null = null;
+  private nativeRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
-  private nextOffset: number | null = null;
   private sessions: GatewaySessionRow[] = [];
   private metrics = new Map<string, Metrics>();
   private historyReads = 0;
-  private tools: ReadonlyMap<string, SidebarToolActivity> = new Map();
   private stopping = new Set<string>();
   private readonly messageSubscriptions = new Map<string, Set<SessionMessageSubscription>>();
   private readonly narrationSource: Pick<
     SessionCapability,
     "subscribeMessages" | "unsubscribeMessages"
   >;
-  private readonly narration: SidebarSessionNarrationController;
+  private readonly narration = createSidebarNarration();
   private readonly unsubscribe: Array<() => void>;
   private readonly visibilityDocument = globalThis.document;
-  private readonly visibilityChanged = () => this.reconcile();
+  private readonly stopVisibility: (() => void) | undefined;
 
   constructor(
     private readonly context: ApplicationContext,
@@ -137,22 +156,18 @@ export class SubagentsPanelData {
         }
       },
     };
-    this.narration = new SidebarSessionNarrationController(
-      () => undefined,
-      () => undefined,
-      (tools) => {
-        this.tools = tools;
-        this.publish();
-      },
-    );
+    // Until disposal, keep rows synchronous and retire connection scopes before observer events.
     this.unsubscribe = [
+      this.narration.subscribe(() => this.publish()),
       context.gateway.subscribe(() => {
         this.reconcile();
         this.publish();
       }),
       context.gateway.subscribeEvents((event) => this.handleEvent(event)),
     ];
-    this.visibilityDocument?.addEventListener("visibilitychange", this.visibilityChanged);
+    this.stopVisibility = this.visibilityDocument
+      ? listen(this.visibilityDocument, "visibilitychange", () => this.reconcile())
+      : undefined;
   }
 
   sync(input: SubagentsPanelInput): void {
@@ -189,7 +204,8 @@ export class SubagentsPanelData {
     this.scope = scope;
     const generation = this.generation;
     this.loading = true;
-    this.error = null;
+    this.failure = null;
+    this.syncReadCompletion();
     this.observation = this.context.sessions.observeList(
       this.childQuery(this.input),
       (snapshot) => {
@@ -212,7 +228,7 @@ export class SubagentsPanelData {
       input.agentId,
     );
     return {
-      ...childSessionListQuery(parent.sessionKey, PAGE_SIZE),
+      ...childSessionListQuery(parent.sessionKey),
       // Global aliases require their physical agent scope. Canonical parents
       // must retain children spawned on other configured agents.
       ...(parent.sessionKey === "global" ? { agentId: parent.agentId } : {}),
@@ -220,91 +236,132 @@ export class SubagentsPanelData {
   }
 
   async refresh(): Promise<void> {
-    const observation = this.observation;
-    if (!observation) {
-      return;
-    }
-    await this.readList(() => {
-      this.metrics.clear();
-      this.error = null;
-      return observation.refresh();
-    });
-  }
-
-  async loadMore(): Promise<void> {
-    if (!this.input || this.loading || !this.hasMore || this.nextOffset === null) {
-      return;
-    }
-    await this.readList(() => {
-      if (!this.input || this.loading || !this.hasMore || this.nextOffset === null) {
-        return Promise.resolve();
-      }
-      return this.context.sessions.refreshList({
-        ...this.childQuery(this.input),
-        offset: this.nextOffset,
-        append: true,
-      });
-    });
-  }
-
-  private async readList(read: () => Promise<void>): Promise<void> {
     const generation = this.generation;
-    // The roster publishes ready rows before releasing its pending RPC. Join
-    // our prior operation so a click from that publication cannot lose an append.
-    while (this.pendingListRead && this.current(generation)) {
-      await this.pendingListRead.catch(() => undefined);
-    }
+    await this.pendingListRead;
     if (!this.current(generation)) {
       return;
     }
-    const pending = Promise.resolve().then(() => (this.current(generation) ? read() : undefined));
-    this.pendingListRead = pending;
-    try {
-      await pending;
-    } catch (error) {
-      if (this.current(generation)) {
-        this.error = formatUiError(error);
-        this.publish();
-      }
-    } finally {
-      if (this.pendingListRead === pending) {
-        this.pendingListRead = null;
-      }
+    this.metrics.clear();
+    this.failure = null;
+    await Promise.all([this.readList(), this.readNative()]);
+  }
+
+  private readNative(): Promise<void> {
+    const { input, scope, generation } = this;
+    if (this.nativeRead || !input || !scope || !this.current(generation)) {
+      return this.nativeRead ?? Promise.resolve();
     }
+    clearTimeout(this.nativeRefreshTimer);
+    const query = this.childQuery(input);
+    const pending = Promise.resolve().then(async () => {
+      try {
+        if (!this.current(generation)) {
+          return;
+        }
+        const result = await scope.client.request<{
+          session: GatewaySessionRow | null;
+          nativeSubagents?: NativeSubagentsSnapshot;
+        }>("sessions.describe", {
+          key: query.spawnedBy,
+          ...(query.agentId ? { agentId: query.agentId } : {}),
+          includeNativeSubagents: true,
+        });
+        if (!this.current(generation)) {
+          return;
+        }
+        // Parent authorization and native generation are owned by this read.
+        // Absence is not a saved-history assertion and never creates sessions.
+        this.nativeSnapshot = result.session ? result.nativeSubagents : undefined;
+        this.nativeError = null;
+        this.changed();
+      } catch (error: unknown) {
+        if (this.current(generation)) {
+          this.nativeSnapshot = undefined;
+          this.nativeError = formatUiError(error);
+          this.changed();
+        }
+      } finally {
+        if (this.nativeRead === pending) {
+          this.nativeRead = null;
+          if (this.current(generation)) {
+            // Completion-paced and non-overlapping; hidden/disconnected owners retire.
+            this.nativeRefreshTimer = setTimeout(() => void this.readNative(), 5_000);
+          }
+        }
+      }
+    });
+    this.nativeRead = pending;
+    return pending;
+  }
+
+  private async readList(initialResult?: SessionsListResult): Promise<void> {
+    if (this.pendingListRead) {
+      return this.pendingListRead;
+    }
+    const generation = this.generation;
+    if (!this.input || !this.current(generation)) {
+      return;
+    }
+    const query = this.childQuery(this.input);
+    this.loading = true;
+    this.syncReadCompletion();
+    this.publish();
+    const pending = Promise.resolve()
+      .then(async () => {
+        if (this.current(generation)) {
+          await fetchChildSessionRows({
+            sessions: this.context.sessions,
+            parentKey: query.spawnedBy,
+            agentId: query.agentId,
+            isCurrent: () => this.current(generation),
+            initialResult,
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (this.current(generation)) {
+          this.failure = { kind: "read", message: formatUiError(error) };
+          this.loading = false;
+          this.syncReadCompletion();
+          this.publish();
+        }
+      })
+      .finally(() => {
+        if (this.pendingListRead === pending) {
+          this.pendingListRead = null;
+        }
+      });
+    this.pendingListRead = pending;
+    await pending;
   }
 
   private applyList(snapshot: SessionListSnapshot): void {
-    this.loading = snapshot.loading;
-    this.error = snapshot.error;
     const result = snapshot.result;
+    const pagination = snapshot.pagination;
+    const incomplete =
+      (pagination?.hasMore ?? result?.hasMore) ||
+      (pagination?.totalCount !== undefined && pagination.count < pagination.totalCount);
+    this.loading = !snapshot.error && (snapshot.loading || incomplete);
+    this.failure = snapshot.error ? { kind: "read", message: snapshot.error } : null;
+    this.syncReadCompletion();
     if (snapshot.error) {
       // Access loss must not leave previously readable child contents onscreen.
       this.sessions = [];
       this.metrics.clear();
-      this.hasMore = false;
-      this.nextOffset = null;
-    } else if (result) {
+    } else if (result && !incomplete) {
       this.hasResult = true;
-      this.hasMore = result.hasMore === true;
-      this.nextOffset = result.nextOffset ?? null;
       const sampledAt = Date.now();
       const previous = new Map(this.sessions.map((row) => [row.key, row]));
-      this.sessions = result.sessions
-        .filter(
-          (row) =>
-            (row.classification === "subagent" || isSubagentSessionKey(row.key)) &&
-            !row.swarmGroupId?.trim(),
-        )
-        .map((row) => {
-          const held = previous.get(row.key);
-          const sameSample =
-            held && runIdentity(held) === runIdentity(row) && held.runtimeMs === row.runtimeMs;
-          return Object.assign({}, row, {
-            agentId: resolveUiSessionRowAgentId(row, this.input?.agentId ?? "main"),
-            runtimeSampledAt:
-              row.runtimeSampledAt ?? (sameSample ? held.runtimeSampledAt : undefined) ?? sampledAt,
-          });
+      this.sessions = result.sessions.filter(isSubagentsPanelSession).map((row) => {
+        const held = previous.get(row.key);
+        const sameSample =
+          held && runIdentity(held) === runIdentity(row) && held.runtimeMs === row.runtimeMs;
+        return Object.assign({}, row, {
+          agentId: resolveUiSessionRowAgentId(row, this.input?.agentId ?? "main"),
+          runtimeSampledAt:
+            row.runtimeSampledAt ?? (sameSample ? held.runtimeSampledAt : undefined) ?? sampledAt,
         });
+      });
       const keys = new Set(this.sessions.map((row) => row.key));
       for (const key of this.metrics.keys()) {
         if (!keys.has(key)) {
@@ -321,6 +378,9 @@ export class SubagentsPanelData {
     this.syncNarration();
     this.publish();
     this.readMetrics();
+    if (result && incomplete && !snapshot.loading && !snapshot.error) {
+      void this.readList(result);
+    }
   }
 
   private syncNarration(): void {
@@ -331,7 +391,7 @@ export class SubagentsPanelData {
       source: this.narrationSource,
       rows: this.sessions.map((row) => ({
         key: row.key,
-        hasActiveRun: isSessionRunActive(row),
+        hasActiveRun: isSessionRunStateActive(row),
         startedAt: row.startedAt,
         updatedAt: row.updatedAt,
       })),
@@ -351,7 +411,7 @@ export class SubagentsPanelData {
         metrics.read ||
         metrics.pending ||
         this.historyReads >= HISTORY_CONCURRENCY ||
-        (isSessionRunActive(row) && !this.messageSubscriptions.has(row.key))
+        (isSessionRunStateActive(row) && !this.messageSubscriptions.has(row.key))
       ) {
         continue;
       }
@@ -470,7 +530,8 @@ export class SubagentsPanelData {
     if (!metrics) {
       return;
     }
-    const fallback = !metrics.liveToolObserved && metrics.tool && !this.tools.has(row.key);
+    const fallback =
+      !metrics.liveToolObserved && metrics.tool && !this.narration.read().tools.has(row.key);
     const activity = readSidebarToolActivity(stream, payload.data, metrics.tool);
     if (activity !== undefined) {
       metrics.liveToolObserved = true;
@@ -486,7 +547,7 @@ export class SubagentsPanelData {
       callIdentity ? metrics.calls.get(callIdentity) : undefined,
     );
     if (!item) {
-      if (fallback && activity !== undefined && !this.tools.has(row.key)) {
+      if (fallback && activity !== undefined && !this.narration.read().tools.has(row.key)) {
         this.publish();
       }
       return;
@@ -516,11 +577,31 @@ export class SubagentsPanelData {
     if (this.disposed) {
       return;
     }
+    const tools = this.narration.read().tools;
     this.rows = this.sessions.map((session) => {
       const metrics = this.metrics.get(session.key);
-      const tool = isSessionRunActive(session)
-        ? (this.tools.get(session.key) ?? (metrics?.liveToolObserved ? undefined : metrics?.tool))
+      const active = isSessionRunStateActive(session);
+      const tool = active
+        ? (tools.get(session.key) ?? (metrics?.liveToolObserved ? undefined : metrics?.tool))
         : undefined;
+      const headline =
+        active && metrics
+          ? selectActivityHeadline(
+              [...metrics.calls]
+                .filter(([identity, item]) => {
+                  const runId = toolStreamIdentityRunId(identity);
+                  return (
+                    runId !== undefined &&
+                    session.activeRunIds?.includes(runId) &&
+                    !item.hideFromChannelProgress &&
+                    !item.suppressChannelProgress
+                  );
+                })
+                .map(([, item]) => item),
+              [],
+              new Map(),
+            )
+          : undefined;
       const stopAccess = readChatSessionActionAccess(this.context.gateway.snapshot, true, {
         session,
         sessionAbortable: true,
@@ -528,10 +609,16 @@ export class SubagentsPanelData {
       return {
         session,
         callCount: metrics ? subagentToolCallCount(metrics) : undefined,
-        activity: tool?.text,
-        toolDisplayName: tool ? resolveToolDisplay({ name: tool.name }).label : undefined,
-        canStop:
-          isSessionRunActive(session) && session.activeRunIds?.length === 1 && stopAccess.allowed,
+        activity:
+          tool?.text ||
+          headline?.title ||
+          (active &&
+          session.observerDigest?.runId &&
+          session.activeRunIds?.includes(session.observerDigest.runId)
+            ? session.observerDigest.headline.trim() || undefined
+            : undefined),
+        toolDisplayName: tool ? resolveToolDisplayIdentity(tool.name).label : undefined,
+        canStop: active && session.activeRunIds?.length === 1 && stopAccess.allowed,
         stopping: this.stopping.has(session.key),
         stopAccess,
       };
@@ -561,7 +648,7 @@ export class SubagentsPanelData {
       sessionAbortable: true,
     }).abort;
     if (!access.allowed) {
-      this.error = access.reason;
+      this.failure = { kind: "stop", message: access.reason };
       this.publish();
       return;
     }
@@ -578,10 +665,28 @@ export class SubagentsPanelData {
       return;
     }
     this.stopping.delete(session.key);
-    this.error = result.ok ? (result.warning ?? null) : formatUiError(result.error);
+    const message = result.ok ? (result.warning ?? null) : formatUiError(result.error);
+    this.failure = message ? { kind: "stop", message } : null;
     this.publish();
     if (result.ok) {
       void this.refresh();
+    }
+  }
+
+  reportStopError(error: unknown): void {
+    this.failure = { kind: "stop", message: formatUiError(error) };
+    this.publish();
+  }
+
+  private syncReadCompletion(): void {
+    if (this.loading) {
+      if (!this.readCompletion) {
+        this.readCompletion = Promise.withResolvers<void>();
+        this.readResult = this.readCompletion.promise;
+      }
+    } else {
+      this.readCompletion?.resolve();
+      this.readCompletion = null;
     }
   }
 
@@ -595,31 +700,37 @@ export class SubagentsPanelData {
   }
 
   private retire(): void {
+    this.lifetime.resolve();
+    this.lifetime = Promise.withResolvers<void>();
+    this.readCompletion?.resolve();
+    this.readCompletion = null;
+    this.readResult = Promise.resolve();
     this.generation += 1;
+    clearTimeout(this.nativeRefreshTimer);
+    this.nativeRead = null;
+    this.nativeSnapshot = undefined;
+    this.nativeError = null;
     this.observation?.dispose();
     this.observation = null;
     this.pendingListRead = null;
     this.scope = null;
     this.sessions = [];
     this.metrics.clear();
-    this.tools = new Map();
     this.stopping.clear();
     this.messageSubscriptions.clear();
     this.loading = false;
-    this.hasMore = false;
     this.hasResult = false;
-    this.nextOffset = null;
-    this.error = null;
+    this.failure = null;
     this.syncNarration();
   }
 
   dispose(): void {
     this.disposed = true;
     this.retire();
-    this.narration.dispose();
+    this.narration.disconnect();
     for (const unsubscribe of this.unsubscribe) {
       unsubscribe();
     }
-    this.visibilityDocument?.removeEventListener("visibilitychange", this.visibilityChanged);
+    this.stopVisibility?.();
   }
 }

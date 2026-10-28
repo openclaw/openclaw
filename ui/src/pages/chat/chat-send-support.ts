@@ -9,7 +9,7 @@ import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts
 import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -25,9 +25,8 @@ import {
   removeDeliveredQueuedChatSendForRun,
   updateQueuedMessage,
 } from "./chat-queue.ts";
-import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import type { ChatQueueAdmissionResult } from "./composer-persistence.ts";
+import type { ChatQueueAdmissionResult } from "./composer-queue-persistence.ts";
 import {
   admitChatSubmission,
   retireChatSubmissionDisplay,
@@ -41,9 +40,6 @@ import {
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
-
-export const UNCONFIRMED_CHAT_SEND_ERROR =
-  "Delivery has not been confirmed. Check the conversation — retry only if your message didn't arrive.";
 
 export const OFFLINE_QUEUE_STORAGE_ERROR =
   "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
@@ -74,12 +70,15 @@ export function requiresChatInputConsumption(item: ChatQueueItem): boolean {
   return !item.intent && !item.localCommandName && !item.text.trimStart().startsWith("/");
 }
 
-export function chatSendHoldReason(
+/** Local queue admission does not require the initial turn to have settled. */
+export function chatSendAdmissionHoldReason(
   host: ChatHost,
   sessionKey: string,
-  initialTurnPending = false,
   agentId?: string,
 ): string | null {
+  if (sessionKey === host.sessionKey && host.isRouteSessionPending?.()) {
+    return t("chat.thread.loading");
+  }
   if (isExpiredIncognitoSession(host, sessionKey)) {
     return t("chat.incognitoExpiredTitle");
   }
@@ -87,33 +86,41 @@ export function chatSendHoldReason(
   if (sendDisabledReason) {
     return sendDisabledReason;
   }
-  return chatSendPendingReason(host, sessionKey, initialTurnPending);
+  return chatConnectionPendingReason(host);
 }
 
-// Hello permits RPCs before account recovery has claimed any retained first turn.
+export function chatSendHoldReason(
+  host: ChatHost,
+  sessionKey: string,
+  initialTurnPending = false,
+  agentId?: string,
+): string | null {
+  return (
+    (host.gatewayWorkPaused ? t("chat.queue.states.waitingForReconnect") : null) ??
+    chatSendAdmissionHoldReason(host, sessionKey, agentId) ??
+    chatSendPendingReason(host, sessionKey, initialTurnPending)
+  );
+}
+
+function chatConnectionPendingReason(host: Pick<ChatHost, "client" | "connected">): string | null {
+  return host.connected && host.client && !host.client.recoveryScopeReady
+    ? t("chat.queue.connectionPending")
+    : null;
+}
+
+// Sending waits for the authenticated outbox scope and locally owned session creation.
 // Renderers show loading only for these transient holds, never terminal expiry.
 export function chatSendPendingReason(
   host: Pick<ChatHost, "client" | "connected" | "hasPendingInitialTurn">,
   sessionKey: string,
   initialTurnPending = false,
 ): string | null {
-  if (host.connected && host.client && !host.client.recoveryScopeReady) {
-    return t("chat.queue.connectionPending");
-  }
-  return initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
-    ? t("chat.queue.initialTurnPending")
-    : null;
-}
-
-export function formatTerminalChatSendAckError(
-  ack: TerminalFailureChatSendAck,
-  context: "chat" | "detached",
-): string {
-  return ack.status === "error"
-    ? "Chat failed before the run started; try again."
-    : context === "detached"
-      ? "The active run ended before the detached message was accepted."
-      : "The run ended before the message was accepted.";
+  return (
+    chatConnectionPendingReason(host) ??
+    (initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
+      ? t("chat.queue.initialTurnPending")
+      : null)
+  );
 }
 
 function preserveDeliveredUserTurn(
@@ -202,10 +209,7 @@ export function retireDeliveredQueuedUserTurn(
       // attempt still owns the row; an absent row must not swallow chat.final.
       return readQueuedMessageById(host, stored.id) ? "stale" : "retired";
     }
-    if (!sameQueuedDeliveryVersion(current, stored)) {
-      return "stale";
-    }
-    if (!stored.sendRunId) {
+    if (!sameQueuedDeliveryVersion(current, stored) || !stored.sendRunId) {
       return "stale";
     }
     // Every pane receives the terminal. Retain complete message bytes before
@@ -277,11 +281,10 @@ export function retireDeliveredQueuedUserTurn(
       return "stale";
     }
     const reason = result.status === "failed" ? result.reason : "missing";
-    // Delivery proof must never become a fresh-send retry because local bytes
-    // were unavailable. Keep the same run identity and its no-replay barrier.
+    // Keep the same key if local projection fails after delivery.
     updateQueuedMessage(host, stored.id, (item) =>
       failOutboxPayload(
-        { ...item, sendState: item.sendState === "held" ? "held" : "unconfirmed" },
+        { ...item, sendState: item.sendState === "held" ? "held" : "failed" },
         reason,
       ),
     );
@@ -289,15 +292,13 @@ export function retireDeliveredQueuedUserTurn(
   });
 }
 
-type ChatDeliveryFailureHost = Parameters<typeof visibleSessionMatches>[0] & {
-  lastError?: string | null;
-  chatError?: string | null;
-  sessionsResult?: SessionsListResult | null;
-};
-
 /** Surface a terminal delivery failure in the owning pane or a named toast. */
 export function surfaceChatDeliveryFailure(
-  host: ChatDeliveryFailureHost,
+  host: Parameters<typeof visibleSessionMatches>[0] & {
+    lastError?: string | null;
+    chatError?: string | null;
+    sessionsResult?: SessionsListResult | null;
+  },
   sessionKey: string,
   agentId: string | undefined,
   error: string,

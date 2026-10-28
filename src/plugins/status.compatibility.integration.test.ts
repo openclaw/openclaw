@@ -34,6 +34,7 @@ describe("plugin compatibility snapshot notices", () => {
     });
     const stateDir = makePluginLoaderTempDir();
     const config = {
+      agents: { entries: { main: { workspace: plugin.dir } } },
       plugins: {
         load: { paths: [plugin.file] },
         allow: [plugin.id],
@@ -42,7 +43,7 @@ describe("plugin compatibility snapshot notices", () => {
 
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
       useNoBundledPlugins();
-      const params = { config, workspaceDir: plugin.dir, env: process.env };
+      const params = { config };
 
       expect(buildPluginCompatibilitySnapshotNotices(params)).toStrictEqual([]);
       expect(fs.existsSync(runtimeMarker)).toBe(false);

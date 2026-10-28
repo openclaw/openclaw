@@ -15,10 +15,11 @@ import type {
 import type { UserProfileAuthLink } from "../../state/user-model-accounts.js";
 import { createModelAccountConnectService } from "../model-account-connect.js";
 import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import { usersHandlers } from "./users.js";
 
-const resolveUserProfileId = vi.hoisted(() => vi.fn());
+const resolveProfileId = vi.hoisted(() => vi.fn());
 const prepareUserProfileSelectionAuthority = vi.hoisted(() => vi.fn());
 const connectUserModelAccount = vi.hoisted(() => vi.fn());
 const listUserProfileAuthLinks = vi.hoisted(() => vi.fn());
@@ -34,16 +35,46 @@ const resolvePersonalAccountAuthMethod = vi.hoisted(() => vi.fn());
 const exchange = vi.hoisted(() => vi.fn());
 const modelAccountLinksCurrent = vi.hoisted(() => vi.fn());
 
-vi.mock("../../state/user-profiles.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../state/user-profiles.js")>();
+export {
+  resolveProfileId,
+  prepareUserProfileSelectionAuthority,
+  connectUserModelAccount,
+  listUserProfileAuthLinks,
+  listUserModelAccounts,
+  readUserModelAccountSummary,
+  readSelectedUserModelAccount,
+  setUserProfileAuthLink,
+  clearUserProfileAuthLink,
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  registerSecretValueForRedaction,
+  resolvePersonalAccountAuthMethod,
+  exchange,
+  modelAccountLinksCurrent,
+};
+
+function selectionAuthority(reference: string) {
+  const profileId = resolveProfileId(reference);
   return {
-    ...actual,
-    getUserProfileRole: () => null,
+    profileId,
+    isCurrent: () =>
+      resolveProfileId(reference) === profileId && resolveProfileId(profileId) === profileId,
   };
-});
+}
+
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  captureResidentUserProfileAccess: (profileId: string) => ({
+    assertCurrent: () => ({ id: resolveProfileId(profileId), role: null, githubLogin: null }),
+  }),
+}));
 vi.mock("../../state/user-channel-identity-operations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-channel-identity-operations.js")>()),
   prepareUserProfileSelectionAuthority,
+  prepareUserProfileRolePolicyAuthority: async (reference: string) => ({
+    ...selectionAuthority(reference),
+    role: null,
+    githubLogin: null,
+  }),
 }));
 vi.mock("../../state/user-profile-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/user-profile-events.js")>()),
@@ -74,6 +105,8 @@ vi.mock("../../agents/auth-profiles/shared-main-dir.js", async (importOriginal) 
 vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
   ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync: async (...args: unknown[]) =>
+    ensureAuthProfileStoreWithoutExternalProfiles(...args),
 }));
 vi.mock("../../logging/secret-redaction-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../logging/secret-redaction-registry.js")>()),
@@ -94,7 +127,7 @@ type ConnectTestContext = Pick<
   | "getRuntimeConfig"
   | "getClientConnIds"
 >;
-const credential: OAuthCredential = {
+export const credential: OAuthCredential = {
   type: "oauth",
   provider: "openai",
   access: "synthetic-access",
@@ -104,10 +137,10 @@ const credential: OAuthCredential = {
   clientId: "synthetic-client",
   authorizationScope: "openid profile resource.invoke offline_access",
 };
-const authorized: ProviderAuthResult = {
+export const authorized: ProviderAuthResult = {
   profiles: [{ profileId: "openai:ignored-shared-id", credential }],
 };
-const runAuth = vi.fn(async (ctx: ProviderAuthContext) => {
+export const runAuth = vi.fn(async (ctx: ProviderAuthContext) => {
   const value = await ctx.prompter.text({
     message: "Provider credential",
     sensitive: true,
@@ -121,34 +154,28 @@ const oauthMethod: ProviderAuthMethod = {
   kind: "oauth",
   run: runAuth,
 };
-const broadcast = vi.fn();
-const warn = vi.fn();
-let service: ReturnType<typeof createModelAccountConnectService>;
+export const broadcast = vi.fn();
+export const warn = vi.fn();
+export let service: ReturnType<typeof createModelAccountConnectService>;
 let context: ConnectTestContext;
-let config: OpenClawConfig;
-let clients: Set<TestClient>;
-let self: TestClient;
-let writes: AuthProfileCredential[];
-let linksByOwner: Map<string, UserProfileAuthLink[]>;
+export let config: OpenClawConfig;
+export let clients: Set<TestClient>;
+export let self: TestClient;
+export let writes: AuthProfileCredential[];
+export let linksByOwner: Map<string, UserProfileAuthLink[]>;
 
-function createClient(profileId = "profile-1", scopes = ["operator.write"]): TestClient {
+export function createClient(profileId = "profile-1", scopes = ["operator.write"]): TestClient {
   const client: TestClient = {
     connId: `connection-${clients.size + 1}`,
     invalidated: false,
-    authenticatedUserProfile: { profileId, displayName: "Ada", hasAvatar: false, updatedAt: 1 },
-    connect: {
-      role: "operator",
-      scopes,
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", mode: "test", version: "1", platform: "test" },
-    },
+    authenticatedUserProfile: gatewayProfile(profileId, "Ada"),
+    connect: gatewayConnect(scopes, { id: "test", mode: "test", version: "1" }),
   };
   clients.add(client);
   return client;
 }
 
-async function rpc(
+export async function rpc(
   requestMethod: string,
   params: Record<string, unknown>,
   client: TestClient = self,
@@ -167,7 +194,7 @@ async function rpc(
   });
   return respond;
 }
-function flowRpc(
+export function flowRpc(
   action: "answer" | "cancel" | "status",
   flow: UsersAuthConnectStartResult,
   params: Record<string, unknown> = {},
@@ -180,7 +207,7 @@ function flowRpc(
     client,
   );
 }
-async function startFlow(
+export async function startFlow(
   profileId = "profile-1",
   client = self,
   provider = "openai",
@@ -200,7 +227,11 @@ async function startFlow(
   );
   return flow;
 }
-async function complete(flow: UsersAuthConnectStartResult, profileId = "profile-1", client = self) {
+export async function complete(
+  flow: UsersAuthConnectStartResult,
+  profileId = "profile-1",
+  client = self,
+) {
   const current: UsersAuthConnectStatusResult = await status(flow, profileId, client);
   return flowRpc(
     "answer",
@@ -213,7 +244,7 @@ async function complete(flow: UsersAuthConnectStartResult, profileId = "profile-
     client,
   );
 }
-async function terminal(
+export async function terminal(
   flow: UsersAuthConnectStartResult,
   expected: string,
   profileId = "profile-1",
@@ -224,7 +255,11 @@ async function terminal(
   );
   return status(flow, profileId, client);
 }
-async function status(flow: UsersAuthConnectStartResult, profileId = "profile-1", client = self) {
+export async function status(
+  flow: UsersAuthConnectStartResult,
+  profileId = "profile-1",
+  client = self,
+) {
   const respond = await flowRpc("status", flow, {}, profileId, client);
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   return respond.mock.calls[0]?.[1];
@@ -276,16 +311,10 @@ export function setupModelAccountConnectTest() {
           return links;
         },
       );
-    resolveUserProfileId.mockImplementation((id: string) => id);
-    prepareUserProfileSelectionAuthority.mockImplementation(async (reference: string) => {
-      const profileId = resolveUserProfileId(reference);
-      return {
-        profileId,
-        isCurrent: () =>
-          resolveUserProfileId(reference) === profileId &&
-          resolveUserProfileId(profileId) === profileId,
-      };
-    });
+    resolveProfileId.mockImplementation((id: string) => id);
+    prepareUserProfileSelectionAuthority.mockImplementation(async (reference: string) =>
+      selectionAuthority(reference),
+    );
     listPersonalAccountAuthChoices.mockReturnValue([
       {
         pluginId: "openai",
@@ -339,48 +368,11 @@ export function setupModelAccountConnectTest() {
   });
 }
 
-function setConfig(next: OpenClawConfig) {
+export function setConfig(next: OpenClawConfig) {
   config = next;
 }
 
-function restartService() {
+export function restartService() {
   service = createModelAccountConnectService({ getConfig: () => config });
   context.modelAccountConnectService = service;
 }
-
-export {
-  resolveUserProfileId,
-  prepareUserProfileSelectionAuthority,
-  connectUserModelAccount,
-  listUserProfileAuthLinks,
-  listUserModelAccounts,
-  readUserModelAccountSummary,
-  readSelectedUserModelAccount,
-  setUserProfileAuthLink,
-  clearUserProfileAuthLink,
-  ensureAuthProfileStoreWithoutExternalProfiles,
-  registerSecretValueForRedaction,
-  resolvePersonalAccountAuthMethod,
-  exchange,
-  modelAccountLinksCurrent,
-  credential,
-  authorized,
-  runAuth,
-  broadcast,
-  warn,
-  service,
-  config,
-  clients,
-  self,
-  writes,
-  linksByOwner,
-  createClient,
-  rpc,
-  flowRpc,
-  startFlow,
-  complete,
-  terminal,
-  status,
-  setConfig,
-  restartService,
-};

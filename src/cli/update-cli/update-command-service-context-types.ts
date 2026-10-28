@@ -3,16 +3,17 @@ import type { ServiceInspectionReason } from "../../daemon/service-inspection-er
 import type { GatewayServiceDefinitionBackupReceipt } from "../../daemon/service-stage.js";
 import type {
   GatewayServiceCommandConfig,
+  GatewayServiceState,
   SystemdServiceIdentity,
 } from "../../daemon/service-types.js";
 import type {
   PackageDirectoryIdentity,
-  PackageIntegrityFingerprint,
   PackageLauncherFingerprint,
 } from "../../infra/package-update-integrity.js";
 import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import type { WindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 /** One native rewrite per finalization; subsequent activation preserves its publication. */
@@ -34,7 +35,14 @@ export type ManagedGatewayUpdateVerdict =
   | { kind: "unresolved"; root: string; fingerprint: string }
   | { kind: "unavailable"; message: string; inspectionReason?: ServiceInspectionReason };
 
-export type PreManagedServiceStop = {
+export type ManagedGatewayServiceObservation = {
+  serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
+  serviceEnv?: NodeJS.ProcessEnv;
+  /** Original account observed from the pinned native user-manager connection. */
+  serviceManagerUid?: number;
+};
+
+export type PreManagedServiceStop = ManagedGatewayServiceObservation & {
   stoppedAtMs?: number;
   stopped: boolean;
   inspected: boolean;
@@ -42,28 +50,27 @@ export type PreManagedServiceStop = {
   running: boolean;
   /** Verified native service process, used only to correlate legacy Gateway locks. */
   servicePid?: number;
+  /** Native enable policy captured before our stop; absence is unknown. */
+  serviceAutoStartEnabled?: boolean;
   serviceControlGroup?: string;
   /** Reporting fact only; membership is rechecked before the native stop. */
   serviceMembershipSourceAbsent?: boolean;
   offline?: boolean;
   serviceMutationAllowed?: boolean;
   serviceMutationSkipMessage?: string;
-  serviceUpdateVerdict?: ManagedGatewayUpdateVerdict;
   blockMessage?: string;
   blockFailureFacts?: UpdateFailureFact[];
-  serviceEnv?: NodeJS.ProcessEnv;
   serviceDefinitionEnv?: NodeJS.ProcessEnv;
   serviceNodeRunner?: string;
   servicePort?: number;
   /** Original service generation, which can differ from the invoking CLI package. */
   serviceIdentity?: { version: string; buildId?: string };
-  /** Original account observed from the pinned native user-manager connection. */
-  serviceManagerUid?: number;
   serviceSystemdIdentity?: SystemdServiceIdentity;
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
 
 export type UpdateRestartParams = {
+  originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   result: UpdateRunResult;
   root: string;
   preManagedServiceStop?: PreManagedServiceStop;
@@ -87,12 +94,10 @@ export type OriginalManagedServiceRuntime = {
     fingerprint: string;
     rebound?: string;
     reboundRuntimePin?: string;
-    runtimePin: DaemonRuntimePinSnapshot;
+    runtimePin: DaemonRuntimePinSnapshot | undefined;
   };
-  service: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid">;
+  service: ManagedGatewayServiceObservation;
   packageIdentity: PackageDirectoryIdentity;
-  packageFingerprint?: PackageIntegrityFingerprint;
-  packageFingerprintWarning?: string;
   launcher: {
     path: string;
     realPath: string;
@@ -113,3 +118,35 @@ export type ManagedServicePackageUpdatePlan = {
   nodeRunner?: string;
   serviceUnitTarget?: string;
 };
+
+export type ManagedServiceStopParams = {
+  recovery?: unknown;
+  updateRun?: UpdateCommandOptions["run"];
+  recordPhase?: (phase: "activating") => Promise<void>;
+  updateInstallKind: "git" | "package";
+  root: string;
+  shouldRestart: boolean;
+  jsonMode: boolean;
+  phase?: "inspect" | "prepare" | "refresh";
+  /** Package/helper root can differ from the inspected service during a rebind. */
+  handoffRoot?: string;
+  handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
+  expectedService?: ManagedGatewayServiceObservation &
+    Partial<Pick<PreManagedServiceStop, "stopped">>;
+  allowInstallRootChange?: boolean;
+  onStopped?: (state: PreManagedServiceStop) => void;
+  /** Inspection-only selection; never copied into recovery or finalizer records. */
+  onOwnedStartupRuntime?: (executable: string | undefined) => void;
+  /** Doctor restores this same native instance after its offline repair. */
+  retainNativeIdentity?: boolean;
+  assertCurrent?: (phase?: "restore") => void;
+  /** Revalidate a parent deadline immediately before the native stop side effect. */
+  assertDeadline?: () => void;
+  waitForCurrent?: () => Promise<void>;
+  timeoutMs?: number;
+  warn?: (message: string) => void;
+} & (
+  | { recordPhase: (phase: "activating") => Promise<void> }
+  | { updateRun?: undefined }
+  | { phase: "inspect" | "refresh" }
+);

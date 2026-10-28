@@ -1,182 +1,180 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolAuthorityReadCaptureActive,
   recordPreparedToolAuthorityRead,
   type PreparedToolAuthorityRead,
 } from "../../agents/harness/host-private-capabilities.js";
-import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
-import { readIncognitoSessionSteeringEntry } from "../../config/sessions/session-accessor.sqlite-incognito-sharing.js";
-import {
-  captureSessionEntryReadScope,
-  isNativeSessionEntryRead,
-} from "../../config/sessions/session-entry-read-request.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
+import { captureSessionEntryReadScope } from "../../config/sessions/session-entry-read-request.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
-  assertSessionStoreReadCandidate,
-  captureSessionStoreCandidateIdentities,
-} from "../../config/sessions/session-store-read-candidates.js";
-import { captureSessionStoreReadCandidates } from "../../config/sessions/session-store-target-inventory.js";
-import {
   collectSessionEntryLookupKeys,
-  normalizeStoreSessionKey,
   resolveSessionEntryCandidates,
 } from "../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
 
-/** Carry terminal-delivery eligibility into the target's final prepared admission. */
+function prepareCurrentSteeringRead(assertCurrent: () => void) {
+  return {
+    assertCurrent,
+    release() {},
+    prepareCurrent: async () => {
+      assertCurrent();
+      if (isToolAuthorityReadCaptureActive()) {
+        recordPreparedToolAuthorityRead({
+          reads: [],
+          assertPrepared: assertCurrent,
+          assertLegacyCurrent: assertCurrent,
+        });
+      }
+    },
+  };
+}
+
+/** Keep the target's execution settings current through steering admission. */
 export function prepareSteeringDelivery(params: {
   agentId: string;
   sessionKey?: string;
   storePath?: string;
-  sessionId?: string;
-  sourceTurnId?: string;
   entry?: SessionEntry;
   assertCurrent: () => void;
 }) {
-  const fallbackEntry = params.entry ? structuredClone(params.entry) : undefined;
-  const assertEntry = (
-    current: Parameters<typeof resolveRestartRecoverySteeringBlockReason>[0],
-  ) => {
+  let admission:
+    | {
+        matchesExecutionSettings: (entry: SessionEntry | undefined, agentId: string) => boolean;
+      }
+    | undefined;
+  const bindAdmission = (value: NonNullable<typeof admission>) => {
+    admission = value;
+  };
+  const matchesExecutionSettings = (entry: SessionEntry | undefined) =>
+    admission?.matchesExecutionSettings(entry, params.agentId) ?? true;
+  const fallbackEntry = params.entry;
+  const assertEntry = (current: SessionEntry | undefined) => {
     params.assertCurrent();
     const entry = current ?? fallbackEntry;
-    const reason = resolveRestartRecoverySteeringBlockReason(
-      entry,
-      params.sessionId ?? entry?.sessionId ?? "",
-      params.sourceTurnId ??
-        normalizeOptionalString(entry?.restartRecoveryDeliverySourceRunId) ??
-        "",
-    );
-    if (reason) {
+    if (!matchesExecutionSettings(entry)) {
       throw new MessageInjectionTargetUnavailableError(
-        `Terminal source-reply delivery is closed (${reason})`,
+        "Execution settings changed during steering preparation",
       );
     }
   };
   if (!params.sessionKey || !params.storePath) {
     return {
-      prepareCurrent: async () => assertEntry(fallbackEntry),
+      ...prepareCurrentSteeringRead(() => assertEntry(fallbackEntry)),
+      bindAdmission,
     };
   }
-  const { scope, agentId } = captureSessionEntryReadScope({
+  const memory = captureSessionActorStorageOwner(params, { assertCurrent() {}, authorize() {} });
+  if (memory) {
+    const sessionKey = params.sessionKey;
+    return {
+      ...prepareCurrentSteeringRead(() => {
+        const current =
+          memory.binding?.actor.target.sessionKey === sessionKey
+            ? memory.binding.actor.snapshot(memory.authority)
+            : memory.owner?.readSession(sessionKey, memory.authority);
+        if (!current?.entry) {
+          throw new MessageInjectionTargetUnavailableError("Steering target session was closed");
+        }
+        assertEntry(current.entry);
+      }),
+      bindAdmission,
+    };
+  }
+  const { scope } = captureSessionEntryReadScope({
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
-  if (isNativeSessionEntryRead(scope, agentId)) {
-    const storePath = isIncognitoSessionKey(scope.sessionKey)
-      ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: params.agentId, env: scope.env })
-      : scope.storePath!;
-    const owner = getOpenIncognitoAgentDatabase(params.agentId, storePath);
-    const assertNativeCurrent = () => {
-      params.assertCurrent();
-      if (getOpenIncognitoAgentDatabase(params.agentId, storePath) !== owner) {
-        throw new Error("Steering delivery incognito owner changed");
-      }
-      assertEntry(
-        owner ? readIncognitoSessionSteeringEntry(owner.db, scope.sessionKey) : undefined,
-      );
-    };
-    return {
-      prepareCurrent: async () => {
-        assertNativeCurrent();
-        if (isToolAuthorityReadCaptureActive()) {
-          recordPreparedToolAuthorityRead({
-            reads: [],
-            assertPrepared: assertNativeCurrent,
-            assertLegacyCurrent: assertNativeCurrent,
-          });
-        }
-      },
-    };
-  }
-  const candidates = captureSessionStoreReadCandidates(scope.storePath!);
-  const identities = captureSessionStoreCandidateIdentities(candidates);
-  let selectedPath: string | undefined;
-  const assertSources = () => {
-    params.assertCurrent();
-    for (const candidate of candidates) {
-      assertSessionStoreReadCandidate(candidate.path, candidates);
+  const sessionKey = resolveSqliteSessionKey(scope.sessionKey, params.agentId);
+  let active = true;
+  let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
+  let unregister: (() => void) | undefined;
+  let preparation: Promise<void> | undefined;
+  const release = () => {
+    if (!active) {
+      return;
     }
-    for (const [path, expected] of identities) {
-      const current = readDatabasePathIdentitySync(path);
-      if (
-        current.key !== expected.key ||
-        current.canonicalPath !== expected.canonicalPath ||
-        current.birthtime !== expected.birthtime
-      ) {
-        throw new Error("Steering delivery source changed during preparation");
-      }
+    active = false;
+    retained?.release();
+    unregister?.();
+  };
+  const assertCurrent = () => {
+    params.assertCurrent();
+    if (!active || !retained?.isCurrent()) {
+      throw new MessageInjectionTargetUnavailableError("Steering target changed");
     }
   };
-  const assertLegacyCurrent = () => {
-    assertSources();
-    assertEntry(loadSessionEntry({ ...scope, readConsistency: "latest" }));
-    assertSources();
+  const prepare = async () => {
+    params.assertCurrent();
+    await withSessionEntriesFromStoresInWorker(
+      [
+        {
+          agentId: params.agentId,
+          storePath: scope.storePath!,
+          env: scope.env,
+          projection: "exact",
+          snapshotFields: [],
+          sessionKeys: [...new Set([sessionKey, ...collectSessionEntryLookupKeys(sessionKey)])],
+        },
+      ],
+      ([read]) => {
+        params.assertCurrent();
+        if (!active || !read) {
+          throw new MessageInjectionTargetUnavailableError("Steering preparation was released");
+        }
+        const selected = resolveSessionEntryCandidates({
+          entries: read.result.entries,
+          sessionKey,
+          canonicalKeys: true,
+        }).existing;
+        assertEntry(selected?.entry);
+        const identity =
+          read.result.source?.databaseIdentity ?? read.result.databaseIdentity?.identity;
+        if (!identity) {
+          throw new MessageInjectionTargetUnavailableError(
+            "Steering session source is unavailable",
+          );
+        }
+        retained = retainPreparedSessionEntryPredicate({
+          databaseIdentity: `file:${identity}`,
+          sessionKey: selected?.sessionKey ?? sessionKey,
+          entry: selected?.entry,
+          matches: (before, after) =>
+            matchesExecutionSettings(after) &&
+            before?.sessionId === after?.sessionId &&
+            before?.lifecycleRevision === after?.lifecycleRevision,
+        });
+        unregister = registerOpenClawAgentDatabaseAsyncResource({
+          agentId: read.database.agentId,
+          path: read.database.path,
+          revoke: release,
+          close: async () => release(),
+        });
+      },
+      { ordered: true },
+    );
+    assertCurrent();
   };
   const descriptor: PreparedToolAuthorityRead = {
-    reads: [
-      {
-        agentId: params.agentId,
-        storePath: scope.storePath!,
-        env: scope.env,
-        projection: "exact",
-        snapshotFields: [],
-        sessionKeys: [
-          ...new Set([
-            normalizeStoreSessionKey(scope.sessionKey),
-            ...collectSessionEntryLookupKeys(scope.sessionKey),
-          ]),
-        ],
-      },
-    ],
-    assertPrepared: (reads) => {
-      assertSources();
-      const read = reads[0]!;
-      read.assertCurrent();
-      const physicalPath = assertSessionStoreReadCandidate(read.database.path, candidates);
-      if (selectedPath !== undefined && selectedPath !== physicalPath) {
-        throw new Error("Steering delivery selected store changed");
-      }
-      selectedPath = physicalPath;
-      assertEntry(
-        resolveSessionEntryCandidates({
-          entries: read.result.entries,
-          sessionKey: scope.sessionKey,
-          canonicalKeys: true,
-        }).existing?.entry,
-      );
-      read.assertCurrent();
-      assertSources();
-    },
-    assertLegacyCurrent,
+    reads: [],
+    assertPrepared: assertCurrent,
+    assertLegacyCurrent: assertCurrent,
   };
   return {
+    bindAdmission,
+    assertCurrent,
+    release,
     prepareCurrent: async () => {
-      assertSources();
+      preparation ??= prepare();
+      await preparation;
+      assertCurrent();
       if (isToolAuthorityReadCaptureActive()) {
         recordPreparedToolAuthorityRead(descriptor);
-      } else {
-        await withSessionEntriesFromStoresInWorker(descriptor.reads, descriptor.assertPrepared, {
-          prepareSource: (_input, database, identity) => {
-            assertSources();
-            const physicalPath = assertSessionStoreReadCandidate(database.path, candidates);
-            if (selectedPath !== undefined && selectedPath !== physicalPath) {
-              throw new Error("Steering delivery selected store changed");
-            }
-            selectedPath = physicalPath;
-            if (!identities.has(identity.canonicalPath)) {
-              identities.set(identity.canonicalPath, identity);
-            }
-          },
-        });
       }
-      assertSources();
     },
   };
 }

@@ -1,8 +1,3 @@
-/**
- * Playwright role snapshot helpers.
- *
- * Preserves native AI refs and finalizes browser snapshot budgets and deltas.
- */
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
@@ -14,7 +9,6 @@ type RoleRef = {
   nth?: number;
 };
 
-/** Mapping from generated role refs to role/name metadata. */
 export type RoleRefMap = Record<string, RoleRef>;
 
 /** Identity strategy used to compare consecutive ref-bearing snapshots. */
@@ -37,7 +31,6 @@ export type RoleSnapshotResult<T extends RoleRef = RoleRef> = {
 
 const ROLE_SNAPSHOT_TRUNCATION_MARKER = "[...TRUNCATED - page too large]";
 
-/** Options for filtering and compacting role snapshots. */
 export type RoleSnapshotOptions = {
   /** Only include interactive elements (buttons, links, inputs, etc.). */
   interactive?: boolean;
@@ -70,35 +63,6 @@ export function getRoleSnapshotIdentityKeys<T extends RoleRef>(
   return new Set(
     Object.entries(refs).map(([ref, value]) => getRoleSnapshotIdentityKey(ref, value, mode)),
   );
-}
-
-/** Mark ref-bearing lines that were absent from the previous compatible snapshot. */
-function annotateRoleSnapshotDelta<T extends RoleRef>(params: {
-  lines: string[];
-  lineRefs: readonly (string | undefined)[];
-  refs: Record<string, T>;
-  mode: RoleSnapshotIdentityMode;
-  previousKeys: ReadonlySet<string>;
-}): boolean {
-  const markedKeys = new Set<string>();
-  for (const [index, line] of params.lines.entries()) {
-    const ref = params.lineRefs[index];
-    const value = ref && Object.hasOwn(params.refs, ref) ? params.refs[ref] : undefined;
-    if (!ref || !value) {
-      continue;
-    }
-    const key = getRoleSnapshotIdentityKey(ref, value, params.mode);
-    if (params.previousKeys.has(key)) {
-      continue;
-    }
-    params.lines[index] = `${line} [new]`;
-    markedKeys.add(key);
-  }
-  if (markedKeys.size === 0) {
-    return false;
-  }
-  params.lines.push(`${markedKeys.size} new element(s) since last snapshot`);
-  return true;
 }
 
 function truncateRoleSnapshot(lines: readonly string[], maxChars: number) {
@@ -139,13 +103,24 @@ export function finalizeRoleSnapshot<T extends RoleRef>(params: {
   let annotated = false;
   if (delta && previousKeys !== undefined) {
     lineRefs = sourceLines.map(findRoleSnapshotLineRef);
-    annotated = annotateRoleSnapshotDelta({
-      lines: sourceLines,
-      lineRefs,
-      refs: params.refs,
-      mode: delta.mode,
-      previousKeys,
-    });
+    const markedKeys = new Set<string>();
+    for (const [index, line] of sourceLines.entries()) {
+      const ref = lineRefs[index];
+      const value = ref && Object.hasOwn(params.refs, ref) ? params.refs[ref] : undefined;
+      if (!ref || !value) {
+        continue;
+      }
+      const key = getRoleSnapshotIdentityKey(ref, value, delta.mode);
+      if (previousKeys.has(key)) {
+        continue;
+      }
+      sourceLines[index] = `${line} [new]`;
+      markedKeys.add(key);
+    }
+    annotated = markedKeys.size > 0;
+    if (annotated) {
+      sourceLines.push(`${markedKeys.size} new element(s) since last snapshot`);
+    }
   }
   const sourceSnapshot = annotated ? sourceLines.join("\n") : params.snapshot;
   const truncated = maxChars !== undefined && sourceSnapshot.length > maxChars;
@@ -292,7 +267,6 @@ function compactTree(lines: readonly string[]) {
   return compacted || "(empty)";
 }
 
-/** Normalize a role snapshot ref accepted by browser actions. */
 export function parseRoleRef(raw: string): string | null {
   const trimmed = raw.trim();
   const normalized = trimmed.startsWith("@")

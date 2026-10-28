@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionMutationAuthorizationChangedError } from "../../gateway/session-mutation-authorization-error.js";
@@ -7,13 +8,17 @@ import {
   type SqliteWorkerStore,
 } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import * as agentWorkers from "../../state/openclaw-agent-worker-store.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
+import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { updateSessionProfileInvolvementAsync } from "./session-involvement-store.js";
 
 function createFixture(canonicalGeneration?: string) {
@@ -109,18 +114,13 @@ it.each(["transaction", "commit"] as const)(
       });
       let current = true;
       let revoked = false;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      const observe = vi
-        .spyOn(admission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((callback, attachment) =>
-          create((request, grant) => {
-            if (request.stage === stage) {
-              current = false;
-              revoked = true;
-            }
-            callback(request, grant);
-          }, attachment),
-        );
+      const observe = probe.admission(admission, (request, grant, callback) => {
+        if (request.stage === stage) {
+          current = false;
+          revoked = true;
+        }
+        callback(request, grant);
+      });
       try {
         const result = await updateSessionProfileInvolvementAsync(f.scope, {
           ...f.params,
@@ -142,42 +142,29 @@ it.each(["transaction", "commit"] as const)(
   },
 );
 
-it("rejects a profile alias merge between involvement preparation and commit", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = createFixture();
-    const before = f.read();
-    const create = admission.createSqliteWorkerOperationAdmission;
-    let merged = false;
-    const observe = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((callback, attachment) =>
-        create((request, grant) => {
-          if (request.stage === "commit" && !merged) {
-            merged = true;
-            linkEmail(f.previousEmail, f.profile.id);
-          }
-          callback(request, grant);
-        }, attachment),
-      );
-    try {
-      await expect(
-        updateSessionProfileInvolvementAsync(f.scope, {
-          ...f.params,
-          change: { kind: "visibility", hidden: true },
-        }),
-      ).rejects.toThrow("Session involvement profile aliases changed before commit");
-      expect(merged).toBe(true);
-      expect(f.read()).toEqual(before);
-    } finally {
-      observe.mockRestore();
-    }
-  });
-});
-
-it("invalidates an unknown involvement commit without replay or acknowledged lifecycle publication", async () => {
+it("publishes a committed involvement receipt when the ordinary reply is lost without replay", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = createFixture();
     expect(f.read()).not.toHaveProperty(f.profile.id);
+    const identity = readOpenClawAgentDatabaseIdentity(openOpenClawAgentDatabase(f.scope)).identity;
+    if (typeof identity !== "string") {
+      throw new Error("Expected a durable involvement fixture");
+    }
+    const retain = (
+      matches: Parameters<typeof retainPreparedSessionEntryPredicate>[0]["matches"],
+    ) =>
+      retainPreparedSessionEntryPredicate({
+        databaseIdentity: `file:${identity}`,
+        sessionKey: f.scope.sessionKey,
+        entry: loadSessionEntry(f.scope),
+        projection: "full",
+        matches,
+      });
+    const stable = retain((before, after) => before?.sessionId === after?.sessionId);
+    const personal = retain((before, after) =>
+      isDeepStrictEqual(before?.profileInvolvement, after?.profileInvolvement),
+    );
+    const whole = retain(isDeepStrictEqual);
     const changes: SessionRowChange[] = [];
     const stopChanges = sessionChanges.subscribeFacts((change) => changes.push(change));
     const lifecycle = vi.fn();
@@ -226,18 +213,35 @@ it("invalidates an unknown involvement commit without replay or acknowledged lif
           ...f.params,
           change: { kind: "mention", source: f.source },
         }),
-      ).rejects.toBe(failure);
+      ).resolves.toBe(true);
       expect(dispatches).toBe(1);
+      expect(stable.isCurrent()).toBe(true);
+      expect(personal.isCurrent()).toBe(false);
+      expect(whole.isCurrent()).toBe(false);
+      expect(stable.readCurrent()?.entry?.profileInvolvement?.profiles[f.profile.id]).toMatchObject(
+        {
+          hidden: false,
+          lastMention: f.source,
+        },
+      );
       expect(changes).toEqual([
-        expect.objectContaining({ sessionKey: f.scope.sessionKey, factsInvalidated: true }),
+        expect.objectContaining({
+          sessionKey: f.scope.sessionKey,
+          facts: { kind: "unchanged" },
+        }),
       ]);
-      expect(lifecycle).not.toHaveBeenCalled();
+      expect(lifecycle).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ sessionKey: f.scope.sessionKey, reason: "involvement" }),
+      );
       expect(f.read()?.[f.profile.id]).toMatchObject({ hidden: false, lastMention: f.source });
       expect(dispatches).toBe(1);
     } finally {
       open.mockRestore();
       stopChanges();
       stopLifecycle();
+      stable.release();
+      personal.release();
+      whole.release();
     }
   });
 });

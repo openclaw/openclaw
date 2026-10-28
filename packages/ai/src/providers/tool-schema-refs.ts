@@ -1,5 +1,14 @@
 import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
 import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
+import { SCHEMA_ARRAY_KEYS, SCHEMA_MAP_KEYS, SCHEMA_OBJECT_KEYS } from "./schema-walk.js";
+import {
+  MAX_TOOL_SCHEMA_DEPTH,
+  inheritToolSchemaTruncation,
+  reportToolSchemaTruncation,
+  truncateToolSchemaDepth,
+} from "./tool-schema-depth.js";
+
+export { SCHEMA_ARRAY_KEYS, SCHEMA_MAP_KEYS, SCHEMA_OBJECT_KEYS } from "./schema-walk.js";
 
 export function setOwnSchemaProperty(
   target: Record<string, unknown>,
@@ -14,7 +23,7 @@ export function setOwnSchemaProperty(
   });
 }
 
-type SchemaDefs = {
+export type SchemaDefs = {
   $defs: Map<string, unknown>;
   definitions: Map<string, unknown>;
 };
@@ -27,7 +36,7 @@ export function copySchemaMeta(from: Record<string, unknown>, to: Record<string,
   }
 }
 
-function extendSchemaDefs(
+export function extendSchemaDefs(
   defs: SchemaDefs | undefined,
   schema: Record<string, unknown>,
 ): SchemaDefs | undefined {
@@ -77,32 +86,6 @@ function resolveJsonPointerPath(value: unknown, tokens: readonly string[]): unkn
   return current;
 }
 
-function resolveLocalJsonPointer(rootDocument: unknown, ref: string): unknown {
-  const tokens = parseLocalSchemaRefPointer(ref);
-  return tokens ? resolveJsonPointerPath(rootDocument, tokens) : undefined;
-}
-
-export const SCHEMA_MAP_KEYS = new Set([
-  "$defs",
-  "definitions",
-  "dependentSchemas",
-  "patternProperties",
-  "properties",
-]);
-
-export const SCHEMA_OBJECT_KEYS = new Set([
-  "additionalProperties",
-  "contains",
-  "else",
-  "if",
-  "items",
-  "not",
-  "propertyNames",
-  "then",
-]);
-
-export const SCHEMA_ARRAY_KEYS = new Set(["allOf", "anyOf", "items", "oneOf", "prefixItems"]);
-
 export const SCHEMA_LITERAL_KEYS = new Set(["const", "default", "enum", "examples"]);
 
 function tryResolveLocalRef(
@@ -128,12 +111,17 @@ function inlineLocalSchemaRefsWithDefs(
   schema: unknown,
   defs: SchemaDefs | undefined,
   refStack: Set<string> | undefined,
-  state: { unresolvedLocalRefs: boolean },
+  state: { unresolvedLocalRefs: boolean; truncated: boolean },
   rootDocument: unknown,
+  depth = 0,
 ): unknown {
+  if (depth > MAX_TOOL_SCHEMA_DEPTH) {
+    state.truncated = true;
+    return {};
+  }
   if (Array.isArray(schema)) {
     return schema.map((entry) =>
-      inlineLocalSchemaRefsWithDefs(entry, defs, refStack, state, rootDocument),
+      inlineLocalSchemaRefsWithDefs(entry, defs, refStack, state, rootDocument, depth + 1),
     );
   }
 
@@ -164,6 +152,7 @@ function inlineLocalSchemaRefsWithDefs(
       nextRefStack,
       state,
       rootDocument,
+      depth + 1,
     );
     if (!isSchemaRecord(inlined)) {
       return inlined;
@@ -185,48 +174,62 @@ function inlineLocalSchemaRefsWithDefs(
     if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
       const entries = Object.entries(value);
       for (const entry of entries) {
-        entry[1] = inlineLocalSchemaRefsWithDefs(entry[1], nextDefs, refStack, state, rootDocument);
+        if (key === "dependencies" && Array.isArray(entry[1])) {
+          continue;
+        }
+        entry[1] = inlineLocalSchemaRefsWithDefs(
+          entry[1],
+          nextDefs,
+          refStack,
+          state,
+          rootDocument,
+          depth + 1,
+        );
       }
       next = Object.fromEntries(entries);
     } else if (SCHEMA_OBJECT_KEYS.has(key) && isSchemaRecord(value)) {
-      next = inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state, rootDocument);
+      next = inlineLocalSchemaRefsWithDefs(
+        value,
+        nextDefs,
+        refStack,
+        state,
+        rootDocument,
+        depth + 1,
+      );
     } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
       next = value.map((entry) =>
-        inlineLocalSchemaRefsWithDefs(entry, nextDefs, refStack, state, rootDocument),
+        inlineLocalSchemaRefsWithDefs(entry, nextDefs, refStack, state, rootDocument, depth + 1),
       );
     }
     setOwnSchemaProperty(result, key, next);
   }
   if (state.unresolvedLocalRefs) {
-    if ("$defs" in obj) {
-      result.$defs = obj.$defs;
-    }
-    if ("definitions" in obj) {
-      result.definitions = obj.definitions;
-    }
-    if ("components" in obj) {
-      result.components = obj.components;
+    for (const key of ["$defs", "definitions", "components"]) {
+      if (key in obj) {
+        result[key] = obj[key];
+      }
     }
   }
   return result;
 }
 
-/** Inline local $ref pointers so providers receive self-contained tool schemas. */
-export function inlineLocalToolSchemaRefs(schema: unknown): unknown {
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
+/** Inline local $ref pointers in the normalizer's already-bounded input. */
+export function inlineLocalToolSchemaRefs(schema: unknown, toolName?: string): unknown {
+  const state = { unresolvedLocalRefs: false, truncated: false };
   // SAFETY: Objects, including legacy array roots, can carry definition-table keys.
   const schemaRecord = schema as Record<string, unknown>;
-  return inlineLocalSchemaRefsWithDefs(
+  const normalized = inlineLocalSchemaRefsWithDefs(
     schema,
     Array.isArray(schema) ? extendSchemaDefs(undefined, schemaRecord) : undefined,
     undefined,
-    {
-      unresolvedLocalRefs: false,
-    },
+    state,
     schema,
   );
+  const bounded = truncateToolSchemaDepth(normalized);
+  if (state.truncated || bounded !== normalized) {
+    reportToolSchemaTruncation(schema, toolName);
+  }
+  return inheritToolSchemaTruncation(schema, bounded, state.truncated);
 }
 
 /** Keep compact root definitions. Fall back for scopes or refs we must rewrite. */
@@ -242,13 +245,11 @@ export function canPreserveRootSchemaRefs(schema: unknown): boolean {
     return false;
   }
   let hasRefs = false;
-  const ancestors = new Set<object>();
   function visit(node: unknown, inDefinitions = false): boolean {
     if (!isSchemaRecord(node)) {
       return true;
     }
     if (
-      ancestors.has(node) ||
       "$id" in node ||
       "id" in node ||
       "components" in node ||
@@ -261,33 +262,28 @@ export function canPreserveRootSchemaRefs(schema: unknown): boolean {
         typeof node.$ref !== "string" ||
         !/^#\/(\$defs|definitions)\/[^/]+$/.test(node.$ref) ||
         node.nullable === true ||
-        resolveLocalJsonPointer(schema, node.$ref) === undefined
+        tryResolveLocalRef(node.$ref, undefined, schema) === undefined
       ) {
         return false;
       }
       // Unused definitions must not keep an otherwise reference-free schema large.
       hasRefs ||= !inDefinitions;
     }
-    ancestors.add(node);
-    try {
-      for (const [key, value] of Object.entries(node)) {
-        if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
-          const childInDefinitions = inDefinitions || key === "$defs" || key === "definitions";
-          if (!Object.values(value).every((entry) => visit(entry, childInDefinitions))) {
-            return false;
-          }
-        } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-          if (!value.every((entry) => visit(entry, inDefinitions))) {
-            return false;
-          }
-        } else if (SCHEMA_OBJECT_KEYS.has(key) && !visit(value, inDefinitions)) {
+    for (const [key, value] of Object.entries(node)) {
+      if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
+        const childInDefinitions = inDefinitions || key === "$defs" || key === "definitions";
+        if (!Object.values(value).every((entry) => visit(entry, childInDefinitions))) {
           return false;
         }
+      } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
+        if (!value.every((entry) => visit(entry, inDefinitions))) {
+          return false;
+        }
+      } else if (SCHEMA_OBJECT_KEYS.has(key) && !visit(value, inDefinitions)) {
+        return false;
       }
-      return true;
-    } finally {
-      ancestors.delete(node);
     }
+    return true;
   }
   return visit(schema) && hasRefs;
 }

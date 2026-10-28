@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPluginCache } from "../plugins/plugin-cache.js";
 import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.js";
+import { runtimeProcessExternalPackageEntrypoints } from "./runtime-process-manifest.js";
 
 type PackageRootOptions = { cwd?: string; argv1?: string; moduleUrl?: string };
 
@@ -12,7 +13,7 @@ const PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN =
 export function rewritePnpmVersionedOpenClawEntryPath(entryPath: string): string {
   return entryPath.replace(
     PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN,
-    "$1$2node_modules$2openclaw$2openclaw.mjs",
+    `$1$2node_modules$2openclaw$2${runtimeProcessExternalPackageEntrypoints.cliLauncher}`,
   );
 }
 
@@ -23,7 +24,9 @@ export function resolveOpenClawInstallationRootSync(
 ): string {
   const launcherRoot = argv1 ? findPackageRootSync(path.dirname(path.resolve(argv1))) : null;
   const pnpmRoot = path.dirname(
-    rewritePnpmVersionedOpenClawEntryPath(path.join(runningRoot, "openclaw.mjs")),
+    rewritePnpmVersionedOpenClawEntryPath(
+      path.join(runningRoot, runtimeProcessExternalPackageEntrypoints.cliLauncher),
+    ),
   );
   for (const candidate of [launcherRoot, pnpmRoot]) {
     if (!candidate || candidate === runningRoot) {
@@ -79,8 +82,8 @@ function readPackageNameSync(dir: string): string | null {
   }
 }
 
-async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
-  for (const current of iterAncestorDirs(startDir, maxDepth)) {
+async function findPackageRoot(startDir: string): Promise<string | null> {
+  for (const current of iterAncestorDirs(startDir)) {
     const name = await readPackageName(current);
     if (name === "openclaw") {
       return current;
@@ -89,8 +92,8 @@ async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string 
   return null;
 }
 
-function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
-  for (const current of iterAncestorDirs(startDir, maxDepth)) {
+function findPackageRootSync(startDir: string): string | null {
+  for (const current of iterAncestorDirs(startDir)) {
     const name = readPackageNameSync(current);
     if (name === "openclaw") {
       return current;
@@ -99,9 +102,9 @@ function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
   return null;
 }
 
-function* iterAncestorDirs(startDir: string, maxDepth: number): Generator<string> {
+function* iterAncestorDirs(startDir: string): Generator<string> {
   let current = path.resolve(startDir);
-  for (let i = 0; i < maxDepth; i += 1) {
+  for (let i = 0; i < 12; i += 1) {
     yield current;
     // Never walk above a node_modules boundary: a package.json up there belongs
     // to the workspace that installed the tooling (for example an enclosing
@@ -154,27 +157,34 @@ function candidateDirsFromArgv1(argv1: string): string[] {
   return [...deduped];
 }
 
-export async function resolveOpenClawPackageRoot(opts: PackageRootOptions): Promise<string | null> {
+function preparePackageRootSearch(opts: PackageRootOptions, preserveInventory: boolean) {
   const candidates = buildCandidates(opts);
   const cacheKey = candidates.join("\0");
   const searches = getPluginCache().sdk.packageSearches;
   const cached = searches.get(cacheKey);
-  if (cached?.all) {
-    return cached.all[0] ?? null;
+  return {
+    candidates,
+    first: cached?.all ? (cached.all[0] ?? null) : cached?.first,
+    complete(first: string | null) {
+      // Async discovery may overlap a complete inventory; sync discovery only selects one root.
+      searches.set(cacheKey, preserveInventory ? { ...searches.get(cacheKey), first } : { first });
+      return first;
+    },
+  };
+}
+
+export async function resolveOpenClawPackageRoot(opts: PackageRootOptions): Promise<string | null> {
+  const search = preparePackageRootSearch(opts, true);
+  if (search.first !== undefined) {
+    return search.first;
   }
-  if (cached?.first !== undefined) {
-    return cached.first;
-  }
-  for (const candidate of candidates) {
+  for (const candidate of search.candidates) {
     const found = await findPackageRoot(candidate);
     if (found) {
-      searches.set(cacheKey, { ...searches.get(cacheKey), first: found });
-      return found;
+      return search.complete(found);
     }
   }
-
-  searches.set(cacheKey, { ...searches.get(cacheKey), first: null });
-  return null;
+  return search.complete(null);
 }
 
 // Every distinct OpenClaw package root among the runtime hints, in candidate order (symlinked
@@ -204,27 +214,17 @@ export function resolveOpenClawPackageRootsSync(opts: PackageRootOptions): strin
 }
 
 export function resolveOpenClawPackageRootSync(opts: PackageRootOptions): string | null {
-  const candidates = buildCandidates(opts);
-  const cacheKey = candidates.join("\0");
-  const searches = getPluginCache().sdk.packageSearches;
-  const cached = searches.get(cacheKey);
-  if (cached?.all) {
-    return cached.all[0] ?? null;
+  const search = preparePackageRootSearch(opts, false);
+  if (search.first !== undefined) {
+    return search.first;
   }
-  if (cached?.first !== undefined) {
-    return cached.first;
-  }
-  for (const candidate of candidates) {
+  for (const candidate of search.candidates) {
     const found = findPackageRootSync(candidate);
     if (found) {
-      // Cache only the selected root; Doctor may still request the complete inventory.
-      searches.set(cacheKey, { first: found });
-      return found;
+      return search.complete(found);
     }
   }
-
-  searches.set(cacheKey, { first: null });
-  return null;
+  return search.complete(null);
 }
 
 function buildCandidates(opts: PackageRootOptions): string[] {

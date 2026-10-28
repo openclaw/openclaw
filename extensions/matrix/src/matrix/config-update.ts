@@ -68,22 +68,6 @@ function normalizeMatrixSecretInput(
   return ref;
 }
 
-function cloneMatrixDmConfig(dm: NonNullable<MatrixConfig["dm"]>): MatrixConfig["dm"] {
-  return {
-    ...dm,
-    ...(dm.allowFrom ? { allowFrom: [...dm.allowFrom] } : {}),
-  };
-}
-
-function cloneMatrixRoomMap(rooms: MatrixConfig["groups"]): MatrixConfig["groups"] {
-  if (!rooms) {
-    return rooms;
-  }
-  return Object.fromEntries(
-    Object.entries(rooms).map(([roomId, roomCfg]) => [roomId, roomCfg ? { ...roomCfg } : roomCfg]),
-  );
-}
-
 export function updateMatrixAccountConfig(
   cfg: CoreConfig,
   accountId: string,
@@ -137,16 +121,15 @@ export function updateMatrixAccountConfig(
   applyNullableField(nextAccount, "encryption", patch.encryption);
   applyNullableField(nextAccount, "allowBots", patch.allowBots);
   applyNullableField(nextAccount, "autoJoin", patch.autoJoin);
-  applyNullableField(nextAccount, "autoJoinAllowlist", patch.autoJoinAllowlist, (value) => [
+  applyNullableField(nextAccount, "autoJoinAllowlist", patch.autoJoinAllowlist);
+  applyNullableField(nextAccount, "dm", patch.dm, (value) => ({
+    ...(nextAccount.dm as MatrixConfig["dm"] | undefined),
     ...value,
-  ]);
-  applyNullableField(nextAccount, "dm", patch.dm, (value) =>
-    cloneMatrixDmConfig({ ...(nextAccount.dm as MatrixConfig["dm"] | undefined), ...value }),
-  );
+  }));
   applyNullableField(nextAccount, "groupPolicy", patch.groupPolicy);
-  applyNullableField(nextAccount, "groupAllowFrom", patch.groupAllowFrom, (value) => [...value]);
+  applyNullableField(nextAccount, "groupAllowFrom", patch.groupAllowFrom);
   for (const key of ["groups", "rooms"] as const) {
-    applyNullableField(nextAccount, key, patch[key], cloneMatrixRoomMap);
+    applyNullableField(nextAccount, key, patch[key]);
   }
 
   const nextAccounts = Object.fromEntries(

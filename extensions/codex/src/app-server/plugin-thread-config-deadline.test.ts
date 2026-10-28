@@ -3,10 +3,14 @@
 // the assertions are unchanged.
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
-import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
-import { pluginInstalled, pluginList } from "./plugin-inventory.test-helpers.js";
+import {
+  codexPluginConfig,
+  curatedPlugin,
+  pluginInstalled,
+  pluginList,
+} from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import { createCodexPluginThreadConfigStartupProvider } from "./plugin-thread-config-deadline.js";
+import { preparePluginThreadConfigForTest } from "./plugin-thread-config.test-helpers.js";
 
 describe("Codex plugin thread config deadline", () => {
   it("keeps the plugin config deadline bounded when the wall clock rewinds", async () => {
@@ -37,25 +41,13 @@ describe("Codex plugin thread config deadline", () => {
         },
       );
 
-      const buildPromise = createCodexPluginThreadConfigStartupProvider({
-        inputFingerprint: undefined,
-        enabledPluginConfigKeys: undefined,
-        policy: undefined,
+      const buildPromise = preparePluginThreadConfigForTest(
+        codexPluginConfig({ plugins: { calendar: curatedPlugin("calendar") } }),
+        "runtime-wall-clock-rewind",
+      )({
         requestTimeoutMs: 60_000,
         signal: new AbortController().signal,
-        pluginConfig: {
-          codexPlugins: {
-            enabled: true,
-            plugins: {
-              calendar: {
-                marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-                pluginName: "calendar",
-              },
-            },
-          },
-        },
         appCache: new CodexAppInventoryCache(),
-        appCacheKey: "runtime-wall-clock-rewind",
         metadataCache: new CodexPluginMetadataCache(),
         client: { request },
       }).build();

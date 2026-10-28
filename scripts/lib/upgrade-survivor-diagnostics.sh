@@ -15,6 +15,8 @@ prepare_diagnostics_capture() {
       "$ARTIFACT_DIR"/backup-rollback-{create,restore}.json \
       "$ARTIFACT_DIR"/backup-rollback-{create,restore}.json.err \
       "$ARTIFACT_DIR/legacy-operator-restored-index.json" \
+      "$ARTIFACT_DIR/legacy-operator-pending-delivery.json" \
+      "$ARTIFACT_DIR/legacy-operator-pending-delivery-before-start.json" \
       "$ARTIFACT_DIR"/restored-index-{post-update,candidate-import,rollback}.json \
       "$ARTIFACT_DIR"/legacy-operator-baseline-turn.{out,err} \
       "$ARTIFACT_DIR"/legacy-operator-candidate-turn.{out,err} \

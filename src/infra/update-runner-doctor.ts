@@ -2,13 +2,10 @@ import { compareSemverStrings } from "./update-check.js";
 
 const EXTERNAL_SERVICE_REPAIR_POLICY_MIN_VERSION = "2026.4.25-beta.1";
 
-export function resolveUpdateDoctorExecutionPolicy(params: {
-  targetVersion: string | null;
-  allowGatewayServiceRepair: boolean;
-}): { fix: boolean; serviceRepairPolicy?: "external" } {
-  if (params.allowGatewayServiceRepair) {
-    return { fix: true };
-  }
+export function resolveUpdateDoctorExecutionPolicy(params: { targetVersion: string | null }): {
+  fix: boolean;
+  serviceRepairPolicy?: "external";
+} {
   const support = compareSemverStrings(
     params.targetVersion,
     EXTERNAL_SERVICE_REPAIR_POLICY_MIN_VERSION,

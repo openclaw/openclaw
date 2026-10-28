@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Long-running, synthetic-only Gateway retention probe. Run on an isolated host.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import {
   appendFileSync,
@@ -30,16 +30,25 @@ const { values } = parseArgs({
     minutes: { type: "string", default: "90" },
     sessions: { type: "string", default: "2000" },
     clients: { type: "string", default: "10" },
-    port: { type: "string", default: "19548" },
+    port: { type: "string", default: "41673" },
     "rpc-interval-ms": { type: "string", default: "2000" },
     "turn-interval-ms": { type: "string", default: "180000" },
     "snapshot-minutes": { type: "string" },
+    "module-census": { type: "boolean" },
+    coverage: { type: "boolean" },
+    "lazy-import-trace": { type: "boolean" },
+    "turn-count": { type: "string" },
+    "gateway-preload": { type: "string" },
+    "shell-turns": { type: "boolean" },
+    "idle-minutes": { type: "string" },
+    "ready-file": { type: "string" },
+    "start-file": { type: "string" },
     help: { type: "boolean" },
   },
 });
 if (values.help) {
   console.log(
-    "node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90 [--sessions 2000 --clients 10 --port 19548 --snapshot-minutes 10,90]",
+    "node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90 [--sessions 2000 --clients 10 --port 41673 --snapshot-minutes 10,90 --module-census --coverage --idle-minutes 5]",
   );
   process.exit(0);
 }
@@ -49,23 +58,38 @@ function positiveInteger(value, label) {
   }
   return Number(value);
 }
+if (values.coverage && !values["module-census"]) {
+  throw new Error("--coverage requires --module-census");
+}
+if (Boolean(values["ready-file"]) !== Boolean(values["start-file"])) {
+  throw new Error("--ready-file and --start-file must be supplied together");
+}
 const minutes = positiveInteger(values.minutes, "minutes");
+const idleMinutes = values["idle-minutes"]
+  ? positiveInteger(values["idle-minutes"], "idle-minutes")
+  : 0;
 const sessionCount = positiveInteger(values.sessions, "sessions");
 const clientCount = positiveInteger(values.clients, "clients");
 const port = positiveInteger(values.port, "port");
 const rpcInterval = positiveInteger(values["rpc-interval-ms"], "rpc-interval-ms");
 const turnInterval = positiveInteger(values["turn-interval-ms"], "turn-interval-ms");
-if (port < 19500 || port > 19597) {
-  throw new Error("port and two adjacent mock ports must fit 19500–19599");
+const turnCount = values["turn-count"]
+  ? positiveInteger(values["turn-count"], "turn-count")
+  : Infinity;
+if (port < 40000 || port > 65533) {
+  throw new Error("port and two adjacent mock ports must fit 40000–65535");
 }
 if (!values.root) {
   throw new Error("--root is required; it must name a new synthetic state directory");
 }
 const root = path.resolve(values.root);
 const build = JSON.parse(readFileSync("dist/build-info.json", "utf8"));
-const snapshotMinutes = (values["snapshot-minutes"] ?? `10,${minutes}`)
-  .split(",")
-  .map((v) => positiveInteger(v, "snapshot-minutes"));
+const snapshotMinutes =
+  values["snapshot-minutes"] === "none"
+    ? []
+    : (values["snapshot-minutes"] ?? `10,${minutes}`)
+        .split(",")
+        .map((v) => positiveInteger(v, "snapshot-minutes"));
 if (snapshotMinutes.some((v, i) => v > minutes || (i > 0 && v - snapshotMinutes[i - 1] < 2))) {
   throw new Error("snapshot minutes must increase by at least two and fit the duration");
 }
@@ -78,10 +102,12 @@ const record = (event) => {
   console.log(line);
 };
 const config = structuredClone(BASE_GATEWAY_BENCH_CONFIG);
-config.cron = { enabled: false };
+config.cron = { enabled: true };
 config.gateway.controlUi.allowedOrigins = [`http://127.0.0.1:${port}`];
 config.memory = { search: { enabled: false } };
 config.plugins.slots = { memory: "none" };
+// Background reviews share the agent model and would consume its ordered tool fixtures.
+config.skills = { ...config.skills, workshop: { autonomous: { mode: "off" } } };
 applyMockOpenAiModelConfig(config, { mockPort: port + 1 });
 // Utility summaries must not consume the agent mock's ordered tool-response script.
 config.models.providers["heap-rig-utility"] = {
@@ -91,7 +117,6 @@ config.models.providers["heap-rig-utility"] = {
 config.agents.defaults.utilityModel = "heap-rig-utility/gpt-5.6-luna";
 config.agents.defaults = {
   ...config.agents.defaults,
-  heartbeat: { every: "0m" },
   skipBootstrap: true,
   skills: [],
   modelPolicy: {},
@@ -102,10 +127,22 @@ config.agents.entries = Object.fromEntries(
   ["main", "second"].map((id) => {
     const workspace = path.join(root, `workspace-${id}`);
     mkdirSync(workspace);
+    // Git baseline discovery must not ascend into a checkout containing the live SQLite state.
+    const gitInit = spawnSync(
+      "git",
+      ["init", "--quiet", "--template=", "--initial-branch=main", workspace],
+      { encoding: "utf8" },
+    );
+    if (gitInit.status !== 0) {
+      throw new Error(`Could not isolate synthetic workspace: ${gitInit.error ?? gitInit.stderr}`);
+    }
     return [id, { workspace }];
   }),
 );
 const turnDriver = await configureHeapRigTurns(config, root, port + 1);
+if (values["shell-turns"]) {
+  config.tools.exec = { security: "full", ask: "off" };
+}
 await configureHeapRigCatalog(config, root);
 const configPath = path.join(root, "openclaw.json");
 writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
@@ -114,6 +151,8 @@ const env = createGatewayBenchEnv(root, configPath, {
   caseEnv: {
     ...turnDriver.env,
     OPENAI_API_KEY: "synthetic-heap-rig-not-a-real-key",
+    OPENCLAW_PROFILE: `heap-rig-${port}`,
+    OPENCLAW_SYSTEMD_UNIT: `openclaw-heap-rig-${port}`,
     PATH: `${path.dirname(process.execPath)}:${process.env.PATH}`,
     TMPDIR: root,
   },
@@ -121,7 +160,6 @@ const env = createGatewayBenchEnv(root, configPath, {
 const children = [];
 const clients = new Set();
 const requests = {};
-const retries = {};
 const events = {};
 const identities = Array.from({ length: clientCount }, () => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -152,7 +190,7 @@ function start(args, label, extraEnv = {}) {
     cwd: process.cwd(),
     env: { ...env, ...extraEnv },
     detached: true,
-    stdio: ["ignore", fd, fd],
+    stdio: ["ignore", fd, fd, ...(label === "gateway" && values["module-census"] ? ["ipc"] : [])],
   });
   closeSync(fd);
   children.push(child);
@@ -172,16 +210,6 @@ async function sleep(ms) {
     if (!abort.signal.aborted) {
       throw error;
     }
-  }
-}
-class GatewayRpcError extends Error {
-  constructor(method, responseError) {
-    super(`${method}: ${JSON.stringify(responseError)}`);
-    this.projectAccessChanged =
-      method === "projects.list" &&
-      responseError?.code === "UNAVAILABLE" &&
-      responseError?.message ===
-        "Project access changed while preparing the listing. Retry the request.";
   }
 }
 async function connect(protocol, identity) {
@@ -204,7 +232,7 @@ async function connect(protocol, identity) {
     try {
       const result = await work;
       if (!result.ok) {
-        throw new GatewayRpcError(method, result.error);
+        throw new Error(`${method}: ${JSON.stringify(result.error)}`);
       }
       requests[method] = (requests[method] ?? 0) + 1;
       return result.payload;
@@ -299,7 +327,52 @@ try {
     MOCK_REQUEST_LOG: path.join(root, "mock-utility-requests.jsonl"),
     SUCCESS_MARKER: "Synthetic activity summary",
   });
-  const gateway = start(["dist/index.js", "gateway", "--port", String(port)], "gateway");
+  const coldStarted = performance.now();
+  const gateway = start(
+    [
+      ...(values["gateway-preload"] ? ["--import", path.resolve(values["gateway-preload"])] : []),
+      ...(values["lazy-import-trace"]
+        ? ["--import", path.resolve("scripts/perf/lazy-import-trace-preload.mjs")]
+        : []),
+      ...(values["module-census"]
+        ? ["--import", path.resolve("scripts/perf/main-module-census-preload.mjs")]
+        : []),
+      "dist/index.js",
+      "gateway",
+      "--port",
+      String(port),
+    ],
+    "gateway",
+    values["lazy-import-trace"]
+      ? { OPENCLAW_LAZY_IMPORT_TRACE_DIR: path.join(root, "lazy-import-trace") }
+      : {},
+  );
+  async function census(action, label) {
+    if (!values["module-census"]) {
+      return;
+    }
+    const id = randomUUID();
+    const output = path.join(root, `modules-${label}.json`);
+    const reply = Promise.withResolvers();
+    const listener = (message) => {
+      if (message?.channel === "main-module-census" && message.id === id) {
+        if (message.error) {
+          reply.reject(new Error(message.error));
+        } else {
+          reply.resolve(message);
+        }
+      }
+    };
+    gateway.on("message", listener);
+    const timeout = setTimeout(() => reply.reject(new Error("Module census timed out")), 120000);
+    try {
+      gateway.send({ channel: "main-module-census", id, action, output });
+      record({ kind: "module-census", label, ...(await reply.promise), output });
+    } finally {
+      clearTimeout(timeout);
+      gateway.off("message", listener);
+    }
+  }
   const startupDeadline = Date.now() + 600000;
   while (!admin && !abort.signal.aborted && Date.now() < startupDeadline) {
     try {
@@ -313,6 +386,7 @@ try {
   }
   record({
     kind: "ready",
+    coldStartMs: performance.now() - coldStarted,
     pid: gateway.pid,
     node: process.version,
     v8: process.versions.v8,
@@ -332,7 +406,7 @@ try {
         await admin.rpc("sessions.create", { key, agentId });
         await admin.rpc("chat.inject", {
           sessionKey: key,
-          message: `Synthetic history ${index}. `.repeat(32),
+          message: `Synthetic history ${index}. `.repeat(2048).slice(0, 32 * 1024),
         });
         if ((index + 1) % 250 === 0) {
           record({ kind: "seed", completed: index + 1 });
@@ -344,17 +418,79 @@ try {
   if (inventory.totalCount < sessionCount) {
     throw new Error(`Seed inventory incomplete: ${inventory.totalCount}`);
   }
-  record({ kind: "seeded", totalCount: inventory.totalCount });
+  record({ kind: "seeded", totalCount: inventory.totalCount, historyBytesPerSession: 32 * 1024 });
+  await census("capture", "seeded");
+  if (values["ready-file"]) {
+    writeFileSync(
+      values["ready-file"],
+      JSON.stringify({ pid: process.pid, gatewayPid: gateway.pid }),
+    );
+    let startAt;
+    while (!abort.signal.aborted) {
+      try {
+        startAt = positiveInteger(readFileSync(values["start-file"], "utf8").trim(), "start-file");
+        break;
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error;
+        }
+        await sleep(100);
+      }
+    }
+    if (abort.signal.aborted || startAt <= Date.now()) {
+      throw new Error("Preparation missed the workload start; discard the run");
+    }
+    await sleep(startAt - Date.now());
+  }
+  if (values.coverage) {
+    await census("coverage-start", "workload");
+  }
   const startedAt = performance.now();
   const deadline = startedAt + minutes * 60000;
   const samples = [];
+  const floors = [];
   const snapshots = [];
   /** @type {Promise<unknown>} */
   let currentTurn = Promise.resolve();
+  let floor;
+  const floorWidthMs = 10 * 60_000;
+  function finishFloor() {
+    if (floor) {
+      floors.push(floor);
+      record({ kind: "heap-floor", ...floor, counts: { ...turnDriver.counts } });
+      floor = undefined;
+    }
+  }
   async function sample() {
     const observation = await readGatewayMemory(admin.rpc, startedAt);
     samples.push(observation);
-    record({ kind: "sample", ...observation, requests: { ...requests }, retries: { ...retries } });
+    const window = Math.floor(observation.atMs / floorWidthMs);
+    if (floor && floor.window !== window) {
+      finishFloor();
+    }
+    if (!floor) {
+      const sampleInventory = await admin.rpc("sessions.list", { limit: 1, archived: "all" });
+      floor = {
+        window,
+        startMinute: window * 10,
+        endMinute: (window + 1) * 10,
+        samples: 0,
+        heapUsedMb: observation.heapUsedMb,
+        atMs: observation.atMs,
+        sessionCountAtStart: sampleInventory.totalCount,
+      };
+    }
+    floor.samples++;
+    if (observation.heapUsedMb < floor.heapUsedMb) {
+      floor.heapUsedMb = observation.heapUsedMb;
+      floor.atMs = observation.atMs;
+    }
+    record({
+      kind: "sample",
+      ...observation,
+      requests: { ...requests },
+      counts: { ...turnDriver.counts },
+    });
   }
   async function snapshot(minute) {
     /** @type {PromiseWithResolvers<void>} */
@@ -368,7 +504,13 @@ try {
         { reason: `synthetic retention rig minute ${minute}` },
         300000,
       );
-      const entry = { kind: "snapshot", minute, atMs: performance.now() - startedAt, ...result };
+      const entry = {
+        kind: "snapshot",
+        minute,
+        atMs: performance.now() - startedAt,
+        connectedClients: clients.size,
+        ...result,
+      };
       snapshots.push(entry);
       record(entry);
     } finally {
@@ -394,7 +536,7 @@ try {
               reconnectAt = performance.now() + 180000 + index * 11000;
             }
             const selected =
-              sessions[(Math.floor(round / 11) * clientCount + index) % sessions.length];
+              sessions[(Math.floor(round / 10) * clientCount + index) % sessions.length];
             const { key, agentId } = selected;
             const identity = { sessionKey: key, agentId };
             const calls = [
@@ -402,7 +544,7 @@ try {
                 "sessions.list",
                 {
                   limit: 100,
-                  offset: (Math.floor(round / 11) * 100) % sessionCount,
+                  offset: (Math.floor(round / 10) * 100) % sessionCount,
                   archived: "all",
                   includeDerivedTitles: true,
                   includeLastMessage: true,
@@ -420,32 +562,10 @@ try {
               ["agent.identity.get", identity],
               ["cron.list", { includeDisabled: true, limit: 50, compact: true }],
               ["cron.status", {}],
-              ["projects.list", { includeObserved: true }],
               ["sessions.messages.unsubscribe", { key, agentId, subscriptionId: "rig-active" }],
             ];
             const [method, params] = calls[round++ % calls.length];
-            let result;
-            try {
-              result = await client.rpc(method, params);
-            } catch (error) {
-              if (!(error instanceof GatewayRpcError) || !error.projectAccessChanged) {
-                throw error;
-              }
-              // The projects owner refuses a read when access facts change across its await.
-              retries[method] = (retries[method] ?? 0) + 1;
-              record({
-                kind: "rpc-retry",
-                method,
-                atMs: performance.now() - startedAt,
-                reason: error.message,
-              });
-              await sleep(rpcInterval);
-              await workloadReady;
-              if (abort.signal.aborted || performance.now() >= deadline) {
-                break;
-              }
-              result = await client.rpc(method, params);
-            }
+            const result = await client.rpc(method, params);
             if (method === "sessions.catalog.list") {
               const fixture = result.catalogs?.find((catalog) => catalog.id === "heap-rig-catalog");
               if (!fixture?.hosts?.some((host) => host.sessions.length > 0)) {
@@ -456,15 +576,22 @@ try {
             }
             await sleep(rpcInterval);
           }
-        } finally {
+        } catch (error) {
           client?.close();
+          throw error;
         }
+        // Global cleanup closes successful clients after the final snapshot,
+        // keeping the connection population equal in both heap captures.
       })().catch(fail),
     );
   }
   tasks.push(
     (async () => {
-      for (let index = 0; !abort.signal.aborted && performance.now() < deadline; index++) {
+      for (
+        let index = 0;
+        index < turnCount && !abort.signal.aborted && performance.now() < deadline;
+        index++
+      ) {
         await workloadReady;
         if (abort.signal.aborted || performance.now() >= deadline) {
           break;
@@ -472,6 +599,7 @@ try {
         const turnWork = turnDriver.runTurn(admin.rpc, index, {
           agentId: index % 2 === 0 ? "main" : "second",
           canStart: () => !abort.signal.aborted && performance.now() < deadline,
+          shell: values["shell-turns"],
         });
         currentTurn = turnWork;
         const turn = await turnWork;
@@ -485,25 +613,52 @@ try {
     })().catch(fail),
   );
   await sample();
-  for (let minute = 1; minute <= minutes && !abort.signal.aborted; minute++) {
-    await sleep(startedAt + minute * 60000 - performance.now());
+  let nextSnapshot = 0;
+  for (let tick = 1; tick <= minutes * 6 && !abort.signal.aborted; tick++) {
+    await sleep(startedAt + tick * 10_000 - performance.now());
     if (abort.signal.aborted) {
       break;
     }
-    if (snapshotMinutes.includes(minute)) {
-      await snapshot(minute);
+    if (performance.now() < deadline) {
+      await sample();
     }
-    await sample();
+    while (
+      nextSnapshot < snapshotMinutes.length &&
+      Math.max(tick * 10_000, performance.now() - startedAt) >=
+        snapshotMinutes[nextSnapshot] * 60_000
+    ) {
+      await snapshot(snapshotMinutes[nextSnapshot++]);
+    }
+    // Snapshot writing can span several ticks; do not replay missed samples.
+    tick = Math.max(tick, Math.floor((performance.now() - startedAt) / 10_000));
   }
+  await currentTurn;
+  finishFloor();
   if (failure) {
     throw failure;
+  }
+  await census("capture", "complete");
+  if (idleMinutes) {
+    await Promise.all(tasks);
+    for (let minute = 1; minute <= idleMinutes; minute++) {
+      await sleep(60000);
+      if (failure) {
+        throw new Error("Idle observation interrupted", { cause: failure });
+      }
+      await census("stats", `idle-${minute}`);
+    }
+    if (snapshotMinutes.length > 0) {
+      await snapshot(minutes + idleMinutes);
+    }
+    await census("capture", "idle");
   }
   record({
     kind: "complete",
     node: process.version,
     requests,
-    retries,
     events,
+    counts: { ...turnDriver.counts },
+    floors,
     snapshots: snapshots.map(({ path: file, heapUsedAfter, atMs }) => ({
       path: file,
       heapUsedAfter,
@@ -512,7 +667,7 @@ try {
   });
   writeFileSync(
     path.join(root, "result.json"),
-    `${JSON.stringify({ node: process.version, v8: process.versions.v8, build, pid: gateway.pid, minutes, sessionCount, clientCount, requests, retries, events, samples, snapshots }, null, 2)}\n`,
+    `${JSON.stringify({ node: process.version, v8: process.versions.v8, build, pid: gateway.pid, minutes, sessionCount, clientCount, requests, events, samples, floors, snapshots, turns: turnDriver.evidence, counts: turnDriver.counts }, null, 2)}\n`,
   );
 } catch (error) {
   record({ kind: "failed", error: String(error) });

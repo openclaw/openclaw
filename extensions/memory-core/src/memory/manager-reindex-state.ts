@@ -1,3 +1,4 @@
+import { resolveEmbeddingInputFormatVersion } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import {
   hashText,
   MEMORY_CHUNKING_VERSION,
@@ -22,6 +23,7 @@ export type MemoryIndexMeta = {
   chunkTokens: number;
   chunkOverlap: number;
   chunkingVersion?: number;
+  embeddingInputFormatVersion?: number;
   vectorDims?: number;
   ftsTokenizer?: string;
   provenanceVersion?: number;
@@ -35,10 +37,44 @@ export type MemoryIndexProviderIdentity = {
   providerKey: string;
 };
 
+export function canUpgradeMemoryIndexProviderKey(
+  state: MemoryIndexIdentityState,
+  meta: MemoryIndexMeta,
+  identities: MemoryIndexProviderIdentity[],
+): boolean {
+  const [canonical, ...aliases] = identities;
+  if (
+    !canonical ||
+    meta.provider !== canonical.provider ||
+    meta.model !== canonical.model ||
+    !meta.providerKey ||
+    meta.providerKey === canonical.providerKey ||
+    !aliases.some(
+      (alias) =>
+        alias.provider === meta.provider &&
+        alias.model === meta.model &&
+        alias.providerKey === meta.providerKey,
+    )
+  ) {
+    return false;
+  }
+  return (
+    state.status === "valid" ||
+    (state.status === "mismatched" &&
+      state.owner === "openclaw" &&
+      state.code === "chunking_version" &&
+      state.versionOrder === "older" &&
+      state.chunkingVersionOnly === true &&
+      (meta.embeddingInputFormatVersion ?? 0) ===
+        resolveEmbeddingInputFormatVersion(canonical.model))
+  );
+}
+
 export function resolveMemoryIndexProviderIdentities(params: {
   provider: { id: string; model: string } | null;
   cacheKeyData?: Record<string, unknown>;
   aliases?: Array<{ model: string; cacheKeyData: Record<string, unknown> }>;
+  documentPrefix?: string;
 }): MemoryIndexProviderIdentity[] {
   const provider = params.provider ?? { id: "none", model: "fts-only" };
   const candidates = [
@@ -48,10 +84,21 @@ export function resolveMemoryIndexProviderIdentities(params: {
     },
     ...(params.provider ? (params.aliases ?? []) : []),
   ];
+  const embeddingInputFormatVersion = resolveEmbeddingInputFormatVersion(provider.model);
+  // Explicit formatting also disables provider-owned templates, including an empty prefix.
+  const documentPrefix = params.provider ? params.documentPrefix : undefined;
   const seen = new Set<string>();
   const identities: MemoryIndexProviderIdentity[] = [];
   for (const [index, candidate] of candidates.entries()) {
-    const providerKey = hashText(JSON.stringify(candidate.cacheKeyData));
+    const cacheKeyData =
+      embeddingInputFormatVersion || documentPrefix !== undefined
+        ? {
+            provider: candidate.cacheKeyData,
+            embeddingInputFormatVersion,
+            ...(documentPrefix !== undefined ? { documentPrefix } : {}),
+          }
+        : candidate.cacheKeyData;
+    const providerKey = hashText(JSON.stringify(cacheKeyData));
     const key = `${candidate.model}\u0000${providerKey}`;
     if ((index > 0 && !candidate.model) || seen.has(key)) {
       continue;
@@ -90,7 +137,7 @@ function configuredMetaSourcesDiffer(params: {
 }
 
 function openClawIndexMismatch(
-  code: "provenance_version" | "chunking_version",
+  code: "provenance_version" | "chunking_version" | "embedding_input_format",
   reason: string,
   versionOrder: "older" | "newer",
 ): MemoryIndexIdentityState {
@@ -231,15 +278,25 @@ export function resolveMemoryIndexIdentityState(
       owner: "openclaw",
     };
   }
+  // Interpret format revisions against the model that produced the stored vectors.
+  const indexedModel =
+    meta.provider === params.provider?.id &&
+    params.providerAliases?.some(({ model }) => model === meta.model)
+      ? (params.provider?.model ?? meta.model)
+      : meta.model;
+  const embeddingInputFormatVersion = resolveEmbeddingInputFormatVersion(indexedModel);
   // A newer dimension wins over an older one: a rollback cannot rewrite that index.
-  if (
-    (meta.provenanceVersion ?? 0) > MEMORY_INDEX_PROVENANCE_VERSION ||
-    (meta.chunkingVersion ?? 0) > MEMORY_CHUNKING_VERSION
-  ) {
+  const newerVersion =
+    (meta.provenanceVersion ?? 0) > MEMORY_INDEX_PROVENANCE_VERSION
+      ? "provenance_version"
+      : (meta.chunkingVersion ?? 0) > MEMORY_CHUNKING_VERSION
+        ? "chunking_version"
+        : (meta.embeddingInputFormatVersion ?? 0) > embeddingInputFormatVersion
+          ? "embedding_input_format"
+          : undefined;
+  if (newerVersion) {
     return openClawIndexMismatch(
-      (meta.provenanceVersion ?? 0) > MEMORY_INDEX_PROVENANCE_VERSION
-        ? "provenance_version"
-        : "chunking_version",
+      newerVersion,
       "the index was written by a newer OpenClaw version; upgrade OpenClaw or reindex explicitly",
       "newer",
     );
@@ -251,17 +308,26 @@ export function resolveMemoryIndexIdentityState(
       "older",
     );
   }
-  if ((meta.chunkingVersion ?? 0) < MEMORY_CHUNKING_VERSION) {
-    // Only an older chunker may use the last published lexical corpus. Embedding
-    // identities do not authorize lexical reads; source/scope identity does.
+  const olderFormat =
+    (meta.chunkingVersion ?? 0) < MEMORY_CHUNKING_VERSION
+      ? "chunking_version"
+      : (meta.embeddingInputFormatVersion ?? 0) < embeddingInputFormatVersion
+        ? "embedding_input_format"
+        : undefined;
+  if (olderFormat) {
+    // These upgrades preserve lexical rows only while source/scope identity still matches.
     return {
       ...openClawIndexMismatch(
-        "chunking_version",
-        "index chunking implementation changed",
+        olderFormat,
+        olderFormat === "chunking_version"
+          ? "index chunking implementation changed"
+          : "index embedding input format changed",
         "older",
       ),
       ...(resolveContentScopeIdentityState(params, meta).status === "valid"
-        ? { chunkingVersionOnly: true }
+        ? olderFormat === "chunking_version"
+          ? { chunkingVersionOnly: true }
+          : { lexicalCompatible: true }
         : {}),
     };
   }

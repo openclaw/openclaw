@@ -4,6 +4,7 @@ import type {
   SessionTranscriptSourcePageOptions,
 } from "../../gateway/session-transcript-read.types.js";
 import {
+  SessionTranscriptSourceMessageTooLargeError,
   SOURCE_PAGE_MAX_BYTES,
   SOURCE_PAGE_MAX_MESSAGES,
 } from "../../gateway/session-transcript-source-pages.js";
@@ -12,10 +13,7 @@ import {
   positionTranscriptDisplayEvents,
   readTranscriptDisplaySource,
 } from "./session-accessor.sqlite-display-position.js";
-import {
-  isVisibleHistoryNonMessageEvent,
-  parseStoredTranscriptEvent,
-} from "./session-accessor.sqlite-history-interval.js";
+import { parseStoredTranscriptEvent } from "./session-accessor.sqlite-history-interval.js";
 import {
   readActiveTranscriptCoordinate,
   resolveVisibleHistoryEventCount,
@@ -27,8 +25,10 @@ import {
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
 import { resolveTranscriptBoundaryWindow } from "./session-accessor.sqlite-reset-window.js";
+import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { readTranscriptPayload } from "./transcript-payload.js";
 
 type SqliteSourceCursor = Exclude<SessionTranscriptSourceCursor, { kind: "archive" }>;
 
@@ -75,6 +75,14 @@ export function readSessionTranscriptSourcePageFromProjection(
     };
   }
   const kept = window?.keptMessagePositions ?? [];
+  const selectedIds = options.messageIds?.map((id) => id.trim());
+  const selectedSequences = selectedIds
+    ? db
+        .selectFrom("transcript_event_identities")
+        .select("seq")
+        .where("session_id", "=", sessionId)
+        .where("event_id", "in", selectedIds)
+    : undefined;
   let cursor: SqliteSourceCursor | undefined = options.cursor ?? {
     kind: kept.length > 0 ? "kept" : "active",
     position: kept.length > 0 ? 0 : (window?.boundaryActivePosition ?? 0),
@@ -136,16 +144,31 @@ export function readSessionTranscriptSourcePageFromProjection(
               .where("active.active_position", ">=", cursor.position)
               .where("active.active_position", "<", snapshot.activeEventCount)
               .orderBy("active.active_position", "asc");
+    const selectedQuery = selectedSequences
+      ? query.where((eb) =>
+          eb.or([
+            eb("event.seq", "in", selectedSequences),
+            // Legacy handoffs can retain message.__openclaw.id without an indexed root ID.
+            eb.not(
+              eb.exists(
+                eb
+                  .selectFrom("transcript_event_identities as identity")
+                  .select("identity.seq")
+                  .whereRef("identity.session_id", "=", "event.session_id")
+                  .whereRef("identity.seq", "=", "event.seq"),
+              ),
+            ),
+          ]),
+        )
+      : query;
     const rows =
-      kind === "kept" && keptPositions.length === 0
+      selectedIds?.length === 0 || (kind === "kept" && keptPositions.length === 0)
         ? []
-        : executeSqliteQuerySync(projection.database.db, query.limit(remaining)).rows;
+        : executeSqliteQuerySync(projection.database.db, selectedQuery.limit(remaining)).rows;
     let admitted = 0;
     for (const row of rows) {
       if (row.bytes + 1 > SOURCE_PAGE_MAX_BYTES) {
-        throw new Error(
-          `Transcript source message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
-        );
+        throw new SessionTranscriptSourceMessageTooLargeError();
       }
       if (bytes + row.bytes + 1 > SOURCE_PAGE_MAX_BYTES) {
         break;
@@ -160,7 +183,7 @@ export function readSessionTranscriptSourcePageFromProjection(
         : readSnapshotEventRows(
             projection,
             selected.map((row) => row.seq),
-          ).map((row) => [row.seq, parseStoredTranscriptEvent(row.event_json)]),
+          ).map((row) => [row.seq, parseStoredTranscriptEvent(readTranscriptPayload(row))]),
     );
     let messageSeq: number = cursor.messageSeq;
     for (const row of selected) {

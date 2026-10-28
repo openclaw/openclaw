@@ -1,249 +1,140 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-import * as display from "./session-utils-display.js";
-import {
-  filterAndSortSessionEntries,
-  listProjectedSessions,
-  prepareSessionRowSelection,
-} from "./session-utils-list.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+import { filterAndSortSessionEntries, prepareSessionRowSelection } from "./session-utils-list.js";
 
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 
-const baseCfg = {
-  session: { mainKey: "main" },
-  agents: { entries: { main: {} } },
-} as OpenClawConfig;
+const cfg = { session: { mainKey: "main" }, agents: { entries: { main: {} } } };
+let projection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
+beforeEach(() => setRuntimeConfigSnapshot(cfg));
+afterEach(() => {
+  projection?.dispose();
+  projection = undefined;
+  clearRuntimeConfigSnapshot();
+});
 
-function selectSessionKeys(params: {
-  opts: Parameters<typeof filterAndSortSessionEntries>[0]["opts"];
-  cfg?: OpenClawConfig;
-  store: Record<string, SessionEntry>;
-  now?: number;
-}): string[] {
-  const now = params.now ?? Date.now();
-  const store = params.store;
-  const projection = createSessionRowProjectionFixture({
-    cfg: params.cfg ?? baseCfg,
-    store,
-    agentId: "main",
-  });
-  try {
-    return filterAndSortSessionEntries({
-      ...prepareSessionRowSelection(projection, params.opts),
-      now,
-    }).map(([key]) => key);
-  } finally {
-    projection.dispose();
-  }
+function entry(id: string, updatedAt: number, fields: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId: id, updatedAt, ...fields };
 }
 
-describe("filterAndSortSessionEntries search", () => {
-  test("matches title punctuation and spacing before selecting the result window", () => {
-    const key = "agent:main:communication";
-    const store: Record<string, SessionEntry> = {
-      [key]: {
-        sessionId: "communication",
-        updatedAt: 1,
-        displayName: "Per-session communication controls in UI",
-      },
-      "agent:main:unrelated": {
-        sessionId: "unrelated",
-        updatedAt: 2,
-        displayName: "Unrelated discussion",
-      },
-    };
-    const projection = createSessionRowProjectionFixture({ cfg: baseCfg, store });
-    const search = (query: string) =>
-      filterAndSortSessionEntries(
-        prepareSessionRowSelection(projection, { search: query, limit: 1 }),
-      ).map(([selected]) => selected);
-    try {
-      for (const query of [
-        "per session communi",
-        "per-session communication controls",
-        "PER—SESSION   COMMUNICATION",
-      ]) {
-        expect(search(query), query).toEqual([key]);
-      }
-      expect(search("per session missing")).toEqual([]);
-      expect(search("---")).toEqual([]);
-      expect(search("agent main communication")).toEqual([]);
-      expect(search(key)).toEqual([key]);
-    } finally {
-      projection.dispose();
-    }
-  });
-
-  test("prepares workspace identity names before selection and refreshes them after edits", async () => {
-    const workspace = tempDirs.make("openclaw-search-identity-");
-    const identityPath = path.join(workspace, "IDENTITY.md");
-    await fs.writeFile(identityPath, "- Name: Astronomy\n");
-    const cfg: OpenClawConfig = { agents: { entries: { main: { workspace } } } };
-    const key = "agent:main:session";
-    const projection = createSessionRowProjectionFixture({
-      cfg,
-      store: { [key]: { sessionId: "workspace-identity", updatedAt: 1 } },
-    });
-    const search = async (value: string) =>
-      (await listProjectedSessions({ projection, opts: { search: value } })).sessions.map(
-        (row) => row.key,
-      );
-    try {
-      expect(await search("Astronomy")).toEqual([key]);
-      await fs.writeFile(`${identityPath}.next`, "- Name: Chemistry\n");
-      await fs.rename(`${identityPath}.next`, identityPath);
-      expect(await search("Astronomy")).toEqual([]);
-      expect(await search("Chemistry")).toEqual([key]);
-    } finally {
-      projection.dispose();
-    }
-  });
-
-  test("reuses static search facts until the resident entry is replaced", () => {
-    const key = "agent:main:search-revision";
-    const entry = { sessionId: "search-revision", updatedAt: 1, label: "First Title" };
-    const projection = createSessionRowProjectionFixture({ cfg: baseCfg, store: { [key]: entry } });
-    const displayName = vi.spyOn(display, "resolveGatewaySessionDisplayName");
-    const search = (query: string) =>
-      filterAndSortSessionEntries(prepareSessionRowSelection(projection, { search: query })).map(
-        ([selected]) => selected,
-      );
-    try {
-      expect(search("FIRST")).toEqual([key]);
-      displayName.mockClear();
-      expect(search("TITLE")).toEqual([key]);
-      expect(displayName).not.toHaveBeenCalled();
-      projection.setEntry(key, { ...entry, label: "Second Name" });
-      expect(search("FIRST")).toEqual([]);
-      expect(search("SECOND")).toEqual([key]);
-      displayName.mockClear();
-      expect(search("NAME")).toEqual([key]);
-      expect(displayName).not.toHaveBeenCalled();
-    } finally {
-      displayName.mockRestore();
-      projection.dispose();
-    }
-  });
-
-  test("filters by selected and stored provider and model identity", () => {
-    const now = Date.now();
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
-    };
-    const store: Record<string, SessionEntry> = {
-      "agent:main:inherited-default": {
-        sessionId: "sess-inherited-default",
-        updatedAt: now,
-        label: "Inherited default",
-      } as SessionEntry,
-      "agent:main:override": {
-        sessionId: "sess-override",
-        updatedAt: now - 1_000,
-        label: "Override",
-        providerOverride: "openai",
-        modelOverride: "gpt-5.5",
-      } as SessionEntry,
-      "agent:main:runtime": {
-        sessionId: "sess-runtime",
-        updatedAt: now - 2_000,
-        label: "Runtime",
-        modelProvider: "google",
-        model: "gemini-3.1-pro-preview",
-      } as SessionEntry,
-    };
-    const cases = [
-      {
-        search: "anthropic/claude-sonnet",
-        expectedKeys: ["agent:main:inherited-default", "agent:main:runtime"],
-      },
-      { search: "openai/gpt-5.5", expectedKeys: ["agent:main:override"] },
-      { search: "google/gemini", expectedKeys: ["agent:main:runtime"] },
-    ] as const;
-
-    for (const testCase of cases) {
-      expect(
-        selectSessionKeys({
-          cfg,
-          store,
-          opts: { search: testCase.search },
-          now,
-        }),
-      ).toEqual(testCase.expectedKeys);
-    }
-  });
-
-  test("matches canonical group titles and kinds before offset selection", () => {
-    const store: Record<string, SessionEntry> = Object.fromEntries(
-      Array.from({ length: 55 }, (_, index) => [
-        `agent:main:filler-${index}`,
-        { sessionId: `filler-${index}`, updatedAt: 100 + index },
-      ]),
+function selection(store: Record<string, SessionEntry>, now = Date.now()) {
+  const owner = createSessionRowProjectionFixture({ cfg, store, agentId: "main" });
+  projection = owner;
+  return (opts: Parameters<typeof prepareSessionRowSelection>[1]) =>
+    filterAndSortSessionEntries({ ...prepareSessionRowSelection(owner, opts), now }).map(
+      ([key]) => key,
     );
-    store["agent:main:slack:channel:target"] = {
-      sessionId: "target",
-      updatedAt: 1,
-      groupChannel: "astronomy",
-      space: "observatory",
-      displayName: "compact-room-id",
-      chatType: "channel",
-    };
-    expect(
-      selectSessionKeys({ store, opts: { search: "observatory #astronomy", limit: 50 } }),
-    ).toEqual(["agent:main:slack:channel:target"]);
-    expect(selectSessionKeys({ store, opts: { search: "group", limit: 50 } })).toEqual([
-      "agent:main:slack:channel:target",
-    ]);
-    expect(
-      selectSessionKeys({ store, opts: { search: "direct", limit: 50, offset: 50 } }),
-    ).toHaveLength(5);
-  });
+}
 
-  test("ranks by real interaction without heartbeat or cron noise", () => {
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": {
-        sessionId: "main",
-        updatedAt: now - 10_000,
-        lastInteractionAt: now - 1_000,
-      } as SessionEntry,
-      "agent:main:heartbeat-noise": {
-        sessionId: "heartbeat-noise",
-        updatedAt: now,
+test("search matches title punctuation and spacing before selecting the result window", () => {
+  const key = "agent:main:communication";
+  const select = selection({
+    [key]: entry("communication", 1, { displayName: "Per-session communication controls in UI" }),
+    "agent:main:unrelated": entry("unrelated", 2, { displayName: "Unrelated discussion" }),
+  });
+  const search = (query: string) => select({ search: query, limit: 1 });
+  for (const query of [
+    "per session communi",
+    "per-session communication controls",
+    "PER—SESSION   COMMUNICATION",
+    key,
+  ]) {
+    expect(search(query), query).toEqual([key]);
+  }
+  for (const query of ["per session missing", "---", "agent main communication"]) {
+    expect(search(query), query).toEqual([]);
+  }
+});
+
+test.each(["München", "한국어"])("search finds both canonical forms of %s", (title) => {
+  const decomposedTitle = title.normalize("NFD");
+  const select = selection({
+    "agent:main:composed": entry("composed", 1, { displayName: title }),
+    "agent:main:decomposed": entry("decomposed", 2, { displayName: decomposedTitle }),
+    "agent:main:unrelated": entry("unrelated", 3, { displayName: "Unrelated discussion" }),
+  });
+  for (const search of [title, decomposedTitle]) {
+    expect(select({ search, limit: 2 }), search).toEqual([
+      "agent:main:decomposed",
+      "agent:main:composed",
+    ]);
+  }
+});
+
+test("search reuses row owners and reads model facts only after the resolved identity misses", () => {
+  const parentKey = "agent:main:parent";
+  const childKey = "agent:main:subagent:child";
+  const modelConfig = {
+    ...cfg,
+    agents: { entries: { main: { model: "openai/gpt-4.1" } } },
+  };
+  setRuntimeConfigSnapshot(modelConfig);
+  projection = createSessionRowProjectionFixture({
+    cfg: modelConfig,
+    agentId: "main",
+    store: {
+      [parentKey]: entry("parent", 1, {
+        displayName: "Investigation parent",
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4",
+      }),
+      [childKey]: entry("child", 2, {
+        label: "Investigation child",
+        parentSessionKey: parentKey,
+        spawnedBy: parentKey,
+      }),
+    },
+  });
+  for (const [search, expected, factKeys] of [
+    ["investigation", [childKey, parentKey], []],
+    ["gpt-4.1", [childKey], [parentKey]],
+    ["claude-sonnet-4", [childKey, parentKey], [childKey]],
+    ["zz-no-match", [], []],
+  ] as const) {
+    const prepared = prepareSessionRowSelection(projection, { search });
+    const getTarget = vi.fn(prepared.getTarget);
+    const getModelFacts = vi.fn(prepared.getModelFacts);
+    const result = filterAndSortSessionEntries({ ...prepared, getTarget, getModelFacts });
+    expect(
+      result.map(([key]) => key),
+      search,
+    ).toEqual(expected);
+    expect(getTarget).toHaveBeenCalledTimes(2);
+    expect(getModelFacts.mock.calls.map(([key]) => key).toSorted(), search).toEqual(
+      [...factKeys].toSorted(),
+    );
+  }
+});
+
+test("ranks by real interaction without heartbeat or cron noise", () => {
+  const now = Date.now();
+  const select = selection(
+    {
+      "agent:main:main": entry("main", now - 10_000, { lastInteractionAt: now - 1_000 }),
+      "agent:main:heartbeat-noise": entry("heartbeat-noise", now, {
         lastInteractionAt: now - 5_000,
         pinnedAt: now,
-      } as SessionEntry,
-      "agent:main:background-only": {
-        sessionId: "background-only",
-        updatedAt: now + 1_000,
-      } as SessionEntry,
-      "agent:main:main:heartbeat": {
-        sessionId: "isolated-heartbeat",
-        updatedAt: now + 3_000,
+      }),
+      "agent:main:background-only": entry("background-only", now + 1_000),
+      "agent:main:main:heartbeat": entry("isolated-heartbeat", now + 3_000, {
         lastInteractionAt: now + 3_000,
         heartbeatIsolatedBaseSessionKey: "agent:main:main",
-      } as SessionEntry,
-      "agent:main:cron:job-1:run:run-abc": {
-        sessionId: "run-abc",
-        updatedAt: now + 2_000,
-        lastInteractionAt: now + 2_000,
-      } as SessionEntry,
-    };
-
-    expect(
-      selectSessionKeys({
-        store,
-        opts: { requireLastInteraction: true, sortBy: "lastInteractionAt" },
-        now,
       }),
-    ).toEqual(["agent:main:main", "agent:main:heartbeat-noise"]);
-  });
+      "agent:main:cron:job-1:run:run-abc": entry("run-abc", now + 2_000, {
+        lastInteractionAt: now + 2_000,
+      }),
+    },
+    now,
+  );
+  expect(select({ requireLastInteraction: true, sortBy: "lastInteractionAt" })).toEqual([
+    "agent:main:main",
+    "agent:main:heartbeat-noise",
+  ]);
 });

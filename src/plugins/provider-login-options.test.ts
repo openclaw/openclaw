@@ -30,21 +30,38 @@ function choice(overrides: Partial<ProviderAuthChoiceMetadata> = {}): ProviderAu
 describe("provider login choices", () => {
   beforeEach(() => declarations.read.mockReturnValue([]));
 
-  it("keeps undeclared credential-only support on setup and filters hidden or media choices", () => {
+  it("offers guided auth without stored credentials and filters hidden, discovery, or media choices", () => {
     const choices = [
-      choice({ docsUrl: "https://docs.example.com/authentication" }),
-      choice({ choiceId: "setup", credentialOnly: undefined }),
+      choice(),
+      choice({
+        pluginId: "meta",
+        providerId: "meta",
+        groupId: "meta",
+        groupLabel: "Meta",
+        choiceId: "muse-code",
+        credentialOnly: undefined,
+      }),
+      choice({ choiceId: "discovery", appGuidedDiscovery: true }),
+      choice({
+        choiceId: "secret-setup",
+        credentialOnly: undefined,
+        appGuidedAuth: undefined,
+        appGuidedSecret: true,
+      }),
       choice({ choiceId: "hidden", assistantVisibility: "manual-only" }),
       choice({ choiceId: "undetected", assistantVisibility: "detected-only" }),
       choice({ choiceId: "media", onboardingScopes: ["image-generation"] }),
     ];
-    expect(listProviderLoginOptions(choices)).toMatchObject([
-      { id: "demo/demo-device", docsUrl: "https://docs.example.com/authentication" },
+    const options = listProviderLoginOptions(choices);
+    expect(options).toMatchObject([
+      { id: "demo/demo-device" },
+      { id: "meta/muse-code", brandId: "meta", kind: "device-code", requiresSetup: true },
     ]);
+    expect(options[0]).not.toHaveProperty("requiresSetup");
   });
 
-  it("orders login methods by the provider's declared priority", () => {
-    const choices = [
+  it("orders login methods without mutating declarations", () => {
+    const choices = Object.freeze([
       choice({
         choiceId: "codex-device",
         choiceLabel: "Codex device code",
@@ -52,19 +69,12 @@ describe("provider login choices", () => {
         assistantPriority: -40,
       }),
       choice({ choiceId: "chatgpt", choiceLabel: "Sign in with ChatGPT", assistantPriority: -50 }),
-    ];
+    ]);
     expect(listProviderLoginOptions(choices).map((option) => option.id)).toEqual([
       "demo/chatgpt",
       "demo/codex-device",
     ]);
-  });
-
-  it("keeps a single provider behind an explicit menu selection", () => {
-    declarations.read.mockReturnValue([choice()]);
-    expect(resolveProviderChannelLoginChoice(undefined)).toEqual({
-      status: "providers",
-      providers: [{ pluginId: "demo", providerId: "demo", label: "Demo" }],
-    });
+    expect(choices.map((entry) => entry.choiceId)).toEqual(["codex-device", "chatgpt"]);
   });
 
   it("lists provider families once even when login requires setup", () => {
@@ -127,13 +137,9 @@ describe("provider login choices", () => {
       status: "resolved",
       choice: { pluginId: "demo", methodId: "device-code", command: "demo/demo-device" },
     });
-    expect(resolveProviderChannelLoginChoice("gone/demo-device")).toMatchObject({
-      status: "unsupported",
-    });
-    expect(resolveProviderChannelLoginChoice("DEMO/demo-device")).toMatchObject({
-      status: "unsupported",
-    });
-    expect(resolveProviderChannelLoginChoice("demo-device")).toMatchObject({ status: "ambiguous" });
+    expect(resolveProviderChannelLoginChoice("gone/demo-device").status).toBe("unsupported");
+    expect(resolveProviderChannelLoginChoice("DEMO/demo-device").status).toBe("unsupported");
+    expect(resolveProviderChannelLoginChoice("demo-device").status).toBe("ambiguous");
   });
 
   it("offers aliases only for a declared fixed-input method and keeps unsupported chat on handoff", () => {

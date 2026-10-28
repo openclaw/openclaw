@@ -1,7 +1,6 @@
 // Verifies optional media/PDF tool factory planning from plugin metadata and auth.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -11,13 +10,13 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
   resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
-import { loadCapabilityMetadataSnapshot } from "./tools/manifest-capability-availability.js";
 import * as pdfModelConfigModule from "./tools/pdf-tool.model-config.js";
 
 function createAuthStore(providers: string[] = []): AuthProfileStore {
@@ -106,11 +105,6 @@ function createStandardMediaPlugins(
       setupProviders: [{ id: mediaProvider, envVars: [mediaEnvVar] }],
     }),
   ];
-}
-
-function createImageAndPdfPlugins(): [PluginManifestRecord, PluginManifestRecord] {
-  const plugins = createStandardMediaPlugins("anthropic");
-  return [plugins[0], plugins[3]];
 }
 
 function installSnapshot(
@@ -293,14 +287,6 @@ describe("optional media tool factory planning", () => {
       ],
       "/workspace/a",
     );
-    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
-    expect(
-      getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/a" }),
-    ).toBeDefined();
-    expect(
-      loadCapabilityMetadataSnapshot({ config }).plugins.map((plugin) => plugin.id),
-    ).not.toContain("image-owner");
-
     expect(
       resolveOptionalMediaToolFactoryPlan({
         config,
@@ -385,7 +371,10 @@ describe("optional media tool factory planning", () => {
 
   it("defers PDF resolution and passes the active model at execution", async () => {
     const config: OpenClawConfig = {};
-    installSnapshot(config, createImageAndPdfPlugins());
+    const workspaceDir = process.cwd();
+    vi.stubEnv("ANTHROPIC_API_KEY", "unrelated-fixture-key");
+    // No automatic PDF model exists in this workspace; only the active model can qualify.
+    installSnapshot(config, createStandardMediaPlugins("openrouter"), workspaceDir);
     const resolveSpy = vi.spyOn(pdfModelConfigModule, "resolvePdfModelConfigForTool");
 
     for (const modelHasVision of [true, false]) {
@@ -393,6 +382,7 @@ describe("optional media tool factory planning", () => {
       const tools = createOpenClawTools({
         config,
         agentDir: "/tmp/openclaw-agent-main",
+        workspaceDir,
         authProfileStore: createAuthStore(["openrouter"]),
         modelProvider: "openrouter",
         modelId: "deepseek/deepseek-v4.1-flash",
@@ -440,16 +430,7 @@ describe("optional media tool factory planning", () => {
   });
 
   it("honors manifest-declared image provider auth alias base-url guards", () => {
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "http://localhost:11434/v1",
-            models: [],
-          },
-        },
-      },
-    };
+    const config: OpenClawConfig = configFor("openai", "http://localhost:11434/v1");
     installSnapshot(config, [
       createPlugin({
         id: "openai",

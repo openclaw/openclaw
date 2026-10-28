@@ -21,27 +21,22 @@ if (!run) {
 const banner = 'echo "============================================"';
 const monitor = run.slice(run.lastIndexOf(banner) + banner.length);
 
-function runMonitor(options: {
+type MonitorOptions = {
   rows?: string;
   ports?: string;
   activeUntil?: number;
   marker?: { observedAt: number; modifiedAt: number };
   discoveryExit?: number;
   netstatExit?: number;
-}) {
+};
+function runMonitor(options: MonitorOptions) {
   const dir = createTempDir("openclaw-windows-idle-");
   fs.writeFileSync(path.join(dir, "connections"), options.rows ?? "");
   const markerSeed = path.join(dir, "marker-seed");
   fs.writeFileSync(markerSeed, "");
   const markerTime = options.marker?.modifiedAt ?? 1000;
   fs.utimesSync(markerSeed, markerTime, markerTime);
-  return spawnSync(
-    "bash",
-    [
-      "-euo",
-      "pipefail",
-      "-c",
-      `
+  const script = `
 clock=1000
 runner_ssh_port=64004
 idle_timeout=1
@@ -57,65 +52,56 @@ netstat() {
   if [ "$clock" -le "$ACTIVE_UNTIL" ]; then command cat "$HOME/connections"; fi
   return "$NETSTAT_EXIT"
 }
-${monitor}`,
-    ],
-    {
-      encoding: "utf8",
-      timeout: 5000,
-      env: {
-        ...process.env,
-        HOME: dir,
-        LOCAL_PORTS: options.ports ?? "22",
-        ACTIVE_UNTIL: String(options.activeUntil ?? 1090),
-        MARKER_AT: String(options.marker?.observedAt ?? 0),
-        DISCOVERY_EXIT: String(options.discoveryExit ?? 0),
-        NETSTAT_EXIT: String(options.netstatExit ?? 0),
-      },
+${monitor}`;
+  return spawnSync("bash", ["-euo", "pipefail", "-c", script], {
+    encoding: "utf8",
+    timeout: 5000,
+    env: {
+      ...process.env,
+      HOME: dir,
+      LOCAL_PORTS: options.ports ?? "22",
+      ACTIVE_UNTIL: String(options.activeUntil ?? 1090),
+      MARKER_AT: String(options.marker?.observedAt ?? 0),
+      DISCOVERY_EXIT: String(options.discoveryExit ?? 0),
+      NETSTAT_EXIT: String(options.netstatExit ?? 0),
     },
-  );
+  });
 }
 
+const sshOptions = (local: string, ports = "22"): MonitorOptions => ({
+  ports,
+  rows: `  TCP    ${local}    192.0.2.1:51000    ESTABLISHED\r\n`,
+});
+
 describe.skipIf(process.platform === "win32")("native Windows Testbox idle monitor", () => {
-  it.each([
-    { name: "IPv4", ports: "22", local: "172.16.0.2:22" },
-    { name: "IPv6", ports: "22", local: "[2001:db8::1]:22" },
-    { name: "a second non-default listener", ports: "2201|2202", local: "172.16.0.2:2202" },
-  ])("keeps $name SSH active, then expires after disconnect", ({ ports, local }) => {
-    const result = runMonitor({
-      ports,
-      rows: `  TCP    ${local}    192.0.2.1:51000    ESTABLISHED\r\n`,
+  it.each<[string, MonitorOptions, number]>([
+    ["IPv4", sshOptions("172.16.0.2:22"), 1150],
+    ["IPv6", sshOptions("[2001:db8::1]:22"), 1150],
+    ["second listener", sshOptions("172.16.0.2:2202", "2201|2202"), 1150],
+    [
+      "non-SSH or closed connections",
+      {
+        rows: [
+          "  TCP    0.0.0.0:22       0.0.0.0:0           LISTENING",
+          "  TCP    172.16.0.2:2222  192.0.2.1:51000     ESTABLISHED",
+          "  TCP    172.16.0.2:51000 192.0.2.1:64004     ESTABLISHED",
+          "  TCP    172.16.0.2:51001 192.0.2.1:22        ESTABLISHED",
+          "  TCP    [2001:db8::1]:22 [2001:db8::2]:51000 TIME_WAIT",
+          "",
+        ].join("\r\n"),
+      },
+      1060,
+    ],
+    ["command between polls", { marker: { observedAt: 1030, modifiedAt: 1015 } }, 1090],
+    ["old command", { marker: { observedAt: 1030, modifiedAt: 970 } }, 1060],
+  ])("expires at the correct time with %s", (_name, options, clock) => {
+    const result = runMonitor(options);
+    expect(result, result.stderr).toMatchObject({
+      status: 0,
+      stdout: expect.stringContaining(`monitor_clock=${clock}`),
     });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("monitor_clock=1150");
     expect(result.stdout).toContain("Idle timeout reached (1 minutes). Shutting down.");
   });
-
-  it("does not count listeners, foreign ports, port prefixes, or closed connections as activity", () => {
-    const result = runMonitor({
-      rows: [
-        "  TCP    0.0.0.0:22       0.0.0.0:0           LISTENING",
-        "  TCP    172.16.0.2:2222  192.0.2.1:51000     ESTABLISHED",
-        "  TCP    172.16.0.2:51000 192.0.2.1:64004     ESTABLISHED",
-        "  TCP    172.16.0.2:51001 192.0.2.1:22        ESTABLISHED",
-        "  TCP    [2001:db8::1]:22 [2001:db8::2]:51000 TIME_WAIT",
-        "",
-      ].join("\r\n"),
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("monitor_clock=1060");
-  });
-
-  it.each([
-    { name: "a command between polls", modifiedAt: 1015, expectedClock: 1090 },
-    { name: "an old command", modifiedAt: 970, expectedClock: 1060 },
-  ])(
-    "uses the marker mtime for $name without keeping the lease alive forever",
-    ({ modifiedAt, expectedClock }) => {
-      const result = runMonitor({ marker: { observedAt: 1030, modifiedAt } });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain(`monitor_clock=${expectedClock}`);
-    },
-  );
 
   it.each([
     { name: "listener discovery", discoveryExit: 7, expectedExit: 7 },
@@ -312,16 +298,14 @@ foreach ($case in $cases) {
 @{ installations=$cases.Count; descriptors=($aclCases.Count + 4) } | ConvertTo-Json -Compress
 `,
     );
+    const resolver = path.resolve("scripts/windows-testbox-openssh.ps1");
     const result = spawnSync(
       "pwsh",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-File",
-        fixture,
-        path.resolve("scripts/windows-testbox-openssh.ps1"),
-      ],
-      { encoding: "utf8", timeout: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS },
+      ["-NoProfile", "-NonInteractive", "-File", fixture, resolver],
+      {
+        encoding: "utf8",
+        timeout: WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
+      },
     );
     const redact = (text: string | null | undefined) => {
       let value = text ?? "";

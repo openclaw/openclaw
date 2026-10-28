@@ -1,0 +1,13 @@
+import { createDeferred, createEffect, onSettled } from "solid-js";
+
+export function validLifecycle(read: () => string) {
+  const deferred = createDeferred(read);
+  createEffect(deferred, (value) => {
+    document.title = value;
+  });
+  onSettled(() => {
+    const listener = () => {};
+    document.addEventListener("example", listener);
+    return () => document.removeEventListener("example", listener);
+  });
+}

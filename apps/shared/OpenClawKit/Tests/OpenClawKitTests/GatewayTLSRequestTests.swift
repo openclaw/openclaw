@@ -116,6 +116,23 @@ private final class GatewayHTTPFixture: @unchecked Sendable {
     }
 }
 
+private final class GatewayHTTPFailureFixture: GatewayTLSFailureProviding {
+    var failure: GatewayTLSValidationFailure?
+    private(set) var consumed = 0
+
+    init(kind: GatewayTLSValidationFailureKind = .pinMismatch) {
+        self.failure = GatewayTLSValidationFailure(
+            kind: kind, host: "gateway.example.test", storeKey: "test-profile",
+            expectedFingerprint: "expected", observedFingerprint: "observed", systemTrustOk: false, port: 8443)
+    }
+
+    func consumeLastTLSFailure() -> GatewayTLSValidationFailure? {
+        self.consumed += 1
+        defer { self.failure = nil }
+        return self.failure
+    }
+}
+
 struct GatewayTLSRequestTests {
     private static func session(allowsRedirects: Bool = false) -> GatewayTLSPinningSession {
         GatewayTLSPinningSession(
@@ -141,6 +158,60 @@ struct GatewayTLSRequestTests {
         #expect(response.url == destinationURL)
         #expect(source.requests.count == 1)
         #expect(destination.requests.count == 1)
+    }
+
+    @Test(arguments: [GatewayTLSValidationFailureKind.pinMismatch, .untrustedCertificate, .authorityMismatch])
+    func `HTTP trust reconciliation keeps typed details and consumes them once`(
+        kind: GatewayTLSValidationFailureKind) throws
+    {
+        let provider = GatewayHTTPFailureFixture(kind: kind)
+        let failure = provider.failure
+        // A rejected challenge can cancel URLSession without canceling the caller Task.
+        let transport = URLError(.cancelled, userInfo: ["test-marker": "original"])
+        let mapped = try #require(provider.consumeHTTPFailure(transport) as? GatewayTLSValidationError)
+        #expect(mapped.failure == failure)
+        #expect(mapped.context == "gateway request")
+        #expect(provider.consumed == 1)
+        #expect(provider.failure == nil)
+        let later = try #require(provider.consumeHTTPFailure(transport) as? URLError)
+        #expect(later.code == transport.code)
+        #expect(later.userInfo["test-marker"] as? String == "original")
+        #expect(provider.consumed == 2)
+    }
+
+    @Test func `HTTP reconciliation preserves a URL error without a recorded trust failure`() throws {
+        let provider = GatewayHTTPFailureFixture()
+        provider.failure = nil
+        let transport = URLError(.networkConnectionLost, userInfo: ["test-marker": "original"])
+        let result = try #require(provider.consumeHTTPFailure(transport) as? URLError)
+        #expect(result.code == transport.code)
+        #expect(result.userInfo["test-marker"] as? String == "original")
+        #expect(provider.consumed == 1)
+    }
+
+    @Test func `non URL failures discard stale HTTP trust context without replacing the error`() {
+        let provider = GatewayHTTPFailureFixture()
+        let original = NSError(domain: "test-error", code: 42)
+        #expect(provider.consumeHTTPFailure(original) as NSError === original)
+        #expect(provider.failure == nil)
+        #expect(provider.consumed == 1)
+        let canceled = GatewayHTTPFailureFixture()
+        #expect(canceled.consumeHTTPFailure(CancellationError()) is CancellationError)
+        #expect(canceled.failure == nil)
+        #expect(canceled.consumed == 1)
+    }
+
+    @Test @MainActor func `caller cancellation takes precedence and discards HTTP trust context`() async throws {
+        let provider = GatewayHTTPFailureFixture()
+        let original = URLError(.cancelled, userInfo: ["test-marker": "caller-canceled"])
+        let caller = Task { provider.consumeHTTPFailure(original) }
+        // MainActor has not yielded, so the reconciliation runs in an already-canceled caller.
+        caller.cancel()
+        let result = try #require(await caller.value as? URLError)
+        #expect(result.code == original.code)
+        #expect(result.userInfo["test-marker"] as? String == "caller-canceled")
+        #expect(provider.failure == nil)
+        #expect(provider.consumed == 1)
     }
 
     @Test(arguments: [200, 302])

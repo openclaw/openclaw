@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -15,6 +16,10 @@ import {
 import { channelPairingHandlers } from "../gateway/server-methods/channel-pairing.js";
 import { execApprovalsHandlers } from "../gateway/server-methods/exec-approvals.js";
 import {
+  createSecretsHandlers,
+  createSecretStoreWriteService,
+} from "../gateway/server-methods/secrets.js";
+import {
   createSessionMutationTestClient,
   createSessionMutationTestContext,
 } from "../gateway/server-methods/sessions-mutations.owner.test-support.js";
@@ -23,16 +28,29 @@ import {
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
 } from "../infra/exec-approvals.js";
-import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
+import {
+  acquireGatewayLock,
+  resolveGatewayLockPaths,
+  type GatewayLockHandle,
+} from "../infra/gateway-lock.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
+import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import {
   readChannelPairingStateSnapshot,
   writeChannelPairingStateSnapshot,
 } from "../pairing/pairing-store-sqlite.test-helpers.js";
+import {
+  listSecretStoreEntries,
+  readSecretStoreValue,
+  writeSecretStoreEntry,
+} from "../secrets/store/secret-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import { writeAdminStateOwnerObservationPreload } from "./admin-state-owner.observation.test-support.js";
 import { adminStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { stateOwnerEnv } from "./cli-process-fixture.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
 const entrypoint = resolveRuntimeWorkerArgv(
@@ -41,6 +59,15 @@ const entrypoint = resolveRuntimeWorkerArgv(
 const token = "synthetic-admin-routing-token";
 const channel = "routing-fixture";
 const pattern = "/usr/bin/routing-fixture";
+const teamScope = { kind: "team" } as const;
+const readSecret = (name: string) => readSecretStoreValue({ scope: teamScope, name });
+const approvalWrite = <const Kind extends string>(kind: Kind, args: string[]) =>
+  ({
+    kind,
+    method: "exec.approvals.set",
+    capability: GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
+    args: ["approvals", ...args, "--json"],
+  }) as const;
 const operations = [
   {
     kind: "pairing-list",
@@ -60,23 +87,14 @@ const operations = [
     capability: GATEWAY_SERVER_CAPS.EXEC_APPROVALS_GET_OWNER,
     args: ["approvals", "get", "--json"],
   },
+  approvalWrite("approvals-set", ["set", "--stdin"]),
+  approvalWrite("allowlist-add", ["allowlist", "add", pattern]),
+  approvalWrite("allowlist-remove", ["allowlist", "remove", pattern]),
   {
-    kind: "approvals-set",
-    method: "exec.approvals.set",
-    capability: GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
-    args: ["approvals", "set", "--stdin", "--json"],
-  },
-  {
-    kind: "allowlist-add",
-    method: "exec.approvals.set",
-    capability: GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
-    args: ["approvals", "allowlist", "add", pattern, "--json"],
-  },
-  {
-    kind: "allowlist-remove",
-    method: "exec.approvals.set",
-    capability: GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
-    args: ["approvals", "allowlist", "remove", pattern, "--json"],
+    kind: "native-commit",
+    method: "exec.approvals.native.commit",
+    capability: GATEWAY_SERVER_CAPS.EXEC_APPROVALS_NATIVE_COMMIT,
+    args: ["approvals", "native", "--stdin", "--json"],
   },
 ] as const;
 type Scenario = "live" | "offline" | "missing-capability" | "refused" | "lost-reply";
@@ -87,29 +105,75 @@ describe("administrative CLI state owner routing", () => {
   let claim: TestPortClaim;
   let owner: GatewayLockHandle | null;
   let server: WebSocketServer;
+  let catalogServer: ReturnType<typeof createServer>;
   let scenario: Scenario = "live";
   let selectedMethod: string;
   let missingCapability: string | undefined;
   let missingApprovals: ReturnType<typeof readExecApprovalsSnapshot>;
   const methods: string[] = [];
   const failures: unknown[] = [];
+  const run = (args: readonly string[], input?: string) =>
+    runCliProcessChild({ nodeArgs: [...entrypoint, ...args], env, input });
+  const readObservation = async () =>
+    JSON.parse(await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"));
+  const acquireOwner = () =>
+    acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
+  const releaseOwner = async () => {
+    await closeOpenClawStateDatabaseAsync();
+    await owner?.release();
+    owner = null;
+  };
+  const applyEnv = () => {
+    for (const key of ["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "HOME", "USERPROFILE"]) {
+      vi.stubEnv(key, env[key]);
+    }
+  };
+  const runOwned = async (
+    args: readonly string[],
+    input?: string,
+    writes: "adminSql" | "secretWrites" = "adminSql",
+  ) => {
+    if (scenario === "offline") {
+      await releaseOwner();
+    }
+    const result = await run(args, input);
+    if (!owner) {
+      owner = await acquireOwner();
+      expect(owner).not.toBeNull();
+    }
+    const succeeded = scenario === "live" || scenario === "offline";
+    expect(result.code, result.stderr).toBe(succeeded ? 0 : 1);
+    const observation = await readObservation();
+    if (scenario === "offline") {
+      expect(observation[writes]).toBeGreaterThan(0);
+      if (writes === "adminSql") {
+        expect(observation.workerSql).toBeGreaterThan(0);
+      }
+      expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
+    } else {
+      expect(observation[writes]).toBe(0);
+    }
+    const warning =
+      scenario === "refused"
+        ? "No local mutation was attempted"
+        : scenario === "lost-reply" && "outcome may be partial";
+    if (warning) {
+      expect(result.stderr).toContain(warning);
+    }
+    return { result, succeeded };
+  };
 
   beforeAll(async () => {
     root = roots.make("openclaw-admin-owner-");
-    claim = await acquireTestPortBlock({ offsets: [0] });
-    env = {
-      PATH: process.env.PATH,
-      SystemRoot: process.env.SystemRoot,
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+    claim = await acquireTestPortBlock({ offsets: [0, 1] });
+    env = stateOwnerEnv(root, {
       OPENCLAW_GATEWAY_TOKEN: token,
-      OPENCLAW_NO_RESPAWN: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      NODE_DISABLE_COMPILE_CACHE: "1",
-    };
+    });
+    const preloadPath = await writeAdminStateOwnerObservationPreload(
+      root,
+      resolveGatewayLockPaths(env).ownerLockPath,
+    );
+    Object.assign(env, sqliteWorkerPreloadEnv(preloadPath));
     const cfg = {
       gateway: {
         mode: "local" as const,
@@ -117,16 +181,39 @@ describe("administrative CLI state owner routing", () => {
         auth: { mode: "token" as const, token },
       },
       commands: { ownerAllowFrom: ["telegram:123"] },
+      models: { catalogRefresh: { url: `http://127.0.0.1:${claim.port + 1}/catalog` } },
     };
     await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(cfg));
-    for (const key of ["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "HOME", "USERPROFILE"]) {
-      vi.stubEnv(key, env[key]);
-    }
-    owner = await acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
+    applyEnv();
+    owner = await acquireOwner();
     expect(owner).not.toBeNull();
     missingApprovals = readExecApprovalsSnapshot();
     expect(missingApprovals.exists).toBe(false);
-    const handlers = { ...channelPairingHandlers, ...execApprovalsHandlers };
+    const reloadSecrets = async () => ({ warningCount: 0 });
+    const handlers = {
+      ...channelPairingHandlers,
+      ...execApprovalsHandlers,
+      ...createSecretsHandlers({
+        reloadSecrets,
+        storeWriteService: createSecretStoreWriteService({ reloadSecrets }),
+        resolveSecrets: async () => ({ assignments: [], diagnostics: [], inactiveRefPaths: [] }),
+      }),
+    };
+    catalogServer = createServer((_req, response) =>
+      response.end(
+        JSON.stringify({
+          schemaVersion: 2,
+          generatedAt: 1_753_500_000_000,
+          sourceCommit: "fixture",
+          providers: { synthetic: {} },
+          models: [
+            { id: "synthetic-model", provider: "synthetic", pricing: { status: "unknown" } },
+          ],
+        }),
+      ),
+    );
+    catalogServer.listen(claim.port + 1, "127.0.0.1");
+    await once(catalogServer, "listening");
     const client = createSessionMutationTestClient();
     client.connect.scopes = ["operator.admin"];
     const context = createSessionMutationTestContext(cfg);
@@ -192,9 +279,7 @@ describe("administrative CLI state owner routing", () => {
   });
 
   beforeEach(() => {
-    for (const key of ["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "HOME", "USERPROFILE"]) {
-      vi.stubEnv(key, env[key]);
-    }
+    applyEnv();
     scenario = "live";
     missingCapability = undefined;
     methods.length = 0;
@@ -202,6 +287,9 @@ describe("administrative CLI state owner routing", () => {
 
   afterAll(async () => {
     await closeMinimalGatewayServer(server);
+    await new Promise<void>((resolve, reject) => {
+      catalogServer.close((error) => (error ? reject(error) : resolve()));
+    });
     await closeOpenClawStateDatabaseAsync();
     await owner?.release();
     await claim.release();
@@ -212,7 +300,11 @@ describe("administrative CLI state owner routing", () => {
   it.each(
     operations.flatMap((operation) => {
       const scenarios: Scenario[] = ["live", "offline", "missing-capability"];
-      if (["pairing-list", "pairing-approve", "approvals-set"].includes(operation.kind)) {
+      if (
+        ["pairing-list", "pairing-approve", "approvals-set", "native-commit"].includes(
+          operation.kind,
+        )
+      ) {
         scenarios.push("refused", "lost-reply");
       }
       return scenarios.map((mode) => Object.assign({}, operation, { mode }));
@@ -232,53 +324,52 @@ describe("administrative CLI state owner routing", () => {
       ],
     });
     await updateExecApprovals({
-      update: () => ({
-        version: 1,
-        agents: {
-          "*": { allowlist: operation.kind === "allowlist-remove" ? [{ pattern }] : [] },
+      update: {
+        kind: "replace",
+        file: {
+          version: 1,
+          agents: {
+            "*": {
+              allowlist: ["allowlist-remove", "native-commit"].includes(operation.kind)
+                ? [{ pattern }]
+                : [],
+            },
+          },
         },
-      }),
+      },
     });
-    if (scenario === "offline") {
-      await closeOpenClawStateDatabaseAsync();
-      await owner?.release();
-      owner = null;
-    }
-    const result = await runCliProcessChild({
-      nodeArgs: [...entrypoint, ...operation.args],
-      env,
+    const { result, succeeded } = await runOwned(
+      operation.args,
       // Default CLI saves have always normalized legacy string allowlist entries.
-      input: JSON.stringify({ version: 1, agents: { "*": { allowlist: [pattern] } } }),
-    });
-    if (!owner) {
-      owner = await acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
-      expect(owner).not.toBeNull();
-    }
-    const observation = JSON.parse(
-      await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
+      JSON.stringify(
+        operation.kind === "native-commit"
+          ? {
+              operation: "commit",
+              agentId: "main",
+              command: "native fixture",
+              uses: [{ match: { pattern }, resolvedPath: pattern }],
+              grants: [],
+              authorization: {
+                source: "current-policy",
+                security: "full",
+                ask: "off",
+                allowlistSatisfied: true,
+              },
+            }
+          : { version: 1, agents: { "*": { allowlist: [pattern] } } },
+      ),
     );
-    const succeeded = scenario === "live" || scenario === "offline";
-    expect(result.code, result.stderr).toBe(succeeded ? 0 : 1);
-    if (scenario === "offline") {
-      expect(observation.adminSql).toBeGreaterThan(0);
-      expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
-      expect(methods).toEqual([]);
-    } else {
-      expect(observation.adminSql).toBe(0);
-      const prefix = operation.method === "exec.approvals.set" ? ["exec.approvals.get"] : [];
-      expect(methods).toEqual(
-        scenario === "missing-capability" ? prefix : [...prefix, operation.method],
-      );
-    }
+    const prefix = operation.method === "exec.approvals.set" ? ["exec.approvals.get"] : [];
+    expect(methods).toEqual(
+      scenario === "offline"
+        ? []
+        : scenario === "missing-capability"
+          ? prefix
+          : [...prefix, operation.method],
+    );
     if (scenario === "missing-capability") {
       expect(result.stderr).toContain(operation.capability);
       expect(result.stderr).toContain("Update the Gateway");
-    }
-    if (scenario === "refused") {
-      expect(result.stderr).toContain("No local mutation was attempted");
-    }
-    if (scenario === "lost-reply") {
-      expect(result.stderr).toContain("outcome may be partial");
     }
     const applied = succeeded || scenario === "lost-reply";
     const pairing = readChannelPairingStateSnapshot(channel);
@@ -298,6 +389,18 @@ describe("administrative CLI state owner routing", () => {
       if (succeeded && operation.kind === "pairing-approve") {
         expect(result.stdout).toContain(`Approved ${channel} sender sender.`);
       }
+    } else if (operation.kind === "native-commit") {
+      const allowlist = readExecApprovalsSnapshot().file.agents?.["*"]?.allowlist;
+      expect(allowlist).toMatchObject([
+        {
+          pattern,
+          ...(applied ? { lastUsedCommand: "native fixture", lastResolvedPath: pattern } : {}),
+        },
+      ]);
+      expect(allowlist?.[0]?.lastUsedAt !== undefined).toBe(applied);
+      if (succeeded) {
+        expect(JSON.parse(result.stdout)).toEqual({ authorized: true });
+      }
     } else {
       const expected =
         operation.kind === "allowlist-remove"
@@ -313,20 +416,81 @@ describe("administrative CLI state owner routing", () => {
     }
   });
 
+  it.each(["live", "offline", "refused", "lost-reply"] as const)(
+    "secret set: %s preserves ownership and never replays a routed write",
+    async (mode) => {
+      scenario = mode;
+      selectedMethod = "secrets.store.set";
+      await writeSecretStoreEntry({
+        scope: teamScope,
+        name: "OWNER_SECRET",
+        value: "synthetic-original",
+        kind: "secret",
+        updatedBy: "fixture",
+      });
+      await runOwned(
+        ["secrets", "store", "set", "OWNER_SECRET", "--value-file", "-"],
+        "synthetic-rotated",
+        "secretWrites",
+      );
+      expect(methods).toEqual(mode === "offline" ? [] : ["secrets.store.set"]);
+      expect(await readSecret("OWNER_SECRET")).toMatchObject({
+        ok: true,
+        value: mode === "refused" ? "synthetic-original" : "synthetic-rotated",
+      });
+    },
+  );
+
+  it("routes secret import, host policy, and removal through the live owner", async () => {
+    const runSecret = (args: string[], input?: string) =>
+      runOwned(["secrets", "store", ...args], input, "secretWrites");
+    await runSecret(
+      ["import", "--from", "-", "--yes"],
+      "BATCH_TOKEN=synthetic-imported\nBATCH_MODE=test\n",
+    );
+    expect(await readSecret("BATCH_TOKEN")).toMatchObject({
+      ok: true,
+      value: "synthetic-imported",
+    });
+    await runSecret(["set", "BATCH_TOKEN", "--allow-host", "API.EXAMPLE.COM"]);
+    expect(
+      (await listSecretStoreEntries({ scope: teamScope })).find(
+        (entry) => entry.name === "BATCH_TOKEN",
+      ),
+    ).toMatchObject({ kind: "secret", allowedHosts: ["api.example.com"] });
+    await runSecret(["rm", "BATCH_TOKEN", "--yes"]);
+    expect((await readSecret("BATCH_TOKEN")).ok).toBe(false);
+    expect(methods).toEqual([
+      "secrets.store.import",
+      "secrets.store.allowedHosts",
+      "secrets.store.delete",
+    ]);
+  });
+
+  it("refuses live catalog refresh and persists the same command offline", async () => {
+    const refused = await run(["models", "refresh"]);
+    expect(refused.code, refused.stderr).toBe(1);
+    expect(refused.stderr).toContain("exclusive offline state ownership");
+    expect(methods).toEqual([]);
+    expect(readRemoteModelCatalog()).toBeUndefined();
+    await releaseOwner();
+    const result = await run(["models", "refresh"]);
+    owner = await acquireOwner();
+    expect(result.code, result.stderr).toBe(0);
+    expect(readRemoteModelCatalog()?.generated_at).toBe(1_753_500_000_000);
+    const observed = await readObservation();
+    expect(observed.catalogWrites).toBeGreaterThan(0);
+    expect(observed).toMatchObject({ missingCustody: 0, ownerPids: [observed.pid] });
+  });
+
   it("keeps an unstored default policy absent when a live owner serves approvals get", async () => {
     const current = readExecApprovalsSnapshot();
     expect(await restoreExecApprovalsSnapshotLocked(missingApprovals, current.hash)).toBe(true);
-    const result = await runCliProcessChild({
-      nodeArgs: [...entrypoint, "approvals", "get", "--json"],
-      env,
-    });
+    const result = await run(["approvals", "get", "--json"]);
     expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ exists: false, hash: missingApprovals.hash });
     expect(readExecApprovalsSnapshot()).toMatchObject({ exists: false, raw: null });
     expect(methods).toEqual(["exec.approvals.get"]);
-    expect(
-      JSON.parse(await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"))
-        .adminSql,
-    ).toBe(0);
+    expect((await readObservation()).adminSql).toBe(0);
   });
 });

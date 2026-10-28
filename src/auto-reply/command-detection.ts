@@ -9,6 +9,7 @@ import { listChatCommands, listChatCommandsForConfig } from "./commands-registry
 import { normalizeCommandBody } from "./commands-registry-normalize.js";
 import type { CommandNormalizeOptions } from "./commands-registry.types.js";
 import { isAbortTrigger } from "./reply/abort-trigger-text.js";
+import { isBangCommandInput } from "./reply/bash-command-input.js";
 import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 
 function normalizeControlCommandBody(text?: string, options?: CommandNormalizeOptions): string {
@@ -76,7 +77,19 @@ export function hasInlineCommandTokens(text?: string): boolean {
   return /(?:^|\s)[/!][a-z]/i.test(text ?? "");
 }
 
-function hasSpacedPluginCommand(text?: string): boolean {
+/** Detects command syntax without broadening it for channel authorization metadata. */
+export function hasCommandSyntax(
+  text?: string,
+  cfg?: OpenClawConfig,
+  options?: CommandNormalizeOptions,
+): boolean {
+  if (
+    isBangCommandInput(text) ||
+    isControlCommandMessage(text, cfg, options) ||
+    hasInlineCommandTokens(text)
+  ) {
+    return true;
+  }
   const commandBody = text?.match(/(?:^|\s)(\/\s+[a-z][\s\S]*)/i)?.[1];
   // Only active registered commands affect ingress authorization and mention gating.
   // This keeps spaced syntax aligned with canonical `/name` command ownership.
@@ -89,9 +102,7 @@ export function shouldComputeCommandAuthorized(
   cfg?: OpenClawConfig,
   options?: CommandNormalizeOptions,
 ): boolean {
-  return (
-    isControlCommandMessage(text, cfg, options) ||
-    hasInlineCommandTokens(text) ||
-    hasSpacedPluginCommand(text)
-  );
+  // A required group mention can precede the bang; execution strips that mention later.
+  const bangCandidate = text?.match(/(?:^|\s)(![\s\S]*)/)?.[1];
+  return hasCommandSyntax(text, cfg, options) || isBangCommandInput(bangCandidate);
 }

@@ -1,15 +1,24 @@
 import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  parseReplyDirectives,
-  type ReplyDirectiveParseResult,
-} from "../auto-reply/reply/reply-directives.js";
-import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
+  asOptionalObjectRecord,
+  asOptionalRecord as asRecord,
+} from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import {
+  createStreamingDirectiveAccumulator,
+  splitTrailingDirective,
+} from "../auto-reply/reply/streaming-directives.js";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import type { AssistantMessage } from "../llm/types.js";
-import { parseAssistantTextSignature } from "../shared/chat-message-content.js";
-import { trimTextPreservingCode } from "../shared/text/text-projection.js";
+import {
+  parseAssistantTextSignature,
+  readAssistantTextBlocksForPhase,
+} from "../shared/chat-message-content.js";
+import { toolCallXmlTextFilter } from "../shared/text/assistant-visible-text.js";
+import { downgradedToolCallTextFilter } from "../shared/text/downgraded-tool-call-text.js";
+import { createTextProjection, trimTextPreservingCode } from "../shared/text/text-projection.js";
 import {
   findDirectiveCodePrefix,
   type StreamDirectiveCodePrefix,
@@ -19,6 +28,7 @@ import { hasReplyDirectiveMetadata } from "./embedded-agent-subscribe.handlers.m
 import type {
   EmbeddedAgentSubscribeContext,
   EmbeddedAgentSubscribeState,
+  StreamingReplyResolver,
 } from "./embedded-agent-subscribe.handlers.types.js";
 import {
   extractAssistantCommentaryText,
@@ -37,26 +47,16 @@ export function isSubscribeTranscriptOnlyOpenClawAssistantMessage(
   return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
 }
 
-export function isResponsesApiAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  return OPENAI_RESPONSES_APIS.has(normalizeOptionalString(message.api) ?? "");
+function readAssistantMessageApi(message: AgentMessage | undefined) {
+  return message?.role === "assistant" ? normalizeOptionalString(message.api) : undefined;
 }
 
-export function isAnthropicAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const api = normalizeOptionalString(message.api) ?? "";
-  return api === "anthropic-messages";
+export function isResponsesApiAssistantMessage(message: AgentMessage | undefined): boolean {
+  return OPENAI_RESPONSES_APIS.has(readAssistantMessageApi(message) ?? "");
 }
 
 export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const api = normalizeOptionalString(message.api) ?? "";
+  const api = readAssistantMessageApi(message);
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
 }
 
@@ -86,6 +86,10 @@ export function extractStandaloneMessageToolText(
   return normalizeOptionalString(args?.message);
 }
 
+function isAssistantTextBlock(value: unknown): value is { type: "text"; textSignature?: unknown } {
+  return asOptionalObjectRecord(value)?.type === "text";
+}
+
 export function resolveAssistantStreamItemId(params: {
   contentIndex?: unknown;
   message: AgentMessage | undefined;
@@ -96,24 +100,16 @@ export function resolveAssistantStreamItemId(params: {
   }
   const contentIndex = resolveAssistantStreamContentIndex(params.contentIndex);
   const indexedBlock = contentIndex !== undefined ? content[contentIndex] : undefined;
-  const indexedRecord =
-    indexedBlock && typeof indexedBlock === "object"
-      ? (indexedBlock as { type?: unknown })
-      : undefined;
-  const hasIndexedTextBlock = indexedRecord?.type === "text";
+  const hasIndexedTextBlock = isAssistantTextBlock(indexedBlock);
   const candidateStart =
     hasIndexedTextBlock && contentIndex !== undefined ? contentIndex : content.length - 1;
   const candidateEnd = hasIndexedTextBlock ? candidateStart : 0;
   for (let index = candidateStart; index >= candidateEnd; index -= 1) {
     const block = content[index];
-    if (!block || typeof block !== "object") {
+    if (!isAssistantTextBlock(block)) {
       continue;
     }
-    const record = block as { type?: unknown; textSignature?: unknown };
-    if (record.type !== "text") {
-      continue;
-    }
-    const signature = parseAssistantTextSignature(record);
+    const signature = parseAssistantTextSignature(block);
     if (signature?.id) {
       return signature.id;
     }
@@ -134,23 +130,16 @@ export function resolveAssistantStreamBlockIndex(
     return undefined;
   }
   const indexedBlock = contentIndex === undefined ? undefined : message.content[contentIndex];
-  if (indexedBlock && typeof indexedBlock === "object" && indexedBlock.type === "text") {
+  if (isAssistantTextBlock(indexedBlock)) {
     return contentIndex;
   }
-  if (itemId) {
-    for (let index = message.content.length - 1; index >= 0; index -= 1) {
-      const candidate = message.content[index];
-      if (
-        candidate &&
-        typeof candidate === "object" &&
-        candidate.type === "text" &&
-        parseAssistantTextSignature(candidate)?.id === itemId
-      ) {
-        return index;
-      }
-    }
-  }
-  return undefined;
+  const index = itemId
+    ? message.content.findLastIndex(
+        (candidate) =>
+          isAssistantTextBlock(candidate) && parseAssistantTextSignature(candidate)?.id === itemId,
+      )
+    : -1;
+  return index >= 0 ? index : undefined;
 }
 
 export function scopeAssistantMessageToStreamBlock(
@@ -176,25 +165,41 @@ export function emitAssistantCommentaryStreamData(
   ctx: EmbeddedAgentSubscribeContext,
   message: AssistantMessage,
   finalMessage = false,
-  preparedText?: string,
 ) {
   const isResponsesCommentary = isResponsesApiAssistantMessage(message);
   const { lastAssistantStreamContentIndex: index, lastAssistantStreamItemId: itemId } = ctx.state;
   // Non-text updates carry prior Responses items too; publish only the active item.
-  const commentaryMessage = isResponsesCommentary
-    ? scopeAssistantMessageToStreamBlock(message, index, itemId)
-    : message;
-  const text =
-    !isResponsesCommentary && preparedText !== undefined
-      ? preparedText
-      : extractAssistantCommentaryText(commentaryMessage);
-  if (text && (finalMessage || !isResponsesCommentary || ctx.state.deltaBuffer !== text)) {
-    // Generic commentary must carry the identity the phase tagger generated so
-    // the Control UI can key the live row to the persisted fallback row; without
-    // it every generic segment is unkeyed and survives as a duplicate.
+  let commentaryMessages = [scopeAssistantMessageToStreamBlock(message, index, itemId)];
+  if (!isResponsesCommentary) {
+    const blocks = readAssistantTextBlocksForPhase(message, "commentary");
+    // Generic partials retain earlier items; keep each snapshot under its original identity.
+    commentaryMessages = [message];
+    if (Array.isArray(message.content)) {
+      commentaryMessages = [];
+      for (const id of new Set(blocks.map((block) => parseAssistantTextSignature(block)?.id))) {
+        const content = message.content.filter(
+          (block) =>
+            block.type === "text" &&
+            blocks.some((selected) => selected === block) &&
+            parseAssistantTextSignature(block)?.id === id,
+        );
+        commentaryMessages.push({ ...message, content });
+      }
+    }
+  }
+  for (const commentaryMessage of commentaryMessages) {
+    const accumulator = createStreamingDirectiveAccumulator();
+    const text = extractAssistantCommentaryText(commentaryMessage, (part, final) => {
+      const preparedStart = accumulator.sourceText.length;
+      accumulator.consume(part, { final: finalMessage && final });
+      return accumulator.sourceText.slice(preparedStart);
+    });
+    if (!text || (!finalMessage && isResponsesCommentary && ctx.state.deltaBuffer === text)) {
+      continue;
+    }
     const commentaryItemId = isResponsesCommentary
       ? itemId
-      : resolveAssistantStreamItemId({ message });
+      : resolveAssistantStreamItemId({ message: commentaryMessage });
     ctx.emitAssistantStreamData(
       { text, delta: "", replace: true, phase: "commentary", itemId: commentaryItemId },
       { finalMessage },
@@ -213,6 +218,28 @@ export function emitReasoningEnd(ctx: EmbeddedAgentSubscribeContext) {
     log: ctx.log,
     callback: () => ctx.params.onReasoningEnd?.(),
   });
+}
+
+export function emitPersistentReasoning(ctx: EmbeddedAgentSubscribeContext, text: string) {
+  if (
+    !ctx.state.includeReasoning ||
+    !text ||
+    !ctx.params.onBlockReply ||
+    ctx.params.silentExpected ||
+    shouldSuppressDeterministicApprovalOutput(ctx.state) ||
+    shouldSuppressSourceReplyOutput(ctx) ||
+    text === ctx.state.lastReasoningSent
+  ) {
+    return;
+  }
+  const previous = ctx.state.lastReasoningSent;
+  const pending =
+    previous && text.startsWith(previous) ? text.slice(previous.length).trimStart() : text;
+  ctx.state.lastReasoningSent = text;
+  // Keep reasoning separate from answer/tool payloads, in provider order.
+  if (pending) {
+    ctx.emitBlockReply({ text: pending, isReasoning: true });
+  }
 }
 
 export function emitAssistantMessageStart(ctx: EmbeddedAgentSubscribeContext) {
@@ -240,14 +267,20 @@ export function shouldSuppressDeterministicApprovalOutput(
   return state.deterministicApprovalPromptPending || state.deterministicApprovalPromptSent;
 }
 
-export function hasMessageToolOnlySourceDelivery(
+export function shouldSuppressSourceReplyOutput(
   ctx: Pick<EmbeddedAgentSubscribeContext, "params" | "state">,
+  assistant = ctx.state.lastAssistant,
 ): boolean {
   return (
-    ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
-    (ctx.state.messageToolOnlySourceReplyDelivered ||
-      ctx.params.hasDeliveredMessageToolOnlySourceReply?.() === true ||
-      (ctx.state.messagingToolSourceReplyPayloads?.length ?? 0) > 0)
+    // Scheduled text remains provisional until cron publishes the settled result.
+    (readAutomationDisplayState(ctx.params.runId) !== "ordinary" &&
+      assistant?.stopReason !== "error" &&
+      assistant?.stopReason !== "aborted") ||
+    ctx.state.sourceReplyDeliveryState === "delivered" ||
+    (ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
+      (ctx.state.messageToolOnlySourceReplyDelivered ||
+        ctx.params.hasDeliveredMessageToolOnlySourceReply?.() === true ||
+        (ctx.state.messagingToolSourceReplyPayloads?.length ?? 0) > 0))
   );
 }
 
@@ -269,141 +302,230 @@ export function resolveAssistantTextChunk(params: {
   if (content.startsWith(accumulatedText)) {
     return content.slice(accumulatedText.length);
   }
-  if (accumulatedText.startsWith(content)) {
-    return "";
-  }
-  if (!accumulatedText.includes(content)) {
-    return content;
-  }
-  return "";
+  return accumulatedText.includes(content) ? "" : content;
 }
 
-export function resolveStreamingReply(params: {
-  evtType: "text_delta" | "text_start" | "text_end";
-  next: string;
-  previousText: string;
-  previousCleaned: string;
-  visibleDelta: string;
-  appendDelta: string | null;
-  parsedStreamDirectives: ReplyDirectiveParseResult | null;
-  previousAudioDirectiveCount: number;
-  rawDirectiveSource?: string;
-  directiveCodePrefix?: StreamDirectiveCodePrefix;
-}): {
-  text: string;
-  delta: string;
-  replace: boolean;
-  hasText: boolean;
-  replyDirectives: ReplyDirectiveParseResult | null;
-  audioDirectiveCount: number;
-  directiveCodePrefix?: StreamDirectiveCodePrefix;
-} {
-  let directiveCodePrefix = params.appendDelta !== null ? params.directiveCodePrefix : undefined;
-  if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
-    const text = params.previousCleaned;
-    return {
-      text,
-      delta: "",
-      replace: false,
-      hasText: Boolean(text.trim()),
-      replyDirectives: null,
-      audioDirectiveCount: params.previousAudioDirectiveCount,
-      directiveCodePrefix:
-        directiveCodePrefix &&
-        params.rawDirectiveSource?.length === directiveCodePrefix.checkedRawLength
-          ? directiveCodePrefix
-          : undefined,
-    };
-  }
-
-  let text: string | undefined;
-  let delta: string | undefined;
-  let isAppend = false;
-  let replyDirectives = params.parsedStreamDirectives;
-  let audioDirectiveCount = params.previousAudioDirectiveCount;
-  if (
-    directiveCodePrefix &&
-    params.rawDirectiveSource?.includes("[[", Math.max(0, directiveCodePrefix.checkedRawLength - 1))
-  ) {
-    directiveCodePrefix = undefined;
-  }
-  if (
-    params.evtType !== "text_end" &&
-    params.parsedStreamDirectives &&
-    !params.parsedStreamDirectives.isSilent &&
-    !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
-    !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta) &&
-    params.parsedStreamDirectives.text === params.visibleDelta &&
-    params.appendDelta !== null &&
-    params.previousText === params.previousCleaned &&
-    (directiveCodePrefix || !params.rawDirectiveSource?.includes("[["))
-  ) {
-    // Visibility and trim owners already prepared this exact append.
-    text = params.next;
-    delta = params.appendDelta;
-    isAppend = true;
-    if (directiveCodePrefix && params.rawDirectiveSource !== undefined) {
-      directiveCodePrefix = {
-        ...directiveCodePrefix,
-        checkedRawLength: params.rawDirectiveSource.length,
+export function createStreamingReplyResolver(): StreamingReplyResolver {
+  const rawProjection = createTextProjection([
+    downgradedToolCallTextFilter(),
+    toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }, true),
+  ]);
+  let directiveCodePrefix: StreamDirectiveCodePrefix | undefined;
+  let hasDirectiveMarker = false;
+  let previousChar = "";
+  // A stripped directive (media line, audio/reply tag) leaves the raw visible prefix longer than
+  // the cleaned text, so the append paths below cannot prove an append and every delta re-parses
+  // the whole reply. Track the exact source the canonical parse consumed so a byte-exact,
+  // directive-free append can reuse its result instead.
+  let settledDirectiveSource: string | undefined;
+  let settledDirectiveText = "";
+  let settledDirectiveTail = false;
+  // A removed inline directive can retroactively own surrounding whitespace, so a prefix that
+  // ever held a marker stays on the canonical parse.
+  let settledDirectiveMarked = false;
+  // An invalid media reference rewrites its notice in place as the line grows, so those replies
+  // keep the canonical parse.
+  let settledDirectiveNotice = false;
+  return (params) => {
+    let preparedRawText = params.next;
+    if (params.rawDirectiveSource !== undefined) {
+      const appended = params.rawDirectiveDelta ?? params.rawDirectiveSource;
+      // Directive parsing needs pre-trim coordinates, independently of the visible projection.
+      preparedRawText =
+        params.rawDirectiveDelta === undefined
+          ? rawProjection.replace(params.rawDirectiveSource).text
+          : rawProjection.append(params.rawDirectiveDelta, params.rawDirectiveSource).text;
+      if (params.rawDirectiveDelta === undefined) {
+        directiveCodePrefix = undefined;
+        hasDirectiveMarker = false;
+        previousChar = "";
+      }
+      // Untrimmed sources answer to their own trim owner, so the settled clean prefix does not
+      // apply to them.
+      settledDirectiveSource = undefined;
+      if ((previousChar + appended).includes("[[")) {
+        hasDirectiveMarker = true;
+        directiveCodePrefix = undefined;
+      }
+      if (appended) {
+        previousChar = appended.slice(-1);
+      }
+    }
+    if (params.appendDelta === null) {
+      directiveCodePrefix = undefined;
+      settledDirectiveSource = undefined;
+    }
+    if (!params.parsedStreamDirectives && params.evtType === "text_delta") {
+      if (params.rawDirectiveSource?.length !== directiveCodePrefix?.checkedRawLength) {
+        directiveCodePrefix = undefined;
+      }
+      const text = params.previousCleaned;
+      return {
+        text,
+        delta: "",
+        replace: false,
+        hasText: Boolean(text.trim()),
+        replyDirectives: null,
+        audioDirectiveCount: params.previousAudioDirectiveCount,
       };
     }
-  }
 
-  if (text === undefined) {
-    directiveCodePrefix = undefined;
-    audioDirectiveCount = 0;
-    const source =
-      params.rawDirectiveSource === undefined
-        ? params.next
-        : stripDowngradedToolCallText(params.rawDirectiveSource);
-    const parsed = parseReplyDirectives(
-      params.evtType === "text_end" ? source : splitTrailingDirective(source).text,
-      {
+    let text: string | undefined;
+    let delta: string | undefined;
+    let isAppend = false;
+    let replyDirectives = params.parsedStreamDirectives;
+    let audioDirectiveCount = params.previousAudioDirectiveCount;
+    if (
+      params.evtType !== "text_end" &&
+      params.parsedStreamDirectives &&
+      !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
+      !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta) &&
+      params.parsedStreamDirectives.text === params.visibleDelta &&
+      params.appendDelta !== null &&
+      params.previousText === params.previousCleaned &&
+      (directiveCodePrefix || !hasDirectiveMarker)
+    ) {
+      // Visibility and trim owners already prepared this exact append.
+      text = params.next;
+      delta = params.appendDelta;
+      isAppend = true;
+      if (directiveCodePrefix && params.rawDirectiveSource !== undefined) {
+        directiveCodePrefix = {
+          ...directiveCodePrefix,
+          checkedRawLength: params.rawDirectiveSource.length,
+        };
+      }
+    }
+    if (
+      text === undefined &&
+      params.evtType !== "text_end" &&
+      params.parsedStreamDirectives &&
+      params.parsedStreamDirectives.text === params.visibleDelta &&
+      params.appendDelta !== null &&
+      params.previousCleaned &&
+      params.previousText.length > params.previousCleaned.length &&
+      !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta)
+    ) {
+      const marker = params.previousText.lastIndexOf("[[");
+      const tailStart = params.previousText.indexOf("]]", marker + 2) + 2;
+      const tail = params.previousText.slice(tailStart);
+      const source = params.rawDirectiveSource ?? params.next;
+      // Settled directives before any code opener cannot enter code on append.
+      // New markers and reference definitions still require the complete Markdown context.
+      if (
+        marker >= 0 &&
+        tailStart > marker + 2 &&
+        tail.trim() &&
+        params.previousCleaned.endsWith(tail.trimStart()) &&
+        !/[`~\t]| {4}/u.test(params.previousText.slice(0, marker)) &&
+        !source.includes("[[", params.previousText.length - 1) &&
+        !source.includes("]:")
+      ) {
+        text = params.previousCleaned + params.appendDelta;
+        delta = params.appendDelta;
+        isAppend = true;
+      }
+    }
+
+    if (
+      text === undefined &&
+      params.rawDirectiveSource === undefined &&
+      params.evtType !== "text_end" &&
+      params.appendDelta !== null &&
+      params.parsedStreamDirectives &&
+      !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
+      settledDirectiveSource !== undefined &&
+      !settledDirectiveTail &&
+      !settledDirectiveMarked &&
+      !settledDirectiveNotice &&
+      params.next.length === settledDirectiveSource.length + params.appendDelta.length &&
+      params.next.endsWith(params.appendDelta) &&
+      !params.appendDelta.includes("[[") &&
+      !params.appendDelta.endsWith("[") &&
+      !/(?:^|[\r\n])[^\S\r\n]*MEDIA:/iu.test(
+        settledDirectiveSource.slice(-1) + params.appendDelta,
+      ) &&
+      !/(?:^|[\r\n])[\t ]*(?:M|ME|MED|MEDI|MEDIA)$/iu.test(
+        settledDirectiveSource.slice(-1) + params.appendDelta,
+      )
+    ) {
+      // The visible text grew by exactly the reported delta and the new bytes cannot start or
+      // complete a directive, so every directive the cleaned prefix already removed stays removed.
+      text = settledDirectiveText + params.appendDelta;
+      delta = params.appendDelta;
+      isAppend = true;
+    }
+
+    if (text === undefined) {
+      directiveCodePrefix = undefined;
+      audioDirectiveCount = 0;
+      const source =
+        params.rawDirectiveSource === undefined || params.evtType !== "text_end"
+          ? preparedRawText
+          : toolCallXmlTextFilter(
+              { stripFunctionCallsXmlPayloads: true },
+              params.evtType !== "text_end",
+            ).transform(stripDowngradedToolCallText(params.rawDirectiveSource));
+      const split = params.evtType === "text_end" ? undefined : splitTrailingDirective(source);
+      const parsed = parseReplyDirectives(split ? split.text : source, {
         onAudioDirective: () => {
           audioDirectiveCount += 1;
         },
-      },
-    );
-    text =
-      params.rawDirectiveSource === undefined ? parsed.text : trimTextPreservingCode(parsed.text);
-    if (
-      params.evtType !== "text_end" &&
-      params.appendDelta !== null &&
-      source === params.rawDirectiveSource &&
-      text === params.next &&
-      !parsed.isSilent &&
-      !hasReplyDirectiveMetadata(parsed) &&
-      !parsed.mediaUrls?.length
-    ) {
-      const prefix = findDirectiveCodePrefix(source, params.visibleDelta);
-      if (prefix && params.next.startsWith(source.slice(0, prefix.end))) {
-        // Both raw and projected appends retain this canonical code prefix.
-        directiveCodePrefix = prefix;
+      });
+      text =
+        params.rawDirectiveSource === undefined ? parsed.text : trimTextPreservingCode(parsed.text);
+      // Record the settled prefix this parse produced: the exact source it consumed, its cleaned
+      // text, and whether an incomplete directive tail was held back from both.
+      settledDirectiveSource =
+        params.rawDirectiveSource === undefined && params.evtType !== "text_end"
+          ? preparedRawText
+          : undefined;
+      settledDirectiveText = text;
+      settledDirectiveTail = Boolean(split?.tail);
+      settledDirectiveMarked =
+        settledDirectiveSource !== undefined && preparedRawText.includes("[[");
+      settledDirectiveNotice = Boolean(parsed.mediaFailures?.length);
+      if (
+        params.evtType !== "text_end" &&
+        params.appendDelta !== null &&
+        source === params.rawDirectiveSource &&
+        text === params.next &&
+        !hasReplyDirectiveMetadata(parsed) &&
+        !parsed.mediaUrls?.length
+      ) {
+        const prefix = findDirectiveCodePrefix(source, params.visibleDelta);
+        if (prefix && params.next.startsWith(source.slice(0, prefix.end))) {
+          // Both raw and projected appends retain this canonical code prefix.
+          directiveCodePrefix = prefix;
+        }
       }
+      if (replyDirectives) {
+        // Metadata comes from complete code context. Only newly accepted audio
+        // occurrences create a streaming edge; prior voice tags are not replayed.
+        replyDirectives = {
+          ...replyDirectives,
+          replyToId: parsed.replyToId,
+          replyToCurrent: parsed.replyToCurrent,
+          replyToTag: parsed.replyToTag,
+          audioAsVoice: audioDirectiveCount > params.previousAudioDirectiveCount,
+        };
+      }
+    } else if (params.rawDirectiveSource === undefined && params.evtType !== "text_end") {
+      // The appended text above is byte-exact, so it can seed the same settled prefix.
+      settledDirectiveSource = params.next;
+      settledDirectiveText = text;
+      settledDirectiveTail = false;
     }
-    if (replyDirectives) {
-      // Metadata comes from complete code context. Only newly accepted audio
-      // occurrences create a streaming edge; prior voice tags are not replayed.
-      replyDirectives = {
-        ...replyDirectives,
-        replyToId: parsed.replyToId,
-        replyToCurrent: parsed.replyToCurrent,
-        replyToTag: parsed.replyToTag,
-        audioAsVoice: audioDirectiveCount > params.previousAudioDirectiveCount,
-      };
-    }
-  }
-  const replace = Boolean(
-    !isAppend && params.previousCleaned && !text.startsWith(params.previousCleaned),
-  );
-  return {
-    text,
-    delta: replace ? "" : (delta ?? text.slice(params.previousCleaned.length)),
-    replace,
-    hasText: Boolean(isAppend ? text : text.trim()),
-    replyDirectives,
-    audioDirectiveCount,
-    directiveCodePrefix,
+    const replace = Boolean(
+      !isAppend && params.previousCleaned && !text.startsWith(params.previousCleaned),
+    );
+    return {
+      text,
+      delta: replace ? "" : (delta ?? text.slice(params.previousCleaned.length)),
+      replace,
+      hasText: Boolean(isAppend ? text : text.trim()),
+      replyDirectives,
+      audioDirectiveCount,
+    };
   };
 }

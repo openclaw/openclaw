@@ -22,6 +22,20 @@ export function shouldRefreshContextWindowCache(plan: GatewayReloadPlan): boolea
   );
 }
 
+export function doesReloadAffectPluginCapabilities(
+  plan: GatewayReloadPlan,
+  previousConfig: OpenClawConfig,
+  nextConfig: OpenClawConfig,
+): boolean {
+  return (
+    plan.reloadPlugins ||
+    !isDeepStrictEqual(
+      resolveChannelConfigActivationFacts(previousConfig),
+      resolveChannelConfigActivationFacts(nextConfig),
+    )
+  );
+}
+
 /** Auth changes must replace prepared owners instead of advancing their config in place. */
 export function doesReloadAffectProviderAuth(
   plan: GatewayReloadPlan,
@@ -29,16 +43,12 @@ export function doesReloadAffectProviderAuth(
   nextConfig: OpenClawConfig,
 ): boolean {
   return (
-    plan.reloadPlugins ||
+    doesReloadAffectPluginCapabilities(plan, previousConfig, nextConfig) ||
     plan.changedPaths.some(isProviderAuthRelevantReloadPath) ||
     diffConfigPaths(previousConfig, nextConfig).some(isProviderAuthRelevantReloadPath) ||
     !isDeepStrictEqual(
       collectConfiguredModelRefs(previousConfig),
       collectConfiguredModelRefs(nextConfig),
-    ) ||
-    !isDeepStrictEqual(
-      resolveChannelConfigActivationFacts(previousConfig),
-      resolveChannelConfigActivationFacts(nextConfig),
     )
   );
 }
@@ -68,30 +78,20 @@ const PROVIDER_AUTH_RELEVANT_AGENT_SUBFIELDS = new Set([
 ]);
 
 // Nested model selectors can change providers; unrelated scheduling/compaction knobs cannot.
-function isAuthRelevantAgentSubfield(
-  field: string | undefined,
-  next: string | undefined,
-  nested: string | undefined,
-): boolean {
+function isAuthRelevantAgentSubfield(field: string | undefined, next: string | undefined): boolean {
   if (field === undefined) {
     return true;
   }
   if (PROVIDER_AUTH_RELEVANT_AGENT_SUBFIELDS.has(field)) {
     return true;
   }
-  if (field === "heartbeat" || field === "subagents") {
+  if (field === "subagents") {
     return next === undefined || next === "model";
   }
-  return (
-    field === "compaction" &&
-    (next === undefined ||
-      next === "model" ||
-      next === "provider" ||
-      (next === "memoryFlush" && (nested === undefined || nested === "model")))
-  );
+  return field === "compaction" && (next === undefined || next === "model" || next === "provider");
 }
 
-function isProviderAuthRelevantReloadPath(path: string): boolean {
+export function isProviderAuthRelevantReloadPath(path: string): boolean {
   const segments = path.split(".");
   const [head = "", second, third, fourth] = segments;
   if (PROVIDER_AUTH_RELEVANT_CONFIG_ROOTS.has(head)) {
@@ -105,10 +105,10 @@ function isProviderAuthRelevantReloadPath(path: string): boolean {
     return true;
   }
   if (second === "defaults") {
-    return isAuthRelevantAgentSubfield(third, segments[3], segments[4]);
+    return isAuthRelevantAgentSubfield(third, segments[3]);
   }
   if (second === "entries") {
-    return isAuthRelevantAgentSubfield(fourth, segments[4], segments[5]);
+    return isAuthRelevantAgentSubfield(fourth, segments[4]);
   }
   return false;
 }

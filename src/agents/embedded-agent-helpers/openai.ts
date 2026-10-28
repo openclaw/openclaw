@@ -2,7 +2,6 @@ import {
   normalizeOpenAIResponsesFunctionCallId,
   replaceCompactionReplayOwnerContent,
   shouldNormalizeOpenAIResponsesToolCallId,
-  splitOpenAIFunctionCallPairing,
 } from "@openclaw/ai/transports";
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AgentMessage } from "../runtime/index.js";
@@ -49,37 +48,22 @@ function isOpenAIToolCallType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
 }
 
+const DROP_REPLAY_MESSAGE = Symbol("dropReplayMessage");
+
 function rewriteReplayMessages(
   messages: AgentMessage[],
-  rewrite: (message: AgentMessage) => AgentMessage,
+  rewrite: (message: AgentMessage) => AgentMessage | typeof DROP_REPLAY_MESSAGE,
 ): AgentMessage[] {
   let changed = false;
   const result: AgentMessage[] = [];
   for (const message of messages) {
     const next = rewrite(message);
     changed ||= !Object.is(next, message);
-    result.push(next);
+    if (next !== DROP_REPLAY_MESSAGE) {
+      result.push(next);
+    }
   }
   return changed ? result : messages;
-}
-
-type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
-type AssistantContentBlock = AssistantMessage["content"][number];
-
-function rewriteAssistantContent(
-  message: AssistantMessage,
-  rewrite: (block: AssistantContentBlock) => AssistantContentBlock,
-): AssistantMessage {
-  if (!Array.isArray(message.content)) {
-    return message;
-  }
-  let changed = false;
-  const content = message.content.map((block) => {
-    const next = rewrite(block);
-    changed ||= !Object.is(next, block);
-    return next;
-  });
-  return changed ? replaceCompactionReplayOwnerContent(message, content) : message;
 }
 
 /**
@@ -111,7 +95,11 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
     const role = (msg as { role?: unknown }).role;
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      return rewriteAssistantContent(assistantMsg, (block) => {
+      if (!Array.isArray(assistantMsg.content)) {
+        return assistantMsg;
+      }
+      let changed = false;
+      const content = assistantMsg.content.map((block) => {
         if (!block || typeof block !== "object") {
           return block;
         }
@@ -124,11 +112,13 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         if (nextId === toolCallBlock.id) {
           return block;
         }
+        changed = true;
         return {
           ...block,
           id: nextId,
         } as typeof block;
       });
+      return changed ? replaceCompactionReplayOwnerContent(assistantMsg, content) : assistantMsg;
     }
 
     if (role === "toolResult") {
@@ -137,82 +127,6 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
         resolveId,
       });
     }
-    return msg;
-  });
-}
-
-/**
- * OpenAI can reject replayed `function_call` items with an `fc_*` id if the
- * matching `reasoning` item is absent in the same assistant turn.
- *
- * When that pairing is missing, strip the `|fc_*` suffix from tool call ids so
- * shared model runtime omits `function_call.id` on replay.
- */
-export function downgradeOpenAIFunctionCallReasoningPairs(
-  messages: AgentMessage[],
-): AgentMessage[] {
-  let pendingRewrittenIds: Map<string, string> | null = null;
-  return rewriteReplayMessages(messages, (msg) => {
-    if (!msg || typeof msg !== "object") {
-      pendingRewrittenIds = null;
-      return msg;
-    }
-
-    const role = (msg as { role?: unknown }).role;
-    if (role === "assistant") {
-      const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-      const localRewrittenIds = new Map<string, string>();
-      let seenReplayableReasoning = false;
-      const next = rewriteAssistantContent(assistantMsg, (block) => {
-        if (!block || typeof block !== "object") {
-          return block;
-        }
-
-        const thinkingBlock = block as OpenAIThinkingBlock;
-        if (
-          thinkingBlock.type === "thinking" &&
-          hasOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
-        ) {
-          seenReplayableReasoning = true;
-          return block;
-        }
-
-        const toolCallBlock = block as OpenAIToolCallBlock;
-        if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
-          return block;
-        }
-
-        const pairing = splitOpenAIFunctionCallPairing(toolCallBlock.id);
-        if (seenReplayableReasoning || !pairing.itemId || !pairing.itemId.startsWith("fc_")) {
-          return block;
-        }
-
-        localRewrittenIds.set(toolCallBlock.id, pairing.callId);
-        return {
-          ...block,
-          id: pairing.callId,
-        } as typeof block;
-      });
-      pendingRewrittenIds = localRewrittenIds.size > 0 ? localRewrittenIds : null;
-      return next;
-    }
-
-    if (role === "toolResult" && pendingRewrittenIds && pendingRewrittenIds.size > 0) {
-      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
-        toolUseId?: unknown;
-      };
-      const updates: Record<string, string> = {};
-      for (const field of ["toolCallId", "toolUseId"] as const) {
-        const id = toolResult[field];
-        const nextId = typeof id === "string" ? pendingRewrittenIds.get(id) : undefined;
-        if (nextId && nextId !== id) {
-          updates[field] = nextId;
-        }
-      }
-      return Object.keys(updates).length > 0 ? { ...toolResult, ...updates } : msg;
-    }
-
-    pendingRewrittenIds = null;
     return msg;
   });
 }
@@ -246,41 +160,28 @@ export function dropStaleOpenAIReasoning(
   if (dropBefore === undefined) {
     return messages;
   }
-  let anyChanged = false;
-  const out: AgentMessage[] = [];
-
-  for (const msg of messages) {
+  return rewriteReplayMessages(messages, (msg) => {
     if (!msg || typeof msg !== "object") {
-      out.push(msg);
-      continue;
+      return msg;
     }
 
     const role = (msg as { role?: unknown }).role;
     if (role !== "assistant") {
-      out.push(msg);
-      continue;
+      return msg;
     }
 
     const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-    if (!Array.isArray(assistantMsg.content)) {
-      out.push(msg);
-      continue;
-    }
     const messageTimestamp = parseDateFirstTimestampMs(assistantMsg.timestamp);
     // Timestamp-less legacy entries cannot prove they belong to the new route;
     // treat them as pre-switch so stale provider ids never re-enter replay.
     if (messageTimestamp !== undefined && messageTimestamp > dropBefore) {
-      out.push(msg);
-      continue;
+      return msg;
     }
 
-    let changed = false;
     let droppedReplayableReasoning = false;
-    const nextContent: AssistantContentBlock[] = [];
-    for (const block of assistantMsg.content) {
+    const nextContent = assistantMsg.content.filter((block) => {
       if (!block) {
-        changed = true;
-        continue;
+        return false;
       }
       const record = block as OpenAIThinkingBlock;
       if (
@@ -288,21 +189,18 @@ export function dropStaleOpenAIReasoning(
         record.type !== "thinking" ||
         !hasOpenAIReasoningSignature(record.thinkingSignature)
       ) {
-        nextContent.push(block);
-        continue;
+        return true;
       }
-      changed = true;
       droppedReplayableReasoning = true;
+      return false;
+    });
+
+    if (nextContent.length === assistantMsg.content.length) {
+      return msg;
     }
 
-    if (!changed) {
-      out.push(msg);
-      continue;
-    }
-
-    anyChanged = true;
     if (nextContent.length === 0) {
-      continue;
+      return DROP_REPLAY_MESSAGE;
     }
 
     // When a replayable reasoning (rs_*) item is dropped after a model/fallback
@@ -327,8 +225,6 @@ export function dropStaleOpenAIReasoning(
         })
       : nextContent;
 
-    out.push(replaceCompactionReplayOwnerContent(assistantMsg, finalContent));
-  }
-
-  return anyChanged ? out : messages;
+    return replaceCompactionReplayOwnerContent(assistantMsg, finalContent);
+  });
 }

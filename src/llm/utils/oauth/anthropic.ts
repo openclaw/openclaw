@@ -1,7 +1,8 @@
-import { toErrorObject } from "../../../infra/errors.js";
 import { readResponseWithLimit } from "../../../infra/http-body.js";
 import { startOAuthLoopbackCallbackServer } from "../../../infra/oauth-loopback-callback.js";
 import {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
   generateOAuthState,
   generatePKCE,
   parseOAuthAuthorizationInput,
@@ -64,6 +65,9 @@ function formatErrorDetails(error: unknown): string {
   return String(error);
 }
 
+// Only locally constructed, body-free diagnostics may reach refresh messages.
+class TokenResponseError extends Error {}
+
 function formatTokenResponseParseContext(responseBody: string): string {
   return `bodyBytes=${Buffer.byteLength(responseBody, "utf8")}`;
 }
@@ -78,15 +82,14 @@ function parseTokenCredentials(
   let data: unknown;
   try {
     data = JSON.parse(responseBody);
-  } catch (error) {
-    throw new Error(
-      `${options.invalidJsonMessage} url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}; details=${formatErrorDetails(error)}`,
-      { cause: error },
+  } catch {
+    throw new TokenResponseError(
+      `${options.invalidJsonMessage} url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}`,
     );
   }
 
   if (!data || typeof data !== "object") {
-    throw new Error(
+    throw new TokenResponseError(
       `${options.invalidFieldsMessage} url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}`,
     );
   }
@@ -100,7 +103,7 @@ function parseTokenCredentials(
     !record.refresh_token ||
     expires === undefined
   ) {
-    throw new Error(
+    throw new TokenResponseError(
       `${options.invalidFieldsMessage} url=${TOKEN_URL}; ${formatTokenResponseParseContext(responseBody)}`,
     );
   }
@@ -162,9 +165,22 @@ async function postJson(
   });
 
   const buffer = await readResponseWithLimit(response, OAUTH_RESPONSE_MAX_BYTES, {
-    onOverflow: ({ size }) => new Error(`Anthropic OAuth response too large: ${size} bytes`),
+    onOverflow: ({ size }) =>
+      new TokenResponseError(`Anthropic OAuth response too large: ${size} bytes`),
   });
-  const responseBody = new TextDecoder().decode(buffer);
+  const responseBody = new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+
+  if (body.grant_type === "refresh_token") {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(responseBody);
+    } catch {
+      /* Invalid success is handled below. */
+    }
+    if (!response.ok || (payload && typeof payload === "object" && "error" in payload)) {
+      throw createOAuthRefreshResponseError("Anthropic token refresh", response.status, payload);
+    }
+  }
 
   if (!response.ok) {
     throw new Error(
@@ -217,15 +233,12 @@ async function loginAnthropic(options: OAuthLoginCallbacks): Promise<OAuthCreden
   const expectedState = generateOAuthState();
   const server = await startCallbackServer(expectedState);
 
-  let code: string | undefined;
-  let state: string | undefined;
-  const applyAuthorizationInput = (input: string) => {
+  const parseAuthorizationInput = (input: string) => {
     const parsed = parseOAuthAuthorizationInput(input);
     if (parsed.state && parsed.state !== expectedState) {
       throw new Error("OAuth state mismatch");
     }
-    code = parsed.code;
-    state = parsed.state ?? expectedState;
+    return { code: parsed.code, state: parsed.state ?? expectedState };
   };
 
   try {
@@ -248,47 +261,29 @@ async function loginAnthropic(options: OAuthLoginCallbacks): Promise<OAuthCreden
     });
     throwIfOAuthLoginAborted(options.signal);
 
-    let manualInput: string | undefined;
-    let manualError: Error | undefined;
-    const manualPromise = options
-      .onManualCodeInput?.()
-      .then((input) => {
-        manualInput = input;
+    const manualPromise = options.onManualCodeInput?.().then(
+      (input) => {
         server.cancelWait();
-      })
-      .catch((err: unknown) => {
-        manualError = err instanceof Error ? err : new Error(String(err));
+        return parseAuthorizationInput(input);
+      },
+      (err: unknown) => {
         server.cancelWait();
-      });
-
-    const result = await withOAuthLoginAbort(
-      server.waitForCode(),
+        throw err instanceof Error ? err : new Error(String(err));
+      },
+    );
+    const callbackPromise = server.waitForCode();
+    let result = await withOAuthLoginAbort(
+      manualPromise
+        ? Promise.race([
+            manualPromise,
+            callbackPromise.then((callback) => callback ?? manualPromise),
+          ])
+        : callbackPromise,
       options.signal,
       server.cancelWait,
     );
 
-    if (manualError) {
-      throw manualError;
-    }
-
-    if (result?.code) {
-      code = result.code;
-      state = result.state;
-    } else if (manualInput) {
-      applyAuthorizationInput(manualInput);
-    }
-
-    if (!code && manualPromise) {
-      await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
-      if (manualError) {
-        throw toErrorObject(manualError, "Non-Error thrown");
-      }
-      if (manualInput) {
-        applyAuthorizationInput(manualInput);
-      }
-    }
-
-    if (!code) {
+    if (!result?.code) {
       const input = await withOAuthLoginAbort(
         options.onPrompt({
           message: "Paste the authorization code or full redirect URL:",
@@ -297,19 +292,25 @@ async function loginAnthropic(options: OAuthLoginCallbacks): Promise<OAuthCreden
         options.signal,
         server.cancelWait,
       );
-      applyAuthorizationInput(input);
+      result = parseAuthorizationInput(input);
     }
 
-    if (!code) {
+    if (!result.code) {
       throw new Error("Missing authorization code");
     }
 
-    if (!state) {
+    if (!result.state) {
       throw new Error("Missing OAuth state");
     }
 
     options.onProgress?.("Exchanging authorization code for tokens...");
-    return exchangeAuthorizationCode(code, state, verifier, REDIRECT_URI, options.signal);
+    return exchangeAuthorizationCode(
+      result.code,
+      result.state,
+      verifier,
+      REDIRECT_URI,
+      options.signal,
+    );
   } finally {
     await server.close();
   }
@@ -324,16 +325,29 @@ async function refreshAnthropicToken(refreshToken: string): Promise<OAuthCredent
       refresh_token: refreshToken,
     });
   } catch (error) {
-    throw new Error(
-      `Anthropic token refresh request failed. url=${TOKEN_URL}; details=${formatErrorDetails(error)}`,
+    throw createOAuthRefreshError(
+      error instanceof TokenResponseError
+        ? `${error.message} Sign in again.`
+        : "Anthropic token refresh request failed. Sign in again.",
+      { version: 1, phase: "token-response", outcome: "unknown" },
       { cause: error },
     );
   }
 
-  return parseTokenCredentials(responseBody, {
-    invalidJsonMessage: "Anthropic token refresh returned invalid JSON.",
-    invalidFieldsMessage: "Anthropic token refresh returned invalid token fields.",
-  });
+  try {
+    return parseTokenCredentials(responseBody, {
+      invalidJsonMessage: "Anthropic token refresh returned invalid JSON.",
+      invalidFieldsMessage: "Anthropic token refresh returned invalid token fields.",
+    });
+  } catch (cause) {
+    throw createOAuthRefreshError(
+      cause instanceof TokenResponseError
+        ? `${cause.message} Sign in again.`
+        : "Anthropic token refresh returned invalid credentials. Sign in again.",
+      { version: 1, phase: "after-token-response", outcome: "unknown" },
+      { cause },
+    );
+  }
 }
 
 export const anthropicOAuthProvider: OAuthProviderInterface = {
@@ -341,9 +355,7 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
   name: "Anthropic (Claude Pro/Max)",
   usesCallbackServer: true,
 
-  async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-    return loginAnthropic({ ...callbacks });
-  },
+  login: loginAnthropic,
 
   async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
     return refreshAnthropicToken(credentials.refresh);

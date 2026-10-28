@@ -1,31 +1,75 @@
 import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import * as gitWorkerContext from "../../infra/git-worker-context.js";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import * as execRunner from "../../process/exec-runner.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { InvalidWorktreeBaseRefError } from "./base-ref.js";
-import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import { InvalidWorktreeBaseRefError, resolveWorktreeBase } from "./base-ref.js";
+import { readRepositoryBranches } from "./branches.runtime.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
+import { git } from "./git-fixture.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
-
 describe("ManagedWorktreeService branch discovery", () => {
   let root: string;
   let repo: string;
   let service: ManagedWorktreeService;
+
+  async function createRemote(mainCommit?: string) {
+    const remote = path.join(root, "remote.git");
+    await git(root, "clone", "--bare", repo, remote);
+    if (mainCommit) {
+      await git(remote, "update-ref", "refs/heads/main", mainCommit);
+    }
+    await git(repo, "remote", "add", "origin", remote);
+    return remote;
+  }
+
+  async function createChildCommit(tree = "HEAD^{tree}", message = "remote update") {
+    return await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", message);
+  }
+
+  function admitBranchSuggestionCache() {
+    vi.spyOn(gitWorkerContext, "gitFilesystemEnvironmentRevision").mockReturnValue("test-env");
+  }
+
+  async function expectWarmBranchAdmission(
+    checkout: string,
+    resetCommands?: () => void,
+    readBranches = readRepositoryBranches,
+  ) {
+    if (readBranches === readRepositoryBranches) {
+      admitBranchSuggestionCache();
+    }
+    const first = await readBranches(checkout, { includeRepositoryStatus: true });
+    expect(first.repositoryStatus).toBe("git");
+    resetCommands?.();
+    expect(await readBranches(checkout, { includeRepositoryStatus: true })).toEqual(first);
+  }
+
+  function expireBranchSuggestions() {
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_001);
+  }
 
   beforeEach(async () => {
     root = tempDirs.make("openclaw-worktree-branches-", await fs.realpath(os.tmpdir()));
@@ -41,6 +85,7 @@ describe("ManagedWorktreeService branch discovery", () => {
     await fs.writeFile(path.join(repo, "README.md"), "base\n");
     await git(repo, "add", "README.md");
     await git(repo, "commit", "-m", "initial");
+    setRuntimeConfigSnapshot({});
     service = new ManagedWorktreeService({
       env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
     });
@@ -48,56 +93,111 @@ describe("ManagedWorktreeService branch discovery", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    syncBuiltinESMExports();
     vi.unstubAllEnvs();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    clearRuntimeConfigSnapshot();
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("fetches the default base without advancing an explicitly selectable local branch", async () => {
-    const localHead = await git(repo, "rev-parse", "HEAD");
-    const remoteHead = await git(
-      repo,
-      "commit-tree",
-      "HEAD^{tree}",
-      "-p",
-      "HEAD",
-      "-m",
-      "remote update",
-    );
-    const remote = path.join(root, "remote.git");
-    await git(root, "clone", "--bare", repo, remote);
-    await git(repo, "remote", "add", "origin", remote);
-    await git(repo, "fetch", "origin");
-    await git(repo, "remote", "set-head", "origin", "-a");
-    await git(remote, "update-ref", "refs/heads/main", remoteHead, localHead);
+  it.each([
+    { offline: false, dirty: false, switching: false },
+    { offline: true, dirty: false, switching: false },
+    { offline: false, dirty: true, switching: false },
+    { offline: true, dirty: true, switching: false },
+    { offline: false, dirty: false, switching: true },
+  ])(
+    "uses the remote default and only advances clean local main ($offline, $dirty, switching: $switching)",
+    async ({ offline, dirty, switching }) => {
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      await fs.writeFile(path.join(repo, "README.md"), "remote update\n");
+      await git(repo, "add", "README.md");
+      const remoteTree = await git(repo, "write-tree");
+      await fs.writeFile(path.join(repo, "README.md"), "base\n");
+      await git(repo, "add", "README.md");
+      const remoteHead = await createChildCommit(remoteTree);
+      const remote = await createRemote();
+      await git(repo, "fetch", "origin");
+      await git(repo, "remote", "set-head", "origin", "-a");
+      await git(remote, "update-ref", "refs/heads/main", remoteHead, localHead);
 
-    const explicit = await service.create({ repoRoot: repo, name: "local-base", baseRef: "main" });
-    expect(await git(explicit.path, "rev-parse", "HEAD")).toBe(localHead);
-    expect(await git(repo, "rev-parse", "origin/main")).toBe(localHead);
+      const explicit = await service.create({
+        repoRoot: repo,
+        name: "local-base",
+        baseRef: "main",
+      });
+      expect(await git(explicit.path, "rev-parse", "HEAD")).toBe(localHead);
+      expect(await git(repo, "rev-parse", "origin/main")).toBe(localHead);
 
-    const defaultBase = await service.create({ repoRoot: repo, name: "remote-base" });
-    expect(defaultBase.baseRef).toBe("origin/main");
-    expect(await git(defaultBase.path, "rev-parse", "HEAD")).toBe(remoteHead);
-    expect(await git(repo, "rev-parse", "main")).toBe(localHead);
-  });
+      if (offline) {
+        // A project refresh has fetched new refs, but the worktree fetch cannot reach origin.
+        await git(repo, "fetch", "origin");
+        await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable.git"));
+      }
 
-  it("falls back from a pruned remote HEAD only when no explicit base was requested", async () => {
+      if (!offline && !dirty) {
+        // Background template prewarming selects the remote base without moving local main.
+        expect((await resolveWorktreeBase(repo)).commit).toBe(remoteHead);
+        expect(await git(repo, "rev-parse", "main")).toBe(localHead);
+      }
+      if (dirty) {
+        await fs.writeFile(path.join(repo, "README.md"), "local work\n");
+      }
+      let switched = false;
+      if (switching) {
+        await git(repo, "branch", "feature");
+        const readDirectory = fs.readdir;
+        vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+          const entries = await readDirectory(...args);
+          if (!switched && args[0] === path.join(repo, ".git", "worktrees")) {
+            switched = true;
+            await git(repo, "switch", "feature");
+          }
+          return entries;
+        });
+      }
+      const logs = createWarnLogCapture("worktree-base-fetch");
+      try {
+        const defaultBase = await service.create({ repoRoot: repo, name: "remote-base" });
+        expect(defaultBase.baseRef).toBe("origin/main");
+        expect(await git(defaultBase.path, "rev-parse", "HEAD")).toBe(remoteHead);
+        expect(await fs.readFile(path.join(defaultBase.path, "README.md"), "utf8")).toBe(
+          "remote update\n",
+        );
+        if (switching) {
+          expect(switched).toBe(true);
+          expect(
+            await git(repo, "rev-parse", "feature"),
+            "source branch must not be advanced",
+          ).toBe(localHead);
+        }
+        expect(await git(repo, "rev-parse", "main")).toBe(
+          dirty || switching ? localHead : remoteHead,
+        );
+        expect(await fs.readFile(path.join(repo, "README.md"), "utf8")).toBe(
+          dirty ? "local work\n" : switching ? "base\n" : "remote update\n",
+        );
+        if (offline) {
+          const warning = await logs.findText("worktree base origin/main");
+          expect(warning).toContain(remoteHead);
+          expect(warning).toContain("commit age");
+          expect(warning).toContain("fetch failed");
+          expect(warning).toContain("unavailable.git");
+        }
+      } finally {
+        logs.cleanup();
+      }
+    },
+  );
+
+  it("discovers a renamed remote default without substituting local HEAD", async () => {
     useInProcessWorktreeCapacityTransport();
     const disk = fsSync.statfsSync(root);
-    vi.spyOn(fsSync, "statfsSync").mockReturnValue({
-      type: disk.type,
-      files: disk.files,
-      frsize: disk.frsize,
-      ffree: disk.ffree,
-      bsize: 4096,
-      blocks: 1024 ** 4 / 4096,
-      bavail: (100 * 1024 ** 3) / 4096,
-      bfree: (100 * 1024 ** 3) / 4096,
-    });
-    const remote = path.join(root, "remote.git");
-    await git(root, "clone", "--bare", repo, remote);
-    await git(repo, "remote", "add", "origin", remote);
+    vi.spyOn(fsSync, "statfsSync").mockReturnValue(
+      createWorktreeCapacityStatfs(disk, 100 * 1024 ** 3),
+    );
+    const remote = await createRemote();
     await git(repo, "fetch", "origin");
     await git(repo, "remote", "set-head", "origin", "-a");
     const localHead = await git(repo, "rev-parse", "HEAD");
@@ -105,19 +205,182 @@ describe("ManagedWorktreeService branch discovery", () => {
     await git(repo, "config", "fetch.prune", "true");
     await git(repo, "config", "remote.origin.followRemoteHEAD", "never");
 
+    await expect(
+      service.create({ repoRoot: repo, name: "explicit-base", baseRef: "origin/missing" }),
+    ).rejects.toThrow(InvalidWorktreeBaseRefError);
     const created = await service.create({ repoRoot: repo, name: "default-base" });
 
-    expect(created.baseRef).toBe("HEAD");
+    expect(created.baseRef).toBe("origin/next");
     expect(await git(created.path, "rev-parse", "HEAD")).toBe(localHead);
     expect(await git(repo, "symbolic-ref", "refs/remotes/origin/HEAD")).toBe(
-      "refs/remotes/origin/main",
+      "refs/remotes/origin/next",
     );
-    await expect(
-      service.create({ repoRoot: repo, name: "explicit-base", baseRef: "origin/HEAD" }),
-    ).rejects.toThrow(InvalidWorktreeBaseRefError);
     expect(await git(repo, "branch", "--list", "openclaw/explicit-base")).toBe("");
     expect(await service.listRegistryRecords()).toEqual([created]);
   });
+
+  it("warns when the fetched default commit is more than seven days old", async () => {
+    const timestamp = Math.floor(Date.now() / 1000) - 8 * 86_400;
+    const date = new Date(timestamp * 1000).toISOString();
+    await execFileAsync(
+      "git",
+      ["-C", repo, "commit", "--allow-empty", "-m", "old default fixture"],
+      {
+        env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+      },
+    );
+    await createRemote();
+    service = new ManagedWorktreeService({
+      env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+    });
+    const logs = createWarnLogCapture("worktree-base-age");
+    try {
+      await service.create({ repoRoot: repo, name: "old-default" });
+      const warning = await logs.findText("worktree base origin/main");
+      expect(warning).toContain("commit age 8.0 days; fetch succeeded");
+      expect(warning).toContain("base is older than 7 days");
+    } finally {
+      logs.cleanup();
+    }
+  });
+
+  it("preserves ignored local data when the remote starts tracking its path", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "local.txt\n");
+    await git(repo, "add", ".gitignore");
+    await git(repo, "commit", "-m", "ignore local data");
+    const localHead = await git(repo, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(repo, "local.txt"), "remote content\n");
+    await git(repo, "add", "-f", "local.txt");
+    const tree = await git(repo, "write-tree");
+    await git(repo, "rm", "--cached", "local.txt");
+    await fs.writeFile(path.join(repo, "local.txt"), "local data\n");
+    const remoteHead = await createChildCommit(tree, "track local path");
+    await createRemote(remoteHead);
+    const logs = createWarnLogCapture("worktree-base-ignored");
+    try {
+      const created = await service.create({ repoRoot: repo, name: "remote-data" });
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteHead);
+      expect(await git(repo, "rev-parse", "HEAD")).toBe(localHead);
+      expect(await fs.readFile(path.join(repo, "local.txt"), "utf8")).toBe("local data\n");
+      expect(await logs.findText("git fast-forward local default")).toContain("local.txt");
+    } finally {
+      logs.cleanup();
+    }
+  });
+
+  it.each(["unavailable", "shared-dirty"])(
+    "preserves local main held by a %s checkout",
+    async (kind) => {
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      const remoteHead = await createChildCommit();
+      await createRemote(remoteHead);
+      const linked = path.join(root, "linked");
+      if (kind === "unavailable") {
+        await git(repo, "switch", "-c", "feature");
+        await git(repo, "worktree", "add", linked, "main");
+        await git(repo, "worktree", "lock", linked);
+        await fs.rm(linked, { recursive: true, force: true });
+      } else {
+        await git(repo, "worktree", "add", "--force", linked, "main");
+        await fs.writeFile(path.join(linked, "README.md"), "local work\n");
+      }
+
+      const created = await service.create({ repoRoot: repo, name: "remote-default" });
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteHead);
+      expect(await git(repo, "rev-parse", "main")).toBe(localHead);
+      if (kind === "shared-dirty") {
+        expect(await git(linked, "rev-parse", "HEAD")).toBe(localHead);
+        expect(await fs.readFile(path.join(linked, "README.md"), "utf8")).toBe("local work\n");
+      }
+    },
+  );
+
+  it.each(["primary", "main", "unrelated", "update-refs", "attached-update-refs"])(
+    "only retains the default branch reserved by a rebase (%s)",
+    async (kind) => {
+      const linked = kind !== "primary";
+      await git(repo, "switch", "-c", "onto");
+      await fs.writeFile(path.join(repo, "README.md"), "onto change\n");
+      await git(repo, "add", "README.md");
+      await git(repo, "commit", "-m", "onto change");
+      await git(repo, "switch", "main");
+      await fs.writeFile(path.join(repo, "README.md"), "local change\n");
+      await git(repo, "add", "README.md");
+      await git(repo, "commit", "-m", "local change");
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      const remoteHead = await createChildCommit();
+      await createRemote(remoteHead);
+      const rebasing = linked ? path.join(root, "rebasing") : repo;
+      if (linked) {
+        await git(repo, "worktree", "add", "--force", rebasing, "main");
+        if (kind !== "main") {
+          await git(rebasing, "switch", "-c", "topic");
+        }
+      }
+      const updateRefs = kind.endsWith("update-refs");
+      if (updateRefs) {
+        // Git excludes checked-out branches when preparing its update-refs list.
+        await git(repo, "switch", "onto");
+        await fs.writeFile(path.join(rebasing, "topic.txt"), "topic\n");
+        await git(rebasing, "add", "topic.txt");
+        await git(rebasing, "commit", "-m", "topic tip");
+      }
+      await expect(
+        git(rebasing, "rebase", ...(updateRefs ? ["--update-refs"] : []), "onto"),
+      ).rejects.toMatchObject({ code: 1 });
+      if (updateRefs) {
+        const gitDir = await git(rebasing, "rev-parse", "--absolute-git-dir");
+        expect(
+          await fs.readFile(path.join(gitDir, "rebase-merge", "update-refs"), "utf8"),
+        ).toContain("refs/heads/main\n");
+        await git(repo, "switch", "--ignore-other-worktrees", "main");
+        if (kind === "attached-update-refs") {
+          // A rebase exec or an operator can reattach HEAD while the rebase remains paused.
+          await git(rebasing, "symbolic-ref", "HEAD", "refs/heads/topic");
+        }
+      }
+      const pausedHead = await git(rebasing, "rev-parse", "HEAD");
+      const pausedStatus = await git(rebasing, "status", "--porcelain");
+      expect(pausedStatus).toContain("UU README.md");
+
+      const created = await service.create({ repoRoot: repo, name: "during-rebase" });
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteHead);
+      expect(await git(repo, "rev-parse", "main")).toBe(
+        kind === "unrelated" ? remoteHead : localHead,
+      );
+      expect(await git(rebasing, "rev-parse", "HEAD")).toBe(pausedHead);
+      expect(await git(rebasing, "status", "--porcelain")).toBe(pausedStatus);
+    },
+  );
+
+  it.each(["main", "topic"])(
+    "only retains the branch reserved by a linked bisect (%s)",
+    async (branch) => {
+      const good = await git(repo, "rev-parse", "HEAD");
+      await git(repo, "commit", "--allow-empty", "-m", "middle");
+      await git(repo, "commit", "--allow-empty", "-m", "bad");
+      const localHead = await git(repo, "rev-parse", "HEAD");
+      const remoteHead = await createChildCommit();
+      await createRemote(remoteHead);
+      const linked = path.join(root, "bisecting");
+      if (branch === "topic") {
+        await git(repo, "branch", "topic");
+      }
+      await git(repo, "worktree", "add", "--force", linked, branch);
+      await git(linked, "bisect", "start", localHead, good);
+      const pausedHead = await git(linked, "rev-parse", "HEAD");
+      const selected = await resolveWorktreeBase(
+        repo,
+        undefined,
+        undefined,
+        undefined,
+        "fast-forward",
+      );
+      expect(selected.commit).toBe(remoteHead);
+      expect(await git(repo, "rev-parse", "main")).toBe(branch === "main" ? localHead : remoteHead);
+      expect(await git(linked, "rev-parse", "HEAD")).toBe(pausedHead);
+    },
+  );
 
   it("reports Git, plain-directory, and unavailable repository status", async () => {
     const nested = path.join(repo, "packages", "app");
@@ -196,32 +459,41 @@ describe("ManagedWorktreeService branch discovery", () => {
     },
   );
 
-  it("reuses unchanged branch inventories and observes loose, packed, tag, and HEAD changes", async () => {
+  it("reuses branch suggestions until expiry, then observes loose, packed, tag, and HEAD changes", async () => {
+    admitBranchSuggestionCache();
     const linked = path.join(root, "linked");
     await git(repo, "worktree", "add", "-b", "tasks/selected", linked, "HEAD");
     const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
-    const first = await service.listRepositoryBranches(linked);
+    const first = await readRepositoryBranches(linked);
     expect(first.headBranch).toBe("tasks/selected");
     run.mockClear();
-    expect(await service.listRepositoryBranches(linked)).toEqual(first);
+    expect(await readRepositoryBranches(linked)).toEqual(first);
     expect(run).toHaveBeenCalledTimes(0);
 
     await git(repo, "branch", "tasks/added");
-    expect((await service.listRepositoryBranches(linked)).branches).toContainEqual({
+    expect((await readRepositoryBranches(linked)).branches).not.toContainEqual({
+      name: "tasks/added",
+      kind: "local",
+    });
+    expireBranchSuggestions();
+    expect((await readRepositoryBranches(linked)).branches).toContainEqual({
       name: "tasks/added",
       kind: "local",
     });
     await git(repo, "pack-refs", "--all", "--prune");
     await git(repo, "branch", "-d", "tasks/added");
-    expect((await service.listRepositoryBranches(linked)).branches).not.toContainEqual({
+    expireBranchSuggestions();
+    expect((await readRepositoryBranches(linked)).branches).not.toContainEqual({
       name: "tasks/added",
       kind: "local",
     });
     await git(repo, "tag", "tasks/selected");
-    expect((await service.listRepositoryBranches(linked)).headBranch).toBe("heads/tasks/selected");
+    expireBranchSuggestions();
+    expect((await readRepositoryBranches(linked)).headBranch).toBe("heads/tasks/selected");
     await git(linked, "switch", "--detach");
-    expect((await service.listRepositoryBranches(linked)).headBranch).toBeUndefined();
-    expect((await service.listRepositoryBranches(repo)).headBranch).toBe("main");
+    expireBranchSuggestions();
+    expect((await readRepositoryBranches(linked)).headBranch).toBeUndefined();
+    expect((await readRepositoryBranches(repo)).headBranch).toBe("main");
 
     const commit = await git(repo, "rev-parse", "HEAD");
     const refs = path.join(repo, ".git", "refs", "heads", "fleet");
@@ -231,19 +503,49 @@ describe("ManagedWorktreeService branch discovery", () => {
         fs.writeFile(path.join(refs, String(index).padStart(4, "0")), `${commit}\n`),
       ),
     );
-    const fleet = await service.listRepositoryBranches(repo);
+    expireBranchSuggestions();
+    const fleet = await readRepositoryBranches(repo);
     run.mockClear();
-    expect(await service.listRepositoryBranches(repo)).toEqual(fleet);
+    expect(await readRepositoryBranches(repo)).toEqual(fleet);
     expect(run).toHaveBeenCalledTimes(0);
     await fs.unlink(path.join(refs, "0000"));
-    expect((await service.listRepositoryBranches(repo)).branches).not.toContainEqual({
+    expireBranchSuggestions();
+    expect((await readRepositoryBranches(repo)).branches).not.toContainEqual({
       name: "fleet/0000",
       kind: "local",
     });
   });
 
+  it("reuses inventories with more than 1,024 pack metadata files and refreshes expired suggestions", async () => {
+    const packs = path.join(repo, ".git", "objects", "pack");
+    await fs.mkdir(packs, { recursive: true });
+    // Git ignores keep markers during discovery.
+    await Promise.all(
+      Array.from({ length: 1_100 }, (_, index) =>
+        fs.writeFile(path.join(packs, `pack-${index}.keep`), "synthetic keep marker\n"),
+      ),
+    );
+    const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
+    const directories = vi.spyOn(fsSync, "readdirSync");
+    syncBuiltinESMExports();
+    await expectWarmBranchAdmission(repo, () => {
+      run.mockClear();
+      directories.mockClear();
+    });
+    expect(run).toHaveBeenCalledTimes(0);
+    expect(directories.mock.calls.filter(([dir]) => dir === path.join(repo, ".git"))).toHaveLength(
+      1,
+    );
+    await git(repo, "branch", "new-branch");
+    expireBranchSuggestions();
+    expect((await readRepositoryBranches(repo)).branches).toContainEqual({
+      name: "new-branch",
+      kind: "local",
+    });
+  });
+
   it.each(["missing loose", "corrupt loose", "missing pack", "missing index", "corrupt pack"])(
-    "rejects a %s HEAD object after a branch-list cache hit",
+    "rejects a %s HEAD object when branch suggestions refresh",
     async (damage) => {
       const head = await git(repo, "rev-parse", "HEAD");
       let object = path.join(repo, ".git", "objects", head.slice(0, 2), head.slice(2));
@@ -260,33 +562,27 @@ describe("ManagedWorktreeService branch discovery", () => {
         await fs.chmod(object, 0o600);
       }
       const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
-      const first = await service.listRepositoryBranches(repo, { includeRepositoryStatus: true });
-      expect(first.repositoryStatus).toBe("git");
-      run.mockClear();
-      expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
-        first,
-      );
+      await expectWarmBranchAdmission(repo, () => run.mockClear());
       expect(run).toHaveBeenCalledTimes(0);
       if (damage.startsWith("missing")) {
         await fs.unlink(object);
       } else {
         await fs.writeFile(object, Buffer.alloc((await fs.stat(object)).size));
       }
+      expireBranchSuggestions();
 
       await expect(
-        service.listRepositoryBranches(repo, { includeRepositoryStatus: true }),
+        readRepositoryBranches(repo, { includeRepositoryStatus: true }),
       ).resolves.toEqual({
         branches: [],
         repositoryStatus: "unavailable",
       });
-      await expect(service.listRepositoryBranches(repo)).rejects.toThrow(
-        "Git metadata is unavailable",
-      );
+      await expect(readRepositoryBranches(repo)).rejects.toThrow("Git metadata is unavailable");
     },
   );
 
   it.each(["global", "worktree", "included", "environment", "relative", "parameters"])(
-    "observes changed %s config after warming checkout admission",
+    "observes changed %s config on branch suggestion refresh",
     async (source) => {
       let config = path.join(root, "global.gitconfig");
       if (source === "worktree") {
@@ -302,26 +598,27 @@ describe("ManagedWorktreeService branch discovery", () => {
         config = path.join(root, "included.gitconfig");
         vi.stubEnv("GIT_CONFIG_PARAMETERS", `'include.path=${config}'`);
       }
-      const first = await service.listRepositoryBranches(repo, { includeRepositoryStatus: true });
-      expect(first.repositoryStatus).toBe("git");
-      expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
-        first,
-      );
+      const readBranches =
+        source === "environment"
+          ? service.listRepositoryBranches.bind(service)
+          : readRepositoryBranches;
+      await expectWarmBranchAdmission(repo, undefined, readBranches);
       if (source === "environment") {
         config = path.join(root, "redirected.gitconfig");
         vi.stubEnv("GIT_CONFIG_GLOBAL", config);
       }
       await fs.writeFile(config, "[malformed\n");
-      expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
-        {
-          branches: [],
-          repositoryStatus: "unavailable",
-        },
-      );
+      if (source !== "environment") {
+        expireBranchSuggestions();
+      }
+      expect(await readBranches(repo, { includeRepositoryStatus: true })).toEqual({
+        branches: [],
+        repositoryStatus: "unavailable",
+      });
     },
   );
 
-  it("keeps tag peeling and alternate object storage under native Git admission", async () => {
+  it("supports tag HEADs and alternate object storage through native Git refresh", async () => {
     const head = await git(repo, "rev-parse", "HEAD");
     await git(repo, "tag", "-a", "tag-head", "-m", "tagged commit");
     const tag = await git(repo, "rev-parse", "tag-head");
@@ -329,19 +626,12 @@ describe("ManagedWorktreeService branch discovery", () => {
     await git(root, "clone", "--shared", "--no-checkout", repo, alternate);
     await fs.writeFile(path.join(repo, ".git", "HEAD"), `${tag}\n`);
     for (const checkout of [repo, alternate]) {
-      const first = await service.listRepositoryBranches(checkout, {
-        includeRepositoryStatus: true,
-      });
-      expect(first.repositoryStatus).toBe("git");
-      expect(
-        await service.listRepositoryBranches(checkout, { includeRepositoryStatus: true }),
-      ).toEqual(first);
+      await expectWarmBranchAdmission(checkout);
     }
     await fs.unlink(path.join(repo, ".git", "objects", head.slice(0, 2), head.slice(2)));
+    expireBranchSuggestions();
     for (const checkout of [repo, alternate]) {
-      expect(
-        await service.listRepositoryBranches(checkout, { includeRepositoryStatus: true }),
-      ).toEqual({
+      expect(await readRepositoryBranches(checkout, { includeRepositoryStatus: true })).toEqual({
         branches: [],
         repositoryStatus: "unavailable",
       });
@@ -349,8 +639,7 @@ describe("ManagedWorktreeService branch discovery", () => {
   });
 
   it("keeps large repositories usable with bounded suggestions and an explicit unlisted base", async () => {
-    const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);
-    const commit = stdout.trim();
+    const commit = await git(repo, "rev-parse", "HEAD");
     const refs = [
       ...["refs/heads", "refs/remotes/origin"].flatMap((prefix) =>
         Array.from(
@@ -402,8 +691,7 @@ describe("ManagedWorktreeService branch discovery", () => {
     const baseRef = `origin/overflow-${String(2_999).padStart(80, "0")}`;
     expect(result.branches.some((branch) => branch.name === baseRef)).toBe(false);
     const worktree = await service.create({ repoRoot: repo, name: "unlisted-base", baseRef });
-    const createdHead = await execFileAsync("git", ["-C", worktree.path, "rev-parse", "HEAD"]);
-    expect(createdHead.stdout.trim()).toBe(commit);
+    expect(await git(worktree.path, "rev-parse", "HEAD")).toBe(commit);
     await expect(
       service.create({ repoRoot: repo, name: "invalid-base", baseRef: "missing-branch" }),
     ).rejects.toThrow(/base ref|resolve|revision/i);
@@ -415,32 +703,29 @@ describe("ManagedWorktreeService branch discovery", () => {
   ])(
     "retains Git availability when the bounded inventory $label",
     async ({ segments, width, available }) => {
-      const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);
+      const commit = await git(repo, "rev-parse", "HEAD");
       const prefix = "segment/".repeat(segments);
       const names = Array.from(
         { length: 100 },
         (_, index) => `${prefix}${String(index).padStart(width, "0")}`,
       );
-      const refs = names.map((name) => `${stdout.trim()} refs/remotes/origin/${name}`);
+      const refs = names.map((name) => `${commit} refs/remotes/origin/${name}`);
       await fs.writeFile(path.join(repo, ".git", "packed-refs"), `${refs.join("\n")}\n`);
       if (available) {
         // Combined-probe metadata must not shrink the original fallback's byte budget.
-        const legacy = await execFileAsync("git", [
-          "-C",
-          repo,
-          "for-each-ref",
-          "--format=%(refname)%00%(refname:short)",
-          "refs/remotes/",
-        ]);
-        const expanded = await execFileAsync("git", [
-          "-C",
-          repo,
-          "for-each-ref",
-          "--format=%(refname)%00%(refname:short)%00%(symref)%00%(HEAD)",
-          "refs/remotes/",
-        ]);
-        expect(Buffer.byteLength(legacy.stdout)).toBe(262_100);
-        expect(Buffer.byteLength(expanded.stdout)).toBe(262_400);
+        for (const [format, bytes] of [
+          ["%(refname)%00%(refname:short)", 262_100],
+          ["%(refname)%00%(refname:short)%00%(symref)%00%(HEAD)", 262_400],
+        ] as const) {
+          const result = await execFileAsync("git", [
+            "-C",
+            repo,
+            "for-each-ref",
+            `--format=${format}`,
+            "refs/remotes/",
+          ]);
+          expect(Buffer.byteLength(result.stdout)).toBe(bytes);
+        }
       }
       await expect(
         service.listRepositoryBranches(repo, { includeRepositoryStatus: true }),
@@ -459,18 +744,8 @@ describe("ManagedWorktreeService branch discovery", () => {
   it.each(["local", "current", "default", "remote"] as const)(
     "keeps ambiguous %s branch suggestions usable even when Git warnings are disabled",
     async (selection) => {
-      const initial = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);
-      const branchCommit = await execFileAsync("git", [
-        "-C",
-        repo,
-        "commit-tree",
-        "HEAD^{tree}",
-        "-p",
-        initial.stdout.trim(),
-        "-m",
-        "branch target",
-      ]);
-      const commit = branchCommit.stdout.trim();
+      const initial = await git(repo, "rev-parse", "HEAD");
+      const commit = await createChildCommit("HEAD^{tree}", "branch target");
       const remote = selection === "remote";
       const ref = remote ? "refs/remotes/origin/z-selected" : "refs/heads/z-selected";
       await git(repo, "config", "core.warnAmbiguousRefs", "false");
@@ -480,8 +755,7 @@ describe("ManagedWorktreeService branch discovery", () => {
         const fillers = ["refs/heads", "refs/remotes/origin"].flatMap((prefix) =>
           Array.from(
             { length: 150 },
-            (_, index) =>
-              `${initial.stdout.trim()} ${prefix}/filler-${String(index).padStart(3, "0")}`,
+            (_, index) => `${initial} ${prefix}/filler-${String(index).padStart(3, "0")}`,
           ),
         );
         await fs.writeFile(path.join(repo, ".git", "packed-refs"), `${fillers.join("\n")}\n`);
@@ -514,8 +788,7 @@ describe("ManagedWorktreeService branch discovery", () => {
         name: "disambiguated",
         baseRef: expected,
       });
-      const head = await execFileAsync("git", ["-C", created.path, "rev-parse", "HEAD"]);
-      expect(head.stdout.trim()).toBe(commit);
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(commit);
     },
   );
 });

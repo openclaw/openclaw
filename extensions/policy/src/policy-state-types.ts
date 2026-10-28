@@ -1,6 +1,21 @@
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 
+type PolicyEvidenceSource = {
+  readonly id: string;
+  readonly source: string;
+};
+
+type PolicyScopedValueEvidence<
+  Scope extends "global" | "defaults" | "agent",
+  Value extends boolean | string = boolean | string,
+> = PolicyEvidenceSource & {
+  readonly scope: Scope;
+  readonly agentId?: string;
+  readonly value?: Value;
+  readonly explicit?: boolean;
+};
+
 /** Mutable during construction; collectors publish the readonly evidence contract. */
 export type PolicyEvidenceBuilder<T> = { -readonly [Key in keyof T]: T[Key] };
 
@@ -51,24 +66,18 @@ export type PolicyRoutingEvidence = {
   }[];
 };
 
-export type PolicyChannelEvidence = {
-  readonly id: string;
+export type PolicyChannelEvidence = PolicyEvidenceSource & {
   readonly provider: string;
-  readonly source: string;
   readonly enabled?: boolean;
 };
 
-export type PolicyMcpServerEvidence = {
-  readonly id: string;
+export type PolicyMcpServerEvidence = PolicyEvidenceSource & {
   readonly transport: "stdio" | "sse" | "streamable-http" | "unknown";
-  readonly source: string;
   readonly command?: string;
   readonly url?: string;
 };
 
-export type PolicyToolEvidence = {
-  readonly id: string;
-  readonly source: string;
+export type PolicyToolEvidence = PolicyEvidenceSource & {
   readonly line: number;
   readonly risk?: string;
   readonly sensitivity?: string;
@@ -76,8 +85,7 @@ export type PolicyToolEvidence = {
   readonly capabilities?: readonly string[];
 };
 
-export type PolicyToolPostureEvidence = {
-  readonly id: string;
+export type PolicyToolPostureEvidence = PolicyScopedValueEvidence<"global" | "agent"> & {
   readonly kind:
     | "allow"
     | "alsoAllow"
@@ -89,16 +97,10 @@ export type PolicyToolPostureEvidence = {
     | "execSecurity"
     | "fsWorkspaceOnly"
     | "profile";
-  readonly source: string;
-  readonly scope: "global" | "agent";
-  readonly agentId?: string;
-  readonly value?: boolean | string;
   readonly entries?: readonly string[];
-  readonly explicit?: boolean;
 };
 
-export type PolicySandboxPostureEvidence = {
-  readonly id: string;
+export type PolicySandboxPostureEvidence = PolicyScopedValueEvidence<"defaults" | "agent"> & {
   readonly kind:
     | "backend"
     | "browserCdpSourceRange"
@@ -106,23 +108,15 @@ export type PolicySandboxPostureEvidence = {
     | "containerNetwork"
     | "containerSecurityProfile"
     | "mode";
-  readonly source: string;
-  readonly scope: "defaults" | "agent";
-  readonly agentId?: string;
-  readonly value?: boolean | string;
   readonly bind?: string;
   readonly bindMode?: string;
   readonly bindHost?: string;
   readonly bindSurface?: "browser" | "docker";
   readonly networkSurface?: "browser" | "docker";
   readonly profile?: "apparmor" | "seccomp";
-  readonly explicit?: boolean;
 };
 
-export type PolicyModelProviderEvidence = {
-  readonly id: string;
-  readonly source: string;
-};
+export type PolicyModelProviderEvidence = PolicyEvidenceSource;
 
 export type PolicyModelRefEvidence = {
   readonly ref: string;
@@ -131,20 +125,16 @@ export type PolicyModelRefEvidence = {
   readonly source: string;
 };
 
-export type PolicyNetworkEvidence = {
-  readonly id: string;
-  readonly source: string;
+export type PolicyNetworkEvidence = PolicyEvidenceSource & {
   readonly value: boolean;
 };
 
-export type PolicyIngressEvidence = {
-  readonly id: string;
+export type PolicyIngressEvidence = PolicyEvidenceSource & {
   readonly kind:
     | "channelDmPolicy"
     | "channelGroupPolicy"
     | "channelRequireMention"
     | "sessionDmScope";
-  readonly source: string;
   readonly channel?: string;
   readonly accountId?: string;
   readonly groupId?: string;
@@ -152,8 +142,7 @@ export type PolicyIngressEvidence = {
   readonly explicit?: boolean;
 };
 
-export type PolicyGatewayExposureEvidence = {
-  readonly id: string;
+export type PolicyGatewayExposureEvidence = PolicyEvidenceSource & {
   readonly kind:
     | "auth"
     | "authRateLimit"
@@ -165,7 +154,6 @@ export type PolicyGatewayExposureEvidence = {
     | "nodeDenyCommand"
     | "remote"
     | "tailscale";
-  readonly source: string;
   readonly value?: boolean | string;
   readonly nonLoopback?: boolean;
   readonly explicit?: boolean;
@@ -174,43 +162,34 @@ export type PolicyGatewayExposureEvidence = {
   readonly command?: string;
 };
 
-export type PolicyAgentWorkspaceEvidence = {
-  readonly id: string;
+export type PolicyAgentWorkspaceEvidence = PolicyScopedValueEvidence<
+  "defaults" | "agent",
+  string
+> & {
   readonly kind: "workspaceAccess" | "toolDeny";
-  readonly source: string;
-  readonly scope: "defaults" | "agent";
-  readonly agentId?: string;
-  readonly value?: string;
   readonly sandboxMode?: string;
   readonly sandboxModeSource?: string;
   readonly sandboxEnabled?: boolean;
   readonly tool?: string;
   readonly denied?: boolean;
-  readonly explicit?: boolean;
 };
 
-export type PolicySecretEvidence = {
-  readonly id: string;
+export type PolicySecretEvidence = PolicyEvidenceSource & {
   readonly kind: "input" | "provider";
-  readonly source: string;
   readonly provenance?: "secretRef";
   readonly refSource?: "env" | "file" | "exec" | "store";
   readonly refProvider?: string;
   readonly providerSource?: string;
 };
 
-export type PolicyAuthProfileEvidence = {
-  readonly id: string;
-  readonly source: string;
+export type PolicyAuthProfileEvidence = PolicyEvidenceSource & {
   readonly validMetadata: boolean;
   readonly provider?: string;
   readonly mode?: string;
 };
 
-export type PolicyExecApprovalEvidence = {
-  readonly id: string;
+export type PolicyExecApprovalEvidence = PolicyEvidenceSource & {
   readonly kind: "agent" | "allowlist" | "defaults";
-  readonly source: string;
   readonly agentId?: string;
   readonly security?: string;
   readonly securityConfigured?: boolean;
@@ -222,18 +201,12 @@ export type PolicyExecApprovalEvidence = {
   readonly entrySource?: string;
 };
 
-export type PolicyDataHandlingEvidence = {
-  readonly id: string;
+export type PolicyDataHandlingEvidence = PolicyScopedValueEvidence<"global" | "agent"> & {
   readonly kind:
     | "memorySessionTranscriptIndexing"
     | "sensitiveLoggingRedaction"
     | "sessionRetentionMode"
     | "telemetryContentCapture";
-  readonly source: string;
-  readonly scope: "global" | "agent";
-  readonly agentId?: string;
-  readonly value?: boolean | string;
-  readonly explicit?: boolean;
 };
 
 export type SecretRefDefaults = NonNullable<Parameters<typeof coerceSecretRef>[1]>;

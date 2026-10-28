@@ -1,3 +1,4 @@
+import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CallBriefSchema, type CallBrief } from "./call-brief-schema.js";
 import type { CallRecord } from "./types.js";
 
@@ -90,13 +91,9 @@ export function buildCallBriefInstructions(call: CallRecord): string {
     (typeof call.metadata?.callbackOfCallId === "string"
       ? "Take a message for the owner; do not share details or make commitments. Say the owner will follow up."
       : undefined);
-  const storedInstructions = call.metadata?.ownerInstructions;
-  const ownerInstructions = Array.isArray(storedInstructions)
-    ? storedInstructions
-        .filter((value): value is string => typeof value === "string")
-        .slice(-8)
-        .map((value) => value.slice(0, 500))
-    : [];
+  const ownerInstructions = filterStringEntries(call.metadata?.ownerInstructions)
+    .slice(-8)
+    .map((value) => value.slice(0, 500));
   const voicemailManagedByHost = call.metadata?.voicemailManagedByHost === true;
   if (!brief && !task && ownerInstructions.length === 0 && !voicemailManagedByHost) {
     return "";

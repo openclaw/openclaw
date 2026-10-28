@@ -1,9 +1,5 @@
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  definePluginEntry,
-  type ProviderAuthContext,
-  type ProviderAuthResult,
-} from "./runtime-api.js";
+import { definePluginEntry } from "./runtime-api.js";
 
 const DEFAULT_BASE_URL = "http://localhost:3000/v1";
 const DEFAULT_API_KEY = "n/a";
@@ -35,19 +31,6 @@ function parseModelIds(input: string): string[] {
   return normalizeUniqueStringEntries(input.split(/[\n,]/));
 }
 
-function buildModelDefinition(modelId: string) {
-  return {
-    id: modelId,
-    name: modelId,
-    api: "openai-completions" as const,
-    reasoning: false,
-    input: ["text", "image"] as Array<"text" | "image">,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MAX_TOKENS,
-  };
-}
-
 export default definePluginEntry({
   id: "copilot-proxy",
   name: "Copilot Proxy",
@@ -63,10 +46,11 @@ export default definePluginEntry({
           label: "Local proxy",
           hint: "Configure base URL + models for the Copilot Proxy server",
           kind: "custom",
-          run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
+          run: async (ctx) => {
             const baseUrlInput = await ctx.prompter.text({
               message: "Copilot Proxy base URL",
-              initialValue: DEFAULT_BASE_URL,
+              // Prefilling the default makes typed input append to it; blank input keeps it.
+              placeholder: DEFAULT_BASE_URL,
               validate: validateBaseUrl,
             });
 
@@ -101,7 +85,16 @@ export default definePluginEntry({
                       apiKey: DEFAULT_API_KEY,
                       api: "openai-completions",
                       authHeader: false,
-                      models: modelIds.map((modelId) => buildModelDefinition(modelId)),
+                      models: modelIds.map((modelId) => ({
+                        id: modelId,
+                        name: modelId,
+                        api: "openai-completions",
+                        reasoning: false,
+                        input: ["text", "image"],
+                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                        contextWindow: DEFAULT_CONTEXT_WINDOW,
+                        maxTokens: DEFAULT_MAX_TOKENS,
+                      })),
                     },
                   },
                 },

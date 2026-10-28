@@ -1,30 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeOptionalString,
-  readStringValue,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   validateSessionsSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { terminateAcceptedCollectorRun } from "../../agents/subagents/spawn/subagent-spawn-cleanup.js";
 import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { invalidSessionRequest } from "../session-request-error.js";
-import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
-import {
-  loadSessionEntry,
-  loadGatewaySessionEntryReadOnly,
-  resolveDeletedAgentIdFromSessionKey,
-} from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { prepareDeletedAgentSessionCheck } from "../session-utils.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
+import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { isFreshChatSendStarted } from "./session-create-initial-turn.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
   readGatewayRequestMutationAuthority,
@@ -76,21 +68,25 @@ async function createAgentMainSessionForSend(
     "sessions.create handler",
   )(createOptions);
 
-  if (!createResult) {
+  if (!createResult?.ok) {
     return {
       ok: false,
-      error: errorShape(ErrorCodes.UNAVAILABLE, "sessions.create did not respond"),
-    };
-  }
-  if (!createResult.ok) {
-    return {
-      ok: false,
-      error: createResult.error ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to create session"),
+      error:
+        createResult?.error ??
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          createResult ? "failed to create session" : "sessions.create did not respond",
+        ),
     };
   }
 
   const createdKey = normalizeOptionalString(createResult.payload?.key) ?? canonicalKey;
-  const loaded = loadGatewaySessionEntryReadOnly(createdKey, { agentId });
+  const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg: options.context.getRuntimeConfig(),
+    key: createdKey,
+    agentId,
+    assertActive: readGatewayRequestMutationAuthority(options).assertPreparationCurrent,
+  });
   if (!loaded.entry?.sessionId) {
     return {
       ok: false,
@@ -124,29 +120,38 @@ async function handleSessionSend(
     return;
   }
   const requestedAgentId = requestedAgent.agentId;
-  const loaded = loadSessionEntry(key, { agentId: requestedAgentId });
+  const requestAuthority = readGatewayRequestMutationAuthority(options);
+  const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
+    cfg,
+    key,
+    agentId: requestedAgentId,
+    excludeInternalEffects: true,
+    assertActive: requestAuthority.assertPreparationCurrent,
+  });
   const { legacyKey } = loaded;
   let { entry, canonicalKey } = loaded;
-  // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey, entry, {
+  const deletedAgent = prepareDeletedAgentSessionCheck({
+    cfg,
+    sessionKey: canonicalKey,
+    entry,
     acpMetadataSessionKey: legacyKey ?? canonicalKey,
+    assertCurrent: requestAuthority.assertPreparationCurrent,
   });
+  const deletedAgentId = deletedAgent instanceof Promise ? await deletedAgent : deletedAgent;
+  if (deletedAgent instanceof Promise) {
+    requestAuthority.assertPreparationCurrent();
+  }
   if (deletedAgentId !== null) {
-    options.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Agent "${deletedAgentId}" no longer exists in configuration`,
-      ),
+    respondError(
+      options.respond,
+      ErrorCodes.INVALID_REQUEST,
+      `Agent "${deletedAgentId}" no longer exists in configuration`,
     );
     return;
   }
   const explicitIdempotencyKey = normalizeOptionalString(p.idempotencyKey);
   const idempotencyKey = explicitIdempotencyKey ?? randomUUID();
   const respond = options.respond;
-  const requestAuthority = readGatewayRequestMutationAuthority(options);
-  const sessionAuthorization = options.sessionMutationAuthorization;
   const dispatchChatSend = async (dispatchRespond: RespondFn) => {
     const forwarded = bindGatewayRequestHandlerMutationAuthority(
       options,
@@ -205,51 +210,18 @@ async function handleSessionSend(
     canonicalKey = created.canonicalKey;
   }
   if (!entry?.sessionId) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`));
+    respondError(respond, ErrorCodes.INVALID_REQUEST, `session not found: ${key}`);
     return;
   }
   let sendAcked = false;
-  let sendPayload: unknown;
-  let sendCached = false;
-  let startedRunId: string | undefined;
   let interruptedActiveRun = false;
   await dispatchChatSend((ok, payload, error, meta) => {
     sendAcked = ok;
-    sendPayload = payload;
-    sendCached = meta?.cached === true;
     const result = asOptionalObjectRecord(payload);
-    startedRunId = readStringValue(result?.runId);
     interruptedActiveRun = ok && result?.interruptedActiveRun === true;
     respond(ok, payload, error, meta);
   });
   if (sendAcked) {
-    if (isFreshChatSendStarted({ payload: sendPayload, cached: sendCached })) {
-      try {
-        await reactivateCompletedSubagentSession({
-          sessionKey: canonicalKey,
-          runId: startedRunId,
-          task: p.message,
-          gatewayContextResolver: options.context.resolveGatewayContext,
-          assertCurrent: () => {
-            if (sessionAuthorization?.assertAdmittedInputCurrent) {
-              sessionAuthorization.assertAdmittedInputCurrent();
-            } else {
-              requestAuthority.assertCurrent();
-              sessionAuthorization?.assertCurrent();
-            }
-          },
-        });
-      } catch (error) {
-        if (startedRunId) {
-          await terminateAcceptedCollectorRun({
-            childSessionKey: canonicalKey,
-            gatewayRunId: startedRunId,
-            sessionCleanup: "preserve",
-          });
-        }
-        throw error;
-      }
-    }
     emitSessionsChanged(options.context, {
       sessionKey: canonicalKey,
       ...(requestedAgentId ? { agentId: requestedAgentId } : {}),

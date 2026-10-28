@@ -1,5 +1,6 @@
 // Public memory host contracts shared by runtime, builtin search, and package consumers.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "./openclaw-runtime-config.js";
 import type { MemorySearchDeadlineControlOptions } from "./search-deadline-control.js";
 export type MemorySource = "memory" | "sessions";
 
@@ -8,7 +9,14 @@ export type MemoryOriginClass = "owner" | "agent" | "untrusted" | "system";
 export type MemorySessionKind = "interactive" | "cron" | "heartbeat" | "subagent" | "unknown";
 
 /** Additional memory root, optionally narrowed by a root-relative glob. */
-export type MemoryExtraPath = string | { path: string; pattern?: string };
+export type MemoryExtraPath =
+  | string
+  | {
+      path: string;
+      pattern?: string;
+      /** Keep matching reference files out of mtime-based temporal decay. */
+      evergreen?: boolean;
+    };
 
 export type MemoryEntryProvenance = {
   originClass: MemoryOriginClass;
@@ -17,7 +25,6 @@ export type MemoryEntryProvenance = {
   supersedesKey?: string;
 };
 
-/** One ranked memory search hit with optional vector/text scoring details. */
 export type MemorySearchResult = {
   path: string;
   startLine: number;
@@ -37,6 +44,36 @@ export type MemorySearchResult = {
   provenance?: MemoryEntryProvenance;
 };
 
+/** CLI search contract shared by the Gateway adapter and the owning memory plugin. */
+export type MemoryCliSearchParams = {
+  manager: MemorySearchManager;
+  cfg: OpenClawConfig;
+  agentId: string;
+  query: string;
+  maxResults?: number;
+  minScore?: number;
+  assertCurrent?: () => void;
+};
+
+export type MemoryCliSearchResult = {
+  results: MemorySearchResult[];
+  stale?: true;
+  warning?: string;
+  action?: string;
+};
+
+/** Indexed-memory search response shared by the Gateway and browser presentation. */
+export type MemorySearchResponse = MemoryCliSearchResult & {
+  agentId: string;
+  provider: string;
+  searchMode: "hybrid" | "fts-only";
+};
+
+export type MemoryCliSearchOutcome =
+  | MemoryCliSearchResult
+  | { agentId: string; status: "disabled" }
+  | { agentId: string; status: "failed"; error: string };
+
 /** Automatic prompt injection is reserved for content with authoritative trusted provenance. */
 export function isMemoryOriginEligibleForAutomaticInjection(
   originClass: unknown,
@@ -50,7 +87,6 @@ export function isAutomaticMemoryEntryEligible(
   return isMemoryOriginEligibleForAutomaticInjection(entry.provenance?.originClass);
 }
 
-/** Cached/probed embedding availability status. */
 export type MemoryEmbeddingProbeResult = {
   ok: boolean;
   error?: string;
@@ -60,7 +96,6 @@ export type MemoryEmbeddingProbeResult = {
   cacheExpiresAtMs?: number;
 };
 
-/** Progress event emitted during memory sync. */
 export type MemorySyncProgressUpdate = {
   completed: number;
   total: number;
@@ -99,7 +134,6 @@ export type MemorySearchRuntimeDebug = {
   };
 };
 
-/** Successful memory-file excerpt, optionally paginated/truncated. */
 type MemoryReadSuccessResult = {
   status: "ok";
   text: string;
@@ -128,7 +162,6 @@ export type LegacyMemoryReadResult = Omit<MemoryReadSuccessResult, "status"> & {
   status?: never;
 };
 
-/** Aggregated memory backend status for CLI/UI diagnostics. */
 export type MemoryVectorIndexState =
   | { state: "empty" }
   | { state: "complete" }
@@ -203,7 +236,7 @@ export type MemoryIndexIdentityState =
     }
   | ({ status: "mismatched"; reason: string } & (
       | {
-          code: "provenance_version" | "chunking_version";
+          code: "provenance_version" | "chunking_version" | "embedding_input_format";
           owner: "openclaw";
           // Older-chunking corpus marker: set only when every configuration-owned
           // constraint (sources, scope hash, chunk settings, FTS tokenizer) still
@@ -213,6 +246,8 @@ export type MemoryIndexIdentityState =
           // retrieval availability; consumers must still check usable FTS before
           // treating the index as servable.
           chunkingVersionOnly?: boolean;
+          /** Older embedding format with the same corpus; requires usable FTS for retrieval. */
+          lexicalCompatible?: boolean;
         }
       | {
           code:
@@ -261,7 +296,9 @@ export function resolveMemoryIndexIdentityDiagnostic(
   }
   if (
     identity.owner === "openclaw" &&
-    (identity.code === "provenance_version" || identity.code === "chunking_version")
+    (identity.code === "provenance_version" ||
+      identity.code === "chunking_version" ||
+      identity.code === "embedding_input_format")
   ) {
     return {
       status: "mismatched",
@@ -272,6 +309,11 @@ export function resolveMemoryIndexIdentityDiagnostic(
       identity.chunkingVersionOnly === true &&
       identity.versionOrder !== "newer"
         ? { chunkingVersionOnly: true }
+        : {}),
+      ...(identity.code === "embedding_input_format" &&
+      identity.lexicalCompatible === true &&
+      identity.versionOrder !== "newer"
+        ? { lexicalCompatible: true }
         : {}),
     };
   }
@@ -373,7 +415,6 @@ export function resolveMemorySearchStaleness(
   };
 }
 
-/** Search/read/sync/status contract implemented by memory managers. */
 export interface MemorySearchManager {
   search(
     query: string,
@@ -410,11 +451,25 @@ export interface MemorySearchManager {
     limit?: number;
   }): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
+  /** @deprecated Prefer statusAsync when available to keep storage reads off the caller thread. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   status(): MemoryProviderStatus;
+  /** Set includeCounts to false for query-path facts without database diagnostics. */
+  statusAsync?(options?: { includeCounts?: boolean }): Promise<MemoryProviderStatus>;
   sync?(params?: MemorySyncParams): Promise<void>;
   getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
   probeVectorStoreAvailability?(): Promise<boolean>;
   probeVectorAvailability(): Promise<boolean>;
   close?(): Promise<void>;
+}
+
+/** Preserve synchronous third-party managers while built-in status reads run in their worker. */
+export async function readMemorySearchManagerStatus<Status>(
+  manager: {
+    status(): Status;
+    statusAsync?(options?: { includeCounts?: boolean }): Promise<Status>;
+  },
+  options?: { includeCounts?: boolean },
+): Promise<Status> {
+  return manager.statusAsync ? manager.statusAsync(options) : manager.status();
 }

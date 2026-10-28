@@ -46,6 +46,142 @@ subpaths, including older published `@openclaw/discord` packages. Upgrade affect
 plugins before upgrading the host. Not every export has a path-only replacement;
 see the [per-surface mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
 
+### Codex app-server extension factories
+
+The unused bundled-only `api.registerCodexAppServerExtensionFactory(...)` method
+and `contracts.embeddedExtensionFactories` manifest family have been removed.
+Register tool-result transforms with `api.registerAgentToolResultMiddleware(...)`
+and declare `contracts.agentToolResultMiddleware: ["codex"]` for Codex-only
+middleware. The supported middleware also covers `openclaw` and `agentsapi`.
+
+The standalone `createCodexAppServerToolResultExtensionRunner` export remains
+available from `agent-harness` and `agent-harness-runtime`, together with its
+`CodexAppServer*` types. Published `@openclaw/codex@2026.10.4` still imports and
+calls this helper. Explicit factory arrays retain their ordered initialization;
+omitting factories returns tool output unchanged. No removal date is set for
+these exports; their published consumers must migrate first.
+
+### Heartbeat executor and wake helpers
+
+Periodic heartbeat monitoring now runs as ordinary Automations jobs. The
+Gateway no longer schedules the legacy executor. Its SDK surfaces were removed
+with maintainer approval on October 3 and 12, 2026, without another compatibility
+window. Upgrade plugins
+that use these surfaces before upgrading the host.
+
+| Removed surface                                                                                                                                                                    | Replacement                                                                                                                                                                                               |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.runtime.system.requestHeartbeat`, `requestHeartbeatNow`, and `runHeartbeatOnce`                                                                                               | For immediate work, use `captureSessionEventTarget` and `enqueueSessionEvent` on the same runtime namespace. For periodic work, create an ordinary automation job.                                        |
+| `openclaw/plugin-sdk/heartbeat-runtime`                                                                                                                                            | No replacement subpath. Use the runtime session-event methods for waking work; use `system-event-runtime` for passive event inspection and consumption. This subpath was private-local after July 2026.   |
+| `reply-runtime`: `HEARTBEAT_PROMPT`, `DEFAULT_HEARTBEAT_ACK_MAX_CHARS`, `resolveHeartbeatPromptCore`, `stripHeartbeatToken`, `resolveHeartbeatReplyPayload`, and `HEARTBEAT_TOKEN` | Remove executor-specific prompt and acknowledgment handling. Ordinary jobs use their own prompt, delivery policy, and terminal reply. `SILENT_REPLY_TOKEN` and ordinary silence parsing remain supported. |
+| `agent-harness-runtime`: `HeartbeatToolResponse`, `HEARTBEAT_RESPONSE_TOOL_NAME`, and `normalizeHeartbeatToolResponse`                                                             | Remove the `heartbeat_respond` tool and fallback. Publish the ordinary terminal reply through the harness completion contract.                                                                            |
+| Private `provider-model-shared`: `GPT5_HEARTBEAT_PROMPT_OVERLAY` and `GPT5_FRIENDLY_PROMPT_OVERLAY`                                                                                | Remove heartbeat overlays. `GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY` remains available to its existing consumers.                                                                                               |
+
+Reply options `isHeartbeat`, `useHeartbeatFailureCopy`, `heartbeatModelOverride`,
+`enableHeartbeatTool`, `forceHeartbeatTool`, and `continuesConversation`, heartbeat
+typing policy, and context-engine `isHeartbeat` callback parameters are also
+removed. Use ordinary admitted turns and automation configuration instead.
+
+For asynchronous plugin work, capture the original destination before awaiting
+that work, then pass the opaque target to `enqueueSessionEvent`. Check the
+receipt's `accepted` result before committing producer bookkeeping and its
+`settled` result before reporting completion. See
+[runtime session events](/plugins/sdk-runtime/state-and-system#api-runtime-system).
+Passive `enqueueSystemEvent` remains available when no immediate turn is wanted.
+
+Doctor retains legacy configuration and task migration, including its once-only
+delivery notice. Historical transcript recognition, public hook trigger values,
+and v4 compatibility RPCs/events also remain. See
+[Heartbeat migration](/gateway/heartbeat).
+
+### Hosted media, global transforms, and executor controllers
+
+The following registration methods were removed with explicit maintainer approval
+on October 19, 2026, without a new deprecation window. Public ClawHub and bundled
+source inventories found no direct consumers; incomplete inventories and private
+plugins mean this is not proof of universal absence.
+
+| Removed method                             | Migration                                                                                                                                  |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `api.registerHostedMediaResolver(...)`     | No generic replacement. Pass a directly loadable media URL or an allowed local path. Built-in Canvas document URLs still resolve normally. |
+| `api.registerTextTransforms(...)`          | Declare `textTransforms` on your own provider or CLI backend. This does not replace an overlay across other plugins' backends.             |
+| `api.registerAgentExecutorController(...)` | No replacement registrar. Use AgentsAPI `openai_hosted` or an externally managed `self_hosted` environment.                                |
+
+The named `resolveAgentExecutorController` export and its types remain importable
+for published plugins, but lookup throws `PLUGIN_CAPABILITY_REMOVED`. Existing
+controller-owned AgentsAPI bindings and `executorController` configuration are
+rejected rather than silently reassigned or deleted. Before upgrading a host
+that uses this capability, retire or migrate those sessions with the previous
+host and controller. See [AgentsAPI](/plugins/agentsapi) for the supported
+externally managed setup.
+
+### Retroactively recorded shipped exports
+
+The following exports shipped in `v2026.9.8` and were removed without a
+compatibility window. Their removals were recorded retroactively on October 7,
+2026 when the shipped-surface guard was introduced; the exports remain removed.
+The registry's `removeAfter` is the UTC day before the removing commit landed,
+not a compatibility window that was offered to plugin authors.
+
+| Removed export (`openclaw/plugin-sdk/` prefix)                 | Landed (UTC) | `removeAfter` | Replacement                                                                                           |
+| -------------------------------------------------------------- | ------------ | ------------- | ----------------------------------------------------------------------------------------------------- |
+| `allow-from.mapBasicAllowlistResolutionEntries`                | 2026-10-05   | 2026-10-04    | None; project `BasicAllowlistResolutionEntry` fields in the consuming plugin.                         |
+| `computer-use.compileComputerUseValidator`                     | 2026-10-05   | 2026-10-04    | `Compile(schema).Check` from `typebox/compile`, using the exported Computer Use schemas.              |
+| `extension-shared.runStoppablePassiveMonitor`                  | 2026-10-05   | 2026-10-04    | `channel-outbound.runPassiveAccountLifecycle` with `stop: (monitor) => monitor.stop()`.               |
+| `gateway-runtime.resolveAdvertisedLanHost`                     | 2026-10-05   | 2026-10-04    | None; advertised LAN host discovery is host-owned.                                                    |
+| `json-store.readJsonFileWithFallback`                          | 2026-10-05   | 2026-10-04    | None; own JSON artifact parsing, fallback, and file-existence handling in the plugin.                 |
+| `provider-auth.normalizeSecretInputModeInput`                  | 2026-10-05   | 2026-10-04    | None; validate plugin-owned input as the exported `SecretInputMode` values `plaintext` or `ref`.      |
+| `persistent-dedupe.PersistentDedupeLegacyJsonMigrationOptions` | 2026-10-05   | 2026-10-04    | None; the legacy JSON migration was retired.                                                          |
+| `persistent-dedupe.PersistentDedupeLegacyJsonMigrationResult`  | 2026-10-05   | 2026-10-04    | None; the legacy JSON migration was retired.                                                          |
+| `persistent-dedupe.listPersistentDedupeLegacyJsonFileEntries`  | 2026-10-05   | 2026-10-04    | None; the legacy JSON migration was retired.                                                          |
+| `persistent-dedupe.migratePersistentDedupeLegacyJsonFile`      | 2026-10-05   | 2026-10-04    | None; the legacy JSON migration was retired. Runtime dedupe continues through the SQLite-backed APIs. |
+| `provider-auth.CachedCopilotToken`                             | 2026-10-02   | 2026-10-01    | Provider-local GitHub Copilot auth APIs; none in the public SDK.                                      |
+| `provider-auth.DEFAULT_COPILOT_API_BASE_URL`                   | 2026-10-02   | 2026-10-01    | Provider-local GitHub Copilot auth APIs; none in the public SDK.                                      |
+| `provider-auth.deriveCopilotApiBaseUrlFromToken`               | 2026-10-02   | 2026-10-01    | Provider-local GitHub Copilot auth APIs; none in the public SDK.                                      |
+| `provider-auth.resolveCopilotApiToken`                         | 2026-10-02   | 2026-10-01    | Provider-local GitHub Copilot auth APIs; none in the public SDK.                                      |
+
+The first six exports were removed in
+[`2fec39f57319be5b6e0b20b5305665ed1ff5e685`](https://github.com/openclaw/openclaw/commit/2fec39f57319be5b6e0b20b5305665ed1ff5e685).
+The four legacy JSON migration exports were removed in
+[`bd64d93ff1ae704d13813f6580c4809ba0e76606`](https://github.com/openclaw/openclaw/commit/bd64d93ff1ae704d13813f6580c4809ba0e76606).
+The four Copilot exports and their earlier deprecation entries were removed in
+[`f2de06b38de710854aacd19218327358445816c8`](https://github.com/openclaw/openclaw/commit/f2de06b38de710854aacd19218327358445816c8);
+third-party plugins must own their provider-specific token exchange and caching.
+
+### Reply silence parsing
+
+`isSilentReplyText` and `isSilentReplyPayloadText` were removed from
+`openclaw/plugin-sdk/reply-chunking`. The exact whole-reply classifier remains
+available from `openclaw/plugin-sdk/reply-runtime` for raw producer input.
+Delivery plugins must forward prepared text without reclassifying it: literal
+`NO_REPLY` can be a visible answer.
+
+`SILENT_REPLY_TOKEN` was also removed from `openclaw/plugin-sdk/reply-chunking`.
+Import it from its existing `openclaw/plugin-sdk/reply-runtime` export instead:
+
+```ts
+import { SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
+```
+
+Harness producers use `prepareAgentRunTerminalReply` from
+`openclaw/plugin-sdk/agent-harness-runtime` once on the raw final text, then
+render the returned text and publish the matching terminal fact. Deliver the full
+returned text rather than the bounded `terminalReply.text` snapshot. An exact uppercase
+`NO_REPLY`, ignoring surrounding whitespace, requests silence; punctuation,
+quotes, JSON, and prose do not. A literal leading `NO_REPLY\n` removes one line
+without reclassifying the suffix. Otherwise, a standalone `NO_REPLY` on the last
+non-empty line is removed and the preceding answer is delivered; whitespace around
+that final line is allowed. Inline and mid-text mentions remain visible.
+See [Silent replies](/concepts/messages#silent-replies).
+
+### Tool argument redaction
+
+`sanitizeToolArgs` was removed from `openclaw/plugin-sdk/agent-harness-runtime`
+on October 11, 2026, as part of the maintainer-approved removal of automatic
+tool argument and result masking. Remove its import and pass arguments unchanged.
+There is no replacement or compatibility masking path. Logging and diagnostic
+redaction helpers remain available.
+
 ### Process-global API-provider publication
 
 `registerApiProvider(...)` and `unregisterApiProviders(...)` were removed from
@@ -74,6 +210,25 @@ api.on("gateway_stop", async (event, ctx) => {
   await stopPluginService(ctx);
 });
 ```
+
+### Skill Workshop proposal hooks
+
+The `skill_proposal_evaluate` and `skill_proposal_changed` hooks were removed
+together with Skill Workshop proposals. Workshop now applies each change
+immediately and keeps a restorable version, so there is no pending draft to
+evaluate and no proposal lifecycle to observe. The hook runner methods
+`runSkillProposalEvaluate` and `runSkillProposalChanged` were removed, and
+`openclaw/plugin-sdk/plugin-entry` no longer exports
+`PluginHookSkillProposalEvaluateEvent`, `PluginHookSkillProposalEvaluateResult`,
+`PluginHookSkillProposalEvaluationOutcome`, `PluginHookSkillProposalChangedEvent`,
+`PluginHookSkillProposalKind`, `PluginHookSkillEvaluationFinding`,
+`PluginHookSkillBundleFile`, or `PluginHookSkillBundleSnapshot`. The optional
+`proposal` field on `PluginHookSkillChangedEvent` was removed too.
+
+To observe committed Workshop skill writes, register `skill_changed` and filter
+on `source: "workshop"`. There is no replacement for pre-apply evaluation.
+Registering a removed hook name logs an `unknown typed hook` warning and the
+handler never runs.
 
 ### Private testing barrel
 
@@ -230,9 +385,9 @@ timeline for current status.
     `resolveDefaultThinkingLevel(ctx)`.
 
     **New**: a single `resolveThinkingProfile(ctx)` that returns a
-    `ProviderThinkingProfile` with the canonical `id`, optional `label`, and a
-    ranked level list. OpenClaw downgrades stale stored values by profile rank
-    automatically.
+    `ProviderThinkingProfile` with the standard `id`, optional `label`, and a
+    ranked level list. OpenClaw clamps unsupported requests by profile rank
+    during execution, preserving the stored preference across model switches.
 
     The context includes `provider`, `modelId`, optional merged `reasoning`,
     and optional merged model `compat` facts. Provider plugins can use those
@@ -309,7 +464,7 @@ timeline for current status.
     `target: { kind: "chat" | "channel" | "room" | "conversation", id }`;
     the old parallel `chatId`, `channelId`, `roomId`, and `conversationId`
     result fields are no longer accepted. The raw result type remains available
-    until the next plugin-SDK major release.
+    until its separately announced ordinary stable removal release.
 
   </Accordion>
 
@@ -335,7 +490,7 @@ timeline for current status.
 
     | Migrating surface | Replacement |
     | ----------------- | ----------- |
-    | Removed `loadSessionStore(...)` and `resolveSessionStoreEntry(...)`, including package-root `loadSessionStore(...)` | `getSessionEntry(...)` for one scoped row or `listSessionEntries(...)` for scoped iteration from `openclaw/plugin-sdk/session-store-runtime`. |
+    | Removed `loadSessionStore(...)` and `resolveSessionStoreEntry(...)`, including package-root `loadSessionStore(...)` | `await getSessionEntryAsync(...)` for one scoped row or `await listSessionEntriesAsync(...)` for scoped metadata iteration from `openclaw/plugin-sdk/session-store-runtime`. |
     | Removed `updateSessionStore(...)`, package-root `saveSessionStore(...)`, and SDK file-store writes | `patchSessionEntry(...)`, `upsertSessionEntry(...)`, and `deleteSessionEntry(...)` from `openclaw/plugin-sdk/session-store-runtime`; mutate only the intended rows instead of replacing a detached whole-store snapshot. |
     | Removed `LoadSessionStoreOptions` and `UpdateSessionStoreOptions` | Parameters accepted by the scoped row APIs; the whole-store cache and callback options no longer apply. |
     | Removed `resolveSessionFilePath(...)` | Session identity (`agentId`, `sessionKey`, and `sessionId`) with `openclaw/plugin-sdk/session-transcript-runtime`, or Gateway methods that operate on the current session. |
@@ -419,7 +574,7 @@ timeline for current status.
   </Accordion>
 
   <Accordion title="OpenClawSchemaType alias -> OpenClawConfig">
-    The `OpenClawSchemaType` root-SDK alias was removed. Use the canonical
+    The `OpenClawSchemaType` root-SDK alias was removed. Use the primary
     `OpenClawConfig` name.
 
     ```typescript

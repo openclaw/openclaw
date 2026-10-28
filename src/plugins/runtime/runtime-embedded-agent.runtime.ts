@@ -14,6 +14,7 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import { resolveSendableOutboundReplyParts } from "../../infra/outbound/reply-payload-parts.js";
 import { delegateMemoryAudience, isHostMemoryAudience } from "../memory-audience.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
@@ -31,6 +32,8 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
     "preparedRunAdmission" in params ||
     "compactionCountOwner" in params ||
     "onCompactionAccounting" in params ||
+    "beforeRecoveryCompaction" in params ||
+    "disableCompactionRecovery" in params ||
     "onContextAccountingEvent" in params ||
     "onDeferredLifecycleOwner" in params ||
     "onDeferredLifecycleAbort" in params ||
@@ -169,7 +172,12 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
     }
     return result;
   } finally {
-    params.abortSignal?.removeEventListener("abort", close);
-    close();
+    // Accepted terminal writes commit under this admission; abort still closes it immediately.
+    try {
+      await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance);
+    } finally {
+      params.abortSignal?.removeEventListener("abort", close);
+      close();
+    }
   }
 };

@@ -1,3 +1,4 @@
+import { createPluginConfigParser } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
@@ -48,7 +49,6 @@ const codexAppServerServiceTierSchema = z
   .optional();
 const codexAppServerCyberFailoverSchema = z.strictObject({
   mode: z.enum(["auto", "off"]).optional(),
-  model: z.string().trim().min(1).optional(),
   cooloffMs: z.number().positive().optional(),
 });
 const codexAppServerExperimentalSchema = z.strictObject({
@@ -75,6 +75,7 @@ const codexPluginEntryConfigSchema = z.strictObject({
   enabled: z.boolean().optional(),
   marketplaceName: z.string().regex(CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN).optional(),
   pluginName: z.string().trim().min(1).optional(),
+  read_only: z.boolean().optional(),
   allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
 });
 
@@ -148,6 +149,30 @@ const codexPluginConfigSchema = z.strictObject({
       headers: z.record(z.string(), SecretInputSchema).optional(),
       clearEnv: z.array(z.string()).optional(),
       remoteWorkspaceRoot: z.string().trim().min(1).optional(),
+      nativeHookRelay: z
+        .strictObject({
+          url: z
+            .string()
+            .url()
+            .refine((value) => {
+              const url = new URL(value);
+              return (
+                url.protocol === "https:" &&
+                !url.username &&
+                !url.password &&
+                !url.search &&
+                !url.hash
+              );
+            }, "Native hook relay URL must use HTTPS without credentials, query, or fragment"),
+          credentialDirectory: z
+            .string()
+            .trim()
+            .refine(
+              (value) => value.startsWith("/") && value !== "/" && !value.split("/").includes(".."),
+              "Native hook relay credentials require an absolute private directory",
+            ),
+        })
+        .optional(),
       codeModeOnly: z.boolean().optional(),
       loopDetectionPreToolUseRelay: z.boolean().optional(),
       requestTimeoutMs: z.number().positive().optional(),
@@ -172,7 +197,12 @@ export type ParsedCodexPluginConfig = Omit<
   codexPlugins?: z.infer<typeof codexPluginsConfigSchema>;
 };
 
-export function readCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
+export const readCodexPluginConfig = createPluginConfigParser<ParsedCodexPluginConfig>(
+  "codex",
+  parseCodexPluginConfig,
+);
+
+function parseCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
   const appServer = asNullableRecord(asNullableRecord(value)?.appServer);
   if (appServer?.approvalPolicy === "untrusted") {
     throw new Error(
@@ -181,6 +211,11 @@ export function readCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
   }
   const parsed = codexPluginConfigSchema.safeParse(value);
   if (!parsed.success) {
+    if (appServer?.nativeHookRelay !== undefined) {
+      throw new Error(
+        "Invalid plugins.entries.codex.config.appServer.nativeHookRelay configuration; remote hooks require an HTTPS URL and an absolute private credential directory.",
+      );
+    }
     if (asNullableRecord(appServer?.networkProxy)?.enabled === true) {
       const issuePath = parsed.error.issues[0]?.path ?? [];
       // Record keys (domains, headers, etc.) are values, not safe diagnostic field names.
@@ -203,16 +238,18 @@ export function readCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
 }
 
 export function isCodexSandboxExecServerEnabled(
-  pluginConfig?: unknown,
+  pluginConfig?: ParsedCodexPluginConfig,
   sandbox?: unknown,
 ): boolean {
   return (
     isCodexRemoteExecPlacementSandbox(sandbox) ||
-    readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true
+    pluginConfig?.appServer?.experimental?.sandboxExecServer === true
   );
 }
 
-export function isCodexRemoteExecPlacementSandbox(sandbox: unknown): boolean {
+export function isCodexRemoteExecPlacementSandbox(
+  sandbox: unknown,
+): sandbox is { placementExecutionMode: "remote-exec" } {
   return (
     typeof sandbox === "object" &&
     sandbox !== null &&
@@ -224,8 +261,6 @@ export function isCodexRemoteExecPlacementSandbox(sandbox: unknown): boolean {
 export function isCodexPairedNodeRemoteExecPlacementSandbox(sandbox: unknown): boolean {
   return (
     isCodexRemoteExecPlacementSandbox(sandbox) &&
-    typeof sandbox === "object" &&
-    sandbox !== null &&
     "placementNodeId" in sandbox &&
     typeof sandbox.placementNodeId === "string" &&
     sandbox.placementNodeId.length > 0
@@ -253,39 +288,35 @@ export function assertCodexAppServerCommandHasNoInlineArgs(params: {
   );
 }
 
-export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodexPluginsPolicy {
-  const config = readCodexPluginConfig(pluginConfig).codexPlugins;
-  const configured = config !== undefined;
+export function resolveCodexPluginsPolicy(
+  pluginConfig?: ParsedCodexPluginConfig,
+): ResolvedCodexPluginsPolicy {
+  const config = pluginConfig?.codexPlugins;
   const enabled = config?.enabled === true;
-  const destructivePolicy = resolveCodexPluginDestructivePolicy(
-    config?.allow_destructive_actions ?? true,
-  );
   const pluginPolicies = Object.entries(config?.plugins ?? {})
     .flatMap(([configKey, entry]): ResolvedCodexPluginPolicy[] => {
       if (!entry.marketplaceName || !entry.pluginName) {
         return [];
       }
-      const entryDestructivePolicy = resolveCodexPluginDestructivePolicy(
-        entry.allow_destructive_actions ?? config?.allow_destructive_actions ?? true,
-      );
       return [
         {
           configKey,
           marketplaceName: entry.marketplaceName,
           pluginName: entry.pluginName,
           enabled: enabled && entry.enabled !== false,
-          allowDestructiveActions: entryDestructivePolicy.allowDestructiveActions,
-          destructiveApprovalMode: entryDestructivePolicy.destructiveApprovalMode,
+          ...(entry.read_only === true ? { readOnly: true } : {}),
+          ...resolveCodexPluginDestructivePolicy(
+            entry.allow_destructive_actions ?? config?.allow_destructive_actions ?? true,
+          ),
         },
       ];
     })
     .toSorted((left, right) => left.configKey.localeCompare(right.configKey));
   return {
-    configured,
+    configured: config !== undefined,
     enabled,
     allowAllPlugins: enabled && config?.allow_all_plugins === true,
-    allowDestructiveActions: destructivePolicy.allowDestructiveActions,
-    destructiveApprovalMode: destructivePolicy.destructiveApprovalMode,
+    ...resolveCodexPluginDestructivePolicy(config?.allow_destructive_actions ?? true),
     pluginPolicies,
   };
 }
@@ -294,11 +325,8 @@ function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolic
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 } {
-  if (policy === "auto" || policy === "ask") {
-    return { allowDestructiveActions: true, destructiveApprovalMode: policy };
-  }
   return {
-    allowDestructiveActions: policy,
-    destructiveApprovalMode: policy ? "allow" : "deny",
+    allowDestructiveActions: policy !== false,
+    destructiveApprovalMode: typeof policy === "string" ? policy : policy ? "allow" : "deny",
   };
 }

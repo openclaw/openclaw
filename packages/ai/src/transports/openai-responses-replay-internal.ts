@@ -1,13 +1,17 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { APIError } from "openai";
+import { Stream } from "openai/core/streaming";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
-import type { OpenAIResponsesCompactionRejection } from "../provider-options.js";
+import type { CompactionReplayRejection } from "../provider-options.js";
+import { registerSessionResourceCleanup } from "../session-resources.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
   DEFAULT_AZURE_OPENAI_API_VERSION,
   isPreviousResponseRejection,
   type OpenAIResponsesRequestParams,
+  type ResponsesPromptObservation,
 } from "./openai-responses-contracts.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import type { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
@@ -17,14 +21,31 @@ import {
   nextResponsesServiceTier,
 } from "./openai-responses-service-tier.js";
 import { log } from "./openai-transport-shared.js";
+import { decodeSseFrames } from "./transport-stream-shared.js";
 
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
+const PRELUDE_TYPES = new Set(["response.created", "response.in_progress", "response.queued"]);
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
   return (
     ((typeof value === "object" && value !== null) || typeof value === "function") &&
     Symbol.asyncIterator in value
   );
+}
+
+export function readResponsesRecoveryEvent(event: unknown) {
+  const record = isRecord(event) ? event : undefined;
+  const response = isRecord(record?.response) ? record.response : undefined;
+  return {
+    failure:
+      record?.type === "response.failed"
+        ? response?.error
+        : record?.type === "error"
+          ? (record.error ?? record)
+          : undefined,
+    hasResponseOutput: Array.isArray(response?.output) && response.output.length > 0,
+    isPrelude: record !== undefined && PRELUDE_TYPES.has(String(record.type)),
+  };
 }
 
 export function isInvalidEncryptedContentError(error: unknown): boolean {
@@ -62,21 +83,17 @@ function isOrphanedFunctionCallOutputError(error: unknown): boolean {
 
 type ResponsesEncryptedContentRequest = { input?: ResponseInput };
 
-type ResponsesEncryptedContentAttemptKind =
-  | "initial"
-  | "reasoning-stripped"
-  | "compaction-stripped"
-  | "continuation-rejected";
+type ResponsesEncryptedContentAttemptKind = ResponsesPromptObservation["payloadVariant"];
 
 export type ResponsesEncryptedContentAttempt<TRequest extends ResponsesEncryptedContentRequest> = {
   kind: ResponsesEncryptedContentAttemptKind;
   request: TRequest;
-  rejectedCompaction?: OpenAIResponsesCompactionRejection;
+  rejectedCompaction?: CompactionReplayRejection;
 };
 
 export function commitResponsesEncryptedContentAttempt(
   attempt: ResponsesEncryptedContentAttempt<ResponsesEncryptedContentRequest>,
-  commit: (checkpoint: OpenAIResponsesCompactionRejection | undefined) => void,
+  commit: (checkpoint: CompactionReplayRejection | undefined) => void,
 ): void {
   if (attempt.kind === "compaction-stripped") {
     commit(attempt.rejectedCompaction);
@@ -109,7 +126,7 @@ function stripResponsesRequestCompaction<TRequest extends ResponsesEncryptedCont
 
 function readOpenAIResponsesCompactionRejection(
   request: ResponsesEncryptedContentRequest,
-): OpenAIResponsesCompactionRejection | undefined {
+): CompactionReplayRejection | undefined {
   if (!Array.isArray(request.input)) {
     return undefined;
   }
@@ -130,7 +147,7 @@ export async function resolveNextResponsesEncryptedContentAttempt<
 >(
   attempt: ResponsesEncryptedContentAttempt<TRequest>,
   error: unknown,
-  options?: { buildFullHistoryRequest?: () => TRequest | Promise<TRequest> },
+  options: { buildFullHistoryRequest: () => TRequest | Promise<TRequest> },
 ): Promise<ResponsesEncryptedContentAttempt<TRequest> | undefined> {
   const orphanedFunctionOutput = isOrphanedFunctionCallOutputError(error);
   if (
@@ -154,9 +171,7 @@ export async function resolveNextResponsesEncryptedContentAttempt<
   }
   // Filtering the already-pruned checkpoint request would leave a context-blind
   // suffix. Rebuild full history lazily, then preserve any earlier reasoning strip.
-  let compactionStripped = options?.buildFullHistoryRequest
-    ? await options.buildFullHistoryRequest()
-    : locallyStripped;
+  let compactionStripped = await options.buildFullHistoryRequest();
   compactionStripped = stripResponsesRequestCompaction(compactionStripped);
   if (attempt.kind === "reasoning-stripped") {
     compactionStripped = stripResponsesRequestEncryptedReasoning(compactionStripped);
@@ -176,8 +191,8 @@ export async function createResponsesStreamWithRecovery(params: {
   encodeBody?: ReturnType<typeof prepareModelRequestBody>;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
   initialAttemptKind?: ResponsesEncryptedContentAttemptKind;
-  initialRejectedCompaction?: OpenAIResponsesCompactionRejection;
-  onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
+  initialRejectedCompaction?: CompactionReplayRejection;
+  onCompactionRejected?: (checkpoint: CompactionReplayRejection) => void;
   canRetryStream?: () => boolean;
   onServiceTierRejected?: (tier: "ultrafast" | "priority") => void;
   wrapStream?: (result: {
@@ -185,12 +200,148 @@ export async function createResponsesStreamWithRecovery(params: {
     response: Response;
     attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>;
   }) => AsyncIterable<unknown>;
-  buildFullHistoryRequest?: () =>
+  buildFullHistoryRequest: () =>
     | OpenAIResponsesRequestParams
     | Promise<OpenAIResponsesRequestParams>;
 }): Promise<{
   stream: AsyncIterable<unknown>;
 }> {
+  async function* streamWithTerminalDrain(response: Response, body: ReadableStream<Uint8Array>) {
+    const reader = body.getReader();
+    let terminal = false;
+    let firstFrame = true;
+    const decoder = decodeSseFrames();
+    try {
+      // Frame parsing stays synchronous within each read; this owner retains terminal draining.
+      frames: for (let next = decoder.next(); !next.done;) {
+        if (next.value === undefined) {
+          next = decoder.next(await reader.read());
+          continue;
+        }
+        const { frame } = next.value;
+        let eventName: string | null = null;
+        let data: string | undefined;
+        let start = 0;
+        let cr = frame.indexOf("\r");
+        let lf = frame.indexOf("\n");
+        while (start < frame.length) {
+          const end = cr < 0 ? (lf < 0 ? frame.length : lf) : lf < 0 ? cr : Math.min(cr, lf);
+          // The SDK strips one BOM per line; the decoder already handled the stream's first.
+          const bom = !(firstFrame && start === 0) && frame.charCodeAt(start) === 0xfeff;
+          const lineStart = bom ? start + 1 : start;
+          start = end + (frame[end] === "\r" && frame[end + 1] === "\n" ? 2 : 1);
+          if (cr >= 0 && cr < start) {
+            cr = frame.indexOf("\r", start);
+          }
+          if (lf >= 0 && lf < start) {
+            lf = frame.indexOf("\n", start);
+          }
+          if (lineStart < end) {
+            const fieldLength = frame.startsWith("data", lineStart)
+              ? 4
+              : frame.startsWith("event", lineStart)
+                ? 5
+                : 0;
+            const colon = lineStart + fieldLength;
+            if (fieldLength && (colon === end || frame[colon] === ":")) {
+              const value =
+                colon === end ? "" : frame.slice(colon + (frame[colon + 1] === " " ? 2 : 1), end);
+              if (fieldLength === 5) {
+                eventName = value;
+              } else {
+                data = data === undefined ? value : `${data}\n${value}`;
+              }
+            }
+            if (start < frame.length) {
+              continue;
+            }
+          }
+          if (!eventName && data === undefined) {
+            continue;
+          }
+          if (data === "[DONE]") {
+            break frames;
+          }
+          let event: unknown;
+          try {
+            event = JSON.parse(data ?? "");
+          } catch {
+            throw new SyntaxError("Error reading response: malformed server-sent event JSON.");
+          }
+          if (eventName?.startsWith("thread.")) {
+            event = { event: eventName, data: event };
+          } else if (eventName === "error" || (isRecord(event) && event.error)) {
+            throw new APIError(
+              undefined,
+              // @ts-expect-error SDK SSE also passes arbitrary JSON; preserve scalar/null error payloads.
+              isRecord(event) ? (event.error ?? event) : event,
+              undefined,
+              response.headers,
+            );
+          }
+          terminal ||=
+            isRecord(event) &&
+            (event.type === "response.completed" || event.type === "response.incomplete");
+          yield event;
+          eventName = null;
+          data = undefined;
+        }
+        firstFrame = false;
+        next = decoder.next();
+      }
+    } catch (error) {
+      // Match SDK transport cancellation without swallowing provider API errors.
+      if (
+        error instanceof APIError ||
+        !isRecord(error) ||
+        (error.name !== "AbortError" &&
+          !String(error.message).includes("FetchRequestCanceledException"))
+      ) {
+        throw error;
+      }
+    } finally {
+      if (!terminal) {
+        await reader.cancel().catch(() => undefined);
+        reader.releaseLock();
+      } else {
+        const controller = new AbortController();
+        const unregister = registerSessionResourceCleanup((sessionId) => {
+          if (!sessionId) {
+            controller.abort();
+          }
+        });
+        const signal = AbortSignal.any([
+          controller.signal,
+          AbortSignal.timeout(250),
+          ...(params.requestOptions?.signal ? [params.requestOptions.signal] : []),
+        ]);
+        const cancel = () => {
+          void reader.cancel().catch(() => undefined);
+        };
+        signal.addEventListener("abort", cancel, { once: true });
+        void (async () => {
+          try {
+            let bytes = 0;
+            while (!signal.aborted && bytes < 64 * 1024) {
+              const { done, value } = await reader.read();
+              if (done) {
+                break;
+              }
+              bytes += value.byteLength;
+            }
+          } catch {
+            /* Disposal must not change the delivered terminal result. */
+          } finally {
+            cancel();
+            reader.releaseLock();
+            signal.removeEventListener("abort", cancel);
+            unregister();
+          }
+        })();
+      }
+    }
+  }
+
   const encodeBody = params.encodeBody ?? prepareModelRequestBody(undefined);
   let tierCeiling: "priority" | "default" | undefined;
   const limitTier = (request: OpenAIResponsesRequestParams) =>
@@ -257,7 +408,11 @@ export async function createResponsesStreamWithRecovery(params: {
         if (!isAsyncIterable(data)) {
           throw new Error("OpenAI Responses streaming request returned a non-stream response");
         }
-        return { stream: data, response, attempt };
+        const stream =
+          data instanceof Stream && response.body
+            ? streamWithTerminalDrain(response, response.body)
+            : data;
+        return { stream, response, attempt };
       } catch (error) {
         let nextAttempt =
           (!responseAccepted ? recoverServiceTier(attempt, error) : undefined) ??
@@ -273,9 +428,7 @@ export async function createResponsesStreamWithRecovery(params: {
           isPreviousResponseRejection(error as { code?: unknown; param?: unknown })
         ) {
           const request = {
-            ...(params.buildFullHistoryRequest
-              ? await params.buildFullHistoryRequest()
-              : attempt.request),
+            ...(await params.buildFullHistoryRequest()),
           };
           delete request.previous_response_id;
           nextAttempt = { kind: "continuation-rejected", request };
@@ -329,44 +482,24 @@ export async function createResponsesStreamWithRecovery(params: {
           try {
             for await (const event of params.wrapStream?.({ ...current, stream: providerStream }) ??
               providerStream) {
-              if (isRecord(event)) {
-                const failure =
-                  event.type === "response.failed" && isRecord(event.response)
-                    ? event.response.error
-                    : event.type === "error"
-                      ? (event.error ?? event)
-                      : undefined;
-                if (
-                  isRecord(event.response) &&
-                  Array.isArray(event.response.output) &&
-                  event.response.output.length
-                ) {
-                  outputObserved = true;
-                }
-                if (
-                  isRecord(failure) &&
-                  params.canRetryStream?.() === true &&
-                  (isInvalidEncryptedContentError(failure) ||
-                    (!outputObserved && isResponsesServiceTierRejection(failure)))
-                ) {
-                  rejectedEvent = event;
-                  const message = typeof failure.message === "string" ? failure.message : "";
-                  throw Object.assign(new Error(message), {
-                    code: failure.code,
-                    status: failure.status,
-                    type: failure.type,
-                    param: failure.param,
-                  });
-                }
-              }
+              const { failure, hasResponseOutput, isPrelude } = readResponsesRecoveryEvent(event);
+              outputObserved ||= hasResponseOutput;
               if (
-                !isRecord(event) ||
-                !["response.created", "response.in_progress", "response.queued"].includes(
-                  String(event.type),
-                )
+                isRecord(failure) &&
+                params.canRetryStream?.() === true &&
+                (isInvalidEncryptedContentError(failure) ||
+                  (!outputObserved && isResponsesServiceTierRejection(failure)))
               ) {
-                outputObserved = true;
+                rejectedEvent = event;
+                const message = typeof failure.message === "string" ? failure.message : "";
+                throw Object.assign(new Error(message), {
+                  code: failure.code,
+                  status: failure.status,
+                  type: failure.type,
+                  param: failure.param,
+                });
               }
+              outputObserved ||= !isPrelude;
               yield event;
             }
             return;

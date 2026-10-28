@@ -21,6 +21,7 @@ export function buildSpawnThreadBinding(params: {
   sessionDetails?: string[];
 }): SessionBindingBindInput {
   const { cfg, agentId, label, binding } = params;
+  const policyContext = { cfg, channel: binding.channel, accountId: binding.accountId };
   return {
     targetSessionKey: params.sessionKey,
     targetKind: params.targetKind,
@@ -41,16 +42,8 @@ export function buildSpawnThreadBinding(params: {
       introText: resolveThreadBindingIntroText({
         agentId,
         label: label || undefined,
-        idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
-          cfg,
-          channel: binding.channel,
-          accountId: binding.accountId,
-        }),
-        maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
-          cfg,
-          channel: binding.channel,
-          accountId: binding.accountId,
-        }),
+        idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel(policyContext),
+        maxAgeMs: resolveThreadBindingMaxAgeMsForChannel(policyContext),
         sessionCwd: params.sessionCwd,
         sessionDetails: params.sessionDetails,
       }),

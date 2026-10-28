@@ -1,6 +1,6 @@
 import type { AssistantMessage, Model } from "@openclaw/llm-core";
 import { stableStringify } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
 import { sha256Hex } from "./transport-utils.js";
 
@@ -26,10 +26,8 @@ function readResponsesInputReplay(message: AssistantMessage): ResponsesInputRepl
   if (
     replay &&
     typeof replay.afterResponseId === "string" &&
-    Array.isArray(replay.before) &&
-    replay.before.every((item) => typeof item === "string") &&
-    Array.isArray(replay.after) &&
-    replay.after.every((item) => typeof item === "string")
+    isStringArray(replay.before) &&
+    isStringArray(replay.after)
   ) {
     return { afterResponseId: replay.afterResponseId, before: replay.before, after: replay.after };
   }

@@ -1,10 +1,8 @@
 import { consumeResponseBytes, decodeTextPrefix } from "@openclaw/normalization-core";
 import {
-  asDateTimestampMs,
   asFiniteNumber,
   asPositiveFiniteNumber,
   MAX_TIMER_TIMEOUT_SECONDS,
-  resolveExpiresAtMsFromDurationMs,
   resolveIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -46,8 +44,8 @@ export function readCache<T>(
   if (!entry || ttlMs <= 0) {
     return null;
   }
-  const now = asDateTimestampMs(Date.now());
-  if (now === undefined || now >= entry.expiresAt) {
+  const now = Date.now();
+  if (now >= entry.expiresAt) {
     cache.delete(key);
     return null;
   }
@@ -61,18 +59,14 @@ export function writeCache<T>(
   value: T,
   ttlMs: number,
 ) {
-  if (ttlMs <= 0) {
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
     return;
   }
   const now = Date.now();
-  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now });
-  if (expiresAt === undefined) {
-    return;
-  }
   pruneMapToMaxSize(cache, DEFAULT_CACHE_MAX_ENTRIES - 1);
   cache.set(key, {
     value,
-    expiresAt,
+    expiresAt: now + ttlMs,
     insertedAt: now,
   });
 }
@@ -138,7 +132,17 @@ function sniffCharset(contentType: string | null, bytes: Uint8Array): string | u
   if (declaredCharset || !shouldSniffDocumentCharset(contentType)) {
     return declaredCharset;
   }
+  const documentCharset = sniffDocumentCharset(bytes);
+  try {
+    return documentCharset && new TextDecoder(documentCharset).encoding.startsWith("utf-16")
+      ? "utf-8"
+      : documentCharset;
+  } catch {
+    return documentCharset;
+  }
+}
 
+function sniffDocumentCharset(bytes: Uint8Array): string | undefined {
   const head = latin1Decoder.decode(
     bytes.subarray(0, Math.min(bytes.byteLength, RESPONSE_CHARSET_SCAN_BYTES)),
   );
@@ -163,14 +167,8 @@ function sniffCharset(contentType: string | null, bytes: Uint8Array): string | u
   return undefined;
 }
 
-function responseContentType(res: Response): string | null {
-  const headers = res.headers;
-  return typeof headers?.get === "function" ? headers.get("content-type") : null;
-}
-
 function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
-  const contentType = responseContentType(res);
-  const charset = sniffCharset(contentType, bytes);
+  const charset = sniffCharset(res.headers.get("content-type"), bytes);
   try {
     return decodeTextPrefix(bytes, { encoding: charset ?? "utf-8", truncated });
   } catch {
@@ -186,7 +184,7 @@ export async function readResponseText(
   const maxBytes = maxBytesRaw === undefined ? undefined : Math.floor(maxBytesRaw);
 
   const body = res.body;
-  if (maxBytes && body && typeof body === "object" && typeof body.getReader === "function") {
+  if (maxBytes && body) {
     const reader = body.getReader();
     let bytesRead = 0;
     let truncated = false;
@@ -229,32 +227,13 @@ export async function readResponseText(
   }
 
   if (maxBytes) {
-    if (res instanceof Response && res.body === null) {
-      return { text: "", truncated: false, bytesRead: 0 };
-    }
-    // Whole-body fallbacks allocate before returning, so they cannot honor a byte cap.
-    // Fail closed instead of making maxBytes a returned-text limit only.
-    return { text: "", truncated: true, bytesRead: 0 };
-  }
-
-  if (typeof res.arrayBuffer === "function") {
-    try {
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      return {
-        text: decodeResponseBytes(res, bytes),
-        truncated: false,
-        bytesRead: bytes.byteLength,
-      };
-    } catch {
-      // Fall back to text() for lightweight Response-like mocks that do not expose bytes.
-    }
-  }
-
-  try {
-    const text = await res.text();
-    const bytes = new TextEncoder().encode(text);
-    return { text, truncated: false, bytesRead: bytes.byteLength };
-  } catch {
     return { text: "", truncated: false, bytesRead: 0 };
   }
+
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  return {
+    text: decodeResponseBytes(res, bytes),
+    truncated: false,
+    bytesRead: bytes.byteLength,
+  };
 }

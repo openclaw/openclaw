@@ -7,6 +7,7 @@ import {
   pollRelease,
   probeCapabilities,
   ReleaseRefusal,
+  requireReleaseValue as requireValue,
   shellCommand,
   type ReleaseContext,
 } from "./release-stable-state.mts";
@@ -25,13 +26,6 @@ export { validate } from "./release-stable-validation.mts";
 
 const DRY_SHA = "a".repeat(40);
 const HOUR = 60 * 60 * 1_000;
-
-function requireValue(value: string | undefined, name: string): string {
-  if (!value) {
-    throw new Error(`Missing ${name}; complete the preceding release phase.`);
-  }
-  return value;
-}
 
 export async function fetchReleaseMain(ctx: ReleaseContext): Promise<void> {
   const result = await ctx.run("git", ["fetch", "origin", "main:refs/remotes/origin/main"], {
@@ -76,7 +70,7 @@ export async function cut(ctx: ReleaseContext): Promise<void> {
   ).stdout.trim();
   let tip = remote.split(/\s+/u)[0] || cutSha;
   if (!remote) {
-    await ctx.run("git", ["push", "origin", `${cutSha}:refs/heads/${state.branch}`]);
+    await ctx.run("pnpm", ["release:push", "--", "--head", cutSha, "--branch", state.branch]);
   } else {
     await ctx.run("git", ["fetch", "origin", state.branch]);
     tip = (await ctx.run("git", ["rev-parse", "FETCH_HEAD"], { dryRunStdout: tip })).stdout.trim();
@@ -122,7 +116,7 @@ export async function cut(ctx: ReleaseContext): Promise<void> {
       `# Write CHANGELOG/${state.release}.md and CHANGELOG/records/${state.release}.md with $openclaw-changelog-update`,
       "pnpm changelog:check",
       shellCommand("git", ["commit", "-am", `chore(release): cut ${state.release}`]),
-      shellCommand("git", ["push", "origin", state.branch]),
+      "pnpm release:push",
       ctx.resume("cut"),
     ]);
   }

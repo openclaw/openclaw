@@ -43,11 +43,12 @@ export function importLegacyAcpSessionMetadata(params: LegacyAcpMetadataInput): 
         return false;
       }
       const coreTarget = params.readVerifiedCoreImport(database.db, params.agentId);
-      let imported = true;
-      if (coreTarget) {
+      // Declined file metadata stays consumed after the live database gets its own import receipt.
+      let imported = coreTarget.kind !== "stale";
+      if (coreTarget.kind === "canonical") {
         const { entry: canonical, sources } = readLegacyAcpMigrationContext({
           agentId: params.agentId,
-          storePath: coreTarget.sqlitePath,
+          storePath: coreTarget.target.sqlitePath,
           sessionKey,
           env: params.env,
         });

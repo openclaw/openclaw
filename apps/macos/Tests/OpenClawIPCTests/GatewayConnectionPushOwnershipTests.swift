@@ -74,7 +74,7 @@ extension GatewayConnectionControlTests {
                 if replacement == "reconnect" || replacement == "shutdown" {
                     session.latestTask()?.emitReceiveFailure()
                     try await TestWait.state("retired primary socket") {
-                        await connection._test_activeSocketGeneration() == nil
+                        await connection.socketGenerationState.activeGeneration == nil
                     }
                 } else {
                     if replacement != "shutdown" {

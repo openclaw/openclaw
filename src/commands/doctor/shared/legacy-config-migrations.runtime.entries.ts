@@ -30,7 +30,7 @@ function migrateAgentEntries(
   if (Object.hasOwn(agents, "entries")) {
     if (getRecord(agents.entries)) {
       delete agents.list;
-      changes.push("Removed agents.list because canonical agents.entries is already set.");
+      changes.push("Removed agents.list because agents.entries is already set.");
     }
     return;
   }

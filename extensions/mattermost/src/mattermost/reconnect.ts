@@ -1,32 +1,15 @@
 import { setTimeout as delay } from "node:timers/promises";
 
-type RunWithReconnectOpts = {
-  abortSignal?: AbortSignal;
-  onError?: (err: unknown) => void;
-  onReconnect?: (delayMs: number) => void;
-  initialDelayMs?: number;
-  maxDelayMs?: number;
-  jitterRatio?: number;
-  random?: () => number;
-  reconnectAfterClose?: boolean;
-};
-
-/**
- * Reconnection loop with exponential backoff.
- *
- * Calls `connectFn` in a while loop. On normal resolve (connection closed),
- * the backoff resets. On thrown error (connection failed), the current delay is
- * used, then doubled for the next retry.
- * The loop exits when `abortSignal` fires.
- */
 export async function runWithReconnect(
   connectFn: () => Promise<void>,
-  opts: RunWithReconnectOpts = {},
+  opts: {
+    abortSignal?: AbortSignal;
+    onError?: (err: unknown) => void;
+    onReconnect?: (delayMs: number) => void;
+    reconnectAfterClose?: boolean;
+  } = {},
 ): Promise<void> {
-  const { initialDelayMs = 2000, maxDelayMs = 60_000 } = opts;
-  const jitterRatio = Math.max(0, opts.jitterRatio ?? 0);
-  const random = opts.random ?? Math.random;
-  let retryDelay = initialDelayMs;
+  let retryDelay = 2000;
   while (!opts.abortSignal?.aborted) {
     let failed = false;
     try {
@@ -42,9 +25,10 @@ export async function runWithReconnect(
       return;
     }
     if (!failed) {
-      retryDelay = initialDelayMs;
+      retryDelay = 2000;
     }
-    const delayMs = withJitter(retryDelay, jitterRatio, random);
+    const spread = retryDelay * 0.2;
+    const delayMs = Math.round(retryDelay - spread + Math.random() * spread * 2);
     if (!failed && opts.reconnectAfterClose === false) {
       return;
     }
@@ -57,16 +41,7 @@ export async function runWithReconnect(
       }
     }
     if (failed) {
-      retryDelay = Math.min(retryDelay * 2, maxDelayMs);
+      retryDelay = Math.min(retryDelay * 2, 60_000);
     }
   }
-}
-
-function withJitter(baseMs: number, jitterRatio: number, random: () => number): number {
-  if (jitterRatio <= 0) {
-    return baseMs;
-  }
-  const normalized = Math.max(0, Math.min(1, random()));
-  const spread = baseMs * jitterRatio;
-  return Math.max(1, Math.round(baseMs - spread + normalized * spread * 2));
 }

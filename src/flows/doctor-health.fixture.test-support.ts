@@ -67,6 +67,7 @@ export function useDoctorHealthFixture() {
     mocks.taskDefinitelyStopped.mockReset().mockReturnValue(true);
     mocks.startupFallbackRuntime.mockReset().mockResolvedValue(null);
     mocks.outro.mockClear();
+    mocks.lint.mockReset().mockResolvedValue(0);
     mocks.runContributions.mockReset().mockResolvedValue(undefined);
     mocks.writeUpdatePostInstallDoctorResult.mockClear();
   });

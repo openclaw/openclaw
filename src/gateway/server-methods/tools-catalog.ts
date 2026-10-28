@@ -1,4 +1,3 @@
-// Gateway RPC handler for the tool catalog shown by clients and Control UI.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -13,15 +12,13 @@ import {
   resolveCoreToolProfiles,
 } from "../../agents/tool-catalog.js";
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
-import { buildPluginToolMetadataKey, getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { createPluginToolMetadataLookup, getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
 } from "../../plugins/tools.js";
-import { hasMultipleSessionSharingIdentities } from "../../state/user-profile-list.js";
+import { hasMultipleResidentSessionSharingIdentities } from "../../state/user-profile-list.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -50,153 +47,6 @@ function summarizeToolParameters(schema: unknown): ToolCatalogGroup["tools"][num
     });
 }
 
-function buildCoreGroups(params: { cfg: OpenClawConfig; agentId: string }): ToolCatalogGroup[] {
-  // Core catalog rows come from static tool sections so profile chips remain
-  // stable even before any runtime agent session exists.
-  const swarmEnabled = resolveSwarmConfig(params.cfg, params.agentId).enabled;
-  return listCoreToolSections({
-    swarmEnabled,
-    personalInstructionsEnabled: hasMultipleSessionSharingIdentities(),
-  }).map((section) => ({
-    id: section.id,
-    label: section.label,
-    source: "core",
-    tools: section.tools.map((tool) => ({
-      id: tool.id,
-      label: tool.label,
-      description: tool.description,
-      source: "core",
-      defaultProfiles: resolveCoreToolProfiles(tool.id),
-    })),
-  }));
-}
-
-function buildPluginGroups(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  existingToolNames: Set<string>;
-}): ToolCatalogGroup[] {
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  const agentDir = resolveAgentDir(params.cfg, params.agentId);
-  const toolContext = {
-    config: params.cfg,
-    workspaceDir,
-    agentDir,
-    agentId: params.agentId,
-  };
-  const toolRegistry = ensureStandalonePluginToolRegistryLoaded({
-    context: toolContext,
-    toolAllowlist: ["group:plugins"],
-    allowGatewaySubagentBinding: true,
-  });
-  // Resolve tools through the same plugin registry path used at runtime so the
-  // catalog respects conflicts, optional tools, and subagent binding rules.
-  const pluginTools = resolvePluginTools({
-    context: toolContext,
-    existingToolNames: params.existingToolNames,
-    toolAllowlist: ["group:plugins"],
-    suppressNameConflicts: true,
-    allowGatewaySubagentBinding: true,
-    runtimeRegistry: toolRegistry,
-  });
-  const catalogRegistry = toolRegistry ?? getActivePluginRegistry();
-  const groups = new Map<string, ToolCatalogGroup>();
-  // Key metadata by plugin ownership and tool name so we only project metadata that
-  // was registered BY the tool's owning plugin. Without this scoping, plugin-X
-  // could override the catalog label/description/risk/tags for another plugin's
-  // tool by registering metadata with the same toolName.
-  const pluginToolMetadata = new Map<string, PluginRegistry["toolMetadata"][number]["metadata"]>();
-  if (catalogRegistry) {
-    for (const entry of catalogRegistry.toolMetadata) {
-      const metadataKey = buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName);
-      pluginToolMetadata.set(metadataKey, entry.metadata);
-    }
-  }
-  const seenToolIds = new Set<string>();
-  for (const tool of pluginTools) {
-    const meta = getPluginToolMeta(tool);
-    const pluginId = meta?.pluginId ?? "plugin";
-    const groupId = `plugin:${pluginId}`;
-    const existing: ToolCatalogGroup = groups.get(groupId) ?? {
-      id: groupId,
-      label: pluginId,
-      source: "plugin",
-      pluginId,
-      tools: [],
-    };
-    const ownedMetadata = meta?.pluginId
-      ? pluginToolMetadata.get(buildPluginToolMetadataKey(meta.pluginId, tool.name))
-      : undefined;
-    const parameters = summarizeToolParameters(tool.parameters);
-    const fullDescription =
-      ownedMetadata?.description ??
-      (typeof tool.description === "string" ? tool.description : undefined);
-    existing.tools.push({
-      id: tool.name,
-      label:
-        normalizeOptionalString(ownedMetadata?.displayName) ??
-        normalizeOptionalString(tool.label) ??
-        tool.name,
-      description: summarizeToolDescriptionText({
-        rawDescription: fullDescription,
-        displaySummary: tool.displaySummary,
-      }),
-      fullDescription,
-      ...(parameters?.length ? { parameters } : {}),
-      source: "plugin",
-      pluginId,
-      optional: meta?.optional,
-      risk: ownedMetadata?.risk,
-      tags: ownedMetadata?.tags,
-      defaultProfiles: [],
-    });
-    seenToolIds.add(tool.name);
-    groups.set(groupId, existing);
-  }
-  for (const entry of catalogRegistry?.tools ?? []) {
-    const names = entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
-    for (const name of names) {
-      if (seenToolIds.has(name) || params.existingToolNames.has(name)) {
-        continue;
-      }
-      const groupId = `plugin:${entry.pluginId}`;
-      // Declared-but-unresolved plugin tools still appear so operators can see
-      // optional capabilities that may need config before they bind at runtime.
-      const existing: ToolCatalogGroup = groups.get(groupId) ?? {
-        id: groupId,
-        label: entry.pluginName ?? entry.pluginId,
-        source: "plugin",
-        pluginId: entry.pluginId,
-        tools: [],
-      };
-      const ownedMetadata = pluginToolMetadata.get(
-        buildPluginToolMetadataKey(entry.pluginId, name),
-      );
-      existing.tools.push({
-        id: name,
-        label: normalizeOptionalString(ownedMetadata?.displayName) ?? name,
-        description:
-          summarizeToolDescriptionText({
-            rawDescription: ownedMetadata?.description,
-          }) || `Plugin tool from ${entry.pluginName ?? entry.pluginId}`,
-        fullDescription: ownedMetadata?.description,
-        source: "plugin",
-        pluginId: entry.pluginId,
-        optional: entry.optional,
-        risk: ownedMetadata?.risk,
-        tags: ownedMetadata?.tags,
-        defaultProfiles: [],
-      });
-      seenToolIds.add(name);
-      groups.set(groupId, existing);
-    }
-  }
-  return Array.from(groups.values(), (group) => {
-    group.tools = group.tools.toSorted((a, b) => a.id.localeCompare(b.id));
-    return group;
-  }).toSorted((a, b) => a.label.localeCompare(b.label));
-}
-
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
   "tools.catalog": ({ params, respond, context }) => {
     if (!assertValidParams(params, validateToolsCatalogParams, "tools.catalog", respond)) {
@@ -211,14 +61,130 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const { cfg, agentId } = resolved;
-    const groups = buildCoreGroups({ cfg, agentId });
+    // Core catalog rows come from static tool sections so profile chips remain
+    // stable even before any runtime agent session exists.
+    const swarmEnabled = resolveSwarmConfig(cfg, agentId).enabled;
+    const groups = listCoreToolSections({
+      swarmEnabled,
+      personalInstructionsEnabled: hasMultipleResidentSessionSharingIdentities(),
+    }).map((section): ToolCatalogGroup => ({
+      id: section.id,
+      label: section.label,
+      source: "core",
+      tools: section.tools.map((tool) => ({
+        id: tool.id,
+        label: tool.label,
+        description: tool.description,
+        source: "core",
+        defaultProfiles: resolveCoreToolProfiles(tool.id),
+      })),
+    }));
     if (params.includePlugins !== false) {
+      const existingToolNames = new Set(
+        groups.flatMap((group) => group.tools.map((tool) => tool.id)),
+      );
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      const agentDir = resolveAgentDir(cfg, agentId);
+      const toolContext = {
+        config: cfg,
+        workspaceDir,
+        agentDir,
+        agentId,
+      };
+      const toolRegistry = ensureStandalonePluginToolRegistryLoaded({
+        context: toolContext,
+        toolAllowlist: ["group:plugins"],
+        allowGatewaySubagentBinding: true,
+      });
+      // Resolve tools through the same plugin registry path used at runtime so the
+      // catalog respects conflicts, optional tools, and subagent binding rules.
+      const pluginTools = resolvePluginTools({
+        context: toolContext,
+        existingToolNames,
+        toolAllowlist: ["group:plugins"],
+        suppressNameConflicts: true,
+        allowGatewaySubagentBinding: true,
+        runtimeRegistry: toolRegistry,
+      });
+      const catalogRegistry = toolRegistry ?? getActivePluginRegistry();
+      const pluginGroups = new Map<string, ToolCatalogGroup>();
+      // Key metadata by plugin ownership and tool name so we only project metadata that
+      // was registered BY the tool's owning plugin. Without this scoping, plugin-X
+      // could override the catalog label/description/risk/tags for another plugin's
+      // tool by registering metadata with the same toolName.
+      const metadataFor = createPluginToolMetadataLookup(catalogRegistry?.toolMetadata);
+      const seenToolIds = new Set<string>();
+      const appendTool = (
+        pluginId: string,
+        label: string,
+        tool: Omit<ToolCatalogGroup["tools"][number], "source" | "pluginId" | "defaultProfiles">,
+      ) => {
+        const id = `plugin:${pluginId}`;
+        const group: ToolCatalogGroup = pluginGroups.get(id) ?? {
+          id,
+          label,
+          source: "plugin",
+          pluginId,
+          tools: [],
+        };
+        group.tools.push({ ...tool, source: "plugin", pluginId, defaultProfiles: [] });
+        seenToolIds.add(tool.id);
+        pluginGroups.set(id, group);
+      };
+      for (const tool of pluginTools) {
+        const meta = getPluginToolMeta(tool);
+        const pluginId = meta?.pluginId ?? "plugin";
+        const ownedMetadata = meta?.pluginId ? metadataFor(meta.pluginId, tool.name) : undefined;
+        const parameters = summarizeToolParameters(tool.parameters);
+        const fullDescription =
+          ownedMetadata?.description ??
+          (typeof tool.description === "string" ? tool.description : undefined);
+        appendTool(pluginId, pluginId, {
+          id: tool.name,
+          label:
+            normalizeOptionalString(ownedMetadata?.displayName) ??
+            normalizeOptionalString(tool.label) ??
+            tool.name,
+          description: summarizeToolDescriptionText({
+            rawDescription: fullDescription,
+            displaySummary: tool.displaySummary,
+          }),
+          fullDescription,
+          ...(parameters?.length ? { parameters } : {}),
+          optional: meta?.optional,
+          risk: ownedMetadata?.risk,
+          tags: ownedMetadata?.tags,
+        });
+      }
+      for (const entry of catalogRegistry?.tools ?? []) {
+        const names = entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
+        for (const name of names) {
+          if (seenToolIds.has(name) || existingToolNames.has(name)) {
+            continue;
+          }
+          // Declared-but-unresolved plugin tools still appear so operators can see
+          // optional capabilities that may need config before they bind at runtime.
+          const ownedMetadata = metadataFor(entry.pluginId, name);
+          appendTool(entry.pluginId, entry.pluginName ?? entry.pluginId, {
+            id: name,
+            label: normalizeOptionalString(ownedMetadata?.displayName) ?? name,
+            description:
+              summarizeToolDescriptionText({
+                rawDescription: ownedMetadata?.description,
+              }) || `Plugin tool from ${entry.pluginName ?? entry.pluginId}`,
+            fullDescription: ownedMetadata?.description,
+            optional: entry.optional,
+            risk: ownedMetadata?.risk,
+            tags: ownedMetadata?.tags,
+          });
+        }
+      }
       groups.push(
-        ...buildPluginGroups({
-          cfg,
-          agentId,
-          existingToolNames: new Set(groups.flatMap((group) => group.tools.map((tool) => tool.id))),
-        }),
+        ...Array.from(pluginGroups.values(), (group) => {
+          group.tools.sort((a, b) => a.id.localeCompare(b.id));
+          return group;
+          // oxlint-disable-next-line unicorn/no-array-sort -- Array.from creates a fresh, private array.
+        }).sort((a, b) => a.label.localeCompare(b.label)),
       );
     }
     respond(

@@ -22,6 +22,7 @@ const portal = {
   tokenQuery: `openclaw_portal=${"a".repeat(64)}`,
   url: `http://127.0.0.1:43123/app?openclaw_portal=${"a".repeat(64)}`,
   publicUrl: "http://127.0.0.1:43123/app",
+  exposure: { kind: "loopback-only", browserReachability: "unverified" },
   path: "/app",
   description: "Live preview",
   createdAtMs: 123,
@@ -55,6 +56,27 @@ describe("portal protocol schemas", () => {
     expect(validatePortalOpenParams({ port: 3000, path: "app" })).toBe(false);
     expect(validatePortalOpenParams({ port: 3000, host: "example.test" })).toBe(false);
     expect(validatePortalCloseParams({ id: "" })).toBe(false);
+  });
+
+  it("carries exposure facts without allowing a producer to claim browser reachability", () => {
+    expect(
+      Value.Check(PortalOpenResultSchema, {
+        ...portal,
+        exposure: { kind: "non-loopback", browserReachability: "unverified" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(PortalOpenResultSchema, {
+        ...portal,
+        exposure: { kind: "non-loopback", browserReachability: "reachable" },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(PortalSummarySchema, {
+        ...portal,
+        exposure: { kind: "public", browserReachability: "unverified" },
+      }),
+    ).toBe(false);
   });
 
   it("validates summaries, results, and full replace-set events", () => {

@@ -35,6 +35,8 @@ export {
   readApprovalReactionPresentationBinding,
   type ApprovalReactionDeliveryBinding,
 } from "./approval-reaction-binding.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { readApprovalReactionDeliveryMetadata } from "./approval-reaction-binding.js";
 
 type KeyedStore<TValue> = {
   register(key: string, value: TValue, opts?: { ttlMs?: number }): Promise<void>;

@@ -3,15 +3,23 @@
 import { subagentRegistryMocks } from "./agent.subagent-registry.mocks.test-support.js";
 import { vi } from "vitest";
 import type { readAcpSessionMetaAsync } from "../../acp/runtime/session-meta.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import type {
-  hasSessionTranscriptEventsSync,
-  readTranscriptMutationStateSync,
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeLease,
+  PreparedModelRuntimePluginGeneration,
+} from "../../agents/prepared-model-runtime.types.js";
+import type {
+  SessionTranscriptReadScope,
   recordSessionParticipant,
   listSessionParticipantsReadOnly,
-  stageSessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
+import type { resetSessionEntryLifecycle } from "../../config/sessions/session-accessor.lifecycle.js";
+import type { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
+import type { readTranscriptMutationStateInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { createSessionAccessorMockReset } from "./agent.session-accessor-fixtures.test-support.js";
 import { createAgentTestUserTurnRecorder } from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -19,12 +27,19 @@ const mocks = vi.hoisted(() => ({
   updateSessionStore: vi.fn(),
   applySessionEntryReplacements: vi.fn(),
   patchSessionEntryTarget: vi.fn(),
+  resetSessionEntryLifecycle: vi.fn<typeof resetSessionEntryLifecycle>(),
   persistSessionTranscriptTurn: vi.fn(),
   stageSessionPendingInput: vi.fn<typeof stageSessionPendingInput>(),
   recordSessionParticipant: vi.fn<typeof recordSessionParticipant>(async () => "inserted"),
   listSessionParticipantsReadOnly: vi.fn<typeof listSessionParticipantsReadOnly>(() => new Map()),
-  hasSessionTranscriptEventsSync: vi.fn<typeof hasSessionTranscriptEventsSync>(() => false),
-  readTranscriptMutationStateSync: vi.fn<typeof readTranscriptMutationStateSync>(() => ({
+  hasSessionTranscriptEventsSync: vi.fn<(scope: SessionTranscriptReadScope) => boolean>(
+    () => false,
+  ),
+  readTranscriptMutationStateSync: vi.fn<
+    (
+      scope: SessionTranscriptReadScope,
+    ) => ReturnType<typeof readTranscriptMutationStateInTransaction>
+  >(() => ({
     observedAt: null,
     updatedAt: null,
   })),
@@ -92,19 +107,49 @@ export function resolveAgentTestConfig(
 }
 
 function loadAgentSessionFixture(
-  ...args: Parameters<typeof import("../session-utils.js").loadSessionEntry>
-): ReturnType<typeof import("../session-utils.js").loadSessionEntry> {
-  const loaded = mocks.loadSessionEntry(...args) as ReturnType<
-    typeof import("../session-utils.js").loadSessionEntry
+  ...args: Parameters<typeof import("../session-entry-load.test-support.js").loadSessionEntryAsync>
+): Awaited<
+  ReturnType<typeof import("../session-entry-load.test-support.js").loadSessionEntryAsync>
+> {
+  const loaded = mocks.loadSessionEntry(...args) as Awaited<
+    ReturnType<typeof import("../session-entry-load.test-support.js").loadSessionEntryAsync>
   >;
   return { ...loaded, cfg: resolveAgentTestConfig(loaded.cfg) };
 }
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) =>
+    loadAgentSessionFixture(params.key, {
+      agentId: params.agentId,
+      projection: params.projection,
+      clone: false,
+    }),
+}));
+
+vi.mock("../../config/sessions/session-transcript-anchor-read.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../config/sessions/session-transcript-anchor-read.js")
+    >();
   return {
     ...actual,
-    loadSessionEntry: loadAgentSessionFixture,
+    readSessionTranscriptAnchorsAsync: (
+      ...args: Parameters<typeof actual.readSessionTranscriptAnchorsAsync>
+    ) =>
+      args[1].includeMetadata
+        ? Promise.resolve({
+            anchors: [],
+            metadata: {
+              present: mocks.hasSessionTranscriptEventsSync(args[0]),
+              ...mocks.readTranscriptMutationStateSync(args[0]),
+            },
+          })
+        : actual.readSessionTranscriptAnchorsAsync(...args),
   };
 });
 
@@ -116,9 +161,9 @@ vi.mock("../../config/sessions.js", async () => {
     ...actual,
     updateSessionStore: mocks.updateSessionStore,
     resolveSessionLifecycleTimestamps: mocks.resolveSessionLifecycleTimestamps,
-    resolveAgentIdFromSessionKey: (sessionKey: string) => {
+    resolveAgentIdFromSessionKey: (sessionKey: string, configuredDefaultAgentId?: string) => {
       const m = /^agent:([^:]+):/.exec(sessionKey.trim());
-      return m?.[1] ?? "main";
+      return m?.[1] ?? configuredDefaultAgentId ?? "main";
     },
     resolveExplicitAgentSessionKey: mocks.resolveExplicitAgentSessionKey,
     resolveAgentMainSessionKey: ({
@@ -133,6 +178,7 @@ vi.mock("../../config/sessions.js", async () => {
 
 // mock-isolation: Handler fixtures supply lifecycle timestamps without opening transcript readers.
 vi.mock("../../config/sessions/lifecycle-read.js", () => ({
+  hasTerminalMainSessionTranscriptNewerThanRegistryAsync: async () => false,
   resolveSessionLifecycleTimestampsAsync: async (
     params: Parameters<typeof mocks.resolveSessionLifecycleTimestamps>[0],
   ) => mocks.resolveSessionLifecycleTimestamps(params),
@@ -142,18 +188,39 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
     "../../config/sessions/session-accessor.js",
   );
+  // The accessor barrel is still initializing when this mock resolves (import cycle through the
+  // session controller), so take exact-read helpers from their defining module.
+  const exactRead = await import("../../config/sessions/session-accessor.sqlite-exact-read.js");
+  const admittedRead =
+    await import("../../config/sessions/session-accessor.sqlite-entry-admitted-read.js");
+  const listRead = await import("../../config/sessions/session-accessor.sqlite-entry-list.read.js");
   return {
     ...actual,
+    loadExactSessionEntryCandidates: admittedRead.loadExactSessionEntryCandidates,
+    loadExactSessionEntryReadOnly: exactRead.loadExactSessionEntryReadOnly,
+    listSessionEntriesReadOnly: listRead.listSessionEntriesReadOnly,
     applySessionEntryReplacements: mocks.applySessionEntryReplacements,
     patchSessionEntryTarget: mocks.patchSessionEntryTarget,
     persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
-    stageSessionPendingInput: mocks.stageSessionPendingInput,
     // These handler fixtures own an in-memory store; participant access must not reach shared /tmp SQLite.
     recordSessionParticipant: mocks.recordSessionParticipant,
     listSessionParticipantsReadOnly: mocks.listSessionParticipantsReadOnly,
-    hasSessionTranscriptEventsSync: mocks.hasSessionTranscriptEventsSync,
-    readTranscriptMutationStateSync: mocks.readTranscriptMutationStateSync,
   };
+});
+
+// mock-isolation: Handler routing uses an in-memory store; atomic reset durability has real owner tests.
+vi.mock("../../config/sessions/session-accessor.lifecycle.js", async () => ({
+  ...(await vi.importActual<typeof import("../../config/sessions/session-accessor.lifecycle.js")>(
+    "../../config/sessions/session-accessor.lifecycle.js",
+  )),
+  resetSessionEntryLifecycle: mocks.resetSessionEntryLifecycle,
+}));
+
+vi.mock("../../config/sessions/session-accessor.pending-inputs.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/session-accessor.pending-inputs.js")
+  >("../../config/sessions/session-accessor.pending-inputs.js");
+  return { ...actual, stageSessionPendingInput: mocks.stageSessionPendingInput };
 });
 
 vi.mock("../../sessions/user-turn-transcript.js", async () => {
@@ -188,28 +255,74 @@ vi.mock("../../commands/agent.js", () => {
   };
 });
 
-vi.mock("../../agents/prepared-model-runtime.js", () => {
+vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/prepared-model-runtime.js")>();
   // Direct handler tests bypass Gateway startup, so provide the lifecycle fact
   // that production publishes before admitting agent RPCs.
-  const pluginGeneration = {
+  const pluginRegistry = createEmptyPluginRegistry();
+  const pluginGeneration: PreparedModelRuntimePluginGeneration = {
     remoteCatalog: null,
-    pluginMetadataSnapshot: {},
+    pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+    pluginRegistry,
+    inboundPluginRegistry: pluginRegistry,
     configuredCatalogEntries: [],
     inlineProviderModels: [],
   };
+  const createLease = (input: PreparedModelRuntimeInput): PreparedModelRuntimeLease => {
+    let open = true;
+    const agentId = input.agentId ?? "main";
+    const workspaceDir = input.workspaceDir ?? "/tmp/workspace";
+    return {
+      snapshot: {
+        ...input,
+        agentId,
+        workspaceDir,
+        observationConfig: input.config,
+        catalogOwner: { agentId, workspaceDir },
+        metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+        pluginRegistry,
+        activeProjectKeys: [],
+        allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
+        authModes: {},
+        modelCatalog: { entries: [], routeVariants: [] },
+        configuredRuntimeModels: [],
+        findConfiguredRuntimeModel: () => undefined,
+        inlineProviderModels: [],
+        isCurrent: () => open,
+        createStores: () => {
+          throw new Error("Direct handler fixture does not execute model stores");
+        },
+      },
+      pluginGeneration,
+      [Symbol.asyncDispose]: vi.fn(async () => {
+        open = false;
+      }),
+    };
+  };
   return {
-    acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
-      [Symbol.asyncDispose]: vi.fn(async () => {}),
-      snapshot: {},
-      pluginGeneration,
-    })),
-    loadPublishedGatewayReplyDispatchRuntime: async ({ agentId }: { agentId: string }) => ({
+    ...actual,
+    acquireAgentRunPreparedModelRuntime: vi.fn(async (input: PreparedModelRuntimeInput) =>
+      createLease(input),
+    ),
+    loadPublishedGatewayReplyDispatchRuntime: async ({
       agentId,
-      agentDir: "/tmp/agent",
-      config: resolveAgentTestConfig(),
-      pluginGeneration,
-      workspaceDir: "/tmp/workspace",
-    }),
+      onRuntimeLease,
+    }: {
+      agentId: string;
+      onRuntimeLease?: (lease: PreparedModelRuntimeLease) => void;
+    }) => {
+      const runtime = {
+        agentId,
+        agentDir: "/tmp/agent",
+        config: resolveAgentTestConfig(),
+        pluginGeneration,
+        workspaceDir: "/tmp/workspace",
+        modelCatalog: { entries: [], routeVariants: [] },
+        inboundPluginRegistry: pluginRegistry,
+      };
+      onRuntimeLease?.(createLease({ ...runtime, allowGatewaySubagentBinding: true }));
+      return runtime;
+    },
   };
 });
 
@@ -355,6 +468,14 @@ vi.mock("../../agents/subagents/registry/subagent-registry.js", async (importOri
   replaceSubagentRunAfterSteerCore: mocks.replaceSubagentRunAfterSteer,
 }));
 
+vi.mock("../session-lifecycle-plugin-hooks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-lifecycle-plugin-hooks.js")>()),
+  emitGatewaySessionEndPluginHook: (...args: unknown[]) =>
+    (mocks.emitGatewaySessionEndPluginHook as (...args: unknown[]) => unknown)(...args),
+  emitGatewaySessionStartPluginHook: (...args: unknown[]) =>
+    (mocks.emitGatewaySessionStartPluginHook as (...args: unknown[]) => unknown)(...args),
+}));
+
 vi.mock("../session-reset-service.js", () => ({
   emitGatewaySessionEndPluginHook: (...args: unknown[]) =>
     (mocks.emitGatewaySessionEndPluginHook as (...args: unknown[]) => unknown)(...args),
@@ -418,199 +539,7 @@ vi.mock("../../channels/message/runtime.js", async () => {
   };
 });
 
-type SessionStoreFixture = Record<string, Record<string, unknown>>;
-
-type SessionEntryTargetFixture = {
-  canonicalKey: string;
-  storeKeys: string[];
-};
-
-function cloneSessionStoreFixtureEntry(
-  entry: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  return entry ? structuredClone(entry) : undefined;
-}
-
-function selectFreshestTargetFixtureEntry(
-  store: SessionStoreFixture,
-  target: SessionEntryTargetFixture,
-): { entry: Record<string, unknown>; key: string } | undefined {
-  let freshest: { entry: Record<string, unknown>; key: string } | undefined;
-  for (const key of new Set([target.canonicalKey, ...target.storeKeys])) {
-    const entry = store[key];
-    if (!entry) {
-      continue;
-    }
-    if (
-      !freshest ||
-      ((entry.updatedAt as number | undefined) ?? 0) >
-        ((freshest.entry.updatedAt as number | undefined) ?? 0)
-    ) {
-      freshest = { entry, key };
-    }
-  }
-  return freshest;
-}
-
-export function resetSessionAccessorMocks() {
-  // These handler fixtures own an in-memory store. Real admission durability
-  // and execution-time promotion are covered by the gateway-server suites.
-  mocks.stageSessionPendingInput.mockReset().mockImplementation(async (_scope, options) => {
-    options.assertCurrent();
-    const message = options.prepareMessageAfterIdempotencyCheck
-      ? options.prepareMessageAfterIdempotencyCheck(options.message)
-      : options.message;
-    return message
-      ? {
-          state: "queued",
-          inputId: "test-user-turn",
-          message,
-          run: (operation) => operation(),
-          finish: vi.fn(),
-        }
-      : undefined;
-  });
-  mocks.recordSessionParticipant.mockReset().mockResolvedValue("inserted");
-  mocks.listSessionParticipantsReadOnly.mockReset().mockReturnValue(new Map());
-  mocks.hasSessionTranscriptEventsSync.mockReset().mockReturnValue(false);
-  mocks.readTranscriptMutationStateSync.mockReset().mockReturnValue({
-    observedAt: null,
-    updatedAt: null,
-  });
-  mocks.applySessionEntryReplacements.mockReset().mockImplementation(
-    async (params: {
-      activeSessionKey?: string;
-      requireWriteSuccess?: boolean;
-      sessionKeys?: readonly string[];
-      skipMaintenance?: boolean;
-      storePath: string;
-      update: (entries: Array<{ sessionKey: string; entry: SessionEntry }>) =>
-        | Promise<{
-            replacements?: Iterable<{ sessionKey: string; entry: SessionEntry }>;
-            result: unknown;
-          }>
-        | {
-            replacements?: Iterable<{ sessionKey: string; entry: SessionEntry }>;
-            result: unknown;
-          };
-    }) => {
-      let updateResult: Promise<unknown> | undefined;
-      await mocks.updateSessionStore(
-        params.storePath,
-        (store: Record<string, SessionEntry>) => {
-          updateResult = (async () => {
-            const keys = params.sessionKeys ?? Object.keys(store);
-            const snapshots = keys.flatMap((sessionKey) => {
-              const entry = store[sessionKey];
-              return entry ? [{ sessionKey, entry: structuredClone(entry) }] : [];
-            });
-            const planned = await params.update(snapshots);
-            for (const replacement of planned.replacements ?? []) {
-              if (store[replacement.sessionKey]) {
-                store[replacement.sessionKey] = structuredClone(replacement.entry);
-              }
-            }
-            return planned.result;
-          })();
-          return updateResult;
-        },
-        {
-          activeSessionKey: params.activeSessionKey,
-          requireWriteSuccess: params.requireWriteSuccess,
-          skipMaintenance: params.skipMaintenance,
-        },
-      );
-      // Empty store stubs must still run the projection; undefined can be its valid result.
-      return updateResult === undefined ? (await params.update([])).result : await updateResult;
-    },
-  );
-  mocks.persistSessionTranscriptTurn.mockReset().mockImplementation(
-    async (
-      scope: {
-        agentId?: string;
-        sessionId: string;
-        sessionKey: string;
-        sessionEntry?: SessionEntry;
-        storePath?: string;
-      },
-      options: {
-        messages: Array<{
-          message: unknown;
-          prepareMessageAfterIdempotencyCheck?: (message: unknown) => unknown;
-        }>;
-      },
-    ) => {
-      const candidate = options.messages[0]?.message;
-      const message =
-        options.messages[0]?.prepareMessageAfterIdempotencyCheck?.(candidate) ?? candidate;
-      if (!message) {
-        return { appendedCount: 0, messages: [], sessionEntry: scope.sessionEntry };
-      }
-      return {
-        appendedCount: 1,
-        messages: [
-          {
-            appended: true,
-            messageId: "test-user-turn",
-            message,
-            anchor: {
-              agentId: scope.agentId ?? "main",
-              sessionId: scope.sessionId,
-              sessionKey: scope.sessionKey,
-              storePath: scope.storePath ?? "/tmp/sessions.json",
-              generation: "test-generation",
-              entryId: "test-user-turn",
-              rawSeq: 1,
-              effectiveParentId: null,
-              activeMessagePosition: 0,
-            },
-          },
-        ],
-        sessionEntry: scope.sessionEntry,
-      };
-    },
-  );
-  mocks.patchSessionEntryTarget.mockReset().mockImplementation(
-    async (
-      scope: { storePath: string; target: SessionEntryTargetFixture },
-      update: (
-        entry: Record<string, unknown>,
-        context: { existingEntry?: Record<string, unknown> },
-      ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null,
-      options: {
-        fallbackEntry?: Record<string, unknown>;
-        replaceEntry?: boolean;
-      } = {},
-    ) =>
-      await mocks.updateSessionStore(
-        scope.storePath,
-        async (store: SessionStoreFixture) => {
-          const existing = selectFreshestTargetFixtureEntry(store, scope.target);
-          const base = existing?.entry ?? options.fallbackEntry;
-          if (!base) {
-            return null;
-          }
-          const patchContext = existing ? { existingEntry: structuredClone(existing.entry) } : {};
-          const patch = await update(structuredClone(base), patchContext);
-          if (!patch) {
-            return cloneSessionStoreFixtureEntry(base);
-          }
-          const fresh = selectFreshestTargetFixtureEntry(store, scope.target);
-          const writeBase = fresh?.entry ?? options.fallbackEntry;
-          if (!writeBase) {
-            return null;
-          }
-          const next = options.replaceEntry ? structuredClone(patch) : { ...writeBase, ...patch };
-          for (const key of new Set([scope.target.canonicalKey, ...scope.target.storeKeys])) {
-            delete store[key];
-          }
-          store[scope.target.canonicalKey] = next;
-          return next;
-        },
-        options,
-      ),
-  );
-}
+export const resetSessionAccessorMocks = createSessionAccessorMockReset(mocks);
 
 resetSessionAccessorMocks();
 

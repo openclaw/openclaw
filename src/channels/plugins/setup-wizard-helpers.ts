@@ -122,17 +122,14 @@ export function parseMentionOrPrefixedId(params: {
     return null;
   }
 
-  const mentionMatch = trimmed.match(params.mentionPattern);
-  if (mentionMatch?.[1]) {
-    return params.normalizeId ? params.normalizeId(mentionMatch[1]) : mentionMatch[1];
-  }
-
-  const stripped = params.prefixPattern ? trimmed.replace(params.prefixPattern, "") : trimmed;
-  if (!params.idPattern.test(stripped)) {
+  const mentionId = trimmed.match(params.mentionPattern)?.[1];
+  const id =
+    mentionId || (params.prefixPattern ? trimmed.replace(params.prefixPattern, "") : trimmed);
+  if (!mentionId && !params.idPattern.test(id)) {
     return null;
   }
 
-  return params.normalizeId ? params.normalizeId(stripped) : stripped;
+  return params.normalizeId ? params.normalizeId(id) : id;
 }
 
 export function normalizeAllowFromEntries(
@@ -522,27 +519,22 @@ export async function runSingleChannelSecretStep(
     ...promptState,
   });
 
-  if (result.action === "use-env") {
-    return {
-      cfg: params.applyUseEnv ? await params.applyUseEnv(params.cfg) : params.cfg,
-      action: result.action,
-      resolvedValue: normalizeOptionalString(params.envValue),
-    };
+  if (result.action === "keep") {
+    return { cfg: params.cfg, action: result.action };
   }
-
-  if (result.action === "set") {
-    return {
-      cfg: params.applySet
+  const cfg =
+    result.action === "use-env"
+      ? params.applyUseEnv
+        ? await params.applyUseEnv(params.cfg)
+        : params.cfg
+      : params.applySet
         ? await params.applySet(params.cfg, result.value, result.resolvedValue)
-        : params.cfg,
-      action: result.action,
-      resolvedValue: result.resolvedValue,
-    };
-  }
-
+        : params.cfg;
   return {
-    cfg: params.cfg,
+    cfg,
     action: result.action,
+    resolvedValue:
+      result.action === "use-env" ? normalizeOptionalString(params.envValue) : result.resolvedValue,
   };
 }
 
@@ -572,21 +564,19 @@ export async function promptSingleChannelSecretInput(params: {
     },
   });
 
-  if (selectedMode === "plaintext" && params.canUseEnv) {
-    const keepEnv = await params.prompter.confirm({
-      message: params.envPrompt,
-      initialValue: true,
-    });
-    if (keepEnv) {
-      return { action: "use-env" };
-    }
-  } else if (params.hasConfigToken && params.accountConfigured) {
+  const keepAction =
+    selectedMode === "plaintext" && params.canUseEnv
+      ? "use-env"
+      : params.hasConfigToken && params.accountConfigured
+        ? "keep"
+        : undefined;
+  if (keepAction) {
     const keep = await params.prompter.confirm({
-      message: params.keepPrompt,
+      message: keepAction === "use-env" ? params.envPrompt : params.keepPrompt,
       initialValue: true,
     });
     if (keep) {
-      return { action: "keep" };
+      return { action: keepAction };
     }
   }
 

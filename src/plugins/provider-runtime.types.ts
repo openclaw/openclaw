@@ -11,12 +11,6 @@ import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 type ModelProviderRequestTransportOverrides =
   import("../agents/provider-request-config.types.js").ModelProviderRequestTransportOverrides;
 
-type ProviderRuntimeProviderConfig = Partial<
-  Pick<ModelProviderConfig, "baseUrl" | "api" | "auth" | "models">
-> & {
-  headers?: unknown;
-};
-
 /**
  * Sync hook for provider-owned model ids that are not present in the local
  * registry/catalog yet.
@@ -28,7 +22,10 @@ type ProviderRuntimeProviderConfig = Partial<
 export type ProviderResolveDynamicModelContext = ProviderPreferRuntimeResolvedModelContext & {
   agentRuntimeId?: string;
   modelRegistry: ModelRegistry;
-  providerConfig?: ProviderRuntimeProviderConfig;
+  providerConfig?: Partial<Pick<ModelProviderConfig, "baseUrl" | "api" | "auth" | "models">> & {
+    headers?: unknown;
+    request?: ModelProviderConfig["request"];
+  };
   authProfileId?: string;
   authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
 };
@@ -101,6 +98,19 @@ export type ProviderPrepareRuntimeAuthContext = ProviderPreferRuntimeResolvedMod
   profileId?: string;
 };
 
+/** Transport identity available to every inference capability, without invented chat limits. */
+export type ProviderRuntimeAuthModel = Pick<ProviderRuntimeModel, "id" | "provider"> &
+  Partial<Pick<ProviderRuntimeModel, "name" | "api" | "baseUrl" | "headers">>;
+
+/** Capability-aware exchange; the legacy hook retains its shipped full chat-model contract. */
+export type ProviderPrepareRuntimeAuthContextV2 = Omit<
+  ProviderPrepareRuntimeAuthContext,
+  "model"
+> & {
+  capability: "chat" | "decision";
+  model: ProviderRuntimeAuthModel;
+};
+
 /**
  * Result of `prepareRuntimeAuth`.
  *
@@ -140,6 +150,7 @@ export type ProviderResolveUsageAuthContext = {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   provider: string;
+  /** @deprecated Await resolveApiKeyCandidatesFromConfigAndStore instead. Removal follows an announced ordinary stable release window. */
   resolveApiKeyFromConfigAndStore: (params?: {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
@@ -223,9 +234,6 @@ export type ProviderAuthDoctorHintContext = {
  * Use this to set provider defaults or rewrite provider-specific config keys
  * into the merged `extraParams` object. Return the full next extraParams object.
  */
-/** Provider-facing effort after OpenClaw lowers orchestration-only modes. */
-type ProviderTransportThinkingLevel = Exclude<ThinkLevel, "ultra">;
-
 export type ProviderPrepareExtraParamsContext = ProviderPreferRuntimeResolvedModelContext & {
   agentId?: string;
   /** Selected credential facts; excludes credential material. */
@@ -233,7 +241,8 @@ export type ProviderPrepareExtraParamsContext = ProviderPreferRuntimeResolvedMod
   nativeWebSearchAllowedByToolPolicy?: boolean;
   model?: ProviderRuntimeModel;
   extraParams?: Record<string, unknown>;
-  thinkingLevel?: ProviderTransportThinkingLevel;
+  /** Provider-facing effort after OpenClaw lowers orchestration-only modes. */
+  thinkingLevel?: Exclude<ThinkLevel, "ultra">;
 };
 
 export type ProviderExtraParamsForTransportContext = Omit<

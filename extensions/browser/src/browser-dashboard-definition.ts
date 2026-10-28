@@ -72,7 +72,7 @@ export async function readBrowserDashboardDefinition(
   }
   const agentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
   if (!agentId) {
-    throw new Error("Board did not return a canonical agent-scoped session identity");
+    throw new Error("Board did not return a full agent-scoped session identity");
   }
   const widget = snapshot.widgets.find((entry) => entry.name === request.name);
   if (

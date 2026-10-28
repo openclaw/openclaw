@@ -2,15 +2,18 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   formatDeferredPluginMigration,
+  readConfigWritePendingMigrations,
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { collectPluginConfigContractMatches } from "../plugins/config-contract-matches.js";
+import { normalizePluginPolicyId } from "../plugins/plugin-policy-id.js";
 import { parseConcreteConfigPath, toDotPath } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
-import type { ConfigWriteOptions } from "./io.types.js";
+import type { ConfigIoFactoryOptions, ConfigWriteOptions } from "./io.types.js";
 import type { OpenClawConfig } from "./types.js";
+import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 const snapshotMigrationFacts = new WeakMap<object, readonly DeferredPluginMigration[]>();
 
@@ -19,7 +22,7 @@ export function setDeferredPluginMigrationConfigFacts(
   source: object,
   pending: readonly DeferredPluginMigration[] | undefined,
 ): void {
-  if (pending?.length) {
+  if (pending !== undefined) {
     snapshotMigrationFacts.set(source, structuredClone(pending));
   }
 }
@@ -28,6 +31,19 @@ export function getDeferredPluginMigrationConfigFacts(
   source: unknown,
 ): readonly DeferredPluginMigration[] | undefined {
   return isRecord(source) ? snapshotMigrationFacts.get(source) : undefined;
+}
+
+export async function readConfigWriteMigrationFacts(
+  snapshot: Pick<ConfigFileSnapshot, "path" | "sourceConfig">,
+  env?: NodeJS.ProcessEnv,
+  options?: Pick<ConfigIoFactoryOptions, "deferredPluginMigrations">,
+): Promise<readonly DeferredPluginMigration[] | undefined> {
+  return await readConfigWritePendingMigrations(
+    snapshot.path,
+    env,
+    options?.deferredPluginMigrations ??
+      getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
+  );
 }
 
 function readPathValue(value: unknown, segments: readonly string[]): unknown {
@@ -50,6 +66,45 @@ function uniquePaths(paths: readonly string[][]): string[][] {
   return [...new Map(paths.map((path) => [JSON.stringify(path), path])).values()];
 }
 
+function pluginConfigPaths(config: unknown, pluginId: string): string[][] {
+  const entries = isRecord(config) && isRecord(config.plugins) ? config.plugins.entries : undefined;
+  return isRecord(entries)
+    ? Object.keys(entries)
+        .filter((id) => normalizePluginPolicyId(id) === normalizePluginPolicyId(pluginId))
+        .map((id) => ["plugins", "entries", id, "config"])
+    : [];
+}
+
+/** Empty plugin config has no settings; opaque legacy values still belong to their owner. */
+export function hasDeferredPluginMigrationConfig(
+  config: unknown,
+  pending: DeferredPluginMigration,
+): boolean {
+  if (
+    (pending.validationExcludedPaths ?? []).some(
+      (segments) => readPathValue(config, segments) !== undefined,
+    )
+  ) {
+    return true;
+  }
+  const configPaths = pluginConfigPaths(config, pending.pluginId);
+  return [...(pending.configPaths ?? []), ...configPaths].some((segments) => {
+    const value = readPathValue(config, segments);
+    return (
+      value !== undefined &&
+      !(
+        configPaths.some(
+          (path) =>
+            path.length === segments.length &&
+            path.every((segment, index) => segment === segments[index]),
+        ) &&
+        isRecord(value) &&
+        Object.keys(value).length === 0
+      )
+    );
+  });
+}
+
 /** Preserve only current source inputs owned by the deferred plugin or the shared session locator. */
 export function resolveDeferredPluginMigrationConfigPaths(params: {
   config: unknown;
@@ -62,7 +117,7 @@ export function resolveDeferredPluginMigrationConfigPaths(params: {
     ),
   );
   const configPaths = uniquePaths([
-    ["plugins", "entries", params.pluginId, "config"],
+    ...pluginConfigPaths(params.config, params.pluginId),
     ["session", "store"],
     ...compatibilityPaths,
   ]).filter((path) => readPathValue(params.config, path) !== undefined);
@@ -99,15 +154,37 @@ function restorePath(source: unknown, candidate: unknown, segments: readonly str
   return next;
 }
 
+function retainedPluginPaths(
+  pending: DeferredPluginMigration,
+  nextConfig: OpenClawConfig,
+  unsetPaths?: readonly (readonly string[])[],
+): readonly string[][] {
+  return (pending.configPaths ?? []).filter((path) => {
+    if (
+      path[0] !== "plugins" ||
+      path[1] !== "entries" ||
+      normalizePluginPolicyId(path[2] ?? "") !== normalizePluginPolicyId(pending.pluginId)
+    ) {
+      return true;
+    }
+    const entryPath = path.slice(0, 3);
+    return (
+      !unsetPaths?.some((unset) => isDeepStrictEqual(unset, entryPath)) ||
+      readPathValue(nextConfig, entryPath) !== undefined
+    );
+  });
+}
+
 /** Explicit edits must not report success after preservation restores their old values. */
 export function assertDeferredPluginMigrationConfigEditAllowed(params: {
   sourceConfig: unknown;
   nextConfig: OpenClawConfig;
   pending: readonly DeferredPluginMigration[];
   editedPaths: readonly (readonly string[])[];
+  unsetPaths?: readonly (readonly string[])[];
 }): void {
   for (const pending of params.pending) {
-    for (const retainedPath of pending.configPaths ?? []) {
+    for (const retainedPath of retainedPluginPaths(pending, params.nextConfig, params.unsetPaths)) {
       const intersects = params.editedPaths.some(
         (editedPath) =>
           retainedPath.every((segment, index) => editedPath[index] === segment) ||
@@ -136,17 +213,19 @@ export function preserveDeferredPluginMigrationConfig(params: {
   writeOptions?: Pick<ConfigWriteOptions, "explicitSetPaths" | "unsetPaths" | "auditOrigin">;
 }): OpenClawConfig {
   const { explicitSetPaths, unsetPaths, auditOrigin } = params.writeOptions ?? {};
+  const nextConfig = applyUnsetPathsForWrite(params.nextConfig, unsetPaths);
   if (params.pending.length > 0) {
     assertDeferredPluginMigrationConfigEditAllowed({
       ...params,
-      nextConfig: applyUnsetPathsForWrite(params.nextConfig, unsetPaths),
+      nextConfig,
+      unsetPaths,
       editedPaths:
         auditOrigin === "config-rpc" ? [[]] : [...(explicitSetPaths ?? []), ...(unsetPaths ?? [])],
     });
   }
   let next: unknown = params.nextConfig;
   for (const pending of params.pending) {
-    for (const path of pending.configPaths ?? []) {
+    for (const path of retainedPluginPaths(pending, nextConfig, unsetPaths)) {
       if (path.length > 0) {
         next = restorePath(params.sourceConfig, next, path);
       }

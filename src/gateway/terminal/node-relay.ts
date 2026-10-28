@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS } from "../../infra/node-commands.js";
 import { BoundedBuffer } from "../../shared/bounded-buffer.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -19,14 +20,10 @@ function parseExit(result: NodeInvokeResult): TerminalBackendExit {
     const raw =
       result.payloadJSON ??
       (result.payload === undefined ? undefined : JSON.stringify(result.payload));
-    if (!raw) {
+    const record = raw ? asOptionalRecord(JSON.parse(raw)) : undefined;
+    if (!record) {
       return { exitCode: 0 };
     }
-    const value = JSON.parse(raw) as unknown;
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return { exitCode: 0 };
-    }
-    const record = value as Record<string, unknown>;
     return {
       ...(typeof record.exitCode === "number" ? { exitCode: record.exitCode } : {}),
       ...(typeof record.signal === "number" ? { signal: record.signal } : {}),

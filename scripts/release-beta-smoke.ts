@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { shellEscapeBackslash as shellQuote } from "../src/shared/shell-quote.ts";
 import {
   booleanFlag,
   parseFlagArgs,
@@ -156,10 +157,6 @@ export function run(command: string, args: string[], input?: RunOptions): string
     throw new Error(`${command} ${args.join(" ")} failed with ${reason}${stderr}`);
   }
   return result.stdout ?? "";
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 const TELEGRAM_BETA_WORKFLOW_FILE = "npm-telegram-beta-e2e.yml";

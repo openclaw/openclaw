@@ -41,6 +41,7 @@
           "User-Agent": "claude-code/0.1.0"
         },
         "defaultModel": "kimi-for-coding",
+        "family": "moonshot",
         "models": [
           {
             "id": "k3",

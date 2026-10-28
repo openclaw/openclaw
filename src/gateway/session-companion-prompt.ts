@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { redactToolPayloadText } from "../logging/redact.js";
 import {
   selectSessionCompanionReferenceItems,
   type SessionCompanionThread,
@@ -79,7 +78,8 @@ export function selectDeltaNotes(
 } {
   const candidates = snapshot.notes
     .filter((note) => note.sequence > afterSequence)
-    .toSorted((left, right) => left.sequence - right.sequence);
+    // oxlint-disable-next-line unicorn/no-array-sort -- filter creates a private array, preserving snapshot note order.
+    .sort((left, right) => left.sequence - right.sequence);
   return {
     notes: selectSessionCompanionReferenceItems(candidates.toReversed(), DELTA_MAX_BYTES),
     lastSequence: candidates.at(-1)?.sequence ?? afterSequence,
@@ -111,7 +111,7 @@ export function composePromptMessages(params: {
 }
 
 export function sanitizeAnswer(value: string): string {
-  const redacted = redactToolPayloadText(value).trim();
+  const redacted = value.trim();
   if (redacted.includes(PRIVATE_REFERENCE_BEGIN) || redacted.includes(PRIVATE_REFERENCE_END)) {
     return "";
   }

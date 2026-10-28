@@ -1,40 +1,12 @@
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readHelperResults, type HelperActionResult } from "./helper-results.js";
+import { DIAL_BUNDLES, readHelperResults, type HelperActionResult } from "./helper-results.js";
 import type { FaceTimeHelperPeer, FaceTimeHelperSocketServer } from "./helper-rpc.js";
 import { retainFaceTimeDialCallUUID, type PendingFaceTimeDial } from "./outbound-call.js";
 import type { ActiveFaceTimeCall } from "./runtime-state.js";
 
-export const OUTBOUND_DIAL_HELPER_BUNDLES = new Set([
-  "com.apple.FaceTime",
-  "com.apple.FaceTime.FTConversationService",
-]);
-
 function readHelperPeers(result: HelperActionResult): FaceTimeHelperPeer[] {
-  const peers: FaceTimeHelperPeer[] = [];
-  for (const entry of readHelperResults(result)) {
-    const peer = entry.helperPeer;
-    if (
-      peer &&
-      typeof peer === "object" &&
-      "processId" in peer &&
-      "bundleIdentifier" in peer &&
-      "connectionGeneration" in peer &&
-      "processStartedAtMs" in peer &&
-      typeof peer.processId === "number" &&
-      typeof peer.bundleIdentifier === "string" &&
-      typeof peer.connectionGeneration === "number" &&
-      typeof peer.processStartedAtMs === "number"
-    ) {
-      peers.push({
-        bundleIdentifier: peer.bundleIdentifier,
-        processId: peer.processId,
-        processStartedAtMs: peer.processStartedAtMs,
-        connectionGeneration: peer.connectionGeneration,
-      });
-    }
-  }
-  return peers;
+  return readHelperResults(result).flatMap((entry) => (entry.helperPeer ? [entry.helperPeer] : []));
 }
 
 export function retainHelperResultPeers(
@@ -60,7 +32,7 @@ export function retainOutboundDialHelperPeers(
       continue;
     }
     for (const peer of readHelperPeers(entry)) {
-      if (OUTBOUND_DIAL_HELPER_BUNDLES.has(peer.bundleIdentifier)) {
+      if (DIAL_BUNDLES.has(peer.bundleIdentifier)) {
         peers.set(peer.processId, peer);
       }
     }
@@ -80,11 +52,7 @@ export function readOutboundProxyIdentifier(result: HelperActionResult): string 
 }
 
 export function hasDialHelperConfirmation(results: HelperActionResult[]): boolean {
-  return results.some(
-    (entry) =>
-      typeof entry.helperBundleIdentifier === "string" &&
-      OUTBOUND_DIAL_HELPER_BUNDLES.has(entry.helperBundleIdentifier),
-  );
+  return results.some((entry) => DIAL_BUNDLES.has(entry.helperBundleIdentifier ?? ""));
 }
 
 function hasDefinitiveDialHelperAbsence(
@@ -164,8 +132,7 @@ export async function reconcilePendingFaceTimeCarrier(params: {
     ) {
       return;
     }
-    const topologyGeneration =
-      typeof result.topologyGeneration === "number" ? result.topologyGeneration : undefined;
+    const topologyGeneration = result.topologyGeneration;
     const completeAbsence = hasDefinitiveDialHelperAbsence(result, params.peers.keys());
     if (
       completeAbsence &&

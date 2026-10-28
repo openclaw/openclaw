@@ -1,11 +1,14 @@
-// Watches dev source paths and restarts scripts/run-node.mjs when relevant
-// files change.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { isForegroundGatewayRunArgv } from "../gateway-run-argv.mjs";
+import {
+  GATEWAY_SERVICE_STOP_TIMEOUT_MS,
+  GATEWAY_SUPERVISOR_EXIT_MARGIN_MS,
+} from "../gateway-shutdown-budget.mjs";
 import { toErrorObject } from "./lib/error-format.mts";
 import { sleep } from "./lib/sleep.mjs";
 import {
@@ -19,7 +22,6 @@ const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 const WATCH_RESTART_SIGNAL = "SIGTERM";
 const WATCH_RESTARTABLE_CHILD_EXIT_CODES = new Set([143]);
 const WATCH_IGNORED_PATH_SEGMENTS = new Set([".git", "dist", "node_modules"]);
-const WATCH_LOCK_WAIT_MS = 5_000;
 const WATCH_LOCK_POLL_MS = 100;
 const WATCH_SHUTDOWN_KILL_GRACE_MS = 5_000;
 const WATCH_LOCK_DIR = path.join(".local", "watch-node");
@@ -30,6 +32,11 @@ type ProcessSignal = NodeJS.Signals;
 type WatchExit = number | ProcessSignal;
 type TimerHandle = ReturnType<typeof setTimeout>;
 type WatchPathClassifier = ReturnType<typeof createRunNodePathClassifier>;
+
+const resolveWatchShutdownGraceMs = (args: string[]) =>
+  isForegroundGatewayRunArgv([process.execPath, WATCH_NODE_RUNNER, ...args])
+    ? GATEWAY_SERVICE_STOP_TIMEOUT_MS + GATEWAY_SUPERVISOR_EXIT_MARGIN_MS
+    : WATCH_SHUTDOWN_KILL_GRACE_MS;
 
 type WatchLock = {
   pid: number;
@@ -184,11 +191,8 @@ const printFriendlyWatchStartupError = (err: unknown) => {
   console.error(err);
 };
 
-const loadWatcher = async (): Promise<WatcherFactory> =>
-  (await import("./watch-node-observation.mts")).createSourceObserver;
-
-const waitForWatcherRelease = async (lockPath: string, pid: number) => {
-  const deadline = Date.now() + WATCH_LOCK_WAIT_MS;
+const waitForWatcherRelease = async (lockPath: string, pid: number, timeoutMs: number) => {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!isProcessAlive(pid)) {
       return true;
@@ -240,7 +244,11 @@ const acquireWatchLock = async (cwd: string, args: string[], watchSession: strin
       }
     }
 
-    const released = await waitForWatcherRelease(lockPath, existingPid);
+    const released = await waitForWatcherRelease(
+      lockPath,
+      existingPid,
+      resolveWatchShutdownGraceMs(args),
+    );
     if (!released) {
       logWatcher(`Timed out waiting for watcher pid ${existingPid} to exit.`);
       return null;
@@ -259,9 +267,6 @@ const releaseWatchLock = (lockHandle: { lockPath: string; pid: number } | null) 
   }
 };
 
-/**
- * Runs the watch loop and restarts the child process on relevant changes.
- */
 export async function runWatchMain(): Promise<WatchExit> {
   const cwd = process.cwd();
   const args = process.argv.slice(2);
@@ -293,6 +298,7 @@ export async function runWatchMain(): Promise<WatchExit> {
     let autoDoctorAttempted = false;
     let shutdownExitCode: number | null = null;
     let shutdownKillTimer: TimerHandle | null = null;
+    let shutdownGraceMs = WATCH_SHUTDOWN_KILL_GRACE_MS;
     let watcherStartupError: Error | null = null;
 
     const signalWatchProcess = (child: ChildProcess, signal: ProcessSignal) => {
@@ -331,12 +337,8 @@ export async function runWatchMain(): Promise<WatchExit> {
       if (shutdownKillTimer) {
         clearTimeout(shutdownKillTimer);
       }
-      if (onSigInt) {
-        process.off("SIGINT", onSigInt);
-      }
-      if (onSigTerm) {
-        process.off("SIGTERM", onSigTerm);
-      }
+      process.off("SIGINT", onSigInt);
+      process.off("SIGTERM", onSigTerm);
       // Keep ownership until physical observation retires. A replacement must
       // not acquire the lock while this owner still has live watcher resources.
       void (async () => {
@@ -390,7 +392,7 @@ export async function runWatchMain(): Promise<WatchExit> {
       shutdownKillTimer ??= setTimeout(() => {
         shutdownKillTimer = null;
         signalWatchProcess(shutdownProcess, "SIGKILL");
-      }, WATCH_SHUTDOWN_KILL_GRACE_MS);
+      }, shutdownGraceMs);
     };
 
     const settleIfShuttingDown = (exitedProcess: ChildProcess | null) => {
@@ -412,6 +414,9 @@ export async function runWatchMain(): Promise<WatchExit> {
         exitSignal: ProcessSignal | null,
       ) => void,
     ) => {
+      // run-node owns Gateway draining. Give it the service budget plus time
+      // to finish its own process-group cleanup before this outer owner kills it.
+      shutdownGraceMs = resolveWatchShutdownGraceMs(childArgs.slice(1));
       watchProcess = spawn(process.execPath, childArgs, {
         cwd,
         detached: useChildProcessGroup,
@@ -506,7 +511,7 @@ export async function runWatchMain(): Promise<WatchExit> {
 
     const resolveCreateWatcher = async () => {
       try {
-        return await loadWatcher();
+        return (await import("./watch-node-observation.mts")).createSourceObserver;
       } catch (err) {
         if (isInvalidPackageConfigError(err)) {
           printFriendlyWatchStartupError(err);

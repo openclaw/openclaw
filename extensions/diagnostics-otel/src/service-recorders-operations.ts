@@ -3,17 +3,19 @@ import {
   normalizeDiagnosticValue,
   normalizeDiagnosticLane,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import type {
-  DiagnosticEventMetadata,
-  DiagnosticEventPayload,
-  DiagnosticEventPrivateData,
-} from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOtelErrorMessage } from "./service-content-normalization.js";
+import { assignOptionalNumberAttrs } from "./service-attributes.js";
+import {
+  assignOtelContentAttr,
+  normalizeOtelErrorMessage,
+} from "./service-content-normalization.js";
+import type { DiagnosticHandlers } from "./service-events.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
-import type { SessionRecoveryDiagnosticEvent, TalkDiagnosticEvent } from "./service-types.js";
+import type { SessionRecoveryDiagnosticEvent } from "./service-types.js";
 
 export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
+  const rowSelections = runtime.sessionRowSelectionBaseline;
   const sessionRecoveryAttrs = (evt: SessionRecoveryDiagnosticEvent) => {
     const attrs: Record<string, string> = { "openclaw.state": evt.state };
     if (evt.reason) {
@@ -40,10 +42,63 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
   };
 
   return {
-    recordGatewayRpc(
-      evt: Extract<DiagnosticEventPayload, { type: "gateway.rpc" }>,
-      metadata: DiagnosticEventMetadata,
-    ) {
+    "sessions.list.baseline.retired"(evt, metadata) {
+      if (metadata.trusted) {
+        runtime.sessionsListBaselineRetirementsCounter.add(1, { cause: evt.cause });
+      }
+    },
+    "gateway.ws.event"(evt, metadata) {
+      if (!metadata.trusted) {
+        return;
+      }
+      const attrs = { "openclaw.gateway.ws.event": evt.event };
+      runtime.gatewayWsEventsCounter.add(evt.count, attrs);
+      runtime.gatewayWsEventBytesCounter.add(evt.bytes, attrs);
+      if (evt.wireBytes !== undefined) {
+        runtime.gatewayWsEventWireBytesCounter.add(evt.wireBytes, attrs);
+      }
+      for (const [le, count] of Object.entries(evt.frameBytes ?? {})) {
+        runtime.gatewayWsEventFrameBytesCounter.add(count, { ...attrs, le });
+      }
+      if (evt.presenceMode) {
+        const presenceAttrs = { "openclaw.gateway.ws.mode": evt.presenceMode };
+        runtime.gatewayWsPresenceFramesCounter.add(evt.count, presenceAttrs);
+        runtime.gatewayWsPresenceBytesCounter.add(evt.bytes, presenceAttrs);
+      }
+      if (evt.sessionEvent) {
+        const sessionAttrs = {
+          ...attrs,
+          "openclaw.gateway.ws.reason": evt.sessionEvent.reason,
+          "openclaw.gateway.ws.delivery": evt.sessionEvent.delivery,
+        };
+        runtime.gatewayWsSessionEventFramesCounter.add(evt.count, sessionAttrs);
+        runtime.gatewayWsSessionEventBytesCounter.add(evt.bytes, sessionAttrs);
+      }
+    },
+    "gateway.ws.connections"(evt, metadata) {
+      if (metadata.trusted) {
+        runtime.gatewayWsOperatorConnectionsGauge.record(evt.operators);
+      }
+    },
+    "sessions.list.retention"(evt, metadata) {
+      if (metadata.trusted) {
+        runtime.sessionsListRetainedViewsGauge.record(evt.views);
+        runtime.sessionsListRetainedRefsGauge.record(evt.refs);
+        runtime.sessionsListRetainedBytesGauge.record(evt.estimatedBytes);
+      }
+    },
+    "sessions.event.retention"(evt, metadata) {
+      if (metadata.trusted) {
+        runtime.sessionEventRowsRetainedEntriesGauge.record(evt.entries);
+        runtime.sessionEventRowsRetainedBytesGauge.record(evt.estimatedBytes);
+      }
+    },
+    "sessions.event.rows.reset"(evt, metadata) {
+      if (metadata.trusted) {
+        runtime.sessionEventRowsResetCounter.add(evt.count, { cause: evt.cause });
+      }
+    },
+    "gateway.rpc"(evt, metadata) {
       if (!metadata.trusted || (evt.phase === "response" && evt.firstResponse === false)) {
         return;
       }
@@ -59,6 +114,11 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       runtime.gatewayRpcOutcomesCounter.add(1, outcomeAttrs);
       switch (evt.phase) {
         case "response":
+          if (evt.outcome === "ok" && evt.sessionsList?.baseMissReason) {
+            runtime.sessionsListBaseMissesCounter.add(1, {
+              reason: evt.sessionsList.baseMissReason,
+            });
+          }
           if (evt.outcome === "ok" || evt.outcome === "error") {
             runtime.gatewayRpcFirstResponseHistogram.record(evt.durationMs, attrs);
           }
@@ -100,12 +160,12 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       span.end(evt.ts);
     },
-    recordLaneEnqueue(evt: Extract<DiagnosticEventPayload, { type: "queue.lane.enqueue" }>) {
+    "queue.lane.enqueue"(evt) {
       const attrs = { "openclaw.lane": normalizeDiagnosticLane(evt.lane) };
       runtime.laneEnqueueCounter.add(1, attrs);
       runtime.queueDepthHistogram.record(evt.queueSize, attrs);
     },
-    recordLaneDequeue(evt: Extract<DiagnosticEventPayload, { type: "queue.lane.dequeue" }>) {
+    "queue.lane.dequeue"(evt) {
       const attrs = { "openclaw.lane": normalizeDiagnosticLane(evt.lane) };
       runtime.laneDequeueCounter.add(1, attrs);
       runtime.queueDepthHistogram.record(evt.queueSize, attrs);
@@ -113,23 +173,21 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         runtime.queueWaitHistogram.record(evt.waitMs, attrs);
       }
     },
-    recordSessionState(evt: Extract<DiagnosticEventPayload, { type: "session.state" }>) {
+    "session.state"(evt) {
       const attrs: Record<string, string> = { "openclaw.state": evt.state };
       if (evt.reason) {
         attrs["openclaw.reason"] = redactSensitiveText(evt.reason);
       }
       runtime.sessionStateCounter.add(1, attrs);
     },
-    recordSessionTurnCreated(
-      evt: Extract<DiagnosticEventPayload, { type: "session.turn.created" }>,
-    ) {
+    "session.turn.created"(evt) {
       runtime.sessionTurnCreatedCounter.add(1, {
         "openclaw.agent": normalizeDiagnosticValue(evt.agentId, "unknown"),
         "openclaw.channel": normalizeDiagnosticValue(evt.channel, "unknown"),
         "openclaw.trigger": evt.trigger,
       });
     },
-    recordSessionStuck(evt: Extract<DiagnosticEventPayload, { type: "session.stuck" }>) {
+    "session.stuck"(evt) {
       const attrs: Record<string, string> = { "openclaw.state": evt.state };
       runtime.sessionStuckCounter.add(1, attrs);
       if (typeof evt.ageMs === "number") {
@@ -145,17 +203,13 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       span.setStatus({ code: SpanStatusCode.ERROR, message: "session stuck" });
       span.end();
     },
-    recordSessionRecoveryRequested(
-      evt: Extract<DiagnosticEventPayload, { type: "session.recovery.requested" }>,
-    ) {
+    "session.recovery.requested"(evt) {
       const attrs = sessionRecoveryAttrs(evt);
       attrs["openclaw.action"] = evt.allowActiveAbort ? "abort" : "recover";
       runtime.sessionRecoveryRequestedCounter.add(1, attrs);
       runtime.sessionRecoveryAgeHistogram.record(evt.ageMs, attrs);
     },
-    recordSessionRecoveryCompleted(
-      evt: Extract<DiagnosticEventPayload, { type: "session.recovery.completed" }>,
-    ) {
+    "session.recovery.completed"(evt) {
       const attrs = sessionRecoveryAttrs(evt);
       attrs["openclaw.status"] = evt.status;
       attrs["openclaw.action"] = normalizeDiagnosticValue(evt.action, "unknown");
@@ -165,7 +219,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       runtime.sessionRecoveryCompletedCounter.add(1, attrs);
       runtime.sessionRecoveryAgeHistogram.record(evt.ageMs, attrs);
     },
-    recordTalkEvent(evt: TalkDiagnosticEvent, metadata: DiagnosticEventMetadata) {
+    "talk.event"(evt, metadata) {
       if (!metadata.trusted) {
         return;
       }
@@ -184,10 +238,10 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         runtime.talkAudioBytesHistogram.record(evt.byteLength, attrs);
       }
     },
-    recordRunAttempt(evt: Extract<DiagnosticEventPayload, { type: "run.attempt" }>) {
+    "run.attempt"(evt) {
       runtime.runAttemptCounter.add(1, { "openclaw.attempt": evt.attempt });
     },
-    recordToolLoop(evt: Extract<DiagnosticEventPayload, { type: "tool.loop" }>) {
+    "tool.loop"(evt) {
       const attrs = {
         "openclaw.toolName": normalizeDiagnosticValue(evt.toolName, "tool"),
         "openclaw.loop.level": evt.level,
@@ -215,10 +269,24 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       span.end(evt.ts);
     },
-    recordMemoryUsageMetrics,
-    recordMemoryPressure(
-      evt: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.pressure" }>,
-    ) {
+    "diagnostic.memory.sample": (evt, metadata) => {
+      recordMemoryUsageMetrics(evt);
+      const totals = metadata.trusted && evt.memory.sessionRowSelections;
+      if (!totals) {
+        return;
+      }
+      for (const selection of totals.selections) {
+        const key = `${selection.kind}:${selection.task}`;
+        const previous = rowSelections.selections.get(key);
+        const attrs = { kind: selection.kind, task: selection.task };
+        runtime.sessionRowSelectionsCounter.add(selection.calls - (previous?.calls ?? 0), attrs);
+        runtime.sessionRowSelectionRowsCounter.add(selection.rows - (previous?.rows ?? 0), attrs);
+        rowSelections.selections.set(key, selection);
+      }
+      runtime.sessionRowSelectionResetsCounter.add(totals.resets - rowSelections.resets);
+      rowSelections.resets = totals.resets;
+    },
+    "diagnostic.memory.pressure"(evt) {
       const attrs = {
         "openclaw.memory.level": evt.level,
         "openclaw.memory.reason": evt.reason,
@@ -235,14 +303,12 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         "openclaw.memory.heap_total_bytes": evt.memory.heapTotalBytes,
         "openclaw.memory.external_bytes": evt.memory.externalBytes,
         "openclaw.memory.array_buffers_bytes": evt.memory.arrayBuffersBytes,
-        ...(evt.thresholdBytes !== undefined
-          ? { "openclaw.memory.threshold_bytes": evt.thresholdBytes }
-          : {}),
-        ...(evt.rssGrowthBytes !== undefined
-          ? { "openclaw.memory.rss_growth_bytes": evt.rssGrowthBytes }
-          : {}),
-        ...(evt.windowMs !== undefined ? { "openclaw.memory.window_ms": evt.windowMs } : {}),
       };
+      assignOptionalNumberAttrs(spanAttrs, "openclaw.memory.", {
+        threshold_bytes: evt.thresholdBytes,
+        rss_growth_bytes: evt.rssGrowthBytes,
+        window_ms: evt.windowMs,
+      });
       const span = runtime.spanWithDuration("openclaw.memory.pressure", spanAttrs, 0, {
         endTimeMs: evt.ts,
       });
@@ -254,9 +320,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       span.end(evt.ts);
     },
-    recordAsyncQueueDropped(
-      evt: Extract<DiagnosticEventPayload, { type: "diagnostic.async_queue.dropped" }>,
-    ) {
+    "diagnostic.async_queue.dropped"(evt) {
       runtime.asyncQueueDroppedCounter.add(evt.droppedEvents, {
         "openclaw.diagnostic.async_queue.drop_class": "total",
       });
@@ -272,11 +336,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         }
       }
     },
-    recordRunCompleted(
-      evt: Extract<DiagnosticEventPayload, { type: "run.completed" }>,
-      metadata: DiagnosticEventMetadata,
-      privateData: DiagnosticEventPrivateData,
-    ) {
+    "run.completed"(evt, metadata, privateData) {
       const attrs: Record<string, string | number> = {
         "openclaw.outcome": evt.outcome,
         "openclaw.provider": evt.provider ?? "unknown",
@@ -307,6 +367,10 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       if (redactedError) {
         spanAttrs["openclaw.error"] = redactedError;
       }
+      if (runtime.captureContent) {
+        assignOtelContentAttr(spanAttrs, "input.value", privateData.messageContent?.userPrompt);
+        assignOtelContentAttr(spanAttrs, "output.value", privateData.messageContent?.finalResponse);
+      }
       const trustedTrace = runtime.trustedTraceContext(evt, metadata);
       const trackedSpan = trustedTrace?.spanId
         ? runtime.activeTrustedSpans.get(trustedTrace.spanId)
@@ -328,5 +392,5 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       runtime.completeTrackedLifecycleSpan(trackedSpan ? trustedTrace : undefined, span, evt.ts);
     },
-  };
+  } satisfies DiagnosticHandlers;
 }

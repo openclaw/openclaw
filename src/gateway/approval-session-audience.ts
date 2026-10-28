@@ -8,20 +8,23 @@ import {
   prepareOptionalSubagentSessionListReadCache,
 } from "../agents/subagents/registry/subagent-registry-state.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS } from "./operator-approval-store.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 
 /** Resolves the source session and its operator-visible ancestor audience. */
-function resolveApprovalSessionAudience(
+async function resolveApprovalSessionAudience(
   cfg: OpenClawConfig,
   persisted: boolean,
   source: string,
   sourceAgentId?: string | null,
-): string[] {
+  sourceMemory?: ReturnType<typeof captureSessionEntryMetadataRead>,
+): Promise<string[]> {
   const canonicalize = (sessionKey: string | null | undefined, relativeToSessionKey?: string) => {
     const raw = sessionKey?.trim();
     if (!raw) {
@@ -81,11 +84,18 @@ function resolveApprovalSessionAudience(
       parsed?.rest.toLowerCase() === "global"
         ? { agentId: normalizeAgentId(parsed.agentId), sessionKey: "global" }
         : { agentId: resolveSessionStoreAgentId(cfg, sessionKey), sessionKey };
-    const storedLineage = loadSessionEntryReadOnly({
-      ...target,
-      clone: false,
-      hydrateSkillPromptRefs: false,
-    });
+    const memory = isIncognitoSessionKey(sessionKey)
+      ? sessionKey === sourceSessionKey
+        ? sourceMemory
+        : captureSessionEntryMetadataRead(target, () => getAsyncWorkSignal()?.throwIfAborted())
+      : undefined;
+    const storedLineage = memory
+      ? memory.readCurrent()
+      : await readSessionEntryReadOnlyInWorker({
+          ...target,
+          clone: false,
+          hydrateSkillPromptRefs: false,
+        });
     const parentSessionKey = storedLineage?.parentSessionKey?.trim()
       ? storedLineage.parentSessionKey
       : storedLineage?.spawnedBy;
@@ -120,17 +130,35 @@ export async function resolveApprovalSessionAudienceWithFallback(
   sourceSessionKey: string,
   sourceAgentId?: string | null,
 ): Promise<string[]> {
+  const memory = captureSessionEntryMetadataRead(
+    {
+      sessionKey: sourceSessionKey,
+      ...(sourceAgentId ? { agentId: sourceAgentId } : {}),
+    },
+    () => getAsyncWorkSignal()?.throwIfAborted(),
+  );
+  const initial = memory?.readCurrent();
   let persisted: boolean;
   do {
     persisted = await prepareOptionalSubagentSessionListReadCache();
     getAsyncWorkSignal()?.throwIfAborted();
   } while (persisted && !getSubagentSessionListReadSnapshotIdentity());
+  if (memory) {
+    const current = memory.readCurrent();
+    if (
+      current?.sessionId !== initial?.sessionId ||
+      current?.lifecycleRevision !== initial?.lifecycleRevision
+    ) {
+      throw new Error("Approval source session changed during preparation");
+    }
+  }
   try {
-    return resolveApprovalSessionAudience(
+    return await resolveApprovalSessionAudience(
       getRuntimeConfig(),
       persisted,
       sourceSessionKey,
       sourceAgentId,
+      memory,
     );
   } catch {
     return [resolveApprovalFallbackAudienceSessionKey(sourceSessionKey, sourceAgentId)];

@@ -42,10 +42,6 @@ export async function installBenchmarkRegistryRuntime(mode: "memory" | "durable"
     const persistence =
       await import("../src/agents/subagents/registry/subagent-registry-persistence.js");
     if (mode === "memory") {
-      const { bindSubagentRunRecord } =
-        await import("../src/agents/subagents/registry/subagent-registry.store.codec.js");
-      const { subagentRunRowVersion } =
-        await import("../src/agents/subagents/registry/subagent-registry.store.row.js");
       const mutate = async <P extends SubagentRunMutation<unknown>>(
         runIds: readonly string[],
         plan: (rows: ReadonlyMap<string, SubagentRunRecord>) => P,
@@ -61,7 +57,7 @@ export async function installBenchmarkRegistryRuntime(mode: "memory" | "durable"
               options.onPublished?.(postimages, value);
             }
           },
-          commit: async (planned, _versions, authority) => {
+          commit: async (planned, authority) => {
             authority.assertCurrent();
             if (planned.terminalEvents?.length) {
               throw new Error("Memory benchmark attempted durable terminal signals");
@@ -71,13 +67,7 @@ export async function installBenchmarkRegistryRuntime(mode: "memory" | "durable"
                 ([runId, row]) => [runId, row ? structuredClone(row) : null] as const,
               ),
             );
-            const versions = new Map(
-              [...postimages].map(
-                ([runId, row]) =>
-                  [runId, row ? subagentRunRowVersion(bindSubagentRunRecord(row)) : null] as const,
-              ),
-            );
-            return { value: planned.value, postimages, versions };
+            return { value: planned.value, postimages };
           },
         });
       };
@@ -87,8 +77,8 @@ export async function installBenchmarkRegistryRuntime(mode: "memory" | "durable"
       } satisfies typeof persistence);
     }
 
-    const gatewayRuntime = await import("../src/gateway/server-recovery-runtime-context.js");
-    replaceModule("../src/gateway/server-recovery-runtime-context.ts", {
+    const gatewayRuntime = await import("../src/gateway/server-lifecycle-runtime-context.js");
+    replaceModule("../src/gateway/server-lifecycle-runtime-context.ts", {
       ...gatewayRuntime,
       bindGatewayLifecycleRequest: () => request,
     } satisfies typeof gatewayRuntime);

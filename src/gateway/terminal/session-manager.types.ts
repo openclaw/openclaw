@@ -50,11 +50,15 @@ export type TerminalSession = {
   detachedAtMs: number | null;
   /** Last PTY input/output timestamp; drives idle eviction under pool pressure. */
   lastActivityAtMs: number;
-  /** Claimed by an in-flight open; killed only after its replacement spawns. */
-  evictionClaimed?: boolean;
 };
 
 export type TerminalSessionManagerOptions = {
+  /** Host-selected restriction; never read from Gateway configuration. */
+  disableGatewayLocalTerminals?: boolean;
+  withOpenAdmission?: (
+    request: TerminalOpenRequest,
+    run: (request: TerminalOpenRequest) => Promise<TerminalOpenOutcome>,
+  ) => Promise<TerminalOpenOutcome>;
   emit: TerminalEventSink;
   getBufferedAmount?: (connId: string) => number | undefined;
   spawn?: typeof spawnTerminalPty;
@@ -79,13 +83,15 @@ export type TerminalOpenRequest = {
   env: Record<string, string>;
   /** Request-scoped cancellation; a late backend is killed before registration. */
   signal?: AbortSignal;
+  /** The trusted caller marks node relays explicitly; omitted requests execute on the Gateway. */
+  executionHost?: "gateway" | "node";
   createBackend?: () => Promise<TerminalBackend>;
   stageUpload?: (file: TerminalUploadFile) => Promise<TerminalUploadResult>;
 };
 
 export type TerminalOpenOutcome =
   | ({ ok: true } & Omit<TerminalOpenResult, "confined" | "title">)
-  | { ok: false; code: "limit" | "spawn_failed" | "closed"; message: string };
+  | { ok: false; code: "limit" | "spawn_failed" | "closed" | "disabled"; message: string };
 
 export type TerminalAgentActionOutcome =
   | { ok: true }

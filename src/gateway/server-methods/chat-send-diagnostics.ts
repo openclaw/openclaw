@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-events.js";
+import { createPhaseTimings } from "./phase-timings.js";
 
 const PHASES = [
   "authority",
@@ -17,8 +18,8 @@ const PHASES = [
   "response",
   "dispatch",
 ] as const;
-type ChatSendPhase = (typeof PHASES)[number];
-type PhaseScope = { mark: (phase?: ChatSendPhase) => void; finish: () => void };
+type ChatSendPhase = (typeof PHASES)[number] | `detail.${string}`;
+type PostAckStage = "startup" | "steer" | "queued";
 
 export type ChatSendDiagnostics = ReturnType<typeof startChatSendDiagnostics>;
 
@@ -41,26 +42,33 @@ export function readChatSendDiagnostics(request: object): ChatSendDiagnostics | 
 /** Request-owned totals; nested and parallel phases can overlap. */
 export function startChatSendDiagnostics(log: { info(message: string): void }) {
   const emit = createQueuedDiagnosticPhaseEmitter();
-  const totals = new Map<ChatSendPhase, number>();
-  const active = new Set<(now: number) => void>();
-  let stage: "request" | "startup" = "request";
+  const timing = createPhaseTimings<ChatSendPhase>();
+  const { totals } = timing;
+  let stage: "request" | PostAckStage = "request";
   let startedAt = performance.now();
   let acknowledgedMs: number | undefined;
   let finished = false;
 
   const report = () => {
     const now = performance.now();
-    for (const flush of active) {
-      flush(now);
-    }
+    timing.flush(now);
     const elapsedMs = now - startedAt;
-    const endedAt = Date.now();
+    const slow = elapsedMs >= 1_000;
+    if (!slow && !emit) {
+      totals.clear();
+      startedAt = now;
+      return elapsedMs;
+    }
+    const endedAt = emit ? Date.now() : 0;
     try {
-      let message = `slow chat send ${Math.round(elapsedMs)}ms stage=${stage}`;
-      if (acknowledgedMs !== undefined) {
+      let message = slow ? `slow chat send ${Math.round(elapsedMs)}ms stage=${stage}` : "";
+      if (slow && acknowledgedMs !== undefined) {
         message += ` ack=${Math.round(acknowledgedMs)}ms`;
       }
-      for (const phase of PHASES) {
+      for (const phase of [
+        ...PHASES,
+        ...[...totals.keys()].filter((name) => name.startsWith("detail.")).toSorted(),
+      ]) {
         const durationMs = totals.get(phase);
         if (durationMs === undefined) {
           continue;
@@ -72,9 +80,11 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
           durationMs,
           details: { stage },
         });
-        message += ` ${phase}=${Math.round(durationMs)}ms`;
+        if (slow) {
+          message += ` ${phase}=${Math.round(durationMs)}ms`;
+        }
       }
-      if (elapsedMs >= 1_000) {
+      if (slow) {
         log.info(message);
       }
     } catch {
@@ -85,47 +95,45 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
     return elapsedMs;
   };
 
-  const finish = () => {
+  const finish = (disposition?: {
+    isSteered(): boolean;
+    isEnqueued(): boolean;
+    isTerminal(): boolean;
+  }) => {
     if (!finished) {
+      if (disposition?.isSteered()) {
+        stage = "steer";
+      } else if (disposition?.isEnqueued() || disposition?.isTerminal()) {
+        stage = "queued";
+      }
       report();
       finished = true;
-      active.clear();
+      timing.close();
     }
   };
+  const scope = (phase: ChatSendPhase) => (finished ? undefined : timing.scope(phase));
   return {
-    scope(initialPhase: ChatSendPhase): PhaseScope | undefined {
-      if (finished) {
+    scope,
+    observeSpan: (
+      name: string,
+      attributes: Record<string, unknown> | undefined,
+      durationMs?: number,
+    ) => {
+      const spanName = name === "agent.prepare" ? attributes?.stage : name;
+      if (typeof spanName !== "string" || finished) {
         return undefined;
       }
-      let phase: ChatSendPhase | undefined = initialPhase;
-      let phaseStartedAt = performance.now();
-      let closed = false;
-      const flush = (now: number) => {
-        if (phase) {
-          totals.set(phase, (totals.get(phase) ?? 0) + now - phaseStartedAt);
-        }
-        phaseStartedAt = now;
-      };
-      active.add(flush);
-      const scope: PhaseScope = {
-        mark(nextPhase) {
-          if (!closed && !finished) {
-            flush(performance.now());
-            phase = nextPhase;
-          }
-        },
-        finish() {
-          scope.mark();
-          closed = true;
-          active.delete(flush);
-        },
-      };
-      return scope;
+      const phase = `detail.${spanName}` as const;
+      if (durationMs !== undefined) {
+        totals.set(phase, (totals.get(phase) ?? 0) + durationMs);
+        return undefined;
+      }
+      return scope(phase)?.finish;
     },
-    acknowledge() {
+    acknowledge(disposition: PostAckStage = "startup") {
       if (!finished && stage === "request") {
         acknowledgedMs = report();
-        stage = "startup";
+        stage = disposition;
       }
     },
     finish,

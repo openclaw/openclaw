@@ -13,6 +13,7 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import type { SqliteMutationWorkerCoordination } from "./session-accessor.sqlite-worker-coordination.js";
 import type { SqliteMutationWorkerMessage } from "./session-accessor.sqlite-worker-request.js";
+import type { WorkerCleanup } from "./session-accessor.sqlite-worker-transport.js";
 
 export type SqliteReclamationClaim = Pick<OpenClawAgentDatabaseClaim, "identity" | "assertCurrent">;
 
@@ -23,7 +24,7 @@ export type SqliteReclamationExistingSource = Pick<
 > & {
   birthtime?: string;
 };
-export type SqliteReclamationPreparedSource = Omit<
+type SqliteReclamationPreparedSource = Omit<
   ReturnType<typeof readOpenClawAgentDatabaseIdentity>,
   "identity"
 > & { identity: string };
@@ -42,7 +43,6 @@ export type SqliteReclamationPrepareRequest = {
 export type SqliteReclamationWorkerRequest = {
   type: "reclaim";
   operationId: number;
-  commitGate: SharedArrayBuffer;
   plan: SqliteArchiveReclamationPlan;
   coordination: SqliteMutationWorkerCoordination;
 };
@@ -54,14 +54,12 @@ export type SqliteReclamationWorkerCloseRequest = {
 export type SqliteCanonicalValidationWorkerRequest = {
   type: "canonical-validation";
   operationId: number;
-  commitGate: SharedArrayBuffer;
   databaseOptions: SqliteSessionReclamationPlan["databaseOptions"];
   maxRows: number;
   maxBytes: number;
   initializeCanonicalValidation: boolean;
   coordination: SqliteMutationWorkerCoordination;
 };
-export type WorkerCleanup = { cleanupWarnings: string[]; settled: boolean };
 export type SqliteReclamationWorkerMessage =
   | SqliteMutationWorkerMessage<SqliteSessionReclamationResult | SqliteReclamationPreparation>
   | { type: "lease"; receipt: OpenClawAgentDatabaseWorkerLeaseReceipt }

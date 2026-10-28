@@ -1,21 +1,9 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { InboundDebounceByProvider } from "../../../config/types.messages.js";
-import {
-  normalizePersistedQueueMode,
-  normalizeQueueDropPolicy,
-  normalizeQueueMode,
-} from "./normalize.js";
+import { normalizePersistedQueueMode } from "./normalize.js";
 import { DEFAULT_QUEUE_CAP, DEFAULT_QUEUE_DEBOUNCE_MS, DEFAULT_QUEUE_DROP } from "./state.js";
 import type { QueueSettings, ResolveQueueSettingsParams } from "./types.js";
 
-function resolveChannelDebounce(
-  byChannel: InboundDebounceByProvider | undefined,
-  channelKey: string | undefined,
-): number | undefined {
-  if (!channelKey || !byChannel) {
-    return undefined;
-  }
-  const value = byChannel[channelKey];
+export function normalizeQueueDebounce(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
 }
 
@@ -26,13 +14,13 @@ export function resolveQueueSettingsCore(params: ResolveQueueSettingsParams): Qu
   const resolvedMode =
     params.inlineMode ??
     normalizePersistedQueueMode(params.sessionEntry?.queueMode) ??
-    normalizeQueueMode(providerModeRaw) ??
-    normalizeQueueMode(queueCfg?.mode) ??
+    providerModeRaw ??
+    queueCfg?.mode ??
     "steer";
   const debounceRaw =
     params.inlineOptions?.debounceMs ??
     params.sessionEntry?.queueDebounceMs ??
-    resolveChannelDebounce(queueCfg?.debounceMsByChannel, channelKey) ??
+    (channelKey ? queueCfg?.debounceMsByChannel?.[channelKey] : undefined) ??
     params.pluginDebounceMs ??
     DEFAULT_QUEUE_DEBOUNCE_MS;
   const capRaw =
@@ -43,12 +31,12 @@ export function resolveQueueSettingsCore(params: ResolveQueueSettingsParams): Qu
   const dropRaw =
     params.inlineOptions?.dropPolicy ??
     params.sessionEntry?.queueDrop ??
-    normalizeQueueDropPolicy(queueCfg?.drop) ??
+    queueCfg?.drop ??
     DEFAULT_QUEUE_DROP;
   return {
     mode: resolvedMode,
-    debounceMs: typeof debounceRaw === "number" ? Math.max(0, debounceRaw) : undefined,
-    cap: typeof capRaw === "number" ? Math.max(1, Math.floor(capRaw)) : undefined,
+    debounceMs: Math.max(0, debounceRaw),
+    cap: Math.max(1, Math.floor(capRaw)),
     dropPolicy: dropRaw,
   };
 }

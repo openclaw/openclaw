@@ -8,17 +8,26 @@ read_when:
   - You hit `compaction_loop_persisted` aborts after a context-overflow retry
 ---
 
-OpenClaw has two cooperating guardrails against repetitive tool-call patterns,
-both configured under `tools.loopDetection`:
+After three consecutive identical tool errors (the same tool, arguments, and
+error result), OpenClaw blocks that exact action and gives the model one recovery
+opportunity. It can change its approach, ask for clarification, or answer without
+the tool. An unchanged retry is blocked before execution and ends the turn with
+a bounded diagnostic naming the tool and error class. This narrow guard is
+independent of `tools.loopDetection`, including an explicit `enabled: false`.
+
+Two additional guardrails are configured under `tools.loopDetection`:
 
 1. **Loop detection** (`enabled`) - disabled by default. Watches the rolling
    tool-call history for repeated patterns and unknown-tool retries.
+   The rolling window contains agent-run calls, not operator polling through
+   Gateway `tools.invoke` or HTTP `/tools/invoke`. Operator calls still pass
+   through their normal authorization, tool policy, and hooks.
 2. **Post-compaction guard** - enabled whenever
    `enabled` is not explicitly `false`. Arms after every compaction-retry and
    aborts the run if the agent repeats the same `(tool, args, result)` triple
    within the window.
 
-Set `tools.loopDetection.enabled: false` to silence both guardrails.
+Set `tools.loopDetection.enabled: false` to disable these two additional guardrails.
 
 ## Why this exists
 
@@ -87,6 +96,13 @@ as duration, PID, session ID, and working directory.
 For typed terminal failures, it also ignores diagnostic timestamps, explicit
 attempt or retry counters, elapsed durations, and labeled process IDs. Other
 text and numbers remain significant, so a new failure cause resets the streak.
+
+For successful `memory_search` results, comparison preserves ordered hits and
+their content while ignoring per-call debug timings and the aggregate hit score,
+which changes with temporal decay. Changes to hit order, paths, snippets, line
+ranges, warnings, or other stable result metadata still count as progress. Scores
+and debug data remain in the delivered result; error results keep full comparison.
+
 Outbound message-send results are hashed with volatile per-call ids (message id, file id, timestamp)
 stripped, so delivery IDs alone do not make repeated equivalent sends look like
 progress. When a run id is available, history is evaluated only within that run,
@@ -120,8 +136,37 @@ change authorization, or modify delivered tool results.
 - For smaller models, set `enabled: true`. Flagship models rarely need rolling-history detection and can
   leave the master switch unset while still benefiting from the
   post-compaction guard.
-- To disable everything, including the post-compaction guard, set
-  `tools.loopDetection.enabled: false` explicitly.
+- To disable the rolling detectors and post-compaction guard, set
+  `tools.loopDetection.enabled: false` explicitly. The identical-error guard
+  remains active.
+
+## Repeated tool errors
+
+Three identical consecutive failures allow the initial attempt and two retries.
+The third failure's result includes a recovery note, even when it is the last
+call in the batch. Unknown tool IDs and invalid arguments count as errors, though
+neither executes an implementation. Loop-policy vetoes do not count as failures.
+
+Changed arguments, changed error results, and successful calls reset the
+consecutive-error streak. They do **not** release an action already blocked by
+this guard. A changed plan still passes ordinary approval and permission checks;
+it does not authorize replaying a mutation whose outcome is uncertain. There is
+no automatic tool retry. Another critical loop uses the existing terminal limit.
+
+Already-running parallel calls settle without cancellation or replay. Unstarted
+calls in the triggering batch are blocked, and a matching call admitted earlier
+cannot start after the failure is observed. Final post-hook arguments determine
+whether an action is blocked. Once recovery becomes terminal, no unstarted call
+can begin, even if a different action was already admitted and awaiting preparation.
+Streamed calls from the same model response share the recovery opportunity: the
+model has not seen the note yet. Each action that reaches the identical-failure
+bound remains blocked. The error count follows the model's call order, not
+completion timing.
+
+Committed user messages reset the streak, blocked actions, and shared critical-loop
+recovery allowance, including follow-ups and steering. Queued or cancelled input,
+context-only prompt updates, and continuation without new user input do not.
+Existing run, token, and timeout budgets still apply.
 
 ## Post-compaction guard
 
@@ -158,9 +203,8 @@ so a no-config user still gets the protection.
 
 ## Logs and expected behavior
 
-When a loop is detected, OpenClaw logs a loop event and either warns or blocks
-the next tool-cycle depending on severity, protecting against runaway token
-spend and lockups while preserving normal tool access.
+The always-on identical-error guard uses the bounded recovery described above.
+The optional rolling detectors use the warning and recovery sequence below:
 
 - Warnings come first. On OpenClaw-executed tool calls, a short system note is
   appended to the affected tool result so the model can change approach before
@@ -177,8 +221,9 @@ spend and lockups while preserving normal tool access.
   response with its normal tools.
 - During that response, the model can answer, ask a question, or continue with
   a different tool or different arguments.
-- Another critical loop in the same run blocks its whole batch and ends the
-  run. A new user run starts with a fresh recovery allowance.
+- Another critical loop for the same accepted user input blocks its whole batch
+  and ends the run. Committed new user input starts with a fresh shared recovery
+  allowance.
 - The post-compaction guard emits `compaction_loop_persisted` errors naming
   the offending tool and identical-call count.
 

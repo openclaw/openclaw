@@ -8,7 +8,7 @@ import {
 import { getUpdateRunHistoryStatusAsync } from "./update-run-reader.js";
 import { isAcknowledgedAbandonedUpdateRun, toPublicUpdateRun } from "./update-run-record.js";
 
-/** Status heals the bounded legacy defect while other recovery keeps its existing owner. */
+/** Status heals the bounded legacy defect and projects other driver loss without writes. */
 export async function readUpdateRunStatus() {
   let runReconciliationError: string | undefined;
   try {
@@ -28,7 +28,13 @@ export async function readUpdateRunStatus() {
         ? { staleRun: { runId: activeRun.runId, guidance: staleGuidance } }
         : {}),
       ...(abandonment && abandonment !== LEGACY_UPDATE_RUN_EXPIRED_REASON && activeRun
-        ? { abandonedRun: { runId: activeRun.runId, rule: abandonment } }
+        ? {
+            abandonedRun: {
+              runId: activeRun.runId,
+              rule: abandonment,
+              nextAction: "Run `openclaw update repair` before retrying the update.",
+            },
+          }
         : {}),
       ...(expired && !isAcknowledgedAbandonedUpdateRun(expired)
         ? {

@@ -49,7 +49,8 @@
   transform: translateY(0) scale(0.97);
 }
 
-.about-hero__clawd:focus-visible {
+.about-hero__clawd:focus-visible,
+.about-hero__link:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -94,7 +95,7 @@
 }
 
 /* One-shot poke wave: the same gesture without the loop's long idle lead-in.
-   Duration must stay in sync with CLAWD_WAVE_MS in about-page.ts. */
+   Duration must stay in sync with CLAWD_WAVE_MS in about-page.tsx. */
 .about-hero__clawd--wave .lob-claw--r {
   animation: about-clawd-poke-wave 1.4s ease-in-out;
 }
@@ -171,11 +172,6 @@
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);
   background: var(--bg-hover);
-}
-
-.about-hero__link:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
 }
 
 .about-hero__link-icon {

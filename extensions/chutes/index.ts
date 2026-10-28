@@ -195,7 +195,7 @@ export default definePluginEntry({
           provider: buildStaticChutesProvider(),
         }),
       },
-      refreshOAuth: refreshChutesOAuthCredential,
+      refreshOAuth: (credential) => refreshChutesOAuthCredential(credential),
     });
   },
 });

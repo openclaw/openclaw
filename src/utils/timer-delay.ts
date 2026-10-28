@@ -5,10 +5,6 @@ export {
   resolveSafeTimeoutDelayMs,
 } from "../../packages/gateway-client/src/timeouts.js";
 
-export function setSafeTimeout(
-  callback: () => void,
-  delayMs: number,
-  opts?: { minMs?: number },
-): NodeJS.Timeout {
-  return setTimeout(callback, resolveSafeTimeoutDelayMs(delayMs, opts));
+export function setSafeTimeout(callback: () => void, delayMs: number): NodeJS.Timeout {
+  return setTimeout(callback, resolveSafeTimeoutDelayMs(delayMs));
 }

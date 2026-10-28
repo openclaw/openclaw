@@ -1,48 +1,19 @@
 // Registered executable surfaces retain receiver binding and instance lifetime.
-import { AsyncResource } from "node:async_hooks";
 import { types } from "node:util";
 import {
-  createPluginArgumentView,
-  getPluginMethodArgumentKind,
-} from "./plugin-instance-argument-views.js";
-import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
-import type { PluginInstanceInvocation } from "./plugin-instance-invocation.types.js";
-import { PluginHostObject } from "./plugin-instance-owned-values.js";
+  createPluginIteratorBindings,
+  type PluginIteratorBindingOwner,
+} from "./plugin-instance-iterator.js";
+import { PluginFactoryBinding } from "./plugin-instance-owned-values.js";
 import {
   getPluginOriginalValue,
   pluginInstanceState,
-  pluginInvocationContext,
   setPluginOriginalValue,
-  type PluginInstanceHandle,
 } from "./plugin-instance-scope.js";
-import type { PluginInstanceCallLease } from "./plugin-instance.types.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
+import { createPluginToolExecutionBinding } from "./plugin-tool-execution.js";
 
 const { values: valueInstances } = pluginInstanceState;
-/** An iterator keeps the admission that owns its pending protocol operations. */
-type PluginIteratorAdmission = {
-  readonly origin: PluginInstanceInvocation;
-  reenter: <T>(run: () => T) => T;
-  readonly done: boolean;
-  readonly active: boolean;
-  invoke: <T>(run: () => T) => T;
-  close: () => void;
-  call: (key: PropertyKey, method: Function | undefined, args: unknown[]) => Promise<unknown>;
-};
-
-class ExecutableBinding extends PluginHostObject {
-  #factory: object;
-
-  constructor(value: object, factory: object) {
-    super(value);
-    this.#factory = factory;
-  }
-
-  static belongsTo(value: object, factory: object) {
-    return #factory in value && value.#factory === factory;
-  }
-}
-
 const DATA_FIELDS = new Set([
   "parameters",
   "schema",
@@ -52,46 +23,82 @@ const DATA_FIELDS = new Set([
   "outputSchema",
 ]);
 
-function pluginMemberDescriptor(object: object, key: PropertyKey) {
-  let descriptor: PropertyDescriptor | undefined;
-  for (
-    let source: object | null = object;
-    source && !descriptor;
-    source = Object.getPrototypeOf(source)
-  ) {
-    descriptor = Object.getOwnPropertyDescriptor(source, key);
-  }
-  return descriptor;
-}
+const arrayCallbacks = new Set([
+  "every",
+  "filter",
+  "find",
+  "findIndex",
+  "findLast",
+  "findLastIndex",
+  "flatMap",
+  "forEach",
+  "map",
+  "reduce",
+  "reduceRight",
+  "some",
+  "sort",
+  "toSorted",
+]);
 
-function readPluginMember(
+/** Native signatures distinguish callbacks, stored callables, and function invocation helpers. */
+function getPluginMethodArgumentKind(
   object: object,
   key: PropertyKey,
-  invoke: (run: () => unknown) => unknown,
-  receiver = object,
-): unknown {
-  return pluginMemberNeedsAdmission(object, key)
-    ? invoke(() => Reflect.get(object, key, receiver))
-    : Reflect.get(object, key, receiver);
+): 0 | null | "function" | undefined {
+  const array = Array.isArray(object);
+  const intrinsic =
+    typeof object === "function"
+      ? Function.prototype
+      : array
+        ? Array.prototype
+        : types.isMap(object)
+          ? Map.prototype
+          : types.isSet(object)
+            ? Set.prototype
+            : types.isWeakMap(object)
+              ? WeakMap.prototype
+              : types.isWeakSet(object)
+                ? WeakSet.prototype
+                : undefined;
+  if (!intrinsic || !Object.hasOwn(intrinsic, key)) {
+    return undefined;
+  }
+  let prototype: object | null = object;
+  while (prototype && !Object.hasOwn(prototype, key)) {
+    prototype = Object.getPrototypeOf(prototype);
+  }
+  const parent = prototype && Object.getPrototypeOf(prototype);
+  // Intrinsic collection prototypes directly inherit their realm's Object.prototype.
+  // Own/subclass overrides remain ordinary plugin methods, including custom higher-order methods.
+  if (!parent || Object.getPrototypeOf(parent) !== null) {
+    return undefined;
+  }
+  if (typeof object === "function") {
+    return "function";
+  }
+  return key === "forEach" || (array && typeof key === "string" && arrayCallbacks.has(key))
+    ? 0
+    : null;
 }
 
-function pluginMemberNeedsAdmission(object: object, key: PropertyKey, getters = true): boolean {
+function pluginMemberDescriptor(object: object, key: PropertyKey) {
   for (let source: object | null = object; source; source = Object.getPrototypeOf(source)) {
-    if (types.isProxy(source)) {
-      return true;
-    }
     const descriptor = Object.getOwnPropertyDescriptor(source, key);
     if (descriptor) {
-      return getters && descriptor.get !== undefined;
+      return descriptor;
     }
   }
-  return false;
+  return undefined;
 }
 
-function hasProxyPrototype(object: object): boolean {
+function pluginMemberNeedsAdmission(object: object, key?: PropertyKey, getters = true): boolean {
   for (let source: object | null = object; source; source = Object.getPrototypeOf(source)) {
     if (types.isProxy(source)) {
       return true;
+    }
+    const descriptor = key !== undefined && Object.getOwnPropertyDescriptor(source, key);
+    if (descriptor) {
+      return getters && descriptor.get !== undefined;
     }
   }
   return false;
@@ -113,90 +120,127 @@ function bindNativeReceiver<T, R>(invoke: (receiver: T, args: unknown[]) => R) {
   };
 }
 
-type PluginInstanceBindingOwner = {
-  instance: PluginInstanceHandle;
-  enter: <T>(token: object, run: () => T) => T;
+type PluginInstanceBindingOwner = PluginIteratorBindingOwner & {
   invoke: <T>(run: () => T) => T;
-  lease: () => PluginInstanceCallLease;
-  hasToken: (token: object) => boolean;
-  isConsumerToken: (token: object) => boolean;
 };
 
 /** Registration facts and captured stream scopes share the instance's lifetime. */
 export function createPluginInstanceBindings(bindings: PluginInstanceBindingOwner) {
-  const factories = new WeakSet<object>();
-  const admitFactory = (factory: (...args: never[]) => unknown): void => {
-    factories.add(factory);
-  };
+  const factories = new WeakMap<object, true | "tool" | readonly PropertyKey[]>();
   return {
-    admitFactory,
+    admitFactory: (
+      factory: (...args: never[]) => unknown,
+      resultCallbacks?: "tool" | readonly PropertyKey[],
+    ): void => void factories.set(factory, resultCallbacks ?? true),
     create(
       admit: <T>(run: () => T) => T,
       admitCallback: <T>(run: () => T) => T = (run) => admit(() => bindings.invoke(run)),
     ) {
-      return createPluginBindings(bindings, factories, admit, admitCallback);
+      // Unused custody needs no callable cache; each admission still owns its views.
+      let wrap: ReturnType<typeof createPluginBindings> | undefined;
+      return <T>(value: T): T =>
+        (wrap ??= createPluginBindings(bindings, factories, admit, admitCallback))(value);
     },
   };
 }
 
-/** Builds callable views while the exact instance continues to own admission and leases. */
 function createPluginBindings(
   bindings: PluginInstanceBindingOwner,
-  factories: WeakSet<object>,
+  factories: WeakMap<object, true | "tool" | readonly PropertyKey[]>,
   admit: <T>(run: () => T) => T,
   admitCallback: <T>(run: () => T) => T,
 ) {
-  const { instance } = bindings;
-  const prepareInvocation = (token: object, parent?: PluginInstanceInvocation) => {
-    const context = pluginInvocationContext.getStore();
-    const consumer = bindings.isConsumerToken(token);
-    // Iterator creation runs inside its admitting call; renewals keep that original parent.
-    const origin = parent ?? pluginInstanceInvocation.getStore()!;
-    // Capture once: replaying AsyncLocalStorage.run copies Node's context map per event.
-    const resource = bindings.enter(token, () => new AsyncResource("OpenClawPluginStream"));
-    return {
-      origin,
-      reenter: <T>(run: () => T): T => {
-        if (consumer && !bindings.hasToken(token)) {
-          throw new Error(`Plugin ${instance.pluginId} consumer is closed`);
-        }
-        return resource.runInAsyncScope(() => pluginInstanceInvocation.run(origin, run));
-      },
-      assertCurrent: () => {
-        context?.lookup(instance);
-        const current = pluginInvocationContext.getStore();
-        if (current !== context) {
-          current?.lookup(instance);
-        }
-      },
-      run: <T>(run: () => T): T => resource.runInAsyncScope(run),
-      close: () => resource.emitDestroy(),
-    };
-  };
-  const isFactory = (value: object) => {
+  const factoryBinding = (value: object) => {
     for (
       let source: object | undefined = value;
       source;
-      source = getPluginOriginalValue(source, instance)
+      source = getPluginOriginalValue(source, bindings.instance)
     ) {
-      if (factories.has(source)) {
-        return true;
+      const binding = factories.get(source);
+      if (binding) {
+        return binding;
       }
     }
-    return false;
+    return undefined;
   };
   const wrapped = new WeakMap<object, unknown>();
   const factory = {};
   const originalValue = (value: object) => getPluginOriginalValue(value, bindings.instance);
   const derivedReceivers = new WeakSet<object>();
   const prototypeReceivers = new WeakMap<object, WeakMap<object, object>>();
-  const iterators = new WeakMap<object, PluginIteratorAdmission>();
-  const wrapArguments = createPluginArgumentView({
-    original: originalValue,
-    setOriginal: (value, source) => setPluginOriginalValue(value, source, bindings.instance),
-    isWrapped: (value) => ExecutableBinding.belongsTo(value, factory),
-    invoke: admitCallback,
-  });
+  const { iterators, admitIterator } = createPluginIteratorBindings(bindings, factory, admit);
+  /** Preserves caller data and caches callback views within one instance. */
+  const restoreHandle = (value: unknown): unknown => {
+    if (value === null || typeof value !== "object") {
+      return value;
+    }
+    let source: object = value;
+    for (let original = originalValue(source); original; original = originalValue(source)) {
+      source = original;
+    }
+    return source;
+  };
+  const argumentCallbacks = new WeakMap<Function, Function>();
+  const argumentFactory = {};
+  const wrapArguments = (
+    args: unknown[],
+    callbackIndex?: 0 | null,
+    field = "",
+  ): {
+    args: unknown[];
+    callerData?: unknown[];
+  } => {
+    if (callbackIndex === null || args.length === 0) {
+      return {
+        args: args.map((value) =>
+          typeof value === "function" ? (originalValue(value) ?? value) : restoreHandle(value),
+        ),
+      };
+    }
+    const callerData =
+      callbackIndex === 0 && (field === "reduce" || field === "reduceRight")
+        ? args.slice(1, 2)
+        : undefined;
+    const prepared = args.map((value, index) => {
+      if (typeof value !== "function" || (callbackIndex !== undefined && index !== callbackIndex)) {
+        return restoreHandle(value);
+      }
+      // Returned handles regain identity only in their own instance. One hop preserves
+      // the guarded callback when the plugin returned an incoming caller callback.
+      if (callbackIndex === undefined && PluginFactoryBinding.belongsTo(value, factory)) {
+        return originalValue(value) ?? value;
+      }
+      let callback = callerData
+        ? undefined
+        : PluginFactoryBinding.belongsTo(value, argumentFactory)
+          ? value
+          : argumentCallbacks.get(value);
+      if (!callback) {
+        // Callback delivery retains its invocation; arguments and receivers stay native.
+        callback = new Proxy(value, {
+          apply: (target, receiver, values) => {
+            const result = admitCallback(() => Reflect.apply(target, receiver, values));
+            // Native reducers deliver this exact caller value as the next and final accumulator.
+            if (callerData) {
+              callerData[0] = result;
+            }
+            return result;
+          },
+          construct: (target, values, newTarget) =>
+            admitCallback(() =>
+              Reflect.construct(target, values, newTarget === callback ? target : newTarget),
+            ),
+        });
+        setPluginOriginalValue(callback, value, bindings.instance);
+        if (!callerData) {
+          argumentCallbacks.set(value, callback);
+          void new PluginFactoryBinding(callback, argumentFactory);
+        }
+      }
+      return callback;
+    });
+    return { args: prepared, callerData };
+  };
   // Executable return contracts keep admission; ordinary result graphs are never inspected.
   const passResult = <T>(value: T): T =>
     typeof value === "function" ||
@@ -206,18 +250,32 @@ function createPluginBindings(
       ? wrap(value)
       : value;
   // Factory arrays contain executable registrations, not ordinary result payloads.
-  const bindFactoryResult = <T>(value: T): T => {
-    if (!Array.isArray(value)) {
-      return wrap(value);
+  const bindFactoryResult = <T>(value: T, binding: true | "tool" | readonly PropertyKey[]): T => {
+    if (binding === "tool") {
+      return bindTool(value);
     }
-    // SAFETY: Each member keeps its declared shape while native iteration sees its bound methods.
-    return value.map((entry) => wrap(entry)) as T;
+    const callbacks = binding === true ? undefined : binding;
+    if (
+      callbacks &&
+      value !== null &&
+      typeof value === "object" &&
+      !callbacks.some((key) => typeof Reflect.get(value, key) === "function")
+    ) {
+      return value;
+    }
+    return Array.isArray(value)
+      ? (value.map((entry) => wrap(entry, "", undefined, callbacks)) as T) // SAFETY: Binding preserves each member's shape.
+      : wrap(value, "", undefined, callbacks);
   };
-  const wrapResult = <T>(result: T, callerData?: unknown[], executable = false): T => {
+  const wrapResult = <T>(
+    result: T,
+    callerData?: unknown[],
+    executable?: true | "tool" | readonly PropertyKey[],
+  ): T => {
     const completion = resolvePluginReturnPromise(result);
     if (completion) {
       const pending = mapPluginReturnPromise(completion, (resolved) =>
-        executable ? bindFactoryResult(resolved) : passResult(resolved),
+        executable ? bindFactoryResult(resolved, executable) : passResult(resolved),
       );
       if (pending.host) {
         valueInstances.setHost(pending.value, bindings.instance);
@@ -230,12 +288,32 @@ function createPluginBindings(
     return callerData?.includes(result)
       ? result
       : executable
-        ? bindFactoryResult(result)
+        ? bindFactoryResult(result, executable)
         : passResult(result);
   };
 
+  const bindTool = createPluginToolExecutionBinding({
+    admit,
+    wrapProxy: (tool) => wrap(tool),
+    call: (method, receiver, args) =>
+      admit(() => {
+        const call = wrapArguments(args);
+        return wrapResult(Reflect.apply(method, receiver, call.args), call.callerData);
+      }),
+    register: (view, source) => {
+      void new PluginFactoryBinding(view, factory);
+      setPluginOriginalValue(view, source, bindings.instance);
+      valueInstances.setHost(view, bindings.instance);
+    },
+  });
+
   /** Callables retain their instance; schemas remain data for host validators. */
-  const wrap = <T>(value: T, field = "", callbackIndex?: 0 | null): T => {
+  const wrap = <T>(
+    value: T,
+    field = "",
+    callbackIndex?: 0 | null,
+    resultCallbacks?: readonly PropertyKey[],
+  ): T => {
     if ((!value || typeof value !== "object") && typeof value !== "function") {
       return value;
     }
@@ -243,15 +321,21 @@ function createPluginBindings(
     if (DATA_FIELDS.has(field) || (typeof value === "object" && isNativePluginData(value))) {
       return value;
     }
-    const object: object = value;
-    if (ExecutableBinding.belongsTo(object, factory)) {
+    if (PluginFactoryBinding.belongsTo(value, factory)) {
       return value;
     }
-    const cached = wrapped.get(object);
-    if (cached) {
-      // SAFETY: The cache stores only the view created for this exact input value.
-      return cached as T;
-    }
+    // SAFETY: The cache stores only the view created for this exact input value.
+    return (wrapped.get(value) ?? createView(value, field, callbackIndex, resultCallbacks)) as T;
+  };
+
+  // Keep closure contexts off primitive reads and already-bound value lookups.
+  const createView = <T extends object>(
+    value: T,
+    field: string,
+    callbackIndex?: 0 | null,
+    resultCallbacks?: readonly PropertyKey[],
+  ): T => {
+    const object: object = value;
     const methods = new Map<
       PropertyKey,
       { original: Function; receiver: object; wrapped: unknown }
@@ -305,7 +389,9 @@ function createPluginBindings(
       let property: unknown;
       try {
         resolvedReceiver = resolveReceiver(key, receiver);
-        property = readPluginMember(object, key, invoke, resolvedReceiver);
+        property = pluginMemberNeedsAdmission(object, key)
+          ? invoke(() => Reflect.get(object, key, resolvedReceiver))
+          : Reflect.get(object, key, resolvedReceiver);
       } catch (error) {
         if (protocol && iteration?.active) {
           iteration.close();
@@ -319,6 +405,10 @@ function createPluginBindings(
         if (iteration.active) {
           iteration.close();
         }
+      }
+      // Mixed result envelopes declare their executable slots; all other values remain data.
+      if (resultCallbacks && !resultCallbacks.includes(key)) {
+        return property;
       }
       if (typeof property !== "function" || key === "constructor") {
         return wrap(property, String(key));
@@ -363,7 +453,7 @@ function createPluginBindings(
         return bound;
       }
       const classify = () => getPluginMethodArgumentKind(object, key);
-      const kind = hasProxyPrototype(object) ? invoke(classify) : classify();
+      const kind = pluginMemberNeedsAdmission(object) ? invoke(classify) : classify();
       if (
         kind === "function" &&
         !prototypeReceivers.has(object) &&
@@ -379,8 +469,9 @@ function createPluginBindings(
                     result,
                     wrapArguments(args).args,
                   );
-                  if (isFactory(result)) {
-                    factories.add(source);
+                  const binding = factoryBinding(result);
+                  if (binding) {
+                    factories.set(source, binding);
                   }
                   return wrap(source);
                 })
@@ -461,7 +552,11 @@ function createPluginBindings(
             object,
             key,
             next,
-            pluginMemberDescriptor(object, key)?.set ? resolveReceiver(key, receiver) : receiver,
+            // Inherited and derived data writes must reach their owning view's defineProperty.
+            (receiver === result && !derivedReceivers.has(object)) ||
+              pluginMemberDescriptor(object, key)?.set
+              ? resolveReceiver(key, receiver)
+              : receiver,
           ),
         ),
       // Freezing only the shadow would invalidate its live original-property projection.
@@ -507,7 +602,7 @@ function createPluginBindings(
               return wrapResult(
                 Reflect.apply(value, receiver, call.args),
                 call.callerData,
-                isFactory(result),
+                factoryBinding(result),
               );
             }),
           construct: (_target, args, newTarget): object =>
@@ -536,175 +631,11 @@ function createPluginBindings(
       );
     }
     wrapped.set(object, result);
-    void new ExecutableBinding(result, factory);
+    void new PluginFactoryBinding(result, factory);
     setPluginOriginalValue(result, object, bindings.instance);
     valueInstances.setHost(result, bindings.instance);
     // SAFETY: The view retains the input prototype and routes each member to the original object.
     return result as T;
-  };
-
-  const admitIterator = (iterator: object): PluginIteratorAdmission => {
-    const current = iterators.get(iterator);
-    if (current?.active || current?.done) {
-      return current;
-    }
-    const create = () => admit(() => createIteratorAdmission(iterator, current));
-    return current ? current.reenter(create) : create();
-  };
-
-  const createIteratorAdmission = (
-    iterator: object,
-    previous?: PluginIteratorAdmission,
-  ): PluginIteratorAdmission => {
-    const { token, release } = bindings.lease();
-    let invocation: ReturnType<typeof prepareInvocation>;
-    try {
-      invocation = prepareInvocation(token, previous?.origin);
-    } catch (error) {
-      void release();
-      throw error;
-    }
-    let state: "open" | "returned" | "done" = "open";
-    let active = true;
-    let pending = 0;
-    let closed = false;
-    const settle = () => {
-      if (state === "done" && pending === 0 && !closed) {
-        closed = true;
-        invocation.close();
-      }
-      if (state !== "open" && pending === 0 && active) {
-        active = false;
-        return release();
-      }
-      return undefined;
-    };
-    const releaseOperation = () => {
-      pending -= 1;
-      return settle();
-    };
-    const assertActive = () => {
-      if (!active || !bindings.hasToken(token)) {
-        throw new Error(`Plugin ${bindings.instance.pluginId} stream is closed`);
-      }
-    };
-    const invoke = <T>(run: () => T): T => {
-      pending += 1;
-      try {
-        try {
-          assertActive();
-          invocation.assertCurrent();
-        } catch (error) {
-          state = "done";
-          throw error;
-        }
-        return invocation.run(() => {
-          const result = run();
-          const completion = resolvePluginReturnPromise(result);
-          if (completion) {
-            const settled = mapPluginReturnPromise(
-              completion,
-              async (value) => {
-                await releaseOperation();
-                return value;
-              },
-              async (error: unknown) => {
-                await releaseOperation()?.catch(() => {});
-                throw error;
-              },
-            );
-            // SAFETY: Promise-like reads keep their resolved value while settling the stream lease.
-            return settled.value as T;
-          }
-          void releaseOperation();
-          return result;
-        });
-      } catch (error) {
-        void releaseOperation();
-        throw error;
-      }
-    };
-    const admission: PluginIteratorAdmission = {
-      origin: invocation.origin,
-      reenter: (run) => {
-        try {
-          invocation.assertCurrent();
-          return invocation.reenter(run);
-        } catch (error) {
-          state = "done";
-          void settle();
-          throw error;
-        }
-      },
-      get done() {
-        return state === "done";
-      },
-      get active() {
-        return active;
-      },
-      invoke,
-      close: () => {
-        state = "done";
-        void settle();
-      },
-      call: (key, method, args) => {
-        // Completed return is protocol cleanup and executes no plugin code.
-        if (state === "done" && key === "return") {
-          return Promise.resolve(args[0]).then((value) => ({ done: true, value }));
-        }
-        if (state === "done") {
-          // Preserve terminal results without reentering source methods or getters.
-          return Promise.resolve().then(() =>
-            admit(() => {
-              if (key === "throw") {
-                throw args[0];
-              }
-              return { done: true, value: undefined };
-            }),
-          );
-        }
-        try {
-          assertActive();
-          invocation.assertCurrent();
-          return invocation.run(async () => {
-            pending += 1;
-            try {
-              if (!method) {
-                if (key === "return") {
-                  state = "done";
-                  return { done: true, value: await args[0] };
-                }
-                throw new TypeError("Plugin iterator method must be callable");
-              }
-              const next: unknown = await Reflect.apply(method, iterator, args);
-              if (next === null || (typeof next !== "object" && typeof next !== "function")) {
-                throw new TypeError("Plugin async iterator result must be an object");
-              }
-              assertActive();
-              state = Reflect.get(next, "done") ? "done" : key === "return" ? "returned" : state;
-              return next;
-            } catch (error) {
-              state = "done";
-              throw error;
-            } finally {
-              const completion = releaseOperation();
-              if (completion) {
-                await completion;
-              }
-            }
-          });
-        } catch (error) {
-          state = "done";
-          const reject = () => {
-            throw error;
-          };
-          return Promise.resolve(settle()).then(reject, reject);
-        }
-      },
-    };
-    iterators.set(iterator, admission);
-    previous?.close();
-    return admission;
   };
 
   return wrap;

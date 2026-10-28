@@ -14,6 +14,11 @@ its own new thread. Follow-up user messages in that thread keep routing to the
 same sub-agent session, while the conversation you spawned it from stays with
 your agent.
 
+Embedded and CLI-backed agents use the current conversation for thread spawning.
+The runtime advertises thread-bound spawning only when it can identify that
+conversation and the channel policy permits spawning. Caller-provided MCP
+conversation headers do not authorize a thread binding.
+
 ### Thread supporting channels
 
 `sessions_spawn` with `thread: true` always opens a new child thread; it never

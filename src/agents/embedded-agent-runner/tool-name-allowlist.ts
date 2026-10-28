@@ -23,5 +23,6 @@ export function collectRegisteredToolNames(tools: Array<{ name?: string }>): Set
 }
 
 export function toSessionToolAllowlist(allowedToolNames: Iterable<string>): string[] {
-  return [...new Set(allowedToolNames)].toSorted((a, b) => a.localeCompare(b));
+  // oxlint-disable-next-line unicorn/no-array-sort -- The materialized set array is private.
+  return [...new Set(allowedToolNames)].sort((a, b) => a.localeCompare(b));
 }

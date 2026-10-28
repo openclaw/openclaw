@@ -1,4 +1,3 @@
-// Line helper module supports config adapter behavior.
 import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listLineAccountIds, resolveDefaultLineAccountId, resolveLineAccount } from "./accounts.js";

@@ -5,19 +5,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { setImmediate as yieldTurn } from "node:timers/promises";
-import { readMainSessionRecoveryCheckpoint } from "../src/agents/main-session-recovery/main-session-restart-recovery-checkpoint.js";
 import { SessionManager } from "../src/agents/sessions/session-manager.js";
 import {
-  replaceTranscriptEvents,
-  replaceSessionEntry,
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../src/config/sessions/session-accessor.js";
 import type { TranscriptEvent } from "../src/config/sessions/session-accessor.sqlite-contract.js";
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
-import { recoverSessionEntryFromRestartTombstone } from "../src/config/sessions/session-accessor.sqlite-recovery.js";
+import { replaceTranscriptEvents } from "../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../src/config/sessions/session-transcript-reconcile.js";
-import type { InternalSessionEntry } from "../src/config/sessions/types.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "../src/gateway/session-transcript-usage.js";
 import { runOpenClawAgentWriteTransaction } from "../src/state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
@@ -153,10 +149,8 @@ await withOpenClawTestState({ label: "agent-database-holds" }, async (state) => 
     }),
   );
   // Admit readers before comparing steady-state scans.
-  await readMainSessionRecoveryCheckpoint(scope);
   await readLatestSessionUsageFromTranscriptAsync(scope);
   for (let sample = 0; sample < 3; sample++) {
-    await measure(`recovery-checkpoint-${sample}`, () => readMainSessionRecoveryCheckpoint(scope));
     await measure(`usage-${sample}`, () => readLatestSessionUsageFromTranscriptAsync(scope));
   }
   const manager = await SessionManager.openAsync(scope, state.workspaceDir);
@@ -171,27 +165,4 @@ await withOpenClawTestState({ label: "agent-database-holds" }, async (state) => 
       }),
     );
   }
-  const recoveryEntry: InternalSessionEntry = {
-    sessionId: scope.sessionId,
-    updatedAt: Date.now(),
-    mainRestartRecovery: {
-      cycleId: "synthetic-cycle",
-      revision: 1,
-      chargedAttempts: 3,
-      tombstone: { reason: "automatic recovery exhausted" },
-    },
-  };
-  await replaceSessionEntry(scope, recoveryEntry);
-  await measure("recover-tombstone", async () => {
-    const successorKey = "agent:main:recovered";
-    const result = await recoverSessionEntryFromRestartTombstone({
-      agentId: scope.agentId,
-      storePath: scope.storePath,
-      expected: { cycleId: "synthetic-cycle", revision: 1, sessionId: scope.sessionId },
-      sourceTarget: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-      successorTarget: { canonicalKey: successorKey, storeKeys: [successorKey] },
-      successorEntry: { sessionId: "recovered", updatedAt: Date.now() },
-    });
-    assert.equal(result.status, "created");
-  });
 });

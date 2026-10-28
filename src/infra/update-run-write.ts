@@ -1,36 +1,34 @@
-import type { DatabaseSync } from "node:sqlite";
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { completeUpdateFailureSummary } from "./update-failure-result.js";
+import { claimUpdateResultInTransaction } from "./update-result-claim.js";
+import type { UpdateResultPayload } from "./update-result-payload.js";
+import { isNeverActivatedFailedUpdate } from "./update-run-activation.js";
 import { encodeRun, isRetainedStep, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type { UpdateRunPhasePatch } from "./update-run-mutation.types.js";
 import { decodeRun, readUpdateRunRecord } from "./update-run-read.kernel.js";
 import {
   finishUpdateRunRecord,
-  type FinishUpdateRunResult,
+  type FinishUpdateRunInput,
+  type UpdateRunDiagnostics,
   type UpdateRunPhase,
   type UpdateRunRecord,
   type UpdateRunStep,
 } from "./update-run-record.js";
-import type { UpdateRunResult } from "./update-run-result.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 
-export const updateRunLedgerSchema = extractSqliteTableSchema(
-  OPENCLAW_STATE_SCHEMA_SQL,
-  "update_runs",
-  {
-    endMarker: "ON update_runs(status, created_at_ms DESC, run_id);",
-    errorMessage: "Update run schema markers are missing",
-  },
-);
+export const updateRunLedgerSchema = getOpenClawStateFeatureSchemaSql("update_runs", {
+  endMarker: "ON update_runs(status, created_at_ms DESC, run_id);",
+  errorMessage: "Update run schema markers are missing",
+});
 
 export function upsertStep(record: UpdateRunRecord, input: UpdateRunStep): void {
   const step = { ...input, step: updateRunStepKey(input.step) };
@@ -101,6 +99,22 @@ export function applyUpdateRunStep(
   record: UpdateRunRecord,
   { reason, ...step }: UpdateRunStep & { reason?: string },
 ): void {
+  // Post-completion retirement is advisory; it may add diagnostics, never change the terminal outcome.
+  if (
+    record.finishedAtMs !== null &&
+    (record.status === "succeeded" ||
+      (record.status === "skipped" && record.reason === "already-current") ||
+      isNeverActivatedFailedUpdate(record)) &&
+    step.status === "completed" &&
+    [
+      "recovery-artifact-cleanup",
+      "warning:recovery-artifact-cleanup",
+      "diagnostic:recovery-artifact-cleanup",
+    ].includes(step.step)
+  ) {
+    upsertStep(record, step);
+    return;
+  }
   if (record.status === "running") {
     upsertStep(record, step);
     if (reason !== undefined) {
@@ -110,11 +124,20 @@ export function applyUpdateRunStep(
 }
 
 export function persistRun(
-  db: DatabaseSync,
+  db: EngineConnection,
   record: UpdateRunRecord,
   options: UpdateRunLedgerOptions,
 ): UpdateRunRecord {
   record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
+  const recovery = record.verification.recovery;
+  record.steps = record.steps.filter((step) => step.step !== "finalize:data-at-risk");
+  if (recovery?.serviceRestartSafe === false && recovery.dataAtRisk) {
+    upsertStep(record, {
+      step: "finalize:data-at-risk",
+      status: "completed",
+      failureFacts: [{ check: "update-recovery", code: recovery.dataAtRisk }],
+    });
+  }
   const row = encodeRun(record, options);
   executeSqliteQuerySync(
     db,
@@ -127,7 +150,7 @@ export function persistRun(
 }
 
 export function mutateRunInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   runId: string,
   update: (record: UpdateRunRecord) => void,
   options: UpdateRunLedgerOptions,
@@ -162,16 +185,47 @@ export function mutateRun(
   );
 }
 
+export const UPDATE_RUN_BOOKKEEPING_TIMEOUT_MS = 1_000;
+
+// Recovery requirements are independent of diagnostic history's eviction priority.
+const REQUIRED_UPDATE_RUN_STEPS = new Set<string>([
+  ...UPDATE_RUN_PHASES,
+  "candidate-admission",
+  "global update",
+  "global update (omit optional)",
+  "candidate-doctor-lint",
+  "previous generation restoration",
+  "post-update verification",
+  "task-delivery-recovery",
+  "openclaw doctor",
+  "package rollback",
+  "config rollback",
+  "git-runtime-rollback",
+]);
+
+/** Recovery reads these receipts as well as phases and terminal outcomes. */
+export function isRequiredUpdateRunStep(step: UpdateRunStep & { reason?: string }): boolean {
+  const key = updateRunStepKey(step.step);
+  return (
+    REQUIRED_UPDATE_RUN_STEPS.has(key) ||
+    step.status === "failed" ||
+    step.reason !== undefined ||
+    step.termination === "signal" ||
+    key.startsWith("finalize:") ||
+    key.startsWith("driver:") ||
+    key.startsWith("notice:") ||
+    key.startsWith("reconcile:") ||
+    key.startsWith("diagnostic:database ") ||
+    key.startsWith("git-rollback-")
+  );
+}
+
 type RecoveryDiagnostics = Pick<UpdateRunRecord["verification"], "recovery" | "rollbackOutcome">;
-type UpdateRunDiagnostics = RecoveryDiagnostics &
-  Partial<Pick<UpdateRunResult, "verification" | "steps">> & {
-    failure?: Pick<UpdateRunStep, "step" | "detail" | "failureFacts" | "exitCode">;
-  };
 type UpdateRunDiagnosticsInput =
   | UpdateRunDiagnostics
   | ((recorded: Readonly<RecoveryDiagnostics>) => UpdateRunDiagnostics);
 
-function applyUpdateRunDiagnostics(
+export function applyUpdateRunDiagnostics(
   record: UpdateRunRecord,
   diagnostics: UpdateRunDiagnosticsInput,
 ): void {
@@ -184,6 +238,25 @@ function applyUpdateRunDiagnostics(
   } = typeof diagnostics === "function" ? diagnostics(record.verification) : diagnostics;
   if (failure && record.status === "running") {
     upsertStep(record, { ...failure, status: "failed" });
+  } else if (failure && record.status === "failed") {
+    // A helper can finish before its parent observes the failure. Enrich only
+    // the already-failed step; terminal outcomes and prior facts stay authoritative.
+    const previous = record.steps.find((step) => step.step === updateRunStepKey(failure.step));
+    if (previous?.status === "failed") {
+      upsertStep(record, {
+        ...previous,
+        detail: previous.detail ?? failure.detail,
+        exitCode: previous.exitCode ?? failure.exitCode,
+        failureFacts: [
+          ...new Map(
+            [...(previous.failureFacts ?? []), ...(failure.failureFacts ?? [])].map((fact) => [
+              JSON.stringify(fact),
+              fact,
+            ]),
+          ).values(),
+        ].slice(0, 5),
+      });
+    }
   }
   if (verification) {
     const { recovery, rollbackOutcome, booted, noticeDelivered, doctorHint } = record.verification;
@@ -195,7 +268,13 @@ function applyUpdateRunDiagnostics(
   }
   const constraint = record.verification.recovery;
   const recovery =
-    verification && constraint?.serviceRestartSafe === false ? constraint : observedRecovery;
+    verification && constraint?.serviceRestartSafe === false
+      ? !constraint.dataAtRisk &&
+        observedRecovery?.serviceRestartSafe === false &&
+        observedRecovery.dataAtRisk
+        ? observedRecovery
+        : constraint
+      : observedRecovery;
   if (recovery || observedRollback || verification) {
     recordUpdateRunVerificationRecord(record, {
       ...verification,
@@ -214,15 +293,7 @@ export function recordUpdateRunDiagnostics(
   options: UpdateRunLedgerOptions = {},
 ): UpdateRunRecord | undefined {
   try {
-    if (
-      typeof diagnostics !== "function" &&
-      !(
-        diagnostics.failure ||
-        diagnostics.recovery ||
-        diagnostics.rollbackOutcome ||
-        diagnostics.verification
-      )
-    ) {
+    if (typeof diagnostics !== "function" && !hasUpdateRunDiagnostics(diagnostics)) {
       return undefined;
     }
     return mutateRun(runId, (record) => applyUpdateRunDiagnostics(record, diagnostics), options);
@@ -238,49 +309,79 @@ export function recordUpdateRunDiagnostics(
   }
 }
 
+/** A host reporter claims the settled outcome in this transaction and receives it after commit. */
 export function finishUpdateRun(
   runId: string,
-  result: FinishUpdateRunResult & {
-    before?: UpdateRunRecord["before"];
-    diagnostics?: UpdateRunDiagnostics;
-  },
+  result: FinishUpdateRunInput,
   options: UpdateRunLedgerOptions = {},
+  reportUpdateResult?: (payload: UpdateResultPayload) => void,
 ): UpdateRunRecord {
-  return mutateRun(
-    runId,
-    (record) => {
-      if (record.status === "running") {
-        const diagnostics = result.diagnostics;
-        if (diagnostics) {
-          applyUpdateRunDiagnostics(record, diagnostics);
-          if (!diagnostics.verification) {
-            for (const step of (diagnostics.steps ?? []).flatMap(updateRunStepsFromResultStep)) {
-              upsertStep(record, step);
-            }
-          }
-        }
-        record.before = { ...record.before, ...result.before };
-        const failed =
-          record.steps.find((step) => step.status === "failed" && step.failureFacts?.length) ??
-          (result.status === "failed"
-            ? record.steps.find((step) => step.step === record.phase)
-            : undefined);
-        finishUpdateRunRecord(record, result);
-        if (result.status === "failed" || result.status === "rolled-back") {
-          const summary = completeUpdateFailureSummary(record.reason, failed?.failureFacts);
-          record.reason = summary.reason;
-          if (failed) {
-            failed.failureFacts = summary.failureFacts;
-          } else {
-            upsertStep(record, {
-              step: "update",
-              status: "failed",
-              failureFacts: summary.failureFacts,
-            });
-          }
-        }
+  let updateResult: UpdateResultPayload | undefined;
+  const finished = runExistingOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const record = mutateRunInTransaction(
+        db,
+        runId,
+        (current) => applyFinishUpdateRun(current, result),
+        options,
+      );
+      if (reportUpdateResult) {
+        updateResult = claimUpdateResultInTransaction(db, record);
       }
+      return record;
     },
     options,
+    {
+      schemaSql: updateRunLedgerSchema,
+      operationLabel: "update.run",
+      busyTimeoutMs: options.busyTimeoutMs,
+    },
+  );
+  if (updateResult) {
+    reportUpdateResult?.(updateResult);
+  }
+  return finished;
+}
+
+export function applyFinishUpdateRun(record: UpdateRunRecord, result: FinishUpdateRunInput): void {
+  if (record.status === "running") {
+    const diagnostics = result.diagnostics;
+    if (diagnostics) {
+      applyUpdateRunDiagnostics(record, diagnostics);
+      if (!diagnostics.verification) {
+        for (const step of (diagnostics.steps ?? []).flatMap(updateRunStepsFromResultStep)) {
+          upsertStep(record, step);
+        }
+      }
+    }
+    record.before = { ...record.before, ...result.before };
+    const failed =
+      record.steps.find((step) => step.status === "failed" && step.failureFacts?.length) ??
+      (result.status === "failed"
+        ? record.steps.find((step) => step.step === record.phase)
+        : undefined);
+    finishUpdateRunRecord(record, result);
+    if (result.status === "failed" || result.status === "rolled-back") {
+      const summary = completeUpdateFailureSummary(record.reason, failed?.failureFacts);
+      record.reason = summary.reason;
+      if (failed) {
+        failed.failureFacts = summary.failureFacts;
+      } else {
+        upsertStep(record, {
+          step: "update",
+          status: "failed",
+          failureFacts: summary.failureFacts,
+        });
+      }
+    }
+  }
+}
+
+export function hasUpdateRunDiagnostics(diagnostics: UpdateRunDiagnostics): boolean {
+  return Boolean(
+    diagnostics.failure ||
+    diagnostics.recovery ||
+    diagnostics.rollbackOutcome ||
+    diagnostics.verification,
   );
 }

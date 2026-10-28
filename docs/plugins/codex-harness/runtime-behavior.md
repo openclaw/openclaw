@@ -20,18 +20,25 @@ turn's dynamic-tool output budget cannot hold them. These tools do not change
 Codex's native `skills` namespace or install marketplace skills. See
 [installed skill search](/tools/skills#search-installed-skills).
 
-Codex dynamic tools default to `searchable` loading. OpenClaw normally does
+Codex dynamic tools default to `searchable` loading when the native surface is
+enabled. When it is disabled, OpenClaw publishes allowed dynamic tools directly,
+including session UI tools and managed shell paths. Tool policy, argument
+validation, session authority, and effect ownership still apply. Dashboard and
+widget actions use these session-bound tools; a shell CLI connection and device
+pairing do not replace them. OpenClaw normally does
 not expose dynamic tools that duplicate Codex-native workspace operations:
 `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
-`get_goal`, `create_goal`, `update_goal`, `tool_call`, `tool_describe`,
+`get_goal`, `create_goal`, `update_goal`, `dispatch_action`, `tool_describe`,
 and `tool_search`. Goal operations stay native to Codex,
 so OpenClaw does not project a second goal store into Codex turns. Most
 remaining OpenClaw integration tools, such as messaging, media, cron,
-browser, nodes, gateway, `progress_card`, and `heartbeat_respond` are available through
+browser, nodes, gateway, and `progress_card` are available through
 Codex tool search under the `openclaw` namespace, keeping the initial model
 context smaller. The restricted-turn shell fallback is the exception for
 `exec` and `process` when a finite allowlist disables native Code Mode;
 runtime allowlists and `codexDynamicToolsExclude` still apply.
+Strict [`agent exec`](/cli/agent#agent-exec) runs also use OpenClaw's tools so
+their process cleanup stays with the one-shot run owner.
 When native shell remains active and Gateway access is policy-eligible,
 OpenClaw instead publishes the distinct `gateway_exec` and `gateway_process`
 names so native shell and the OpenClaw-managed environment path cannot be
@@ -52,25 +59,44 @@ replaced by a selected managed provider. OpenClaw keeps Codex's standalone
 its user-defined `web` namespace. `tools.web.search.enabled: false`
 disables both paths, as do tool-disabled LLM-only runs. Codex treats
 `"cached"` as a preference and resolves it to live external access for
-unrestricted app-server turns. Automatic managed fallback fails closed when
+unrestricted app-server turns. Automatic managed fallback is blocked when
 native `allowedDomains` are set so the allowlist cannot be bypassed.
 Persistent effective search-policy changes rotate the bound Codex thread
 before the next turn; transient per-turn restrictions use a temporary
 restricted thread and preserve the existing binding for later resume.
+Requester policy and parent lineage remain bound to preparation: revoking or
+reassigning the requester before native thread or turn dispatch rejects the
+operation before that request reaches Codex. This also applies to `/btw`. Hosted
+search runs inside Codex; OpenClaw validates admission of the search-enabled
+native turn, rather than receiving a separate callback for each hosted search.
+Pending native supervision without a selected model has no hosted search tool.
+Retry after the native session selects a model to prepare its search policy.
+Missing prepared policy also disables hosted search; Codex does not resolve it
+later while building native tools.
+
+When a binding preserves its native model, `/btw` prepares model, credentials,
+and search policy for that bound provider and model, even if the chat's outer
+model differs. A native model change after preparation rejects the side question
+before dispatch; retry to prepare for the current model.
+Supervised native models use Codex's model and authentication ownership, including
+models configured only in Codex; they do not require a host catalog entry or host
+credentials. Side questions use reasoning capabilities from their selected model.
 
 `sessions_yield`, `sessions_spawn`, and message-tool-only source replies stay
-direct because they are turn-control or delegation contracts. Guidance still
-prefers Codex's native `spawn_agent` as the primary Codex subagent surface,
-while explicit OpenClaw or ACP delegation remains directly callable through
-`sessions_spawn`. In Codex Code Mode, generic OpenClaw
+direct because they are turn-control or delegation contracts. Guidance uses
+Codex's native `spawn_agent` for work using only Codex-native tools. New work
+requiring OpenClaw tools goes through the available managed `sessions_spawn`
+route from the start; existing native children stay with native collaboration.
+See [dynamic tools](/plugins/codex-harness-reference/dynamic-tools) for runtime
+selection. In Codex Code Mode, generic OpenClaw
 dynamic-tool results are JSON text rather than JavaScript objects, so parse
 JSON-looking results before reading fields. Codex also serializes nested
 dynamic calls; submit several `sessions_spawn` calls in a bounded loop rather
 than expecting `Promise.all` to launch them concurrently. Already-accepted
 children can still overlap while later calls are submitted. See
 [Swarm](/tools/swarm#use-swarm-from-other-harnesses) for a complete pattern.
-Scheduled heartbeat user messages identify `heartbeat_respond` when structured
-responses are enabled; the tool remains discoverable through Codex tool search.
+Migrated heartbeat monitors use ordinary scheduled automation turns and their
+configured delivery policy. The retired `heartbeat_respond` tool is not exposed.
 
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when
@@ -81,7 +107,7 @@ debugging the full tool payload.
 Long tool results have a collapsed preview in the Control UI. **Show full output**
 opens the saved result as plain text; copy and download use that text, not the
 preview. Reloading the conversation reads the same saved result. Inspection is
-subject to the Gateway's message-size limits and configured transcript redaction.
+subject to the Gateway's message-size limits. Tool-result text is not secret-masked.
 Tool-output inspection requests the supported maximum of 2,000,000 characters per
 text field; a result that remains capped is explicitly marked unavailable.
 A preview limit does not mean Codex truncated the model's input.
@@ -165,11 +191,30 @@ OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
 
+If the app-server connection is lost before the turn completes, the conversation
+retains a visible failure outcome even when Codex already sent commentary or
+partial output. Reloading the Control UI or opening the conversation on another
+client preserves that outcome. The live error and saved notice both explain
+that the task may still be running and tell you to check the conversation before
+trying again. The original error remains in diagnostic details.
+Check any command's effects before retrying: a
+lost connection does not prove that its work stopped. A later turn can reconnect
+to the app-server normally.
+
 Failed app-server startup waits for child shutdown before returning its error.
 If startup times out or is canceled during process registration, cleanup joins
 that registration and closes any late child. Cleanup can extend beyond the
-startup deadline. A canceled caller leaves startup running when another caller
-still owns it.
+startup deadline. A registration failure keeps its specific error when it settles
+during that cleanup, instead of becoming a generic initialization timeout.
+Shared startup has its own deadline. Canceling a shared-client waiter leaves
+service-owned startup running even if it was the only waiter. Later callers can
+join it; once ready, an unused client retires after the idle grace. Isolated
+startup remains caller-owned. See
+[startup budgets](/plugins/codex-harness-reference/timeouts#timeouts).
+
+Temporary capability, native-hook, and tool-catalog probes wait for their isolated
+app-server to close before returning, including after a failed or timed-out read.
+Probes using a shared connection release their lease so other work can continue.
 
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.
@@ -199,56 +244,42 @@ can use it.
 
 ## Automatic Daybreak escalation
 
-OpenAI declines some defensive-cyber work on its general models and directs
-approved workspaces to a Daybreak model instead. When a turn ends in a
-cyber-policy refusal, OpenClaw retries it once on the configured Daybreak model
-so the refused work reaches the tier allowed to answer it. This is on by
-default and is configured under
-`plugins.entries.codex.config.appServer.cyberFailover`.
+When OpenAI returns a structured cyber-policy refusal, the default automatic policy
+retries once with **Blue Access on the same model**. It does not choose a replacement
+model or use the retiring Blue/Red model aliases. The native request changes only the
+turn-scoped `cyberAccessProgram` to `daybreakBlue`; provider, model, runtime, account,
+effort, and speed stay selected. Exact model pins and empty model fallback lists do
+not disable this Access configuration retry.
 
-Daybreak trails the general models in capability, so escalation stays scoped to
-work that was actually refused:
+Escalation stays scoped to work that was actually refused:
 
-- At most one escalated attempt per turn. A second refusal under Daybreak keeps
-  the block and stops.
-- A turn already running on the configured Daybreak model is never escalated.
-- A turn that already acted is never retried. Escalation requires the attempt's
-  own replay-safe verdict, so a turn refused after it sent a message, added a
-  cron entry, spawned a session, started a native continuation, or generated
-  media keeps its result. Cancellation, timeout, or a later failure also prevents
-  escalation even if the result retains a refusal diagnostic.
-- Only a refused turn is ever routed to Daybreak. Every turn starts on the model
-  the session selected, and a turn that was not refused never reaches the weaker
-  tier.
-- The retry does not mirror the prompt into the transcript a second time. The
-  refused attempt's own terminal row is discarded with its result rather than
-  staged, so a successful escalation returns the Daybreak answer; the refused
-  turn still exists upstream in the native Codex thread, which OpenClaw does not
-  rewrite.
-- Only OpenAI's own cyber refusal on the current attempt escalates. Another
-  provider's refusal, another category, and a refusal inherited from an earlier
-  turn all leave the result untouched.
-- Escalation never changes the session's stored model selection, and the only
-  retained state is the unauthorized-target record below, which is process-local
-  rather than persisted.
+- Only the current attempt's structured OpenAI cyber refusal qualifies. Other providers,
+  policy categories, and historical refusals do not trigger a retry.
+- At most one escalated attempt runs per turn. A turn already using Blue or Red is not
+  retried or downgraded; a second refusal stops.
+- The attempt must be replay-safe. Sent messages, scheduled work, spawned sessions,
+  native continuations, generated media, cancellation, timeout, and later failures keep
+  their existing no-replay behavior.
+- Every new turn starts with the session's selected Access setting. Neither the model
+  nor Access override is permanently changed, and the user prompt is not mirrored into
+  the transcript a second time. The refused turn remains in the native Codex thread.
+- `plugins.entries.codex.config.appServer.cyberFailover.mode: "off"` disables this
+  automatic retry. Doctor removes the retired `cyberFailover.model` setting and keeps
+  `mode` and `cooloffMs`; ordinary configured model fallbacks remain separate.
 
-Authorization stays server-owned. `model/list` advertises Daybreak to every
-client, so catalog presence does not prove entitlement: an unentitled workspace
-still receives `401`/`403` on use, and each such attempt costs the transport's
-full reconnect ladder. OpenClaw therefore treats the retry itself as the only
-evidence and reports an `unavailable` notice rather than a silent block. If the
-fallback target is denied without tool activity, side effects, native
-continuation, or interruption, OpenClaw keeps the original refusal even when
-the fallback produced no assistant message. Otherwise, its result is preserved
-so those facts reach the runner.
+Before `turn/start`, the request owner checks the same native client's authenticated
+ChatGPT account and its model-specific `availableAccessPrograms`. Unknown or absent Blue
+capability leaves the original refusal intact without sending a Blue request. This
+integration does not support native API-key Access requests; use the OpenClaw Responses
+runtime for Platform API-key access. Catalog metadata is a prerequisite, not permission
+to ignore a later server denial or changed account.
 
-Because entitlement belongs to the authenticated workspace and the target model
-rather than to any one conversation, an unauthorized target is remembered once
-for every session under that workspace and cannot be displaced by session churn.
-A separate workspace that is entitled keeps escalating normally, and the record
-releases on its own once `cooloffMs` elapses. Only one check runs at a time for a
-given workspace and target, so sibling sessions refused at the same moment do not
-each pay the reconnect ladder before the first result lands.
+A server authorization denial is remembered for the authenticated workspace/model for
+`cooloffMs`, so sibling sessions do not repeat the failed Blue request. This process-local
+record does not disable ordinary Standard requests. A separate workspace remains
+independent, and expired records release automatically. If a failed retry has tool
+activity, side effects, native continuation, or interruption, its own result and receipts
+are retained rather than replaced with the original refusal.
 
 ## Parallel chats and thread ownership
 
@@ -261,6 +292,31 @@ When native interruption and subscription cleanup are confirmed, stopping one
 chat leaves other chats running on the shared client. A follow-up can resume the
 stopped thread without waiting for those chats to finish.
 
+If native children are still running when their parent stops or calls
+`sessions_yield`, OpenClaw keeps the parent's subscription to observe their
+results. The same conversation can accept another message after Codex confirms
+that exact parent turn has ended. Child results stay attached to the original
+session lifecycle; a reset, replaced binding, or revoked source cannot inherit
+its retained authority.
+
+Native child completion delivery stops permanently when its retry budget is
+exhausted or requester recovery blocks it. OpenClaw retires that child turn's
+pending assignment and follow-up receipt together, so later parent registrations
+and Gateway restarts do not restart delivery. A bounded system note in the parent
+transcript identifies the child, its status, and its result session key; a warning
+records retirement even if the transcript note cannot be written. Other pending
+turns of the same child remain independent. Parent subscription retention during
+ordinary completion retries is unchanged.
+
+If a chat's previous client was retired while other chats still use it, the
+next turn waits for its exact thread to close or for that client to exit before
+resuming. If a plugin reload missed the thread's closure notification, OpenClaw
+reads the exact old client's thread status once. A matching `notLoaded` status
+allows the handoff; a still-loaded thread keeps waiting. Native resume retains
+its exclusive persistence writer lock. Stopping the waiting turn cancels its
+read and wait without closing sibling sessions or a healthy new client. A
+startup deadline also ends the wait, but retires the startup client.
+
 Managed local connections share a bounded inference relay. Up to 16 request
 preparations and uploads run at once, with another 16 waiting in arrival order.
 Responses keep streaming after their upload capacity is released, so a long
@@ -271,8 +327,14 @@ with room for 16 pending or closing admissions. It retains up to 64 usable
 WebSockets and reclaims the oldest completed idle connection when either
 transport needs room. Active responses and newly opened connections awaiting
 their first request are not evicted. HTTP connections close after each response;
-native WebSocket reuse remains intact. The separate limit of 64 admitted root
-contexts is unchanged; transport capacity is not a count of saved conversations.
+native WebSocket reuse remains intact. Separately, each inference relay admits at
+most 64 active root contexts. Additional turns wait in arrival order for a root
+to be released; cancellation removes a waiting turn, and relay shutdown rejects
+its waiters. Admission rechecks the turn and transport ownership before starting.
+Debug logs identify the root limit and waiting count. A completed, failed,
+aborted, or yielded turn releases its root; retained parent subscriptions and
+prepared context do not occupy active roots. Transport capacity is not a count
+of saved conversations.
 
 A new WebSocket waits before opening its upstream connection; admission and its
 handshake share a 10-second deadline. HTTP admission and queued WebSocket
@@ -309,6 +371,11 @@ same native thread through multiple controllers; observing native teardown alone
 does not reserve it against a subsequent native reload.
 
 ## Runtime boundaries
+
+Native provider throttling and overload retain their structured status whether
+Codex rejects turn startup or reports a failed turn. Both paths use OpenClaw's
+shared retry and failure guidance in channel chats and the Control UI. Temporary
+throttling does not inherit a subscription usage-limit reset cooldown.
 
 The Codex harness changes the low-level embedded agent executor only.
 

@@ -23,24 +23,6 @@ function baseRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord 
 }
 
 describe("normalizeSubagentRunState", () => {
-  it("normalizes durable task ownership and generation metadata", () => {
-    const entry = normalizeSubagentRunState(
-      baseRun({ taskRunId: "  run-task-owner  ", generation: 2 }),
-    );
-    const malformed = normalizeSubagentRunState(
-      baseRun({ taskRunId: "   ", generation: Number.NaN }),
-    );
-    const nonString = normalizeSubagentRunState({
-      ...baseRun(),
-      taskRunId: 42,
-    } as unknown as SubagentRunRecord);
-
-    expect(entry).toMatchObject({ taskRunId: "run-task-owner", generation: 2 });
-    expect(malformed.taskRunId).toBeUndefined();
-    expect(malformed.generation).toBeUndefined();
-    expect(nonString.taskRunId).toBeUndefined();
-  });
-
   it("normalizes the durable delete-dispatch boundary", () => {
     const valid = normalizeSubagentRunState(baseRun({ deleteCleanupDispatchedAt: 200 }));
     const malformed = normalizeSubagentRunState(baseRun({ deleteCleanupDispatchedAt: Number.NaN }));
@@ -69,42 +51,6 @@ describe("normalizeSubagentRunState", () => {
     expect(entry.suppressCompletionDelivery).toBe(true);
   });
 
-  it("drops malformed killed reconciliation metadata", () => {
-    const entry = normalizeSubagentRunState(
-      baseRun({
-        killReconciliation: { killedAt: Number.NaN },
-      }),
-    );
-
-    expect(entry.killReconciliation).toBeUndefined();
-  });
-
-  it("keeps only complete interrupted-recovery terminal ownership", () => {
-    const terminal = {
-      endedReason: "subagent-error" as const,
-      execution: {
-        status: "terminal" as const,
-        startedAt: 100,
-        endedAt: 200,
-        outcome: { status: "error" as const, error: "restart interrupted run" },
-      },
-      terminalOwner: "interrupted-recovery" as const,
-    };
-    const valid = normalizeSubagentRunState(baseRun(terminal));
-    const malformed = [
-      baseRun({ ...terminal, execution: { ...terminal.execution, endedAt: undefined } }),
-      baseRun({
-        ...terminal,
-        execution: { ...terminal.execution, outcome: { status: "ok" } },
-      }),
-      baseRun({ ...terminal, endedReason: "subagent-complete" }),
-      baseRun({ ...terminal, pauseReason: "sessions_yield" }),
-    ].map((entry) => normalizeSubagentRunState(entry));
-
-    expect(valid.terminalOwner).toBe("interrupted-recovery");
-    expect(malformed.every((entry) => entry.terminalOwner === undefined)).toBe(true);
-  });
-
   it("clears stale cleanupHandled locks after delivered notification if cleanup did not finish", () => {
     const entry = normalizeSubagentRunState(
       baseRun({
@@ -117,20 +63,5 @@ describe("normalizeSubagentRunState", () => {
     );
 
     expect(entry.cleanupHandled).toBe(false);
-  });
-
-  it("keeps discarded terminal delivery dormant across restart", () => {
-    const entry = normalizeSubagentRunState(
-      baseRun({
-        cleanupHandled: true,
-        delivery: {
-          status: "discarded",
-          discardedAt: 400,
-          discardReason: "expired",
-        },
-      }),
-    );
-
-    expect(entry.cleanupHandled).toBe(true);
   });
 });

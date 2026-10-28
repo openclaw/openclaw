@@ -1,9 +1,9 @@
 import { normalizeConversationTargetRef } from "../../../infra/outbound/session-binding-normalization.js";
+import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import {
   resolveConversationBindingAccountIdFromMessage,
   resolveConversationBindingChannelFromMessage,
   resolveConversationBindingContextFromAcpCommand,
-  resolveConversationBindingThreadIdFromMessage,
 } from "../conversation-binding-input.js";
 
 export function resolveAcpCommandBindingContext(
@@ -27,6 +27,6 @@ export function resolveAcpCommandBindingContext(
       cfg: params.cfg,
       commandChannel: params.command.channel,
     }),
-    threadId: resolveConversationBindingThreadIdFromMessage(params.ctx),
+    threadId: stringifyRouteThreadId(params.ctx.MessageThreadId),
   };
 }

@@ -11,7 +11,7 @@ import {
   TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
-import "../../components/app-sidebar.ts";
+import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar gateway session pagination", () => {
   it("refreshes the archived sidebar once when another client changes sessions", async () => {
@@ -163,7 +163,7 @@ describe("AppSidebar gateway session pagination", () => {
     const staleRefresh = sidebar.sessionData.refreshSidebarSessions("main");
     context.agentSelection.state.selectedId = "research";
     context.agentSelection.state.scopeId = "research";
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
 
     expect(harness.list).toHaveBeenCalledWith(

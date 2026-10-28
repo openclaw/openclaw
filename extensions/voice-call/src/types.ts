@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { CallBrief } from "./call-brief-schema.js";
 import type { CallMode, VoiceCallConfig } from "./config.js";
-export type { CallBrief } from "./call-brief-schema.js";
 
 const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock"]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
@@ -45,7 +44,6 @@ export type NormalizedEvent = {
   answeredBy?: string | undefined;
   // Optional per-turn nonce for speech events (Twilio <Gather> replay hardening).
   turnToken?: string | undefined;
-  // Optional fields for inbound call detection
   direction?: "inbound" | "outbound" | undefined;
   from?: string | undefined;
   to?: string | undefined;
@@ -141,7 +139,6 @@ export type InitiateCallInput = {
   from: string;
   to: string;
   webhookUrl: string;
-  clientState?: Record<string, string>;
   /** Inline TwiML to execute without fetching webhook TwiML. */
   inlineTwiml?: string;
   /** TwiML to serve once before normal webhook-driven call handling resumes. */

@@ -1,10 +1,13 @@
 import { stripMemoryAnnotationCarriers } from "../../packages/memory-host-sdk/src/host/curated-annotations.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   isAutomaticMemoryEntryEligible,
+  readMemorySearchManagerStatus,
+  resolveMemorySearchStaleness,
   type MemoryProviderStatus,
   type MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
-import { assertMemoryCallerCurrent } from "./memory-audience.js";
+import { assertMemoryCallerCurrent, prepareMemoryCallerRead } from "./memory-audience.js";
 import type {
   MemoryCallerContext,
   MemoryProviderHandle,
@@ -18,6 +21,57 @@ import type {
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
 
+function legacyCoverageWarning(status: MemoryProviderStatus): string | undefined {
+  const stale = resolveMemorySearchStaleness(status);
+  if (stale) {
+    return stale.warning;
+  }
+  const providerState = status.custom?.providerState;
+  if (providerState && typeof providerState === "object" && "mode" in providerState) {
+    // A lazy manager with embeddings explicitly disabled has nothing semantic to initialize.
+    if (providerState.mode === "pending" && status.requestedProvider !== "none") {
+      return "Memory embeddings are pending. Search results may be incomplete.";
+    }
+    if (
+      providerState.mode === "degraded" ||
+      (providerState.mode === "fts-only" &&
+        status.requestedProvider !== undefined &&
+        status.requestedProvider !== "none")
+    ) {
+      return "Memory embeddings are unavailable. Keyword search remains available; results may be incomplete.";
+    }
+  }
+  if (status.dirty) {
+    return "Memory indexing is pending. Search results may be incomplete.";
+  }
+  // A deliberately keyword-only provider does not promise semantic coverage.
+  if (
+    status.provider !== "none" &&
+    status.vector?.enabled &&
+    (status.vector.index?.state === "incomplete" || status.vector.index?.state === "unverified")
+  ) {
+    return "Memory vector indexing is incomplete. Search results may be incomplete.";
+  }
+  return undefined;
+}
+
+const refreshHandoffs = new WeakMap<
+  MemoryProviderHandle,
+  (onStarted: () => void) => Promise<void>
+>();
+
+/** Join caller admission before handing asynchronous refresh to the provider owner. */
+export function refreshMemoryProviderWithHandoff(
+  provider: MemoryProviderHandle,
+  onStarted: () => void,
+): Promise<void> {
+  const refresh = refreshHandoffs.get(provider);
+  if (!refresh) {
+    throw new Error("memory refresh requires a bound provider handle");
+  }
+  return refresh(onStarted);
+}
+
 /** Recheck both caller and provider lifetime after every asynchronous boundary. */
 export function bindMemoryProvider(
   provider: MemoryProviderHandle,
@@ -29,22 +83,33 @@ export function bindMemoryProvider(
   const instance =
     getPluginValueInstance(provider) ??
     (runtimeOwner ? getPluginValueInstance(runtimeOwner) : undefined);
-  const assertCurrent = () => {
+  // Quiesce closes admission only: a call admitted before it may still complete.
+  const assertCurrent = (admitting: boolean) => {
     if (closed) {
       throw new Error("memory provider handle is closed");
     }
     assertMemoryCallerCurrent(context);
     if (
       instance &&
-      (!instance.acceptingCalls || instance.owner?.revoked || instance.lifecycle.signal.aborted)
+      ((admitting && !instance.acceptingCalls) ||
+        instance.owner?.revoked ||
+        instance.lifecycle.signal.aborted)
     ) {
       throw new Error("memory provider instance is no longer current");
     }
   };
   const invoke = async <T>(run: () => Promise<T>): Promise<T> => {
-    assertCurrent();
+    const before = prepareMemoryCallerRead(context);
+    if (before) {
+      await racePromiseWithAbortSignal(before, context.signal);
+    }
+    assertCurrent(true);
     const result = await run();
-    assertCurrent();
+    const after = prepareMemoryCallerRead(context);
+    if (after) {
+      await racePromiseWithAbortSignal(after, context.signal);
+    }
+    assertCurrent(false);
     return result;
   };
   const assertReference = (reference: MemoryReference) => {
@@ -87,7 +152,15 @@ export function bindMemoryProvider(
       throw new Error("memory provider does not support the project filter capability");
     }
   };
-  return {
+  const refresh = provider.refresh
+    ? (onStarted?: () => void) =>
+        invoke(() => {
+          const pending = provider.refresh!();
+          onStarted?.();
+          return pending;
+        })
+    : undefined;
+  const bound: MemoryProviderHandle = {
     capabilities,
     search: (request) =>
       invoke(async () => {
@@ -122,7 +195,7 @@ export function bindMemoryProvider(
           },
         }
       : {}),
-    ...(provider.refresh ? { refresh: () => invoke(() => provider.refresh!()) } : {}),
+    ...(refresh ? { refresh: () => refresh() } : {}),
     async close() {
       if (closed) {
         return;
@@ -132,6 +205,10 @@ export function bindMemoryProvider(
       await runPluginCleanup(provider, () => provider.close());
     },
   };
+  if (refresh) {
+    refreshHandoffs.set(bound, refresh);
+  }
+  return bound;
 }
 
 // Health reaches every operator.read caller; host filesystem layout stays with local status tools.
@@ -215,6 +292,18 @@ export async function adaptLegacyMemoryProvider(
       },
     };
   };
+  const readCoverage = async (includeCounts?: boolean) => {
+    try {
+      const status = await readMemorySearchManagerStatus(manager, { includeCounts });
+      return { status, warning: legacyCoverageWarning(status) };
+    } catch {
+      assertCurrent();
+      // Diagnostics must not discard an otherwise successful, authorized search.
+      return {
+        warning: "Memory index coverage could not be verified. Search results may be incomplete.",
+      };
+    }
+  };
   // Automatic recall consumers keep their legacy manager paths, so the adapter enumerates no candidates.
   const provider: MemoryProviderHandle = {
     capabilities: {
@@ -237,7 +326,13 @@ export async function adaptLegacyMemoryProvider(
         sessionKey: session?.sessionKey,
         signal: context.signal,
       });
-      return { hits: (await authorize(hits)).map(convert), coverage: "complete" };
+      const authorized = (await authorize(hits)).map(convert);
+      const { warning } = await readCoverage(false);
+      return {
+        hits: authorized,
+        coverage: warning ? "partial" : "complete",
+        ...(warning ? { warning } : {}),
+      };
     },
     async get(request) {
       // readFile is the legacy provider's read authorization boundary, including
@@ -264,11 +359,11 @@ export async function adaptLegacyMemoryProvider(
       };
     },
     async health() {
-      const status = manager.status();
+      const { status, warning } = await readCoverage();
       return {
-        status: status.lastSyncError ? "degraded" : "ready",
-        message: status.lastSyncError,
-        details: { legacy: redactLegacyHealthDetails(status) },
+        status: warning ? "degraded" : "ready",
+        message: warning,
+        ...(status ? { details: { legacy: redactLegacyHealthDetails(status) } } : {}),
       };
     },
     ...(manager.sync ? { refresh: () => manager.sync!({ reason: "provider-refresh" }) } : {}),

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap, resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { XCostLimits } from "./cost-limits.js";
@@ -27,7 +28,7 @@ export type XBudgetExceededError = InstanceType<typeof XBudgetExceededError>;
 
 type SpendRuntime = {
   state: Pick<PluginRuntime["state"], "openKeyedStore" | "resolveStateDir">;
-  logging?: Pick<PluginRuntime["logging"], "getChildLogger">;
+  logging: Pick<PluginRuntime["logging"], "getChildLogger">;
 };
 type Period = { day: string; cycle: string; dayEnd: number; cycleEnd: number };
 type Pending = { key: string; amount: number; day: string; cycle: string };
@@ -74,7 +75,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
     });
   let store = openStore(runtime);
   let state = runtime.state;
-  let logger = runtime.logging?.getChildLogger({ channel: "x", accountId });
+  let logger = runtime.logging.getChildLogger({ channel: "x", accountId });
   let limits = getLimits;
   let tail: Promise<unknown> = Promise.resolve();
   let initialized = false;
@@ -101,6 +102,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
           failure = new Error("X spend accounting unavailable; paid requests paused", {
             cause: error,
           });
+          materializeErrorStack(failure);
           notify();
         }
         throw error;
@@ -234,14 +236,14 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
       ? error
       : refusal({ ...view, day: view.day - view.held, cycle: view.cycle - view.held }, 0);
     if (warnedUntil !== undefined && (Date.now() >= warnedUntil || !notice)) {
-      logger?.info("X API budget reset; paid requests may resume");
+      logger.info("X API budget reset; paid requests may resume");
       warnedUntil = undefined;
     }
     if (!error) {
       refusedAmount = 0;
-    } else if (notice && logger && warnedUntil === undefined) {
+    } else if (notice && warnedUntil === undefined) {
       warnedUntil = notice.exhaustedUntil;
-      logger?.warn(notice.message);
+      logger.warn(notice.message);
     }
     return error;
   };
@@ -328,7 +330,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
     api,
     update(nextRuntime: SpendRuntime, nextLimits: () => XCostLimits) {
       limits = nextLimits;
-      logger = nextRuntime.logging?.getChildLogger({ channel: "x", accountId }) ?? logger;
+      logger = nextRuntime.logging.getChildLogger({ channel: "x", accountId });
       if (state !== nextRuntime.state) {
         store = openStore(nextRuntime);
         state = nextRuntime.state;
@@ -336,6 +338,7 @@ function createSpendOwner(runtime: SpendRuntime, accountId: string, getLimits: (
     },
     async close() {
       failure = new Error("X spend owner closed; pending reservations retained for recovery");
+      materializeErrorStack(failure);
       await tail;
     },
   };

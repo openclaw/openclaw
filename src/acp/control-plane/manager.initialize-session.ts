@@ -63,8 +63,9 @@ export async function runManagerInitializeSession(params: {
       assertCurrent,
     })
   )?.acp;
+  const assertResumeCurrent = await input.revalidateResume?.();
   assertCurrent();
-  input.assertActive?.();
+  assertResumeCurrent?.();
   const ensured = await withAcpRuntimeErrorBoundary({
     run: async () =>
       await runtime.ensureSession({

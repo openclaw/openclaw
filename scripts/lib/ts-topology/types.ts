@@ -1,13 +1,15 @@
-import type { Checker, Project } from "typescript/unstable/sync";
+import type { Checker, Project } from "typescript/sync";
 
 export type UsageBucket = "internal" | "production" | "test";
 
-export type TopologyReportName =
-  | "public-surface-usage"
-  | "owner-map"
-  | "single-owner-shared"
-  | "unused-public-surface"
-  | "consumer-topology";
+export const TOPOLOGY_REPORT_NAMES = [
+  "public-surface-usage",
+  "owner-map",
+  "single-owner-shared",
+  "unused-public-surface",
+  "consumer-topology",
+] as const;
+export type TopologyReportName = (typeof TOPOLOGY_REPORT_NAMES)[number];
 
 export type SymbolKind =
   | "function"

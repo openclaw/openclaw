@@ -1,5 +1,7 @@
 import { stat } from "node:fs/promises";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -9,6 +11,8 @@ import type {
   SetupMemoryImportOutcome,
 } from "../wizard/setup.memory-import.js";
 import { appendSystemAgentAuditEntry } from "./audit.js";
+
+const log = createSubsystemLogger("system-agent/chat-wizard-host");
 
 export const GATEWAY_WRITE_POLICY = {
   mode: "none",
@@ -221,7 +225,6 @@ export async function runHostedMemoryImport(
       "Memory import requires a valid saved config. Run `openclaw doctor --fix`, then retry.",
     );
   }
-  const baseHash = snapshot.hash;
   const config = snapshot.config;
   const { agentId, workspaceDir: workspace } = resolveSystemAgentOnboardingTarget(config);
   try {
@@ -243,15 +246,7 @@ export async function runHostedMemoryImport(
     agentId,
     prompter,
     runtime,
-    beforeApply: async () => {
-      await beforePersistentApply(runtime);
-      const currentSnapshot = await readSetupConfigFileSnapshot();
-      if (!currentSnapshot.exists || !currentSnapshot.valid || currentSnapshot.hash !== baseHash) {
-        throw new Error(
-          "configuration changed during memory import; nothing further was copied — retry to import against the current setup",
-        );
-      }
-    },
+    beforeApply: async () => await beforePersistentApply(runtime),
     onProviderOutcome,
   });
 }
@@ -277,10 +272,7 @@ function formatMemoryImportProviders(providers: ConfirmedMemoryImportProviderOut
     .join(", ");
 }
 
-export async function auditMemoryImport(
-  providers: MemoryImportProviderOutcome[],
-  appendAuditEntry = appendSystemAgentAuditEntry,
-): Promise<void> {
+export async function auditMemoryImport(providers: MemoryImportProviderOutcome[]): Promise<void> {
   const confirmedProviders = providers.filter(hasConfirmedMemoryImportCount);
   const importedProviders = confirmedProviders.filter((provider) => provider.migrated > 0);
   const indeterminateProviders = providers.filter(
@@ -303,29 +295,32 @@ export async function auditMemoryImport(
           .filter(Boolean)
           .join("; ")}`
       : `Imported memory via chat: ${providerSummary}`;
-  await appendAuditEntry({
-    operation: "memory.import",
-    summary,
-    details: {
-      ...(indeterminateProviders.length > 0
-        ? { confirmedItems: importedItems, copiesIndeterminate: true }
-        : { totalItems: importedItems }),
-      providers: providers.map((provider) =>
-        provider.copiesIndeterminate === true
-          ? { providerId: provider.providerId, copiesIndeterminate: true }
-          : {
-              providerId: provider.providerId,
-              items: provider.migrated,
-              ...(provider.failure ? { partial: true } : {}),
-            },
-      ),
-    },
-  });
+  try {
+    await appendSystemAgentAuditEntry({
+      operation: "memory.import",
+      summary,
+      details: {
+        ...(indeterminateProviders.length > 0
+          ? { confirmedItems: importedItems, copiesIndeterminate: true }
+          : { totalItems: importedItems }),
+        providers: providers.map((provider) =>
+          provider.copiesIndeterminate === true
+            ? { providerId: provider.providerId, copiesIndeterminate: true }
+            : {
+                providerId: provider.providerId,
+                items: provider.migrated,
+                ...(provider.failure ? { partial: true } : {}),
+              },
+        ),
+      },
+    });
+  } catch (error) {
+    log.warn(`memory import completed without audit entry: ${formatErrorMessage(error)}`);
+  }
 }
 
 export async function renderMemoryImport(
   outcome: HostedMemoryImportOutcome | undefined,
-  appendAuditEntry = appendSystemAgentAuditEntry,
 ): Promise<string> {
   if (!outcome) {
     return "Memory import did not complete. No outcome was reported, and no success was assumed.";
@@ -351,7 +346,7 @@ export async function renderMemoryImport(
   );
   const importedItems = importedProviders.reduce((total, provider) => total + provider.migrated, 0);
   const providerSummary = formatMemoryImportProviders(importedProviders);
-  await auditMemoryImport(outcome.providers, appendAuditEntry);
+  await auditMemoryImport(outcome.providers);
 
   if (importedItems === 0) {
     if (indeterminateProviders.length > 0) {

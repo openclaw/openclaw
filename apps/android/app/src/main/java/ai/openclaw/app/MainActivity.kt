@@ -34,6 +34,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -167,50 +169,47 @@ class MainActivity : AppCompatActivity() {
    * Starts lifecycle collectors after ViewModel construction so they cannot force early startup.
    */
   private fun startViewModelCollectors(readyViewModel: MainViewModel) {
-    lifecycleScope.launch {
-      repeatOnLifecycle(Lifecycle.State.STARTED) {
-        readyViewModel.preventSleep.collect { enabled ->
-          if (enabled) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-          } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-          }
-        }
+    collectStarted(readyViewModel.preventSleep) { enabled ->
+      if (enabled) {
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+      } else {
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
       }
     }
 
-    lifecycleScope.launch {
-      repeatOnLifecycle(Lifecycle.State.STARTED) {
-        readyViewModel.runtimeInitialized.collect { ready ->
-          runtimeUiStarter.onRuntimeInitialized(
-            ready = ready,
-            startRuntimeUi = screenshotScene == null,
-            attachRuntimeUi = {
-              // Runtime UI helpers need an Activity owner, so attach once after NodeRuntime is ready.
-              readyViewModel.attachRuntimeUi(owner = this@MainActivity, permissionRequester = permissionRequester)
-            },
-            startNodeService = {
-              NodeForegroundService.start(this@MainActivity)
-            },
-          )
-        }
-      }
+    collectStarted(readyViewModel.runtimeInitialized) { ready ->
+      runtimeUiStarter.onRuntimeInitialized(
+        ready = ready,
+        startRuntimeUi = screenshotScene == null,
+        attachRuntimeUi = {
+          // Runtime UI helpers need an Activity owner, so attach once after NodeRuntime is ready.
+          readyViewModel.attachRuntimeUi(owner = this@MainActivity, permissionRequester = permissionRequester)
+        },
+        startNodeService = {
+          NodeForegroundService.start(this@MainActivity)
+        },
+      )
     }
 
-    lifecycleScope.launch {
-      repeatOnLifecycle(Lifecycle.State.STARTED) {
-        readyViewModel.shareLaunchOverflowRevision.collect { revision ->
-          if (revision == 0L) return@collect
-          repeat(readyViewModel.takeShareLaunchOverflowCount()) {
-            Toast
-              .makeText(
-                this@MainActivity,
-                nativeString("Too many shares are waiting to be added."),
-                Toast.LENGTH_SHORT,
-              ).show()
-          }
-        }
+    collectStarted(readyViewModel.shareLaunchOverflowRevision) { revision ->
+      if (revision == 0L) return@collectStarted
+      repeat(readyViewModel.takeShareLaunchOverflowCount()) {
+        Toast
+          .makeText(
+            this@MainActivity,
+            nativeString("Too many shares are waiting to be added."),
+            Toast.LENGTH_SHORT,
+          ).show()
       }
+    }
+  }
+
+  private fun <T> collectStarted(
+    states: Flow<T>,
+    onValue: suspend (T) -> Unit,
+  ) {
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) { states.collect(onValue) }
     }
   }
 
@@ -260,11 +259,9 @@ internal class MainActivityPendingIntentRouter {
     intent: Intent,
     routeIntent: (Intent) -> Unit,
   ): Boolean {
-    if (activated) {
-      routeIntent(intent)
-      return true
-    }
-    return store(intent = intent, initial = false)
+    if (!activated) return store(intent = intent, initial = false)
+    routeIntent(intent)
+    return true
   }
 
   fun discardInitialIntent() {
@@ -347,13 +344,9 @@ internal class MainActivityRuntimeUiStarter {
     startNodeService: () -> Unit,
   ) {
     if (!ready || completed) return
-    if (!startRuntimeUi) {
-      completed = true
-      return
-    }
-    attachRuntimeUi()
+    if (startRuntimeUi) attachRuntimeUi()
     completed = true
-    startNodeService()
+    if (startRuntimeUi) startNodeService()
   }
 }
 

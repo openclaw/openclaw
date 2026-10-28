@@ -15,7 +15,7 @@ export type SkillConfig = Omit<NonNullable<SkillsSchemaInput["entries"]>[string]
   apiKey?: SecretInput;
 };
 
-/** Autonomous and approval settings for generated skill proposals. */
+/** Skill Workshop autonomous learning settings. */
 export type SkillsWorkshopConfig = NonNullable<SkillsSchemaInput["workshop"]>;
 
 export type SkillsWorkshopAutonomousMode = NonNullable<

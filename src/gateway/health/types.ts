@@ -5,13 +5,11 @@ type ProtocolHealth = Snapshot["health"];
 type ProtocolPlugin = NonNullable<ProtocolHealth["plugins"]>;
 type UnavailablePlugin = NonNullable<ProtocolPlugin["unavailable"]>[number];
 
-/** Health snapshot for one configured channel account. */
 export type ChannelAccountHealthSummary = ChannelAccountSnapshot & {
   authAgeMs?: number | null;
   [key: string]: unknown;
 };
 
-/** Channel-level health summary with optional per-account details. */
 export type ChannelHealthSummary = ChannelAccountHealthSummary & {
   accounts?: Record<string, ChannelAccountHealthSummary>;
 };
@@ -20,7 +18,6 @@ export type AgentHealthSummary = NonNullable<ProtocolHealth["agents"]>[number];
 
 export type PluginHealthErrorSummary = ProtocolPlugin["errors"][number];
 
-/** Plugin registry health summary. */
 export type PluginHealthSummary = Omit<ProtocolPlugin, "unavailable"> & {
   unavailable?: Array<
     Omit<UnavailablePlugin, "diagnostic"> & {

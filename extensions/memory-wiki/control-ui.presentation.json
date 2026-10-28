@@ -1,0 +1,8 @@
+{
+  "pluginId": "memory-wiki",
+  "memoryAddon": {
+    "order": 20,
+    "label": "Memory wiki",
+    "labelKey": "memoryPage.addons.memoryWiki.title"
+  }
+}

@@ -19,36 +19,30 @@ type NostrProfileState = {
   version: 1;
   /** Unix timestamp (seconds) of last successful profile publish */
   lastPublishedAt: number | null;
-  /** Event ID of the last published profile */
   lastPublishedEventId: string | null;
   /** Per-relay publish results from last attempt */
   lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
 };
 
-function openNostrBusStateStore(env?: NodeJS.ProcessEnv) {
+function openNostrBusStateStore() {
   return getNostrRuntime().state.openKeyedStore<NostrBusState>({
     namespace: "bus-state",
     maxEntries: 256,
-    ...(env ? { env } : {}),
   });
 }
 
-function openNostrProfileStateStore(env?: NodeJS.ProcessEnv) {
+function openNostrProfileStateStore() {
   return getNostrRuntime().state.openKeyedStore<NostrProfileState>({
     namespace: "profile-state",
     maxEntries: 256,
-    ...(env ? { env } : {}),
   });
 }
 
 export async function readNostrBusState(params: {
   accountId?: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<NostrBusState | null> {
   return (
-    (await openNostrBusStateStore(params.env).lookup(
-      normalizeNostrStateAccountId(params.accountId),
-    )) ?? null
+    (await openNostrBusStateStore().lookup(normalizeNostrStateAccountId(params.accountId))) ?? null
   );
 }
 
@@ -57,18 +51,14 @@ export async function writeNostrBusState(params: {
   lastProcessedAt: number;
   gatewayStartedAt: number;
   recentEventIds?: string[];
-  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const payload: NostrBusState = {
     version: STORE_VERSION,
     lastProcessedAt: params.lastProcessedAt,
     gatewayStartedAt: params.gatewayStartedAt,
-    recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
+    recentEventIds: params.recentEventIds ?? [],
   };
-  await openNostrBusStateStore(params.env).register(
-    normalizeNostrStateAccountId(params.accountId),
-    payload,
-  );
+  await openNostrBusStateStore().register(normalizeNostrStateAccountId(params.accountId), payload);
 }
 
 /**
@@ -96,12 +86,10 @@ export function computeSinceTimestamp(
 
 export async function readNostrProfileState(params: {
   accountId?: string;
-  env?: NodeJS.ProcessEnv;
 }): Promise<NostrProfileState | null> {
   return (
-    (await openNostrProfileStateStore(params.env).lookup(
-      normalizeNostrStateAccountId(params.accountId),
-    )) ?? null
+    (await openNostrProfileStateStore().lookup(normalizeNostrStateAccountId(params.accountId))) ??
+    null
   );
 }
 
@@ -110,7 +98,6 @@ export async function writeNostrProfileState(params: {
   lastPublishedAt: number;
   lastPublishedEventId: string;
   lastPublishResults: Record<string, "ok" | "failed" | "timeout">;
-  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const payload: NostrProfileState = {
     version: PROFILE_STATE_VERSION,
@@ -118,7 +105,7 @@ export async function writeNostrProfileState(params: {
     lastPublishedEventId: params.lastPublishedEventId,
     lastPublishResults: params.lastPublishResults,
   };
-  await openNostrProfileStateStore(params.env).register(
+  await openNostrProfileStateStore().register(
     normalizeNostrStateAccountId(params.accountId),
     payload,
   );

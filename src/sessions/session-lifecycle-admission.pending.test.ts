@@ -1,40 +1,355 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { createEnteredGate as gate } from "../agents/entered-gate.test-support.js";
 import {
-  beginSessionWorkAdmission,
-  collectActiveSessionWorkAdmissions,
-  getActiveSessionWorkAdmissionCount,
-  getSessionWorkAdmissionRelease,
-  interruptSessionWorkAdmissions,
-  isCompetingSessionWorkAdmissionActive,
-  isSessionWorkAdmissionActive,
-  captureGatewaySessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-} from "./session-lifecycle-admission.js";
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "../agents/run-termination.js";
+import { runWithSessionControllerCleanup } from "./session-controller.cleanup-context.js";
+import {
+  beginSessionEffect as beginAdmission,
+  captureSessionWorkRunInterruptions as captureRuns,
+  collectSessionControllerTargets,
+  consumeSessionEffectHandoff as consumeHandoff,
+  getSessionControllerWorkCount,
+  getCompetingSessionWorkAdmissionRelease as getCompetingRelease,
+  captureSessionControllerSettlement as getRelease,
+  interruptSessionControllerEffects as interrupt,
+  isCompetingSessionControllerWorkActive as competingActive,
+  isSessionControllerWorkActive as workActive,
+  observeSessionControllerProtectionReleases,
+  captureGatewaySessionControllerWork as captureGateway,
+  runSessionMutation as mutate,
+  startSessionControllerInterruption as startInterruption,
+} from "./session-controller.lifecycle.js";
+
+const admit = (params: Parameters<typeof beginAdmission>[0]) =>
+  beginAdmission({ assertAllowed: () => {}, ...params });
+function makeTarget<T extends string[]>(scope: string, ...identities: T) {
+  return { scope, identities };
+}
+function ownedTarget(scope: string, ...identities: string[]) {
+  return { ...makeTarget(scope, ...identities), owner: Symbol(scope), serializeOwner: true };
+}
+function admissionOutcome(pending: ReturnType<typeof beginAdmission>) {
+  return pending.then(
+    (lease) => {
+      lease.release();
+      return "incorrectly admitted";
+    },
+    (error: unknown) => error,
+  );
+}
+
+it("notifies only the released scope when acquired identity protection shrinks", async () => {
+  const scope = "release-observer.sqlite";
+  let handoffId = "";
+  const listener = vi.fn(() => {
+    expect(workActive(scope, ["shared"])).toBe(false);
+    expect(consumeHandoff({ handoffId, scope, identities: ["shared"] })).toBeUndefined();
+  });
+  const otherListener = vi.fn();
+  const unsubscribe = observeSessionControllerProtectionReleases(` ${scope} `, listener);
+  const unsubscribeOther = observeSessionControllerProtectionReleases(
+    "other.sqlite",
+    otherListener,
+  );
+  const first = await beginAdmission({ scope, identities: ["shared"] });
+  const second = await beginAdmission({ scope, identities: ["shared"] });
+  handoffId = second.createHandoff();
+  const unrelated = await beginAdmission({ scope, identities: ["unrelated"] });
+  try {
+    first.release();
+    expect(listener).not.toHaveBeenCalled();
+    second.release();
+    second.release();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(otherListener).not.toHaveBeenCalled();
+    expect(workActive(scope, ["unrelated"])).toBe(true);
+    unsubscribe();
+    unrelated.release();
+    expect(listener).toHaveBeenCalledTimes(1);
+  } finally {
+    unsubscribe();
+    unsubscribeOther();
+    first.release();
+    second.release();
+    unrelated.release();
+  }
+});
+
+it.each(["completed", "cancelled", "cancelled-then-restart", "restart", "timeout"] as const)(
+  "uses the adopted run's %s outcome when capturing restart work",
+  async (outcome) => {
+    const scope = "settling-restart.sqlite";
+    const sessionKey = "agent:main:settling";
+    const sessionId = "settling-session";
+    const identity = makeTarget(scope, sessionKey, sessionId);
+    const resolveGatewayContext = () => undefined;
+    const admission = await admit({
+      ...identity,
+      resolveGatewayContext,
+      isSettling: () => false,
+    });
+    let settled = false;
+    const reason =
+      outcome === "restart"
+        ? createAgentRunRestartAbortError()
+        : outcome.startsWith("cancelled")
+          ? createAgentRunDirectAbortError()
+          : outcome === "timeout"
+            ? Object.assign(new Error("timed out"), { name: "TimeoutError" })
+            : undefined;
+    const target = { scope, sessionKey, sessionId };
+    const captured = captureGateway(resolveGatewayContext);
+    try {
+      expect(captured.isActive(target)).toBe(true);
+      expect(
+        consumeHandoff({
+          handoffId: admission.createHandoff(),
+          ...identity,
+          isSettling: () => settled,
+          getAbortReason: () => reason,
+        }),
+      ).toBe(admission);
+      settled = true;
+      if (outcome === "cancelled-then-restart") {
+        startInterruption({
+          ...identity,
+          reason: createAgentRunRestartAbortError(),
+        });
+      }
+      const recoverable = !outcome.startsWith("cancelled");
+      expect(captured.isActive(target)).toBe(recoverable);
+      expect(captureGateway(resolveGatewayContext).isActive(target)).toBe(recoverable);
+      expect(workActive(scope, [sessionKey, sessionId])).toBe(true);
+    } finally {
+      admission.release();
+    }
+  },
+);
+
+it.each(["released", "interrupted", "undeclared", "caller", "wrong receipt"] as const)(
+  "targeted run interruption rejects a %s admission",
+  async (state) => {
+    const target = { scope: "capture-current.sqlite", identities: ["capture-current-session"] };
+    const run = { runId: "captured-run" };
+    const onInterrupt = vi.fn(() => ({
+      runId: state === "wrong receipt" ? "different-run" : run.runId,
+    }));
+    const admission = await admit({
+      ...target,
+      ...(state === "undeclared" ? {} : { run }),
+      onInterrupt,
+    });
+    const capture = () => captureRuns({ ...target, accept: () => true });
+    try {
+      const captured = state === "caller" ? await admission.run(async () => capture()) : capture();
+      if (state === "undeclared" || state === "caller") {
+        expect(captured).toEqual([]);
+        expect(onInterrupt).not.toHaveBeenCalled();
+        return;
+      }
+      expect(captured).toHaveLength(1);
+      if (state === "released") {
+        admission.release();
+      } else if (state === "interrupted") {
+        startInterruption(target);
+        onInterrupt.mockClear();
+      }
+      expect(captured[0]!.interrupt(createAgentRunDirectAbortError())).toBe(false);
+      expect(onInterrupt).toHaveBeenCalledTimes(state === "wrong receipt" ? 1 : 0);
+      const remaining = capture();
+      if (state === "interrupted" || state === "wrong receipt") {
+        expect(remaining).toHaveLength(1);
+        expect(remaining[0]!.interrupt(createAgentRunDirectAbortError())).toBe(false);
+        const released = vi.fn();
+        const completion = remaining[0]!.released.then(released);
+        await Promise.resolve();
+        expect(released).not.toHaveBeenCalled();
+        admission.release();
+        await completion;
+        expect(released).toHaveBeenCalledOnce();
+        expect(capture()).toEqual([]);
+      } else {
+        expect(remaining).toEqual([]);
+      }
+    } finally {
+      admission.release();
+    }
+  },
+);
+
+it("serializes pending owners in FIFO order without blocking other owners", async ({ signal }) => {
+  const serialized = {
+    ...ownedTarget("serialized.sqlite", "agent:main:serialized", "session"),
+    signal,
+  };
+  const barrier = gate();
+  const order: string[] = [];
+  const first = admit({
+    ...serialized,
+    assertAllowed: async () => {
+      await barrier.wait();
+      order.push("first");
+    },
+    revalidateAllowed: () => {},
+  });
+  await withinTest(barrier.entered, signal);
+  const follow = (name: string) =>
+    admit({
+      ...serialized,
+      identities: [serialized.identities[1]],
+      assertAllowed: () => void order.push(name),
+      revalidateAllowed: () => {},
+    });
+  const followers = [follow("second"), follow("third")] as const;
+  const passOtherOwner = async () => {
+    (await admit({ ...serialized, owner: Symbol("independent-owner") })).release();
+  };
+  try {
+    barrier.release();
+    for (const [index, pending] of [first, followers[0]].entries()) {
+      const lease = await withinTest(pending, signal);
+      await withinTest(passOtherOwner(), signal);
+      expect(order).toEqual(["first", "second", "third"].slice(0, index + 1));
+      lease.release();
+    }
+    (await withinTest(followers[1], signal)).release();
+    expect(order).toEqual(["first", "second", "third"]);
+  } finally {
+    barrier.release();
+    for (const attempt of [first, ...followers]) {
+      await attempt.then(
+        (lease) => lease.release(),
+        () => {},
+      );
+    }
+  }
+});
+
+it("keeps nested work reentrant while independent successors retain FIFO and current authority", async ({
+  signal,
+}) => {
+  const target = { ...ownedTarget("nested-owner.sqlite", "nested-owner-session"), signal };
+  const outer = await admit(target);
+  const order: string[] = [];
+  const follower = admit({
+    ...target,
+    assertAllowed: () => {
+      order.push("follower");
+    },
+  });
+  let detached: ReturnType<typeof beginAdmission> | undefined;
+  let allowed = true;
+  try {
+    await withinTest(
+      outer.run(async () => {
+        detached = runWithSessionControllerCleanup(() =>
+          admit({
+            ...target,
+            assertAllowed: () => {
+              if (!allowed) {
+                throw new Error("successor authority revoked");
+              }
+              order.push("detached");
+            },
+          }),
+        );
+        void detached.catch(() => {});
+        const inner = await admit({
+          ...target,
+          assertAllowed: () => {
+            order.push("nested");
+          },
+        });
+        inner.release();
+      }),
+      signal,
+    );
+    expect(outer.isActive()).toBe(true);
+    expect(order).toEqual(["nested"]);
+    outer.release();
+    const next = await withinTest(follower, signal);
+    expect(order).toEqual(["nested", "follower"]);
+    allowed = false;
+    next.release();
+    await expect(detached).rejects.toThrow("successor authority revoked");
+    expect(order).toEqual(["nested", "follower"]);
+  } finally {
+    outer.release();
+    for (const attempt of [follower, detached]) {
+      await attempt?.then(
+        (lease) => lease.release(),
+        () => {},
+      );
+    }
+  }
+});
+
+it.for(["caller abort", "Stop", "targeted Stop"])(
+  "cancels a pending owner wait on %s before its predecessor releases",
+  async (cancellation, { signal }) => {
+    const owned = ownedTarget(`cancel-owner-${cancellation}.sqlite`, "cancel-owner-session");
+    const { scope, identities } = owned;
+    const controller = new AbortController();
+    const reason = createAgentRunDirectAbortError();
+    const predecessorInterrupt = vi.fn();
+    const predecessor = await admit({ ...owned, onInterrupt: predecessorInterrupt });
+    const validate = vi.fn();
+    const run = { runId: "queued-run" };
+    const onInterrupt = vi.fn(() => ({ runId: run.runId }));
+    const pending = admissionOutcome(
+      admit({
+        ...owned,
+        ...(cancellation === "targeted Stop"
+          ? { run, onInterrupt }
+          : { signal: AbortSignal.any([controller.signal, signal]) }),
+        assertAllowed: validate,
+      }),
+    );
+    try {
+      (await admit({ scope, identities, signal })).release();
+      if (cancellation === "caller abort") {
+        controller.abort(reason);
+      } else if (cancellation === "targeted Stop") {
+        const captured = captureRuns({ ...owned, accept: () => true });
+        expect(captured).toHaveLength(1);
+        expect(captured[0]!.interrupt(reason)).toBe(true);
+        expect(captured[0]!.interrupt(reason)).toBe(false);
+        expect(onInterrupt).toHaveBeenCalledOnce();
+      } else {
+        await predecessor.run(async () => {
+          const interrupted = startInterruption({ scope, identities, reason });
+          await withinTest(interrupted.released, signal);
+        });
+      }
+      expect(await withinTest(pending, signal)).toBe(reason);
+      expect(validate).not.toHaveBeenCalled();
+      expect(predecessorInterrupt).not.toHaveBeenCalled();
+      expect(predecessor.isActive()).toBe(true);
+    } finally {
+      controller.abort(reason);
+      predecessor.release();
+      await pending;
+    }
+  },
+);
 
 it("rejects arrivals during awaited cleanup and its final microtask, then reopens only after release", async () => {
   const scope = "hostile-await.sqlite";
-  const identities = ["agent:main:fence", "fence-session"];
-  const entered = createDeferred();
-  const release = createDeferred();
+  const identities: [string, string] = ["agent:main:fence", "fence-session"];
+  const barrier = gate();
   const reason = createAgentRunDirectAbortError();
+  const onInterrupt = vi.fn();
   let lateResult: unknown;
-  const late = () =>
-    beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {} }).then(
-      (lease) => {
-        lease.release();
-        return "incorrectly admitted";
-      },
-      (error: unknown) => error,
-    );
-  const stop = runExclusiveSessionLifecycleMutation("drain", {
+  const late = () => admissionOutcome(admit({ scope, identities, onInterrupt }));
+  const stop = mutate({
     scope,
     identities,
     prepare: async (owner) => {
       owner.closeWorkAdmissions(reason);
-      entered.resolve();
-      await release.promise;
+      await barrier.wait();
     },
     run: async () => {},
     finalize: async () => {
@@ -42,206 +357,138 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
       lateResult = await late();
     },
   });
-  await entered.promise;
+  await barrier.entered;
   try {
     const whileAwaiting = await late();
     expect(whileAwaiting).toBe(reason);
-    const other = await beginSessionWorkAdmission({
-      scope,
-      identities: ["other-session"],
-      assertAllowed: () => {},
-    });
-    other.release();
-    release.resolve();
+    expect(onInterrupt).toHaveBeenCalledExactlyOnceWith(reason);
+    (await admit({ scope, identities: ["other-session"] })).release();
+    barrier.release();
     await stop;
     expect(lateResult).toBe(reason);
-    const fresh = await beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {} });
-    fresh.release();
+    expect(onInterrupt).toHaveBeenCalledTimes(2);
+    (await admit({ scope, identities, onInterrupt })).release();
+    expect(onInterrupt).toHaveBeenCalledTimes(2);
   } finally {
-    release.resolve();
+    barrier.release();
     await stop;
   }
 });
 
 it("interrupts a preexisting non-chat pending attempt without classifying it as active work", async () => {
-  const scope = "non-chat-pending.sqlite";
+  const owner = makeTarget("non-chat-pending.sqlite", "agent:main:pending", "pending-session");
+  const { scope, identities } = owner;
   const resolveGatewayContext = () => undefined;
-  const identities = ["agent:main:pending", "pending-session"] as const;
-  const entered = createDeferred();
-  const release = createDeferred();
+  const barrier = gate();
   const interrupted = vi.fn();
-  let validated = false;
-  const blocker = runExclusiveSessionLifecycleMutation("patch", {
-    scope,
-    identities,
-    prepare: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-    run: async () => {},
-  });
-  await entered.promise;
-  const pending = beginSessionWorkAdmission({
-    scope,
-    identities,
-    onInterrupt: interrupted,
-    resolveGatewayContext,
-    assertAllowed: () => {
-      validated = true;
-    },
-  }).then(
-    (lease) => {
-      lease.release();
-      return "incorrectly admitted";
-    },
-    (error: unknown) => error,
+  const validate = vi.fn();
+  const blocker = mutate({ ...owner, prepare: barrier.wait, run: async () => {} });
+  await barrier.entered;
+  const pending = admissionOutcome(
+    admit({
+      ...owner,
+      onInterrupt: interrupted,
+      resolveGatewayContext,
+      assertAllowed: validate,
+    }),
   );
   try {
-    expect(isSessionWorkAdmissionActive(scope, identities)).toBe(false);
+    expect(workActive(scope, identities)).toBe(false);
     expect(
-      captureGatewaySessionWorkAdmissions(resolveGatewayContext).isActive({
+      captureGateway(resolveGatewayContext).isActive({
         scope,
         sessionKey: identities[0],
         sessionId: identities[1],
       }),
     ).toBe(false);
-    expect(isCompetingSessionWorkAdmissionActive(scope, identities)).toBe(false);
-    expect(getSessionWorkAdmissionRelease({ scope, identities })).toBeUndefined();
-    expect(collectActiveSessionWorkAdmissions().get(scope)).toBeUndefined();
-    expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+    expect(competingActive(scope, identities)).toBe(false);
+    expect(getRelease({ scope, identities })).toBeUndefined();
+    const competingRelease = getCompetingRelease({ scope, identities });
+    expect(competingRelease).toBeDefined();
+    expect(collectSessionControllerTargets().get(scope)).toBeUndefined();
+    expect(getSessionControllerWorkCount()).toBe(0);
     const reason = createAgentRunDirectAbortError();
-    expect(
-      await interruptSessionWorkAdmissions({ scope, identities, reason, timeoutMs: 1000 }),
-    ).toBe(true);
+    expect(await interrupt({ scope, identities, reason, timeoutMs: 1000 })).toBe(true);
     expect(await pending).toBe(reason);
-    expect(interrupted).toHaveBeenCalledOnce();
-    expect(interrupted).toHaveBeenCalledWith(reason);
-    expect(validated).toBe(false);
+    await expect(competingRelease).resolves.toBeUndefined();
+    expect(interrupted).toHaveBeenCalledExactlyOnceWith(reason);
+    expect(validate).not.toHaveBeenCalled();
   } finally {
-    release.resolve();
+    barrier.release();
     await blocker;
     await pending;
   }
 });
 
-it("ordinary compaction still queues work and acquired-release queries do not deadlock it", async () => {
-  const scope = "compaction.sqlite";
-  const identities = ["compaction-session"];
-  const entered = createDeferred();
-  const release = createDeferred();
-  let validated = false;
-  const compaction = runExclusiveSessionLifecycleMutation("compact", {
-    scope,
-    identities,
-    kind: "compaction",
-    prepare: async () => {
-      entered.resolve();
-      await release.promise;
-      await getSessionWorkAdmissionRelease({ scope, identities });
-    },
-    run: async () => {},
-  });
-  await entered.promise;
-  const pending = beginSessionWorkAdmission({
-    scope,
-    identities,
-    assertAllowed: () => {
-      validated = true;
-    },
-  });
-  try {
-    expect(validated).toBe(false);
-    release.resolve();
-    await compaction;
-    const lease = await pending;
-    expect(validated).toBe(true);
-    lease.release();
-  } finally {
-    release.resolve();
-    await compaction;
-    (await pending).release();
-  }
-});
-
-it("single-use identity iterators still wait for the exact lifecycle fence", async () => {
-  const scope = "generator.sqlite";
-  const identities = ["generator-session"];
-  const entered = createDeferred();
-  const release = createDeferred();
-  let validated = false;
-  const mutation = runExclusiveSessionLifecycleMutation("patch", {
-    scope,
-    identities,
-    prepare: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-    run: async () => {},
-  });
-  await entered.promise;
-  const admission = beginSessionWorkAdmission({
-    scope,
-    identities: (function* () {
-      yield identities[0];
-    })(),
-    assertAllowed: () => {
-      validated = true;
-    },
-  });
-  try {
-    const unrelated = await beginSessionWorkAdmission({
-      scope,
-      identities: ["unrelated-generator"],
-      assertAllowed: () => {},
+it.each(["compaction", "single-use iterator"] as const)(
+  "%s queues work behind the exact lifecycle fence without deadlocking release queries",
+  async (mode) => {
+    const owner = makeTarget(`${mode}.sqlite`, `${mode}-session`);
+    const { scope, identities } = owner;
+    const barrier = gate();
+    const validate = vi.fn();
+    const mutation = mutate({
+      ...owner,
+      ...(mode === "compaction" ? { kind: "compaction" as const } : {}),
+      prepare: async () => {
+        await barrier.wait();
+        if (mode === "compaction") {
+          await getRelease(owner);
+        }
+      },
+      run: async () => {},
     });
-    unrelated.release();
-    expect(validated).toBe(false);
-    release.resolve();
-    await mutation;
-    const lease = await admission;
-    expect(validated).toBe(true);
-    lease.release();
-  } finally {
-    release.resolve();
-    await mutation;
-    (await admission).release();
-  }
-});
+    await barrier.entered;
+    const admission = admit({
+      scope,
+      identities: mode === "compaction" ? identities : identities.values(),
+      assertAllowed: validate,
+    });
+    try {
+      if (mode === "single-use iterator") {
+        (await admit({ scope, identities: ["unrelated-generator"] })).release();
+      }
+      expect(validate).not.toHaveBeenCalled();
+      barrier.release();
+      await mutation;
+      (await admission).release();
+      expect(validate).toHaveBeenCalledOnce();
+    } finally {
+      barrier.release();
+      await mutation;
+      (await admission).release();
+    }
+  },
+);
 
 it("an initial validator finishing after pending cancellation cannot enter the writer", async () => {
-  const scope = "initial-validator.sqlite";
-  const identities = ["initial-validator-session"];
-  const entered = createDeferred();
-  const release = createDeferred();
+  const owner = makeTarget("initial-validator.sqlite", "initial-validator-session");
+  const barrier = gate();
   const writer = vi.fn();
+  const released = vi.fn();
+  const unsubscribe = observeSessionControllerProtectionReleases(owner.scope, released);
   const reason = createAgentRunDirectAbortError();
-  const pending = beginSessionWorkAdmission({
-    scope,
-    identities,
-    assertAllowed: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-    revalidateAllowed: writer,
-  }).then(
-    (lease) => {
-      lease.release();
-      return "incorrectly admitted";
-    },
-    (error: unknown) => error,
+  const pending = admissionOutcome(
+    admit({ ...owner, assertAllowed: barrier.wait, revalidateAllowed: writer }),
   );
-  await entered.promise;
+  await barrier.entered;
   try {
-    expect(
-      await interruptSessionWorkAdmissions({ scope, identities, reason, timeoutMs: 1000 }),
-    ).toBe(true);
+    const interruption = startInterruption({ ...owner, reason });
+    const drained = vi.fn();
+    void interruption.released.then(drained);
+    await Promise.resolve();
+    expect(drained).not.toHaveBeenCalled();
+    expect(released).not.toHaveBeenCalled();
+    barrier.release();
     expect(await pending).toBe(reason);
-    release.resolve();
-    // A later mutation must wait for the validator's existing identity lock to finish.
-    await runExclusiveSessionLifecycleMutation("patch", { scope, identities, run: async () => {} });
+    await interruption.released;
+    // Cancellation retains validator custody without acquiring identity protection.
+    await mutate({ ...owner, run: async () => {} });
     expect(writer).not.toHaveBeenCalled();
+    expect(released).not.toHaveBeenCalled();
   } finally {
-    release.resolve();
+    unsubscribe();
+    barrier.release();
     await pending;
   }
 });

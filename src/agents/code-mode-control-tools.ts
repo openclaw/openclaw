@@ -14,66 +14,15 @@ type CodeModeExecHookMetadata = {
 };
 
 const codeModeControlTools = new WeakSet<object>();
-type CodeModeExecDescriptionTarget = Pick<AnyAgentTool, "description">;
-type CodeModeExecDescriptionState = {
-  description: string;
-  targets: Set<WeakRef<CodeModeExecDescriptionTarget>>;
-};
-const codeModeExecDescriptionTargets = new WeakMap<
-  object,
-  { state: CodeModeExecDescriptionState; reference: WeakRef<CodeModeExecDescriptionTarget> }
->();
-
 export function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
   codeModeControlTools.add(tool);
   return tool;
 }
 
-export function copyCodeModeControlToolIdentity(
-  original: object,
-  wrapper: CodeModeExecDescriptionTarget,
-): void {
+export function copyCodeModeControlToolIdentity(original: object, wrapper: object): void {
   if (codeModeControlTools.has(original)) {
     codeModeControlTools.add(wrapper);
-    const descriptionState = codeModeExecDescriptionTargets.get(original)?.state;
-    if (descriptionState && descriptionState.targets.size > 0) {
-      // Registry refresh recreates wrappers from retained definitions; every
-      // live copy must reflect the current authorized catalog.
-      wrapper.description = descriptionState.description;
-      // Reuse target identity across observers so duplicate copies still update once.
-      const reference =
-        codeModeExecDescriptionTargets.get(wrapper)?.reference ?? new WeakRef(wrapper);
-      descriptionState.targets.add(reference);
-      codeModeExecDescriptionTargets.set(wrapper, { state: descriptionState, reference });
-    }
   }
-}
-
-/** Keep catalog updates synchronized across every live exec definition and wrapper. */
-export function createCodeModeExecDescriptionUpdater(tool: AnyAgentTool): {
-  update: (description: string) => void;
-  dispose: () => void;
-} {
-  const initialDescription = tool.description;
-  const toolReference = codeModeExecDescriptionTargets.get(tool)?.reference ?? new WeakRef(tool);
-  const state = { description: initialDescription, targets: new Set([toolReference]) };
-  codeModeExecDescriptionTargets.set(tool, { state, reference: toolReference });
-  return {
-    update(description) {
-      state.description = description;
-      // Obsolete registry wrappers retain their old extension runner. Keep live
-      // copies synchronized without extending either lifetime until catalog disposal.
-      for (const reference of state.targets) {
-        const target = reference.deref();
-        if (target) {
-          target.description = description;
-        } else {
-          state.targets.delete(reference);
-        }
-      }
-    },
-    dispose: () => state.targets.clear(),
-  };
 }
 
 export function isCodeModeControlTool(tool: object): boolean {
@@ -87,13 +36,7 @@ export function isCodeModeExecTool(tool: AnyAgentTool): boolean {
   );
 }
 
-export function isCodeModeExecToolKind(toolKind: unknown): boolean {
-  return toolKind === CODE_MODE_EXEC_TOOL_KIND;
-}
-
-export function resolveCodeModeExecToolInputKind(
-  params: unknown,
-): CodeModeExecToolInputKind | undefined {
+function resolveCodeModeExecToolInputKind(params: unknown): CodeModeExecToolInputKind | undefined {
   if (!isPlainObject(params)) {
     return undefined;
   }

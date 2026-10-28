@@ -20,15 +20,12 @@ export type ThreadBindingRecord = {
   metadata?: Record<string, unknown>;
 };
 
-export type PersistedThreadBindingRecord = ThreadBindingRecord;
-
 export type ThreadBindingManager = {
   accountId: string;
   isStopping: () => boolean;
   getIdleTimeoutMs: () => number;
   getMaxAgeMs: () => number;
   getByThreadId: (threadId: string) => ThreadBindingRecord | undefined;
-  getBySessionKey: (targetSessionKey: string) => ThreadBindingRecord | undefined;
   listBySessionKey: (targetSessionKey: string) => ThreadBindingRecord[];
   listBindings: () => ThreadBindingRecord[];
   touchThread: (params: {
@@ -36,12 +33,10 @@ export type ThreadBindingManager = {
     at?: number;
     persist?: boolean;
   }) => Promise<ThreadBindingRecord | null>;
-  /** @deprecated Generic SDK synchronous touch compatibility. */
-  touchThreadSync: (params: {
-    threadId: string;
-    at?: number;
-    persist?: boolean;
-  }) => ThreadBindingRecord | null;
+  /** @deprecated Use touchThread; compatible through 2026-12-31, removed in the first January 2027 stable. */
+  touchThreadSync: (
+    params: Parameters<ThreadBindingManager["touchThread"]>[0],
+  ) => ThreadBindingRecord | null;
   bindTarget: (params: {
     assertCurrent?: () => void;
     threadId?: string | number;

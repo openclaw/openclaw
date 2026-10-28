@@ -21,10 +21,11 @@ export function writtenIndexCustody() {
   return {
     filePath: options.filePath,
     lease: {
-      ...options.lease,
-      // Refresh wraps the guards while retaining the original lease owner and signal.
+      databasePath: options.lease.databasePath,
+      // Metadata refresh wraps the guards but retains the original state lease owner.
+      stateLease: expect.toSatisfy((lease: unknown) => lease === options.lease.stateLease),
+      assertCurrent: expect.any(Function),
       assertOwned: expect.any(Function),
-      assertOwnedInTransaction: expect.any(Function),
     },
   };
 }

@@ -1,6 +1,7 @@
-import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
+import { getPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 
 /** Deferred publication retains its original store and authority through settlement. */
@@ -9,6 +10,10 @@ export function createPluginSourceAdmissionPublisher(
 ): ((publication: PluginSourceAdmissionPublication) => Promise<boolean>) | undefined {
   if (isArtifactPreservingStateRead()) {
     return undefined;
+  }
+  const delegated = getPluginSourceAdmissionPublisher();
+  if (delegated) {
+    return delegated;
   }
   let context: ReturnType<typeof captureOpenClawStateWorkerContext>;
   try {
@@ -25,14 +30,13 @@ export function createPluginSourceAdmissionPublisher(
     if (isArtifactPreservingStateRead()) {
       return false;
     }
-    const prepared = structuredClone(publication);
     const { runOpenClawStateWorkerOperation } =
       await import("../state/openclaw-state-worker-store.js");
     return (
       (await runOpenClawStateWorkerOperation(
         context,
         (scope) =>
-          scope.execute({ type: "plugins.metadata.sourceAdmission.publish", input: prepared }),
+          scope.execute({ type: "plugins.metadata.sourceAdmission.publish", input: publication }),
         { existingOnly: true },
       )) ?? false
     );

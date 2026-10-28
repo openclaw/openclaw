@@ -12,6 +12,101 @@ OpenClaw replaced a broad backwards-compatibility layer with a modern plugin
 architecture built from small, focused imports. If your plugin predates that
 change, this guide gets it onto the current contracts.
 
+For synchronous SQLite APIs, use the [complete async migration
+guide](/plugins/sdk-migration/sqlite-async). The final compatibility day is
+**2026-12-31**; removal ships in the **first January 2027 stable release**, without
+a Plugin SDK major version. The tables cover every affected member and its
+awaited or prepared replacement.
+
+## Memory flush model selection
+
+Remove `model` from plans returned by `flushPlanResolver` or
+`providerFlushPlanResolver`. `MemoryFlushPlan`, `MemoryFlushFilePlanDraft`, and
+`MemoryFlushToolsPlan` no longer expose a model override. Existing JavaScript
+plans that still return `model` have that field ignored. All memory flushes
+use the active session model and its normal fallback chain.
+
+This intentional removal gives the session ownership of model selection.
+To keep memory extraction local, select a local session model and local
+fallbacks. Doctor removes the corresponding retired
+`agents.defaults.compaction.memoryFlush.model` setting with a warning; see
+[Config migrations](/gateway/doctor/config-migrations#memory-flush-model-selection).
+
+## Prompt hook history is read-only
+
+`before_prompt_build` and `agent_turn_prepare` now share frozen transcript payload
+leaves instead of making mutable deep copies of the entire history. Plugins that
+mutated nested message content in these hooks now get a `TypeError` in strict
+mode; return the hook result instead. For example, replace a history edit intended
+to add instructions with an explicit contribution:
+
+```ts
+api.on("before_prompt_build", () => ({
+  prependContext: "Use the project's documented conventions for this turn.",
+}));
+```
+
+Both hooks accept `prependContext` and `appendContext`. Ordinary
+`before_prompt_build` also accepts `systemPrompt`, `prependSystemContext`,
+`appendSystemContext`, and `toolsAllow`; authorized enrichment only consumes the
+context contributions. None of these fields rewrites stored history.
+
+Message arrays and envelopes remain fresh per dispatch, so array edits and
+whole-field assignments remain isolated from core history and later dispatches.
+Handlers in the same dispatch still share those edits in priority order. Do not
+rely on nested values being mutable, even when a particular harness supplies
+non-owned values that are cloned. If a plugin needs a mutable working copy for
+its own computation, explicitly clone that data inside the plugin. Return only
+the supported contribution fields. See [Prompt and session hooks](/plugins/hooks/prompt-and-session).
+
+## MCP result compatibility window
+
+OpenClaw's session and node MCP clients use the split MCP SDK v2 packages while
+continuing to negotiate legacy MCP. The published plugin boundary retains its
+MCP SDK v1 result shapes for one stable-release window: the first stable release
+containing this migration. Replacing those shapes with v2 types is scheduled for
+the following stable release; no calendar date is assigned yet.
+
+The affected contracts are `SessionMcpRuntime.callTool`, `listTools`,
+`listResourceTemplates`, and `getPrompt` from
+`openclaw/plugin-sdk/agent-harness-runtime`, its
+`prepareHarnessNativeMcpAppPreview.toolResult` input, and the runtime accepted by
+`openclaw/plugin-sdk/codex-mcp-projection`. Keep the existing v1 types when
+implementing these adapters during the compatibility window. Ordinary plugins
+that register tools or MCP connection resolvers do not need a new dependency.
+
+Host results cross this boundary losslessly. An incompatible result throws an
+error with `code: "MCP_SDK_RESULT_UNREPRESENTABLE"` and the MCP method name rather
+than dropping fields. This includes non-object `structuredContent` (arrays,
+scalars, or null), output schemas without `type: "object"`, non-object
+`properties` or non-string-array `required` in an output schema, scalar or null
+values in a tool's input/output schema `properties`, and nested fields that the
+v1 result schemas would discard.
+Metadata, resource content, prompt messages, and pagination cursors are preserved
+when representable.
+
+When the next stable release adopts v2 result types, import result and client
+types from `@modelcontextprotocol/client`, schema validators from
+`@modelcontextprotocol/core`, and the AJV adapter from
+`@modelcontextprotocol/client/validators/ajv`. Treat `structuredContent` as
+`unknown` and narrow it before reading properties; preserve JSON Schema values
+without assuming every property schema is an object. For example:
+
+```ts
+import type { CallToolResult } from "@modelcontextprotocol/client";
+
+function readSummary(result: CallToolResult): string | undefined {
+  const value = result.structuredContent;
+  if (value && typeof value === "object" && "summary" in value) {
+    return typeof value.summary === "string" ? value.summary : undefined;
+  }
+  return undefined;
+}
+```
+
+The compatibility window does not enable modern protocol serving or change MCP
+server configuration.
+
 ## What changed
 
 Several wide-open import surfaces used to let plugins reach almost anything
@@ -45,11 +140,11 @@ The latter retirement received explicit SDK-owner approval on September 30,
   load. Follow the [import path mappings](/plugins/sdk-migration/import-paths) before upgrading.
 </Warning>
 
-OpenClaw does not remove or reinterpret documented plugin behavior in the same
-change that introduces a replacement. Breaking contract changes go through a
-compatibility adapter, diagnostics, docs, and a deprecation window first. That
-applies to SDK imports, manifest fields, setup APIs, hooks, and runtime
-registration behavior.
+OpenClaw's default compatibility policy preserves documented plugin behavior
+through a compatibility adapter, diagnostics, docs, and a deprecation window.
+That applies to SDK imports, manifest fields, setup APIs, hooks, and runtime
+registration behavior. The three session-controller changes below are explicit
+exceptions with immediate enforcement and no compatibility aliases or window.
 
 `ChatCommandDefinition.category` retains the `"docks"` value accepted by the
 2026.8.1 SDK. Command lists display these legacy definitions under **Tools**.
@@ -69,26 +164,187 @@ the read and must not be treated as an absent session.
 
 The synchronous `readAcpSessionEntry` and
 `getAcpSessionManager().resolveSession()` contracts shipped in `v2026.9.4`
-remain available for existing consumers of that compatibility export. They are
-deprecated for runtime use. Ordinary ACP manager and Gateway callers use
-`readAcpSessionEntryAsync` and `getAcpSessionManager().resolveSessionAsync()`.
-Discord and Telegram startup binding cleanup retain their existing synchronous
-reader until conditional deletion can validate metadata at the mutation owner.
-Their inactive incognito composition accepts a prepared session reader whose
-current-source assertion reaches the binding transaction and commit grants.
-The preparation retains the original actor revision and ACP metadata publication
-fence until cleanup releases it. The local `prepareAcpSessionEntryRead` helper captures an existing private actor
-binding and supplies that retained reader; it returns `undefined` without a binding.
-Discord and Telegram startup cleanup use it by default. Ordinary production
-acquisition stays native until atomic incognito activation; guarded durable
-cleanup remains separate work.
+remain available for durable sessions and are deprecated for runtime use.
+Incognito targets reject synchronous access with `IncognitoSessionSyncAccessError`;
+use `readAcpSessionEntryAsync` and
+`getAcpSessionManager().resolveSessionAsync()` instead. The asynchronous path
+acquires the existing memory session actor and joins global ACP metadata through
+the shared-state worker. It does not create a missing incognito session.
+
+Discord and Telegram startup cleanup use `prepareAcpSessionEntryRead` for
+incognito targets. Its prepared reader retains the selected memory owner and
+carries current caller authority through conditional binding deletion. Closing
+the session ends that authority; cleanup does not reopen the retired native
+incognito database.
+
 `IncognitoSessionEndedError` and `IncognitoSessionSyncAccessError`, exposed through
 the local `openclaw/plugin-sdk/acp-runtime` facade, must propagate through cleanup and status
 probes. Use `rethrowIncognitoSessionError(error)` before treating other failures
 as an absent session or an uncertain probe; it also recognizes nested refusals.
-Removing the synchronous contracts
-requires a separately announced breaking SDK release. Incognito reads retain
-their existing native in-memory owner until that owner's worker migration.
+The deprecated synchronous contracts for durable sessions remain available
+through 2026-12-31 and are removed in the first January 2027 stable release.
+
+### Session-keyed harness registration
+
+The session-controller cutover changes standalone session-keyed
+`setActiveEmbeddedRun(...)` registration immediately, with no compatibility
+window. Register native runs from the host-provided, admitted harness attempt.
+Calling the function without that admission throws
+`AgentHarnessPreflightError`, with code
+`SESSION_CONTROLLER_ADMISSION_REQUIRED` and migration guidance.
+
+A hosted call inherits the host's captured operation; passing a session key,
+agent ID, or a plugin-created operation does not obtain admission. Host-owned
+detached work can carry a session key for policy, but cannot own that session's
+turn, queue, or Stop. See [Harness attempt runtime](/plugins/sdk-agent-harness/attempt-runtime)
+for the supported registration and cleanup path. Registration accepts only the
+five public identity arguments and returns a cleanup function bound to that
+exact run. The optional `replyOperation` refers to the same admitted controller
+and retains its documented tool-authority methods; it does not authorize
+standalone registration. Host admission state and native attachment records
+stay private to the host.
+
+### Gateway session control
+
+`GatewayRequestHandlerOptions.context` no longer exposes the mutable
+`chatAbortControllers` or `chatQueuedTurns` maps. The session controller owns
+admission, queued input, and Stop; plugin handlers cannot register or cancel work
+by changing shared maps. Reading either removed property fails with code
+`PLUGIN_CAPABILITY_REMOVED` and the exact capability name.
+
+Keep `api.registerGatewayMethod(...)` for plugin methods. To compose existing
+session operations from an authenticated handler, declare
+`contracts: { gatewayMethodDispatch: ["authenticated-request"] }` in the plugin
+manifest and import `dispatchGatewayMethod` from
+`openclaw/plugin-sdk/gateway-method-runtime`. Use `chat.send` to submit input,
+`chat.abort` with `{ sessionKey, runId? }` to cancel a chat run, or
+`sessions.abort` with `{ key, runId?, clearQueued? }` for session cancellation.
+These calls retain the current caller's authority and the target method's
+authorization; the declaration does not grant additional scopes. Use
+`agent.wait` to await a run, and `sessions.list` for activity observations.
+Bundled or trusted official plugins can also use `api.runtime.gateway.request`,
+session facts, and subscriptions; those runtime capabilities retain their
+existing trust restriction.
+See [Gateway runtime](/plugins/sdk-runtime/gateway-and-nodes#session-control)
+for the supported read and control paths.
+
+### Agent turn start observation
+
+`AgentTurnStartOwner.observe()` now returns `startDeadlineAtMs` instead of
+`expiresAtMs`. The old property has no alias; reading it fails with code
+`PLUGIN_CAPABILITY_REMOVED`. Update consumers of the `onStartOwner` callback
+exposed through `context.createAgentTurnFacade` to inspect the new field.
+
+A finite `startDeadlineAtMs` is the controller's deadline for execution to
+start. `null` means a live controller-owned wait has no finite start deadline;
+an absent field means no controller deadline is available yet. An `undefined`
+observation means the captured owner is no longer current. Stop watching for
+start once `executionStarted` is true. This field does not extend execution
+authority or describe the run's execution timeout. Other API fields named
+`expiresAtMs` retain their existing contracts.
+
+### Session and command preparation
+
+Use `getSessionEntryAsync`, `readSessionUpdatedAtAsync`,
+`getConversationSessionAsync`, `readAmbientTranscriptWatermarkAsync`,
+`loadTranscriptEvents`, and `readTranscriptStatsAsync` from
+`openclaw/plugin-sdk/session-store-runtime` for ordinary session reads. The
+runtime equivalent is `api.runtime.agent.session.getSessionEntryAsync`. These
+operations read through the existing session worker and observe committed
+in-process writes. Missing entries remain `undefined`; read failures propagate.
+`loadTranscriptEventsSync` and `readTranscriptStatsSync` are deprecated; their
+awaited replacements preserve ordered events and transcript statistics while
+keeping durable reads off the Gateway thread.
+
+Await `UserTurnTranscriptRecorder.completeProcessingAsync(outcome)` to settle an
+accepted input through its session owner. The deprecated `completeProcessing`
+method preserves synchronous completion and returns after the terminal outcome
+commits, with a migration warning, through 2026-12-31. Recorders
+without an accepted input keep their existing no-op behavior.
+
+Use `readSessionTranscriptCatalogTitleAsync` from
+`openclaw/plugin-sdk/session-transcript-runtime` for catalog titles. The
+synchronous `readSessionTranscriptCatalogTitle` remains deprecated through
+2026-12-31.
+
+Use `resolveStoredModelOverrideAsync` and `resolveCommandArgMenuAsync` from
+`openclaw/plugin-sdk/command-auth-native` when preparing native commands.
+`resolveCommandArgMenuAsync` is also exported by
+`openclaw/plugin-sdk/native-command-registry`. An inherited-model loader may
+return a promise; direct overrides still need no parent read. Menu preparation
+reads the current session's verbose setting before returning its choices.
+
+The corresponding synchronous APIs are deprecated for ordinary runtime use.
+Released signatures remain supported through 2026-12-31. New
+legacy calls emit a bounded deprecation warning. Bundled callers use the awaited
+operations; final tool, disclosure, and mutation authority checks retain their
+current owner and timing.
+
+For a complete cross-session store view, await
+`loadCombinedSessionStoreForGatewayAsync` from
+`openclaw/plugin-sdk/session-transcript-hit`. It preserves full session entries
+and excludes incognito sessions while reading durable stores through the existing
+database worker. The synchronous `loadCombinedSessionStoreForGateway` retains its
+return value and emits a bounded deprecation warning; it remains supported through
+2026-12-31.
+
+### Native session lineage
+
+Use `resolvePreparedNativeSessionBinding` or
+`retainNativeSessionGenerationAuthority` from
+`openclaw/plugin-sdk/agent-harness-session-runtime` to prepare lineage in the
+session worker. Both return an owned capture: call `release()` in `finally`
+after the last effect and any terminal cleanup. Repeated authority checks use
+the session owner's published facts and immediately reject revoked lineage.
+
+Use `authority.withLiveness(assertCurrent)` when cleanup needs its own lifecycle
+check. This borrows the same source; it does not extend the capture's lifetime.
+Use `createNativeSessionBindingScope` when there is no stored session lineage.
+The released `createNativeSessionBindingAuthority`,
+`combineNativeSessionBindingAuthority`, `prepareNativeSessionGenerationAuthority`,
+and `resolveNativeSessionBindingWithAuthority` contracts remain available but
+deprecated. Their synchronous readers are compatibility paths; bundled harnesses
+use the prepared API.
+
+### Exec approval reads
+
+Await `loadExecApprovalsReadOnlyAsync` or `readExecApprovalsSnapshotAsync` from
+`openclaw/plugin-sdk/exec-approvals-runtime`. Both use the existing shared-state
+read worker. The synchronous `loadExecApprovals` and `readExecApprovalsSnapshot`
+exports retain their signatures through 2026-12-31, emit a bounded
+deprecation warning, and are scheduled for removal in the first January 2027 stable release. Bundled
+runtime callers use the awaited reads. The execution owner still checks current
+approval policy immediately before command execution using committed in-process
+policy publications; that final check does not query SQLite.
+
+The SDK's `readExecApprovalsSnapshotAsync` returns a private mutable snapshot for
+edit-then-save callers. The deprecated synchronous readers likewise retain private
+mutable results through their compatibility window. `loadExecApprovalsReadOnlyAsync`
+shares frozen policy on cached reads: treat its file and nested grants as read-only,
+and use `structuredClone(file)` before preparing an edit. Internal execution reads
+still reuse frozen owner snapshots. Retaining any snapshot does not retain execution
+authority: pending updates and revocations still fail closed at the final execution check.
+
+### Durable-send destination history
+
+Remove `mirror` from calls to `sendDurableMessageBatch` and
+`withDurableMessageSendContext` in `openclaw/plugin-sdk/channel-outbound`.
+Confirmed sends now record their delivered content automatically in the resolved
+destination conversation. The caller's own conversation is not recorded twice.
+
+`session.key` now names the conversation whose turn produced the send. A send to
+that same conversation is skipped because the producing turn already recorded
+it. For proactive or scheduled sends that have no producing turn, pass the
+destination as `session.policyKey` (for example with
+`buildOutboundSessionContext({ policySessionKey })`) instead of `session.key`;
+otherwise the send is treated as the producer's own reply and adds no history row.
+
+The `mirror` parameter and `DeliveryMirror` type remain source-compatible with
+the 2026.10.1 SDK until the next Plugin SDK major, when removal requires explicit
+breaking-release approval. Legacy calls emit one deprecation warning per plugin
+and process. The old field does not select a different history destination or
+override delivered text or media; a mismatched `mirror.sessionKey` creates no
+extra conversation row.
 
 ### Session reset freshness
 
@@ -99,7 +355,7 @@ timestamps are read from the same worker snapshot, with the original database
 owner retained through validation and cleanup. The synchronous
 `resolveEntryResetFreshness(...)` method shipped in `v2026.9.8` remains available
 for existing JavaScript consumers and is deprecated for runtime use; removal
-requires the next Plugin SDK major and explicit breaking-release approval. Both methods retain the
+ships in the first January 2027 stable release after the 2026-12-31 compatibility cutoff. Both methods retain the
 existing reset policy and process-held incognito behavior.
 
 ### Why
@@ -112,14 +368,14 @@ existing reset policy and process-held incognito behavior.
 The typed public SDK is organized into focused subpaths with documented
 contracts. Not every SDK build entrypoint is a public plugin API.
 
-Legacy provider convenience seams for bundled channels are gone too -
+Legacy provider convenience interfaces for bundled channels are gone too -
 channel-branded helper shortcuts were private mono-repo conveniences, not
 stable plugin contracts. Use narrow generic SDK subpaths instead. Inside the
 bundled plugin workspace, keep provider-owned helpers in that plugin's own
 `api.ts` or `runtime-api.ts`:
 
 - Anthropic keeps Claude-specific stream helpers in its own `api.ts` /
-  `contract-api.ts` seam.
+  `contract-api.ts` interface.
 - OpenAI keeps provider builders, default-model helpers, and realtime provider
   builders in its own `api.ts`.
 - OpenRouter keeps provider builder and onboarding/config helpers in its own
@@ -160,6 +416,7 @@ The anchors from the single-page version still resolve here.
 
 [Removed surfaces and replacements](/plugins/sdk-migration/removed-surfaces) — what was removed, and the replacement for each legacy API.
 
+- [Heartbeat executor and wake helpers](/plugins/sdk-migration/removed-surfaces#heartbeat-executor-and-wake-helpers)
 - <a id="removed-compatibility-surfaces"></a>[Removed compatibility surfaces](/plugins/sdk-migration/removed-surfaces#removed-compatibility-surfaces)
 - <a id="process-global-api-provider-publication"></a>[Process-global API-provider publication](/plugins/sdk-migration/removed-surfaces#process-global-api-provider-publication)
 - <a id="deactivate-hook-alias"></a>[Deactivate hook alias](/plugins/sdk-migration/removed-surfaces#deactivate-hook-alias)
@@ -226,3 +483,10 @@ The anchors from the single-page version still resolve here.
 <a id="runtime-tasks-flow" />
 
 For the removed Tasks and TaskFlow surfaces, see [Tasks and TaskFlow API removal](/plugins/sdk-migration/removed-surfaces#tasks-and-taskflow-apis-removed).
+
+The `agent-runtime` snapshot publisher now provides
+`replaceRuntimeAuthProfileStoreSnapshotsAsync`. Await it when publishing a default
+shared-owner snapshot; it resolves cold ownership through the database worker.
+The synchronous `replaceRuntimeAuthProfileStoreSnapshots` remains deprecated until
+a later stable release and retains native cold-owner admission for compatibility.
+Entries with explicit database paths or agent directories remain in-memory publications.

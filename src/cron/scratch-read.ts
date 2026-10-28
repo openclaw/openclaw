@@ -4,23 +4,38 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import type { CronScratchReadCommand, CronScratchSnapshot } from "./scratch-contract.js";
-import { cronStoreKey } from "./store/key.js";
+import { prepareMutableCronStoreKey } from "./store/paths.js";
+
+type CronScratchReadAdmission = {
+  context?: OpenClawStateWorkerContext;
+  assertCurrent?: () => void;
+  signal?: AbortSignal;
+};
 
 /** Keep first-use schema opening and the subsequent read on their existing workers. */
 export async function readCronScratchSnapshot(
   storePath: string,
   selector: CronScratchReadCommand["selector"],
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
-  admission?: {
-    context?: OpenClawStateWorkerContext;
-    assertCurrent?: () => void;
-    signal?: AbortSignal;
-  },
+  admission?: CronScratchReadAdmission,
+): Promise<CronScratchSnapshot | undefined> {
+  const context = admission?.context ?? captureOpenClawStateWorkerContext(options);
+  const selected = { ...selector };
+  const storeKey = await prepareMutableCronStoreKey(storePath, context, options.env);
+  return readCronScratchSnapshotByKey(storeKey, selected, options, { ...admission, context });
+}
+
+/** Internal callers retain the opaque partition selected with their original admission. */
+export async function readCronScratchSnapshotByKey(
+  storeKey: string,
+  selector: CronScratchReadCommand["selector"],
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+  admission?: CronScratchReadAdmission,
 ): Promise<CronScratchSnapshot | undefined> {
   const context = admission?.context ?? captureOpenClawStateWorkerContext(options);
   const command: CronScratchReadCommand = {
     type: "cron.scratch",
-    storeKey: cronStoreKey(storePath),
+    storeKey,
     selector: { ...selector },
   };
   const callerCurrent = admission?.assertCurrent;
@@ -42,7 +57,7 @@ export async function readCronScratchSnapshot(
     { context, current: true, signal },
   );
   assertCurrent();
-  if (!reply?.ok || reply.type !== command.type) {
+  if (!reply) {
     throw new Error("Cron scratch read did not return its admitted snapshot");
   }
   return reply.snapshot;

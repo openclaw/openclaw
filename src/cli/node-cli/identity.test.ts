@@ -1,98 +1,85 @@
-// Node identity CLI tests: read-only output of the node host device identity.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Command } from "commander";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
 } from "../../infra/device-identity.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { runNodeIdentityShow } from "./identity.js";
+import { expectNoCalls } from "../daemon-cli/lifecycle-assertions.test-support.js";
+import { ExpectedCliError } from "../failure-output.js";
+import { registerNodeCli } from "./register.js";
 
-describe("runNodeIdentityShow", () => {
-  let stateDir: string;
-  let prevStateDir: string | undefined;
-  let stdout: string[];
-  let logSpy: ReturnType<typeof vi.spyOn>;
-  let errorSpy: ReturnType<typeof vi.spyOn>;
-  let exitSpy: ReturnType<typeof vi.spyOn>;
-  let writeJsonSpy: ReturnType<typeof vi.spyOn>;
-  let writeStdoutSpy: ReturnType<typeof vi.spyOn>;
+function runNodeIdentity(json = false, identity?: string) {
+  const program = new Command().exitOverride();
+  registerNodeCli(program);
+  const args = ["node", "identity", ...(json ? ["--json"] : [])];
+  if (identity) {
+    args.push("--identity", identity);
+  }
+  return program.parseAsync(args, { from: "user" });
+}
 
-  beforeEach(() => {
-    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-identity-"));
-    prevStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    stdout = [];
-    logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
-    writeStdoutSpy = vi
-      .spyOn(defaultRuntime, "writeStdout")
-      .mockImplementation((value) => stdout.push(value));
-    writeJsonSpy = vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value, space = 2) => {
-      defaultRuntime.writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
-    });
+let stateDir: string;
+let stdout: string[];
+beforeEach(() => {
+  stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-identity-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  stdout = [];
+  for (const method of ["log", "error", "exit"] as const) {
+    vi.spyOn(defaultRuntime, method).mockImplementation(() => {});
+  }
+  vi.spyOn(defaultRuntime, "writeStdout").mockImplementation((value) => stdout.push(value));
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value, space = 2) => {
+    defaultRuntime.writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
   });
+});
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  fs.rmSync(stateDir, { recursive: true, force: true });
+});
 
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    if (prevStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = prevStateDir;
-    }
-    logSpy.mockRestore();
-    errorSpy.mockRestore();
-    exitSpy.mockRestore();
-    writeJsonSpy.mockRestore();
-    writeStdoutSpy.mockRestore();
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  });
+it("fails closed without minting an identity", async () => {
+  await expect(runNodeIdentity()).rejects.toThrow(ExpectedCliError);
+  expectNoCalls(defaultRuntime.error, defaultRuntime.exit, defaultRuntime.log);
+  expect(defaultRuntime.writeStdout).not.toHaveBeenCalled();
+  for (const file of ["client/credentials.sqlite", "state/openclaw.sqlite"]) {
+    expect(fs.existsSync(path.join(stateDir, file))).toBe(false);
+  }
+});
 
-  it("fails closed when no identity exists (never mints one)", async () => {
-    await runNodeIdentityShow({});
-    expect(errorSpy).toHaveBeenCalledOnce();
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
-  });
-
-  it("writes deviceId and raw public key JSON to stdout", async () => {
-    const identity = loadOrCreateDeviceIdentity();
+it.each([undefined, "node"])(
+  "prints existing identity %s as JSON without database writes",
+  async (identityKey) => {
+    const identity = loadOrCreateDeviceIdentity({ identityKey });
     await closeOpenClawStateDatabaseAsync();
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
     const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-    try {
-      await runNodeIdentityShow({ json: true });
-      expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
-    } finally {
-      prepare.mockRestore();
-      exec.mockRestore();
-    }
-    expect(exitSpy).not.toHaveBeenCalled();
-    expect(logSpy).not.toHaveBeenCalled();
-    expect(errorSpy).not.toHaveBeenCalled();
-    expect(writeStdoutSpy).toHaveBeenCalledOnce();
-    const parsed = JSON.parse(stdout.join("")) as {
-      deviceId: string;
-      publicKey: string;
-    };
-    expect(parsed).toEqual({
+    await runNodeIdentity(true, identityKey);
+    expectNoCalls(prepare, exec, defaultRuntime.error, defaultRuntime.exit, defaultRuntime.log);
+    expect(JSON.parse(stdout.join(""))).toEqual({
       deviceId: identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
     });
-  });
+  },
+);
 
-  it("prints human-readable lines without --json", async () => {
-    const identity = loadOrCreateDeviceIdentity();
-    await runNodeIdentityShow({});
-    expect(exitSpy).not.toHaveBeenCalled();
-    const output = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
-    expect(output).toContain(identity.deviceId);
-    expect(output).toContain(publicKeyRawBase64UrlFromPem(identity.publicKeyPem));
-  });
+it("prints human-readable lines without --json", async () => {
+  const identity = loadOrCreateDeviceIdentity();
+  await runNodeIdentity();
+  expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  const calls = vi.mocked(defaultRuntime.log).mock.calls;
+  const output = calls.map(([value]) => String(value)).join("\n");
+  expect(output).toContain(identity.deviceId);
+  expect(output).toContain(publicKeyRawBase64UrlFromPem(identity.publicKeyPem));
+});
+
+it("rejects an unknown identity profile", async () => {
+  await expect(runNodeIdentity(false, "unknown")).rejects.toBeInstanceOf(ExpectedCliError);
 });

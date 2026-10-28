@@ -3,21 +3,32 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import { deserialize } from "node:v8";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, vi, type MockInstance } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareAgentSessionStoreDeletionSafety } from "../agents/agent-delete-session-store-safety.targets.js";
+import { runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { createSpawnBrokerHost } from "../process/spawn-broker/host.js";
+import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../process/supervisor/cancellation-policy.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
+import * as sqliteRuntime from "./bun-sqlite-library.js";
 import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
+import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
+import type { SqliteReadOnlyOperationCommand } from "./sqlite-readonly-operation-types.js";
+import { createSqliteReadOnlyWorkerPool } from "./sqlite-readonly-worker-pool.js";
 import {
+  captureSqliteReadOnlyWorkerLaunch,
+  closeSqliteReadOnlyWorkersForBroker,
+  createScopedSqliteReadOnlyWorker,
   createSqliteReadOnlyWorkerScope,
   runSqliteReadOnlyOperation,
 } from "./sqlite-readonly-worker.js";
+import { observeSettlement } from "./sqlite-readonly.test-support.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
-import { SQLITE_WORKER_TRANSFER_FRAME_BYTES } from "./sqlite-worker-transfer.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -28,6 +39,7 @@ const scope = createSqliteReadOnlyWorkerScope();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
     await scope.close();
+    await cleanupSnapshotOperations();
     vi.restoreAllMocks();
     cleanup();
   }),
@@ -37,23 +49,85 @@ let expectedIdentity: string;
 let env: NodeJS.ProcessEnv;
 let child: ChildProcess;
 let sourceDigest: string;
-const contents = JSON.stringify({
-  providers: {
-    fixture: {
-      models: [{ id: "fixture-model", name: `${"catalog".repeat(1_300_000)}🌊` }],
-    },
-  },
-});
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
+const spawns = vi.mocked(spawn);
+const blocker = { blocker: "survivor" };
+const lastChild = (): ChildProcess => spawns.mock.results.at(-1)?.value;
 
-function read(pluginIds: string[], signal?: AbortSignal) {
-  return scope.run(() =>
-    runSqliteReadOnlyOperation(
-      source,
-      { type: "pluginCatalog.read", input: { agentId: "main", pluginIds } },
-      { source: "canonical", expectedIdentity, env, signal },
+function readCommand(pathname = source) {
+  return {
+    type: "agentRetirement.sessionStoreBlocker" as const,
+    input: prepareAgentSessionStoreDeletionSafety(
+      { agents: { entries: { survivor: {} } }, session: { store: pathname } },
+      "main",
+      env,
     ),
-  );
+  };
+}
+
+const readOptions = () => ({ source: "canonical" as const, expectedIdentity, env });
+const runRead = (options: Parameters<typeof runSqliteReadOnlyOperation>[2] = readOptions()) =>
+  runSqliteReadOnlyOperation(source, readCommand(), options);
+const read = (signal?: AbortSignal) => scope.run(() => runRead({ ...readOptions(), signal }));
+const beginCommand = () => ({
+  type: "pageCache.begin" as const,
+  input: { kind: "agent" as const, maxBytes: 1024, now: Date.now() },
+});
+const begin = (request: ReturnType<typeof createSqliteReadOnlyWorkerScope>) =>
+  request.run(() => runSqliteReadOnlyOperation(source, beginCommand(), readOptions()));
+
+function pauseTransfer(processChild: ChildProcess) {
+  const emit = processChild.emit.bind(processChild);
+  let paused = createDeferredCore<() => boolean>();
+  let pause = true;
+  const receiving = vi.spyOn(processChild, "emit").mockImplementation((event, ...args) => {
+    const message: unknown = args[0];
+    if (
+      event === "message" &&
+      pause &&
+      isRecord(message) &&
+      isRecord(message.result) &&
+      message.result.type === "start"
+    ) {
+      pause = false;
+      paused.resolve(() => emit(event, ...args));
+      return true;
+    }
+    return emit(event, ...args);
+  });
+  return {
+    receiving,
+    get ready() {
+      return paused.promise;
+    },
+    reset() {
+      paused = createDeferredCore<() => boolean>();
+      pause = true;
+    },
+  };
+}
+
+function failingClosePool() {
+  const sessions: Array<ReturnType<typeof createScopedSqliteReadOnlyWorker>> = [];
+  const closeMocks: Array<MockInstance<() => Promise<void>>> = [];
+  const failure = new Error("fixture native cleanup is unconfirmed");
+  const pool = createSqliteReadOnlyWorkerPool((launch) => {
+    const session = createScopedSqliteReadOnlyWorker(launch);
+    sessions.push(session);
+    closeMocks.push(vi.spyOn(session, "close").mockRejectedValue(failure));
+    return session;
+  });
+  const launch = captureSqliteReadOnlyWorkerLaunch(env, "canonical");
+  return {
+    run: (command: SqliteReadOnlyOperationCommand = readCommand()) =>
+      pool.run(source, { ...readOptions(), mode: "operation", command }, launch),
+    async close() {
+      for (const close of closeMocks) {
+        close.mockRestore();
+      }
+      await Promise.all(sessions.map((session) => session.close()));
+    },
+  };
 }
 
 beforeAll(async () => {
@@ -63,64 +137,25 @@ beforeAll(async () => {
   createCurrentOpenClawAgentDatabaseFixtures(path.join(root, "template.sqlite"), [
     { path: source, agentId: "main" },
   ]);
-  const database = new DatabaseSync(source);
-  try {
-    const insert = database.prepare(
-      "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
-    );
-    insert.run("plugin-model-catalog-v1", "fixture", contents, 1);
-    insert.run("plugin-model-catalog-v1", "small", "small catalog", 1);
-  } finally {
-    database.close();
-  }
   expectedIdentity = readDatabasePathIdentitySync(source).key;
   sourceDigest = digest(readFileSync(source));
-  await read(["small"]);
-  child = vi.mocked(spawn).mock.results[0]?.value;
+  await read();
+  child = lastChild();
 });
 
-it("preserves bounded catalog reads, queued inputs, and cancellation ownership", async ({
-  signal,
-}) => {
-  const frames: number[] = [];
-  const observeFrame = (message: unknown) => {
-    if (!isRecord(message) || !isRecord(message.result)) {
-      return;
-    }
-    const frame = message.result.frame;
-    if (isRecord(frame) && typeof frame.bytes === "string") {
-      frames.push(Buffer.from(frame.bytes, "base64").byteLength);
-    }
-  };
-  child.on("message", observeFrame);
-  const sql = [
-    ...(["exec", "prepare", "close"] as const).map((method) =>
-      vi.spyOn(DatabaseSync.prototype, method),
-    ),
-    ...(["all", "get", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    ),
-  ];
-  try {
-    const rows = await read(["fixture"]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.pluginId).toBe("fixture");
-    expect(digest(rows[0]?.contents ?? "")).toBe(digest(contents));
-    expect(frames.length).toBeGreaterThan(1);
-    expect(frames.every((bytes) => bytes > 0 && bytes <= SQLITE_WORKER_TRANSFER_FRAME_BYTES)).toBe(
-      true,
-    );
-    expect(frames.reduce((total, bytes) => total + bytes, 0)).toBeGreaterThan(
-      SQLITE_WORKER_TRANSFER_FRAME_BYTES,
-    );
+it("preserves off-thread reads, queued inputs, and cancellation ownership", async ({ signal }) => {
+  {
+    using exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    using prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    using close = vi.spyOn(DatabaseSync.prototype, "close");
+    using all = vi.spyOn(StatementSync.prototype, "all");
+    using get = vi.spyOn(StatementSync.prototype, "get");
+    using run = vi.spyOn(StatementSync.prototype, "run");
+    using iterate = vi.spyOn(StatementSync.prototype, "iterate");
+    await expect(read()).resolves.toEqual(blocker);
     expect(digest(readFileSync(source))).toBe(sourceDigest);
-    for (const operation of sql) {
+    for (const operation of [exec, prepare, close, all, get, run, iterate]) {
       expect(operation).not.toHaveBeenCalled();
-    }
-  } finally {
-    child.off("message", observeFrame);
-    for (const operation of sql) {
-      operation.mockRestore();
     }
   }
   await waitForDiagnosticEventsDrained();
@@ -135,63 +170,25 @@ it("preserves bounded catalog reads, queued inputs, and cancellation ownership",
   );
   let now = 0;
   const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-  const send = vi.spyOn(child, "send");
-  const emit = child.emit.bind(child);
-  let paused = createDeferredCore<() => boolean>();
-  let pauseNextStart = true;
-  const receiving = vi.spyOn(child, "emit").mockImplementation((event, ...args) => {
-    const message: unknown = args[0];
-    if (
-      event === "message" &&
-      pauseNextStart &&
-      isRecord(message) &&
-      isRecord(message.result) &&
-      message.result.type === "start"
-    ) {
-      pauseNextStart = false;
-      paused.resolve(() => emit(event, ...args));
-      return true;
-    }
-    return emit(event, ...args);
-  });
+  const transfer = pauseTransfer(child);
   const queuedAbort = new AbortController();
   const activeAbort = new AbortController();
   const pending: Promise<unknown>[] = [];
   try {
-    const first = read(["small"]);
+    const first = read();
     pending.push(first);
     const release = await withinTest(
-      awaitGateBeforeSettlement(paused.promise, first, "Read settled before its transfer started"),
+      awaitGateBeforeSettlement(transfer.ready, first, "Read settled before its transfer started"),
       signal,
     );
     now = 10;
-    const command = {
-      type: "pluginCatalog.read" as const,
-      input: {
-        agentId: "main",
-        pluginIds: ["small"],
-        synthetic: {
-          count: 9_007_199_254_740_993n,
-          absent: undefined,
-          owners: new Map([["fixture", "captured"]]),
-          selected: new Set(["small"]),
-        },
-      },
-    };
-    const captured = scope.run(() =>
-      runSqliteReadOnlyOperation(source, command, {
-        source: "canonical",
-        expectedIdentity,
-        env,
-      }),
-    );
+    const command = readCommand();
+    const captured = scope.run(() => runSqliteReadOnlyOperation(source, command, readOptions()));
     pending.push(captured);
-    command.input.pluginIds[0] = "fixture";
-    command.input.synthetic.count = 1n;
-    command.input.synthetic.owners.set("fixture", "changed");
-    command.input.synthetic.selected.add("fixture");
-    const queuedFailure = new Error("queued catalog read cancelled");
-    const queued = read(["fixture"], queuedAbort.signal);
+    command.input.agentId = "other";
+    delete command.input.config.agents?.entries?.survivor;
+    const queuedFailure = new Error("queued ownership read cancelled");
+    const queued = read(queuedAbort.signal);
     pending.push(queued);
     const rejectedQueued = expect(queued).rejects.toBe(queuedFailure);
     queuedAbort.abort(queuedFailure);
@@ -199,51 +196,24 @@ it("preserves bounded catalog reads, queued inputs, and cancellation ownership",
     expect(events.at(-1)).toMatchObject({ phase: "completed", queueDepth: 1 });
     now = 25;
     release();
-    await expect(first).resolves.toEqual([{ pluginId: "small", contents: "small catalog" }]);
-    await expect(captured).resolves.toEqual([{ pluginId: "small", contents: "small catalog" }]);
+    await expect(first).resolves.toEqual(blocker);
+    await expect(captured).resolves.toEqual(blocker);
     await rejectedQueued;
-    const requests = () =>
-      send.mock.calls.flatMap(([message]) =>
-        isRecord(message) && isRecord(message.operation) ? [message.operation] : [],
-      );
-    expect(requests()).toHaveLength(2);
-    const encoded = requests()[1]?.command;
-    if (typeof encoded !== "string") {
-      throw new Error("Expected a serialized operation command");
-    }
-    const decoded: unknown = deserialize(Buffer.from(encoded, "base64"));
-    expect(decoded).toStrictEqual({
-      type: "pluginCatalog.read",
-      input: {
-        agentId: "main",
-        pluginIds: ["small"],
-        synthetic: {
-          count: 9_007_199_254_740_993n,
-          absent: undefined,
-          owners: new Map([["fixture", "captured"]]),
-          selected: new Set(["small"]),
-        },
-      },
-    });
 
-    paused = createDeferredCore<() => boolean>();
-    pauseNextStart = true;
-    const active = read(["small"], activeAbort.signal);
+    transfer.reset();
+    const active = read(activeAbort.signal);
     pending.push(active);
-    const activeFailure = new Error("active catalog read cancelled");
+    const activeFailure = new Error("active ownership read cancelled");
     const rejectedActive = expect(active).rejects.toBe(activeFailure);
     await withinTest(
-      awaitGateBeforeSettlement(paused.promise, active, "Read settled before cancellation"),
+      awaitGateBeforeSettlement(transfer.ready, active, "Read settled before cancellation"),
       signal,
     );
     now = 35;
     activeAbort.abort(activeFailure);
     await rejectedActive;
-    expect(requests()).toHaveLength(3);
-    expect(child.signalCode).toBe("SIGKILL");
-    expect(child.connected).toBe(false);
+    expect(child).toMatchObject({ signalCode: "SIGKILL", connected: false });
     expect(digest(readFileSync(source))).toBe(sourceDigest);
-    expect(spawn).toHaveBeenCalledTimes(1);
     await waitForDiagnosticEventsDrained();
     expect(events.filter((event) => event.phase === "queued")).toHaveLength(4);
     expect(events.filter((event) => event.phase === "started")).toHaveLength(3);
@@ -262,9 +232,263 @@ it("preserves bounded catalog reads, queued inputs, and cancellation ownership",
     clock.mockRestore();
     queuedAbort.abort();
     activeAbort.abort();
-    receiving.mockRestore();
-    send.mockRestore();
+    transfer.receiving.mockRestore();
     await scope.close();
     await Promise.allSettled(pending);
   }
 });
+
+it("reuses workers across closed scopes without carrying database or inspection state", async () => {
+  const root = tempDirs.make("openclaw-readonly-second-");
+  const other = path.join(root, "openclaw-agent.sqlite");
+  createCurrentOpenClawAgentDatabaseFixtures(path.join(root, "template.sqlite"), [
+    { path: other, agentId: "other" },
+  ]);
+  const start = spawns.mock.calls.length;
+  const query = async (pathname: string, artifactPreserving?: true) => {
+    const request = createSqliteReadOnlyWorkerScope();
+    try {
+      return await request.run(() =>
+        runSqliteReadOnlyOperation(pathname, readCommand(pathname), {
+          source: "snapshot",
+          expectedIdentity: readDatabasePathIdentitySync(pathname).key,
+          env,
+          artifactPreserving,
+        }),
+      );
+    } finally {
+      await request.close();
+    }
+  };
+  await expect(query(source, true)).resolves.toEqual(blocker);
+  await expect(query(other)).resolves.toEqual({ blocker: undefined });
+  await expect(runRead()).resolves.toEqual(blocker);
+  expect(spawns.mock.calls.length - start).toBe(1);
+  const reusedChild = lastChild();
+  expect(reusedChild.exitCode).toBeNull();
+  reusedChild.kill("SIGKILL");
+  await new Promise<void>((resolve) => {
+    reusedChild.once("close", resolve);
+  });
+  await expect(query(other)).resolves.toEqual({ blocker: undefined });
+  expect(spawns.mock.calls.length - start).toBe(2);
+});
+
+it("closes a queued scope without waiting for an unrelated active transfer", async ({ signal }) => {
+  await runRead();
+  const activeChild = lastChild();
+  const transfer = pauseTransfer(activeChild);
+  const firstScope = createSqliteReadOnlyWorkerScope();
+  const secondScope = createSqliteReadOnlyWorkerScope();
+  const active = firstScope.run(() => runRead());
+  const release = await withinTest(
+    awaitGateBeforeSettlement(transfer.ready, active, "Active read did not reach transfer"),
+    signal,
+  );
+  const queued = begin(secondScope);
+  const rejected = expect(queued).rejects.toThrow("scope closed");
+  const closing = secondScope.close();
+  const observation = observeSettlement(closing);
+  try {
+    await nextTurn();
+    expect(observation.settled).toBe(true);
+    await rejected;
+    expect(activeChild.exitCode).toBeNull();
+  } finally {
+    release();
+    transfer.receiving.mockRestore();
+    await Promise.allSettled([active, queued, closing]);
+    await firstScope.close();
+  }
+  await expect(active).resolves.toEqual(blocker);
+});
+
+it("bounds concurrent incompatible launches to four live reader processes", async () => {
+  await cleanupSnapshotOperations();
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  let live = 0;
+  let peak = 0;
+  spawns.mockImplementation((...args) => {
+    const processChild = actual.spawn(...args);
+    peak = Math.max(peak, ++live);
+    processChild.once("close", () => {
+      live--;
+    });
+    return processChild;
+  });
+  try {
+    const rows = await Promise.all(
+      Array.from({ length: 8 }, (_, index) =>
+        runRead({
+          ...readOptions(),
+          env: { ...env, OPENCLAW_POOL_FIXTURE: String(index) },
+        }),
+      ),
+    );
+    expect(rows).toEqual(Array.from({ length: 8 }, () => blocker));
+    expect(peak).toBeLessThanOrEqual(4);
+  } finally {
+    await cleanupSnapshotOperations();
+    spawns.mockImplementation(actual.spawn);
+  }
+});
+
+it("quarantines failed cleanup without poisoning healthy capacity or launching a fifth child", async () => {
+  await cleanupSnapshotOperations();
+  const qualified = sqliteRuntime.getSqliteRuntimeCapabilities();
+  const unqualified = { ...qualified, explicitSqliteCloseReleasesNativeResources: false };
+  const capabilities = vi
+    .spyOn(sqliteRuntime, "getSqliteRuntimeCapabilities")
+    .mockReturnValue(unqualified);
+  const pool = failingClosePool();
+  const start = spawns.mock.calls.length;
+  try {
+    for (let index = 0; index < 4; index++) {
+      await expect(pool.run()).rejects.toThrow("SQLite read and child cleanup failed");
+      expect(spawns.mock.calls.length - start).toBe(index + 1);
+      if (index < 3) {
+        capabilities.mockReturnValue(qualified);
+        await expect(pool.run()).resolves.toEqual({
+          operation: "agentRetirement.sessionStoreBlocker",
+          value: blocker,
+        });
+        capabilities.mockReturnValue(unqualified);
+      }
+    }
+    await expect(pool.run()).rejects.toThrow("capacity is held by unconfirmed cleanup");
+    expect(spawns.mock.calls.length - start).toBe(4);
+  } finally {
+    capabilities.mockRestore();
+    await pool.close();
+  }
+});
+
+it.skipIf(process.platform !== "linux")(
+  "wakes capacity waiters when leased native cleanup fails",
+  async () => {
+    const pool = failingClosePool();
+    const warmers = Array.from({ length: 4 }, () => createSqliteReadOnlyWorkerScope());
+    const start = spawns.mock.calls.length;
+    try {
+      for (const request of warmers) {
+        await request.run(() => pool.run(beginCommand()));
+      }
+      const waiting = pool.run();
+      const rejected = expect(waiting).rejects.toThrow("capacity is held by unconfirmed cleanup");
+      for (const request of warmers) {
+        await expect(request.close()).rejects.toThrow("scope cleanup failed");
+      }
+      await rejected;
+      expect(spawns.mock.calls.length - start).toBe(4);
+    } finally {
+      await pool.close();
+      await Promise.allSettled(warmers.map((request) => request.close()));
+    }
+  },
+);
+
+it.skipIf(process.platform !== "linux")(
+  "keeps paced page-cache passes isolated from other scopes and launch eviction",
+  async () => {
+    await cleanupSnapshotOperations();
+    const first = createSqliteReadOnlyWorkerScope();
+    const second = createSqliteReadOnlyWorkerScope();
+    try {
+      expect((await begin(first)).complete).toBe(false);
+      const firstChild = lastChild();
+      expect((await begin(second)).complete).toBe(false);
+      const secondChild = lastChild();
+      expect(secondChild).not.toBe(firstChild);
+      for (let index = 0; index < 5; index++) {
+        await runRead({
+          ...readOptions(),
+          env: { ...env, OPENCLAW_POOL_FIXTURE: `paced-${index}` },
+        });
+      }
+      const progress = await first.run(() =>
+        runSqliteReadOnlyOperation(source, { type: "pageCache.step", input: null }, readOptions()),
+      );
+      expect(typeof progress.complete).toBe("boolean");
+      expect(firstChild.exitCode).toBeNull();
+      await second.close();
+      expect(secondChild.connected).toBe(false);
+      expect(secondChild.exitCode !== null || secondChild.signalCode !== null).toBe(true);
+      expect(firstChild.exitCode).toBeNull();
+      await first.close();
+      expect(firstChild.connected).toBe(false);
+      expect(firstChild.exitCode !== null || firstChild.signalCode !== null).toBe(true);
+    } finally {
+      await Promise.all([first.close(), second.close()]);
+    }
+  },
+);
+
+it.skipIf(process.platform !== "linux")(
+  "waits for leased capacity and cancels a waiting scope without disturbing warm passes",
+  async ({ signal }) => {
+    await cleanupSnapshotOperations();
+    const warmers = Array.from({ length: 4 }, () => createSqliteReadOnlyWorkerScope());
+    const waiting = createSqliteReadOnlyWorkerScope();
+    const aborting = createSqliteReadOnlyWorkerScope();
+    const start = spawns.mock.calls.length;
+    try {
+      await Promise.all(warmers.map(begin));
+      const queued = waiting.run(() => runRead());
+      const observation = observeSettlement(queued);
+      const cancelled = aborting.run(() => runRead());
+      const rejected = expect(cancelled).rejects.toThrow("scope closed");
+      await aborting.close();
+      await rejected;
+      await nextTurn();
+      expect(observation.settled).toBe(false);
+      expect(spawns.mock.calls.length - start).toBe(4);
+      await warmers[0]!.close();
+      await expect(withinTest(queued, signal)).resolves.toEqual(blocker);
+    } finally {
+      await Promise.all([...warmers, waiting, aborting].map((request) => request.close()));
+    }
+  },
+);
+
+it.skipIf(process.platform !== "linux")(
+  "retires idle readers through IPC without waiting for broker termination grace",
+  async () => {
+    const first = createSpawnBrokerHost();
+    const second = createSpawnBrokerHost();
+    const readerScope = createSqliteReadOnlyWorkerScope();
+    const readOwner = () => readerScope.run(() => runRead());
+    const firstSpawn = vi.spyOn(first, "spawn");
+    const secondSpawn = vi.spyOn(second, "spawn");
+    try {
+      await Promise.all([first.ready(), second.ready()]);
+      await runWithSpawnBroker(second, readOwner);
+      await runWithSpawnBroker(first, readOwner);
+      const firstChild = firstSpawn.mock.results[0]!.value;
+      const secondChild = secondSpawn.mock.results[0]!.value;
+      expect(firstChild.exitCode).toBeNull();
+      expect(secondChild.exitCode).toBeNull();
+
+      const started = performance.now();
+      await closeSqliteReadOnlyWorkersForBroker(first);
+      await first.close();
+      expect(performance.now() - started).toBeLessThan(GRACEFUL_CANCEL_TIMEOUT_MS);
+      expect(firstChild).toMatchObject({ exitCode: 0, connected: false });
+      expect(secondChild.exitCode).toBeNull();
+      await expect(runWithSpawnBroker(second, readOwner)).resolves.toEqual(blocker);
+      expect(secondSpawn).toHaveBeenCalledTimes(1);
+      await expect(runWithSpawnBroker(first, readOwner)).rejects.toThrow("broker is closing");
+    } finally {
+      try {
+        await readerScope.close();
+        await Promise.all([
+          closeSqliteReadOnlyWorkersForBroker(first),
+          closeSqliteReadOnlyWorkersForBroker(second),
+        ]);
+      } finally {
+        await Promise.all([first.close(), second.close()]);
+        firstSpawn.mockRestore();
+        secondSpawn.mockRestore();
+      }
+    }
+  },
+);

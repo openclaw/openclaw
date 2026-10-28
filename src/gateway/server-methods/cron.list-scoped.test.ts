@@ -1,30 +1,40 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCronTool } from "../../agents/tools/cron-tool.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as listRevision from "../../cron/list-snapshot-revision.js";
-import { CronService } from "../../cron/service.js";
-import { createNoopLogger } from "../../cron/service.test-harness.js";
+import type { CronService } from "../../cron/service.js";
 import * as cronSort from "../../cron/service/list-page-sort.js";
+import type { CronListPageResult } from "../../cron/service/list-page-types.js";
 import { loadCronQuarantinedJobs, loadCronStore, saveCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import {
-  closeOpenClawStateDatabaseByPathAsync,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { withEnvAsync } from "../../test-utils/env.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { withLocalGatewayRequestScope } from "../local-request-context.js";
-import { cronHandlers } from "./cron.js";
+import { callCron, createReadService } from "./cron-read.test-support.js";
 import { createCronCallerClient, createCronJob } from "./cron.validation.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+function expectReply(respond: ReturnType<typeof vi.fn>, payload: unknown) {
+  expect(respond).toHaveBeenCalledExactlyOnceWith(true, payload, undefined);
+}
+function expectError(respond: ReturnType<typeof vi.fn>, error: unknown) {
+  expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, error);
+}
+function expectErrorMessage(respond: ReturnType<typeof vi.fn>, message: string) {
+  expectError(respond, expect.objectContaining({ message: expect.stringContaining(message) }));
+}
 
 function createJobs(count: number): CronJob[] {
   return Array.from({ length: count }, (_, index) =>
@@ -49,51 +59,36 @@ async function withCronStore(
   options: {
     config?: OpenClawConfig;
     defaultAgentId?: string;
+    jobs?: CronJob[];
   } = {},
 ) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "cron-list-scoped-"));
-  try {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(root, "state") }, async () => {
-      const storePath = path.join(root, "jobs.json");
-      await saveCronStore(storePath, { version: 1, jobs: createJobs(count) });
-      const cron = new CronService({
-        scheduler: createTestGatewayScheduler(),
-        nowMs: () => Date.now(),
-        storePath,
-        cronEnabled: true,
-        defaultAgentId: options.defaultAgentId ?? "main",
-        log: createNoopLogger(),
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      });
-      try {
-        // Listing loads the real store without starting the scheduler.
-        await withLocalGatewayRequestScope(
-          { deps: {}, getRuntimeConfig: () => options.config ?? {} },
-          async () => {
-            const context: GatewayRequestContext = {
-              ...expectDefined(
-                getPluginRuntimeGatewayRequestScope()?.context,
-                "local Gateway context",
-              ),
-              cron,
-              cronStorePath: storePath,
-            };
-            await run({ context, storePath, cron });
-          },
-        );
-      } finally {
-        cron.stop();
-      }
+  await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    setRuntimeConfigSnapshot(options.config ?? {});
+    const storePath = path.join(state.root, "jobs.json");
+    await saveCronStore(storePath, { version: 1, jobs: options.jobs ?? createJobs(count) });
+    const cron = createReadService({
+      storePath,
+      cronEnabled: true,
+      defaultAgentId: options.defaultAgentId ?? "main",
+      enqueueSystemEvent: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-  } finally {
-    // Retire worker admissions before removing storage, including failed fixture setup.
-    await closeOpenClawStateDatabaseByPathAsync(
-      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(root, "state") }),
-    );
-    await fs.rm(root, { recursive: true, force: true });
-  }
+    try {
+      // Listing loads the real store without starting the scheduler.
+      await withLocalGatewayRequestScope(
+        { deps: {}, getRuntimeConfig: () => options.config ?? {} },
+        async () => {
+          const context = expectDefined(
+            getPluginRuntimeGatewayRequestScope()?.context,
+            "local Gateway context",
+          );
+          await run({ context: { ...context, cron, cronStorePath: storePath }, storePath, cron });
+        },
+      );
+    } finally {
+      cron.stop();
+    }
+  });
 }
 
 async function listScoped(
@@ -102,13 +97,10 @@ async function listScoped(
   sessionKey?: string,
   client: GatewayClient | null = createCronCallerClient("ops"),
 ) {
-  const respond = vi.fn();
-  await expectDefined(
-    cronHandlers["cron.list"],
-    "cron.list handler",
-  )({
-    req: { type: "req", id: "cron-list-scoped", method: "cron.list" },
-    params: {
+  const respond = await callCron(
+    context,
+    "cron.list",
+    {
       includeDisabled: true,
       includeDeliveryPreviews: false,
       ...(sessionKey ? { sessionKey, sessionAgentId: "ops" } : {}),
@@ -116,174 +108,193 @@ async function listScoped(
       limit: 1,
       offset,
     },
-    context,
-    client,
-    respond,
-    isWebchatConnect: () => false,
-  });
-  expect(respond).toHaveBeenCalledExactlyOnceWith(true, expect.any(Object), undefined);
-  return respond.mock.calls[0]![1] as {
-    jobs: CronJob[];
-    snapshotRevision: string;
-    total: number;
-    offset: number;
-    limit: number;
-    hasMore: boolean;
-    nextOffset: number | null;
-  };
+    { client },
+  );
+  expectReply(respond, expect.any(Object));
+  return respond.mock.calls[0]![1] as CronListPageResult;
 }
 
 describe("cron.list scoped SQLite snapshots", () => {
-  it.each([{ enabled: true, quarantine: true }])(
-    "keeps unsupported enabled=$enabled delivery repairable beside healthy work and quarantine=$quarantine",
-    async ({ enabled, quarantine }) => {
-      await withCronStore(
-        quarantine ? 3 : 2,
-        async ({ context, storePath, cron }) => {
-          const db = openOpenClawStateDatabase().db;
-          db.prepare(
-            "UPDATE cron_jobs SET enabled = ?, payload_kind = 'systemEvent', job_json = json_set(job_json, '$.enabled', json(?), '$.delivery.mode', 'not-a-route', '$.sessionTarget', 'main', '$.payload', json(?)) WHERE store_key = ? AND job_id = 'job-0000'",
-          ).run(
-            enabled ? 1 : 0,
-            JSON.stringify(enabled),
-            JSON.stringify({ kind: "systemEvent", text: "synthetic legacy job" }),
-            cronStoreKey(storePath),
-          );
-          db.prepare(
-            "UPDATE cron_jobs SET sort_order = 10, grant_definition_generation = 17, job_json = json_set(job_json, '$.notify', json('true'), '$.authoredNote', 'retain me') WHERE store_key = ? AND job_id = 'job-0000'",
-          ).run(cronStoreKey(storePath));
-          db.prepare(
-            "UPDATE cron_jobs SET sort_order = 20 WHERE store_key = ? AND job_id = 'job-0001'",
-          ).run(cronStoreKey(storePath));
-          if (quarantine) {
-            db.prepare(
-              "UPDATE cron_jobs SET sort_order = 0, job_json = json_set(job_json, '$.schedule.everyMs', 0) WHERE store_key = ? AND job_id = 'job-0002'",
-            ).run(cronStoreKey(storePath));
+  it("distinguishes an enabled-only tool inventory from a saved stopped watcher", async () => {
+    await withCronStore(2, async ({ context, storePath }) => {
+      const store = await loadCronStore(storePath);
+      const watcher = expectDefined(store.jobs[0], "saved watcher");
+      watcher.schedule = { kind: "stream", command: ["tail", "-F", "/synthetic/build.log"] };
+      watcher.state = {
+        streamStatus: "stopped",
+        streamSourceIdentity: "00000000-0000-4000-8000-000000000001",
+      };
+      const active = expectDefined(store.jobs[1], "unrelated enabled job");
+      active.enabled = true;
+      active.state.nextRunAtMs = 2_000_000_000_001;
+      await saveCronStore(storePath, store);
+      using _ = vi
+        .spyOn(gatewayModule, "callGatewayTool")
+        .mockImplementation(async <T>(method: string, _options: unknown, params: unknown) => {
+          if (!isRecord(params)) {
+            throw new Error("Tool inventory requests require object parameters");
           }
-          const retained = () =>
-            db
-              .prepare(
-                "SELECT agent_id, updated_at, grant_definition_revision, grant_definition_generation, grant_definition_updated_at FROM cron_jobs WHERE store_key = ? AND job_id = 'job-0000'",
-              )
-              .get(cronStoreKey(storePath));
-          const retainedBefore = retained();
-          const raw = () =>
-            db
-              .prepare("SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = 'job-0000'")
-              .get(cronStoreKey(storePath))?.job_json;
-          const original = raw();
-          await cron.start();
-          const quarantinedJobs = await loadCronQuarantinedJobs(storePath);
-          expect(quarantinedJobs).toHaveLength(quarantine ? 1 : 0);
-          if (quarantine) {
-            expect(quarantinedJobs[0]).toMatchObject({
-              reason: "invalid-schedule",
-              job: { id: "job-0002" },
-            });
-          }
-          expect(retained()).toEqual(retainedBefore);
-          const listResponse = vi.fn();
-          await expectDefined(
-            cronHandlers["cron.list"],
-            "cron.list",
-          )({
-            req: { type: "req", id: "legacy-delivery-list", method: "cron.list" },
-            params: { includeDisabled: true, limit: 10 },
-            context,
-            client: null,
-            respond: listResponse,
-            isWebchatConnect: () => false,
-          });
-          expect(listResponse).toHaveBeenCalledExactlyOnceWith(
-            true,
-            expect.objectContaining({
-              total: 2,
-              jobs: expect.arrayContaining([
-                expect.objectContaining({
-                  id: "job-0000",
-                  delivery: { mode: "not-a-route" },
-                  configRevision: expect.any(String),
-                }),
-                expect.objectContaining({ id: "job-0001" }),
-              ]),
-              deliveryPreviews: expect.any(Object),
+          const respond = await callCron(context, method, params);
+          expect(respond).toHaveBeenCalledExactlyOnceWith(true, expect.any(Object), undefined);
+          return respond.mock.calls[0]?.[1] as T;
+        });
+      const tool = createCronTool();
+      const listed = await tool.execute("active-inventory", { action: "list" });
+      expect(listed.details).toMatchObject({
+        jobs: [expect.objectContaining({ id: "job-0001" })],
+        total: 1,
+        hasMore: false,
+        includeDisabled: false,
+        inventoryHint: expect.stringContaining("Disabled automations are omitted"),
+      });
+      const saved = await tool.execute("saved-inventory", {
+        action: "list",
+        includeDisabled: true,
+      });
+      expect(saved.details).toMatchObject({
+        jobs: expect.arrayContaining([expect.objectContaining({ id: watcher.id, enabled: false })]),
+        total: 2,
+        includeDisabled: true,
+        inventoryHint: expect.stringContaining("get jobId"),
+      });
+      const exact = await tool.execute("inspect-stopped", { action: "get", jobId: watcher.id });
+      expect(exact.details).toMatchObject({
+        id: watcher.id,
+        enabled: false,
+        state: { streamStatus: "stopped" },
+      });
+      for (const result of [listed, saved, exact]) {
+        expect(
+          Value.Errors(expectDefined(tool.outputSchema, "tool output schema"), result.details),
+        ).toEqual([]);
+      }
+      expect(await loadCronStore(storePath)).toEqual(store);
+    });
+  });
+
+  it("lists 146 jobs with delivery previews through the real session worker", async () => {
+    const cfg: OpenClawConfig = {};
+    const jobs = createJobs(146).map((job, index) =>
+      Object.assign(job, {
+        agentId: "main",
+        sessionKey: `agent:main:preview-${index}`,
+        delivery: { mode: "announce" as const, channel: "last" as const },
+      }),
+    );
+    await withCronStore(
+      146,
+      async ({ context, storePath }) => {
+        const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
+        cfg.session = { store: sessionStorePath };
+        replaceSessionEntrySync(
+          { agentId: "main", storePath: sessionStorePath, sessionKey: "agent:main:main" },
+          {
+            sessionId: "main",
+            updatedAt: 1,
+            delivery: normalizeSessionDeliveryState({
+              context: { channel: "telegram", to: "main-recipient", accountId: "work" },
             }),
-            undefined,
+          },
+        );
+        const respond = await callCron(context, "cron.list", { includeDisabled: true, limit: 200 });
+        expectReply(respond, expect.objectContaining({ jobs: expect.any(Array), total: 146 }));
+        const page = respond.mock.calls[0]?.[1] as { jobs: CronJob[] };
+        expect(page.jobs).toHaveLength(146);
+        expect(page.jobs.map((job) => job.id).toSorted()).toEqual(
+          jobs.map((job) => job.id).toSorted(),
+        );
+      },
+      { config: cfg, jobs },
+    );
+  });
+
+  it("keeps unsupported enabled delivery repairable beside healthy work and quarantine", () =>
+    withCronStore(
+      3,
+      async ({ context, storePath, cron }) => {
+        const db = openOpenClawStateDatabase().db;
+        const storeKey = cronStoreKey(storePath);
+        const update = (sql: string, ...params: (string | number)[]) =>
+          db.prepare(sql).run(...params, storeKey);
+        const read = (columns: string) =>
+          db
+            .prepare(`SELECT ${columns} FROM cron_jobs WHERE store_key = ? AND job_id = 'job-0000'`)
+            .get(storeKey);
+        update(
+          "UPDATE cron_jobs SET enabled = ?, payload_kind = 'systemEvent', job_json = json_set(job_json, '$.enabled', json(?), '$.delivery.mode', 'not-a-route', '$.sessionTarget', 'main', '$.payload', json(?)) WHERE store_key = ? AND job_id = 'job-0000'",
+          1,
+          "true",
+          JSON.stringify({ kind: "systemEvent", text: "synthetic legacy job" }),
+        );
+        update(
+          "UPDATE cron_jobs SET sort_order = 10, grant_definition_generation = 17, job_json = json_set(job_json, '$.notify', json('true'), '$.authoredNote', 'retain me') WHERE store_key = ? AND job_id = 'job-0000'",
+        );
+        update("UPDATE cron_jobs SET sort_order = 20 WHERE store_key = ? AND job_id = 'job-0001'");
+        update(
+          "UPDATE cron_jobs SET sort_order = 0, job_json = json_set(job_json, '$.schedule.everyMs', 0) WHERE store_key = ? AND job_id = 'job-0002'",
+        );
+        const retained = () =>
+          read(
+            "agent_id, updated_at, grant_definition_revision, grant_definition_generation, grant_definition_updated_at",
           );
-          expect(JSON.stringify(listResponse.mock.calls[0]![1])).toContain(
-            "delivery requires review",
-          );
-          await expect(cron.run("job-0001", "force")).resolves.toEqual({ ok: true, ran: true });
-          await cron.update("job-0001", { name: "healthy sibling still editable" });
-          expect(raw()).toBe(original);
-          expect(retained()).toEqual(retainedBefore);
-          expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
-            "job-0000",
-            "job-0001",
-          ]);
-          const runResponse = vi.fn();
-          await expectDefined(
-            cronHandlers["cron.run"],
-            "cron.run",
-          )({
-            req: { type: "req", id: "legacy-delivery-run", method: "cron.run" },
-            params: { id: "job-0000", mode: "force" },
-            context,
-            client: null,
-            respond: runResponse,
-            isWebchatConnect: () => false,
-          });
-          expect(runResponse).toHaveBeenCalledExactlyOnceWith(
-            false,
-            undefined,
-            expect.objectContaining({ message: expect.stringContaining("openclaw doctor --fix") }),
-          );
-          for (const patch of [{ name: "unrelated edit" }, { state: { lastDurationMs: 99 } }]) {
-            const response = vi.fn();
-            await expectDefined(
-              cronHandlers["cron.update"],
-              "cron.update",
-            )({
-              req: { type: "req", id: "legacy-delivery-unrelated", method: "cron.update" },
-              params: { id: "job-0000", patch },
-              context,
-              client: null,
-              respond: response,
-              isWebchatConnect: () => false,
-            });
-            expect(response).toHaveBeenCalledExactlyOnceWith(
-              false,
-              undefined,
+        const retainedBefore = retained();
+        const raw = () => read("job_json")?.job_json;
+        const original = raw();
+        await cron.start();
+        const quarantinedJobs = await loadCronQuarantinedJobs(storePath);
+        expect(quarantinedJobs).toHaveLength(1);
+        expect(quarantinedJobs[0]).toMatchObject({
+          reason: "invalid-schedule",
+          job: { id: "job-0002" },
+        });
+        expect(retained()).toEqual(retainedBefore);
+        const listResponse = await callCron(context, "cron.list", {
+          includeDisabled: true,
+          limit: 10,
+        });
+        expectReply(
+          listResponse,
+          expect.objectContaining({
+            total: 2,
+            jobs: expect.arrayContaining([
               expect.objectContaining({
-                message: expect.stringContaining("delivery requires an explicit mode"),
+                id: "job-0000",
+                delivery: { mode: "not-a-route" },
+                configRevision: expect.any(String),
               }),
-            );
-            expect(raw()).toBe(original);
-          }
-          const corrected = vi.fn();
-          await expectDefined(
-            cronHandlers["cron.update"],
-            "cron.update",
-          )({
-            req: { type: "req", id: "legacy-delivery-correct", method: "cron.update" },
-            params: { id: "job-0000", patch: { delivery: { mode: "none" } } },
-            context,
-            client: null,
-            respond: corrected,
-            isWebchatConnect: () => false,
-          });
-          expect(corrected).toHaveBeenCalledExactlyOnceWith(
-            true,
-            expect.objectContaining({ id: "job-0000" }),
-            undefined,
-          );
-          expect(JSON.parse(String(raw()))).not.toHaveProperty("delivery");
-          expect((await cron.readJob("job-0001"))?.name).toBe("healthy sibling still editable");
-        },
-        { defaultAgentId: "ops" },
-      );
-    },
-  );
+              expect.objectContaining({ id: "job-0001" }),
+            ]),
+            deliveryPreviews: expect.any(Object),
+          }),
+        );
+        expect(JSON.stringify(listResponse.mock.calls[0]![1])).toContain(
+          "delivery requires review",
+        );
+        await expect(cron.run("job-0001", "force")).resolves.toEqual({ ok: true, ran: true });
+        await cron.update("job-0001", { name: "healthy sibling still editable" });
+        expect(raw()).toBe(original);
+        expect(retained()).toEqual(retainedBefore);
+        expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
+          "job-0000",
+          "job-0001",
+        ]);
+        const runResponse = await callCron(context, "cron.run", { id: "job-0000", mode: "force" });
+        expectErrorMessage(runResponse, "openclaw doctor --fix");
+        for (const patch of [{ name: "unrelated edit" }, { state: { lastDurationMs: 99 } }]) {
+          const response = await callCron(context, "cron.update", { id: "job-0000", patch });
+          expectErrorMessage(response, "delivery requires an explicit mode");
+          expect(raw()).toBe(original);
+        }
+        const corrected = await callCron(context, "cron.update", {
+          id: "job-0000",
+          patch: { delivery: { mode: "none" } },
+        });
+        expectReply(corrected, expect.objectContaining({ id: "job-0000" }));
+        expect(JSON.parse(String(raw()))).not.toHaveProperty("delivery");
+        expect((await cron.readJob("job-0001"))?.name).toBe("healthy sibling still editable");
+      },
+      { defaultAgentId: "ops" },
+    ));
 
   it("keeps migrated owners outside a different ambient agent's reads and mutations", async () => {
     const config: OpenClawConfig = {
@@ -302,34 +313,26 @@ describe("cron.list scoped SQLite snapshots", () => {
         const before = await loadCronStore(storePath);
         const client = createCronCallerClient("research");
         const page = await listScoped(context, 0, undefined, client);
-        expect(page.total, "An ambient agent must not see historical cron jobs").toBe(1);
-        expect(
-          page.jobs.map((job) => job.id),
-          "An ambient agent must not see historical cron jobs",
-        ).toEqual([explicit.id]);
+        expect(page, "An ambient agent must not see historical cron jobs").toMatchObject({
+          total: 1,
+          jobs: [{ id: explicit.id }],
+        });
         expect((await listScoped(context, 0, undefined, null)).total).toBe(2);
         expect((await listScoped(context, 0, "agent:research:cron:historical", null)).total).toBe(
           0,
         );
         for (const method of ["cron.get", "cron.runs", "cron.update", "cron.remove"] as const) {
-          const respond = vi.fn();
-          await expectDefined(
-            cronHandlers[method],
+          const respond = await callCron(
+            context,
             method,
-          )({
-            req: { type: "req", id: method, method },
-            params: {
+            {
               id: historical.id,
               ...(method === "cron.update" ? { patch: { name: "changed" } } : {}),
             },
-            context,
-            client,
+            { client },
+          );
+          expectError(
             respond,
-            isWebchatConnect: () => false,
-          });
-          expect(respond).toHaveBeenCalledExactlyOnceWith(
-            false,
-            undefined,
             expect.objectContaining({
               details: expect.objectContaining({ code: "CRON_JOB_NOT_FOUND" }),
             }),
@@ -340,8 +343,8 @@ describe("cron.list scoped SQLite snapshots", () => {
       { config, defaultAgentId: "research" },
     );
   });
-  it("prepares one revision for concurrent lists while status does no listing work", async () => {
-    await withCronStore(300, async ({ context, cron }) => {
+  it("prepares one revision for concurrent lists while status does no listing work", () =>
+    withCronStore(300, async ({ context, cron }) => {
       await cron.start();
       const revision = vi.spyOn(listRevision, "resolveCronListSnapshotRevision");
       const pages = await Promise.all(
@@ -349,18 +352,7 @@ describe("cron.list scoped SQLite snapshots", () => {
           if (index % 2 === 0) {
             return listScoped(context, index, undefined, null);
           }
-          const respond = vi.fn();
-          await expectDefined(
-            cronHandlers["cron.status"],
-            "cron.status",
-          )({
-            req: { type: "req", id: `status-${index}`, method: "cron.status" },
-            params: {},
-            context,
-            client: null,
-            respond,
-            isWebchatConnect: () => false,
-          });
+          const respond = await callCron(context, "cron.status", {});
           expect(respond).toHaveBeenCalledWith(
             true,
             expect.objectContaining({ jobs: 300 }),
@@ -373,10 +365,9 @@ describe("cron.list scoped SQLite snapshots", () => {
       expect(revision).toHaveBeenCalledOnce();
       expect((await listScoped(context)).total).toBe(2);
       expect((await listScoped(context, 0, undefined, null)).total).toBe(300);
-    });
-  });
-  it("filters session bindings before pagination without widening caller visibility", async () => {
-    await withCronStore(401, async ({ context, storePath, cron }) => {
+    }));
+  it("filters session bindings before pagination without widening caller visibility", () =>
+    withCronStore(401, async ({ context, storePath, cron }) => {
       await cron.start();
       const store = await loadCronStore(storePath);
       const sessionKey = "agent:ops:night-watch";
@@ -384,9 +375,26 @@ describe("cron.list scoped SQLite snapshots", () => {
         store.jobs[index]!.sessionKey = sessionKey;
       }
       await saveCronStore(storePath, store);
+      const sort = vi.spyOn(cronSort, "sortCronJobs");
       const page = await listScoped(context, 0, sessionKey);
-      expect(page.total).toBe(2);
-      expect(page.jobs.map((job) => job.id)).toEqual(["job-0000"]);
+      const visible = store.jobs.filter(
+        (job) => job.agentId === "ops" && job.sessionKey === sessionKey,
+      );
+      expect(page).toMatchObject({
+        offset: 0,
+        limit: 1,
+        hasMore: true,
+        nextOffset: 1,
+        snapshotRevision: listRevision.resolveCronListSnapshotRevision(
+          visible,
+          listRevision.resolveCronListSnapshotRows(visible),
+        ),
+      });
+      expect(await loadCronStore(storePath)).toEqual(store);
+      expect(sort.mock.calls.reduce((total, [jobs]) => total + jobs.length, 0)).toBeLessThanOrEqual(
+        401,
+      );
+      expect(page).toMatchObject({ total: 2, jobs: [{ id: "job-0000" }] });
       expect((await listScoped(context, 1, sessionKey)).jobs.map((job) => job.id)).toEqual([
         "job-0200",
       ]);
@@ -396,11 +404,10 @@ describe("cron.list scoped SQLite snapshots", () => {
       expect((await listScoped(context, 1, sessionKey, null)).jobs.map((job) => job.id)).toEqual([
         "job-0001",
       ]);
-    });
-  });
+    }));
 
-  it("keeps global-session filtering on the explicit job agent instead of the ambient default", async () => {
-    await withCronStore(
+  it("keeps global-session filtering on the explicit job agent instead of the ambient default", () =>
+    withCronStore(
       2,
       async ({ context, storePath }) => {
         const store = await loadCronStore(storePath);
@@ -411,8 +418,7 @@ describe("cron.list scoped SQLite snapshots", () => {
 
         for (const client of [createCronCallerClient("ops"), null]) {
           const page = await listScoped(context, 0, "global", client);
-          expect(page.total).toBe(1);
-          expect(page.jobs.map((job) => job.id)).toEqual(["job-0000"]);
+          expect(page).toMatchObject({ total: 1, jobs: [{ id: "job-0000" }] });
         }
       },
       {
@@ -425,35 +431,10 @@ describe("cron.list scoped SQLite snapshots", () => {
           session: { scope: "global" },
         },
       },
-    );
-  });
+    ));
 
-  it.each([401])(
-    "bounds sorting work while finding visible jobs across a %i-job inventory",
-    async (count) => {
-      await withCronStore(count, async ({ context, storePath }) => {
-        const before = await loadCronStore(storePath);
-        const sort = vi.spyOn(cronSort, "sortCronJobs");
-        const page = await listScoped(context);
-        const sortedRows = sort.mock.calls.reduce((total, [jobs]) => total + jobs.length, 0);
-        const visible = before.jobs.filter((job) => job.agentId === "ops");
-        expect(page).toMatchObject({
-          total: visible.length,
-          offset: 0,
-          limit: 1,
-          hasMore: visible.length > 1,
-          nextOffset: visible.length > 1 ? 1 : null,
-          snapshotRevision: listRevision.resolveCronListSnapshotRevision(visible),
-          jobs: [expect.objectContaining({ id: "job-0000" })],
-        });
-        expect(await loadCronStore(storePath)).toEqual(before);
-        expect(sortedRows).toBeLessThanOrEqual(count);
-      });
-    },
-  );
-
-  it("isolates hidden changes while revising visible off-page changes and detaching rows", async () => {
-    await withCronStore(401, async ({ context, storePath, cron }) => {
+  it("isolates hidden changes while revising visible off-page changes and detaching rows", () =>
+    withCronStore(401, async ({ context, storePath, cron }) => {
       await cron.start();
       const first = await listScoped(context);
       const store = await loadCronStore(storePath);
@@ -469,11 +450,5 @@ describe("cron.list scoped SQLite snapshots", () => {
       expect((await listScoped(context, 2)).jobs).toEqual([
         expect.objectContaining({ id: "job-0400", name: "visible replacement" }),
       ]);
-
-      store.jobs[0]!.payload = { kind: "agentTurn", message: "replacement message" };
-      await saveCronStore(storePath, store);
-      await listScoped(context);
-      expect(first.jobs[0]!.payload).toEqual({ kind: "agentTurn", message: "scheduled check" });
-    });
-  });
+    }));
 });

@@ -4,7 +4,7 @@ import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
 import { readPackageVersion, UpdatePreMutationError } from "./shared.js";
 import {
   maybeRepairLegacyConfigForUpdateChannel,
@@ -13,10 +13,7 @@ import {
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
-import {
-  captureOwnedManagedUpdateContext,
-  revalidateUpdateDatabaseContext,
-} from "./update-command-managed-context.js";
+import { captureOwnedManagedUpdateContext } from "./update-command-managed-context.js";
 import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { finishUpdate } from "./update-command-post-update.js";
@@ -69,9 +66,18 @@ export async function finishAlreadyCurrentUpdate(
           (await readPackageVersion(params.root)),
       },
     };
+    const completion = () => ({
+      ...params,
+      result,
+      coreAlreadyCurrent: true,
+      mutationStarted: false,
+      installKindChanged: false,
+      downgradeRisk: false,
+    });
     const inspection = {
       ...params,
       roots: [params.root],
+      packageAlreadyCurrent: true,
       updateInstallKind: params.result.mode === "git" ? ("git" as const) : ("package" as const),
       jsonMode: Boolean(params.opts.json),
       timeoutMs: params.updateStepTimeoutMs,
@@ -81,7 +87,7 @@ export async function finishAlreadyCurrentUpdate(
     };
     const admission = await inspectUpdateDatabaseContexts(inspection);
     const service = admission.service;
-    let context = admission.foreground ? admission.contexts[0]! : admission.contexts.at(-1)!;
+    const context = admission.foreground ? admission.contexts[0]! : admission.contexts.at(-1)!;
     const membership = await mutableUpdateGatewayServiceBlock({
       preManagedServiceStop:
         service ?? admission.services.get(params.managedServiceRoot ?? params.root),
@@ -105,13 +111,8 @@ export async function finishAlreadyCurrentUpdate(
       });
       params.stop();
       await finishUpdate({
-        ...params,
-        result,
-        coreAlreadyCurrent: true,
+        ...completion(),
         deferredMaintenance,
-        mutationStarted: false,
-        installKindChanged: false,
-        downgradeRisk: false,
         preManagedServiceStop: service,
         ownedManagedUpdateEnv: context.env,
         configSnapshot: context.configSnapshot,
@@ -158,13 +159,6 @@ export async function finishAlreadyCurrentUpdate(
     for (const warning of pluginWarnings) {
       defaultRuntime[params.opts.json ? "error" : "log"](warning.message);
     }
-    await inspectUpdateDatabaseContexts({
-      ...inspection,
-      expectedServices: admission.services,
-      expectedForeground: admission.foreground,
-    });
-    admission.contexts = await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
-    context = admission.foreground ? admission.contexts[0]! : admission.contexts.at(-1)!;
     let stopState = admission.foreground
       ? undefined
       : admission.services.get(params.managedServiceRoot ?? params.root);
@@ -236,17 +230,12 @@ export async function finishAlreadyCurrentUpdate(
     }
     params.stop();
     await finishUpdate({
-      ...params,
+      ...completion(),
       packageUpdateNodeRunner,
       serviceRuntimeRefreshRequired: Boolean(
         params.managedServiceRoot || runtime.value.replacedNodeRunner,
       ),
-      result,
       storedChannel,
-      coreAlreadyCurrent: true,
-      mutationStarted: false,
-      installKindChanged: false,
-      downgradeRisk: false,
       preManagedServiceStop: stopState,
       ownedManagedUpdateEnv: env,
       configSnapshot,

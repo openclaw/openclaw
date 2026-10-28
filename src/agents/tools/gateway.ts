@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -39,9 +40,9 @@ import {
   loadOrCreateDeviceIdentityAsync,
 } from "../../infra/device-identity-async.js";
 import type { DeviceIdentity } from "../../infra/device-identity.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { prepareQuestionGatewayDispatch } from "../harness/host-private-capabilities.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
+import { hasInProcessGatewayToolCaller } from "./gateway-caller-availability.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { getGatewaySessionSpawnParentExecutionIdentityToken } from "./gateway-session-spawn-execution-identity.js";
@@ -253,6 +254,7 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "cron.add",
   "cron.update",
   "cron.remove",
+  "cron.bind",
   "cron.run",
   "cron.runs",
   "secrets.store.delete",
@@ -265,11 +267,11 @@ const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "question.request",
 ]);
 
-function resolveApprovalRuntimeTokenForGatewayTool(params: {
+async function resolveApprovalRuntimeTokenForGatewayTool(params: {
   method: string;
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
-}): string | undefined {
+}): Promise<string | undefined> {
   if (!APPROVAL_RUNTIME_METHODS.has(params.method)) {
     return undefined;
   }
@@ -432,6 +434,7 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     }
     throw new Error("trusted operational run instance required for this gateway call");
   }
+  let lineageHandoff: ReturnType<typeof createAgentRuntimeExecutionLineageHandoff>;
   try {
     const sessionSpawnContext = getGatewaySessionSpawnContext();
     const parentExecutionIdentityToken = getGatewaySessionSpawnParentExecutionIdentityToken();
@@ -442,7 +445,7 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     if (executionLineage && !activeAuthority) {
       throw new Error("execution lineage handoff requires active parent authority");
     }
-    const lineageHandoff =
+    lineageHandoff =
       sessionSpawnContext && executionLineage && activeAuthority
         ? createAgentRuntimeExecutionLineageHandoff({
             agentId: identity.agentId,
@@ -458,40 +461,36 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     if (executionLineage && !lineageHandoff) {
       throw new Error("execution lineage handoff could not bind the parent admission");
     }
-    try {
-      // A request lifetime narrows inherited tool lifetimes; neither may replace the other.
-      const approvalSignals =
-        params.method === "exec.approval.request" || params.method === "plugin.approval.request"
-          ? [...(identity.approvalSignals ?? []), ...(params.signal ? [params.signal] : [])]
-          : undefined;
-      const approvalAuthority =
-        activeAuthority && approvalSignals?.length
-          ? claimAgentRunApprovalAuthority(activeAuthority, approvalSignals)
-          : activeAuthority;
-      const prepared: AgentRuntimeIdentityTokenParams = {
-        ...identity,
-        operationalRunInstance: identity.operationalRunInstance,
-        approvalAuthority,
-        ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
-        ...(lineageHandoff
-          ? { executionLineageHandoffId: lineageHandoff.id }
-          : sessionSpawnContext
-            ? { executionIdentityToken: parentExecutionIdentityToken, sessionSpawnContext }
-            : {}),
-      };
-      if (!params.inProcess) {
-        return await mintAgentRuntimeIdentityToken(prepared);
-      }
-      const runtimeIdentity = await createAgentRuntimeIdentity(prepared);
-      if (!runtimeIdentity) {
-        throw new Error("invalid agent runtime identity");
-      }
-      return runtimeIdentity;
-    } catch (error) {
-      lineageHandoff?.revoke();
-      throw error;
+    // A request lifetime narrows inherited tool lifetimes; neither may replace the other.
+    const approvalSignals =
+      params.method === "exec.approval.request" || params.method === "plugin.approval.request"
+        ? [...(identity.approvalSignals ?? []), ...(params.signal ? [params.signal] : [])]
+        : undefined;
+    const approvalAuthority =
+      activeAuthority && approvalSignals?.length
+        ? claimAgentRunApprovalAuthority(activeAuthority, approvalSignals)
+        : activeAuthority;
+    const prepared: AgentRuntimeIdentityTokenParams = {
+      ...identity,
+      operationalRunInstance: identity.operationalRunInstance,
+      approvalAuthority,
+      ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
+      ...(lineageHandoff
+        ? { executionLineageHandoffId: lineageHandoff.id }
+        : sessionSpawnContext
+          ? { executionIdentityToken: parentExecutionIdentityToken, sessionSpawnContext }
+          : {}),
+    };
+    if (!params.inProcess) {
+      return await mintAgentRuntimeIdentityToken(prepared);
     }
+    const runtimeIdentity = await createAgentRuntimeIdentity(prepared);
+    if (!runtimeIdentity) {
+      throw new Error("invalid agent runtime identity");
+    }
+    return runtimeIdentity;
   } catch (error) {
+    lineageHandoff?.revoke();
     if (optionalLocalIdentity && !params.required) {
       return undefined;
     }
@@ -508,7 +507,6 @@ type MessageActionAgentRuntimeIdentityParams = {
   sessionId?: string;
   sourceReplyFinal?: boolean;
   sourceReplyToolCallId?: string;
-  callerOwnsTerminalReceipt?: boolean;
 };
 
 async function resolveMessageActionIdentity<T>(
@@ -545,7 +543,9 @@ async function resolveMessageActionIdentity<T>(
   });
   if (!messageActionContext) {
     if (terminalSourceReply) {
-      throw new Error("terminal source reply requires an active turn capability");
+      throw new Error(
+        "terminal source reply requires an active turn capability. This run has no live source turn to finish (it ended, or this is a heartbeat or background run), so changing channel or target will not help. To deliver the message anyway, send it again with final=false.",
+      );
     }
     return undefined;
   }
@@ -556,11 +556,8 @@ async function resolveMessageActionIdentity<T>(
     throw new Error("terminal source reply requires source-turn correlation");
   }
   if (usesUntrustedGatewayContext) {
-    if (params.callerOwnsTerminalReceipt !== true) {
-      throw new Error("terminal source reply requires the trusted local gateway context");
-    }
-    // Remote gateways cannot trust caller-supplied turn metadata. The agent
-    // process owns the durable receipt and sends no source authority over RPC.
+    // Remote gateways cannot trust caller-supplied turn metadata. Keep source
+    // completion authority in the originating agent process.
     return undefined;
   }
   if (!identity.operationalRunInstance) {
@@ -569,19 +566,16 @@ async function resolveMessageActionIdentity<T>(
     }
     return undefined;
   }
-  const resolvedMessageActionContext = terminalSourceReply
-    ? {
-        ...messageActionContext,
-        turnCapability: params.turnCapability,
-        sourceReplyFinal: true as const,
-        sourceReplyToolCallId: sourceReplyToolCallId!,
-      }
-    : {
-        ...messageActionContext,
-        turnCapability: params.turnCapability,
-        ...(params.sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
-        ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
-      };
+  const resolvedMessageActionContext = {
+    ...messageActionContext,
+    turnCapability: params.turnCapability,
+    ...(terminalSourceReply
+      ? { sourceReplyFinal: true as const, sourceReplyToolCallId: sourceReplyToolCallId! }
+      : {
+          ...(params.sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
+          ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
+        }),
+  };
   return await createIdentity({
     ...identity,
     sessionKey: turnCapabilitySessionKey,
@@ -610,12 +604,10 @@ export async function resolveMessageActionAgentRuntimeIdentity(
 
 /** Explicit destinations remain transport calls; retired hosted bindings must reject locally. */
 export function shouldUseInProcessGatewayTool(opts: GatewayCallOptions): boolean {
-  const resolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   return (
-    Boolean(resolver) &&
     !trimToUndefined(opts.gatewayUrl) &&
     !trimToUndefined(opts.gatewayToken) &&
-    resolver?.()?.localEmbedded !== true
+    hasInProcessGatewayToolCaller()
   );
 }
 
@@ -678,7 +670,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   }
   const agentRuntimeIdentityToken =
     typeof runtimeIdentity === "string" ? runtimeIdentity : undefined;
-  const approvalRuntimeToken = resolveApprovalRuntimeTokenForGatewayTool({
+  const approvalRuntimeToken = await resolveApprovalRuntimeTokenForGatewayTool({
     method,
     opts,
     target: gateway.target,

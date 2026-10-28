@@ -1,9 +1,13 @@
-import { onTestFinished, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+const flushAsync = () => vi.dynamicImportSettled();
+const findRun = (requester: string, runId: string) =>
+  mod.listSubagentRunsForRequester(requester).find((run) => run.runId === runId);
 
 export function createLifecycleAgentCallWaits(
   requesterSessionKey: string,
@@ -11,7 +15,6 @@ export function createLifecycleAgentCallWaits(
 ) {
   let agentCallObserved = createDeferred();
   const settleRootWork = observeRootWork();
-  const { flushAsync } = createLifecycleWaits(requesterSessionKey);
   let pendingRootWork = Promise.resolve();
   return {
     notifyAgentCall() {
@@ -19,45 +22,26 @@ export function createLifecycleAgentCallWaits(
       agentCallObserved = createDeferred();
     },
     async waitForAgentCallCount(expectedCount: number) {
-      // Start due callbacks without spending retry time waiting for native worker reads.
       await vi.advanceTimersByTimeAsync(0);
       const entered = async () => {
         while (getAgentCallCount() < expectedCount) {
           await agentCallObserved.promise;
         }
       };
-      // RPC entry may beat a gated producer. Keep joins serial and retain the
-      // loser for teardown; an early retryable result must fail, not trigger retries.
+      // Retain serial producer joins for teardown even when RPC entry wins.
       pendingRootWork = pendingRootWork.then(() => settleRootWork(true));
       await Promise.race([entered(), pendingRootWork]);
       if (getAgentCallCount() >= expectedCount) {
         return;
       }
-      const pending = mod.listSubagentRunsForRequester(requesterSessionKey).map((run) => ({
-        runId: run.runId,
-        execution: run.execution,
-        delivery: run.delivery,
-        requesterSettleWake: run.requesterSettleWake,
-      }));
-      throw new Error(
-        `expected ${expectedCount} agent call(s), got ${getAgentCallCount()}: ${JSON.stringify(pending)}`,
-      );
+      throw new Error(`expected ${expectedCount} agent call(s), got ${getAgentCallCount()}`);
     },
     async waitForCleanupHandledFalse(runId: string) {
-      // RPC entry can beat native persistence. Join its retained producer without
-      // spending retry time or disposing observation of a corrected receipt.
+      // RPC entry may precede persistence; join without advancing retry time.
       await pendingRootWork;
-      const run = mod
-        .listSubagentRunsForRequester(requesterSessionKey)
-        .find((candidate) => candidate.runId === runId);
-      if (
-        run?.cleanupHandled === false &&
-        run.delivery?.status === "pending" &&
-        run.delivery.payload
-      ) {
-        return;
-      }
-      throw new Error(`run ${runId} did not reach deferred cleanup after producer settlement`);
+      const run = findRun(requesterSessionKey, runId);
+      expect(run).toMatchObject({ cleanupHandled: false, delivery: { status: "pending" } });
+      expect(Boolean(run?.delivery?.payload)).toBe(true);
     },
     async settle() {
       try {
@@ -74,21 +58,11 @@ export function createLifecycleAgentCallWaits(
 }
 
 export function createLifecycleWaits(requesterSessionKey: string) {
-  const flushAsync = () => vi.dynamicImportSettled();
-
-  const findRun = (runId: string) =>
-    mod
-      .listSubagentRunsForRequester(requesterSessionKey)
-      .find((candidate) => candidate.runId === runId);
-
-  // Registry mutations become observable when their writer publishes them.
-  // Waiting on that signal has no attempt or wall-clock bound: a state that is
-  // never published fails at the Vitest test timeout instead of losing a race
-  // against native worker writes on a loaded runner.
+  // Await publication, not a polling deadline that races native worker writes.
   const waitForRun = async (runId: string, matches: (run: SubagentRunRecord) => boolean) => {
     const reached = createDeferred<SubagentRunRecord>();
     const observe = () => {
-      const run = findRun(runId);
+      const run = findRun(requesterSessionKey, runId);
       if (run && matches(run)) {
         reached.resolve(run);
       }
@@ -97,7 +71,6 @@ export function createLifecycleWaits(requesterSessionKey: string) {
     onTestFinished(stop);
     try {
       observe();
-      // Start due callbacks without spending retry time waiting for native worker reads.
       await vi.advanceTimersByTimeAsync(0);
       return await reached.promise;
     } finally {
@@ -119,20 +92,11 @@ export function createLifecycleWaits(requesterSessionKey: string) {
     );
   };
 
-  const waitForFrozenResult = (runId: string, matches: (resultText: string) => boolean) =>
-    waitForRun(
-      runId,
-      (run) => typeof run.completion?.resultText === "string" && matches(run.completion.resultText),
-    );
-
-  const waitForFrozenResultText = (runId: string, expectedText: string) =>
-    waitForFrozenResult(runId, (resultText) => resultText === expectedText);
-
   return {
     flushAsync,
     waitForRun,
     waitForDeliveredCleanup,
-    waitForFrozenResult,
-    waitForFrozenResultText,
+    waitForFrozenResultText: (runId: string, expectedText: string) =>
+      waitForRun(runId, (run) => run.completion?.resultText === expectedText),
   };
 }

@@ -1,7 +1,5 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
-import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
-import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
@@ -15,10 +13,11 @@ import {
   resolveAgentHarnessSessionContextError,
   resolveAgentHarnessSessionIdMismatchError,
 } from "../../sessions/agent-harness-session-key.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
+import { respondError } from "../server-methods/response.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
-import { loadSessionEntry, resolveDeletedAgentIdFromSessionKey } from "../session-utils.js";
+import type { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { prepareDeletedAgentSessionCheck } from "../session-utils.js";
 
 export const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
 
@@ -62,62 +61,73 @@ export function respondDeletedAgentSession(params: {
   entry?: SessionEntry | null;
   acpMetadataSessionKey?: string;
   respond: GatewayRequestHandlerOptions["respond"];
-}): boolean {
-  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(
-    params.cfg,
-    params.canonicalKey,
-    params.entry,
-    { acpMetadataSessionKey: params.acpMetadataSessionKey ?? params.canonicalKey },
-  );
-  if (deletedAgentId === null) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
+  assertCurrent?: () => void;
+}): boolean | Promise<boolean> {
+  const deletedAgentId = prepareDeletedAgentSessionCheck({
+    cfg: params.cfg,
+    sessionKey: params.canonicalKey,
+    entry: params.entry,
+    acpMetadataSessionKey: params.acpMetadataSessionKey,
+    assertCurrent: params.assertCurrent,
+  });
+  const respond = (agentId: string | null) => {
+    if (agentId === null) {
+      return false;
+    }
+    respondError(
+      params.respond,
       ErrorCodes.INVALID_REQUEST,
-      `Agent "${deletedAgentId}" no longer exists in configuration`,
-    ),
-  );
-  return true;
+      `Agent "${agentId}" no longer exists in configuration`,
+    );
+    return true;
+  };
+  return deletedAgentId instanceof Promise
+    ? deletedAgentId.then((agentId) => {
+        params.assertCurrent?.();
+        return respond(agentId);
+      })
+    : respond(deletedAgentId);
 }
 
-export function respondUnavailableAgentSessionForKey(params: {
-  sessionKey: string;
+export function respondUnavailableAgentSession(params: {
+  loaded: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>;
   requestedSessionId?: string;
   isRawModelRun: boolean;
-  agentId?: string;
   respond: GatewayRequestHandlerOptions["respond"];
-}): boolean {
-  const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(params.sessionKey, {
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    clone: false,
-    projection: "list",
+  assertCurrent?: () => void;
+}): boolean | Promise<boolean> {
+  const { cfg, entry, canonicalKey, legacyKey } = params.loaded;
+  const deleted = respondDeletedAgentSession({
+    cfg,
+    canonicalKey,
+    entry,
+    acpMetadataSessionKey: legacyKey,
+    respond: params.respond,
+    assertCurrent: params.assertCurrent,
   });
-  if (
-    respondDeletedAgentSession({
-      cfg,
-      canonicalKey,
-      entry,
-      acpMetadataSessionKey: legacyKey,
-      respond: params.respond,
-    })
-  ) {
+  const respondUnavailable = (isDeleted: boolean) => {
+    if (isDeleted) {
+      return true;
+    }
+    const sessionError =
+      resolveAgentHarnessSessionContextError(canonicalKey, entry) ||
+      resolveAgentHarnessSessionIdMismatchError(entry, params.requestedSessionId) ||
+      (params.isRawModelRun && entry?.modelSelectionLocked === true
+        ? AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE
+        : undefined) ||
+      resolveAgentSessionWorkStartError(canonicalKey, entry);
+    if (!sessionError) {
+      return false;
+    }
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, sessionError);
     return true;
-  }
-  const sessionError =
-    resolveAgentHarnessSessionContextError(canonicalKey, entry) ||
-    resolveAgentHarnessSessionIdMismatchError(entry, params.requestedSessionId) ||
-    (params.isRawModelRun && entry?.modelSelectionLocked === true
-      ? AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE
-      : undefined) ||
-    resolveAgentSessionWorkStartError(canonicalKey, entry);
-  if (!sessionError) {
-    return false;
-  }
-  params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, sessionError));
-  return true;
+  };
+  return deleted instanceof Promise
+    ? deleted.then((isDeleted) => {
+        params.assertCurrent?.();
+        return respondUnavailable(isDeleted);
+      })
+    : respondUnavailable(deleted);
 }
 
 export function cronContinuationHasReusableRuntime(params: {
@@ -145,20 +155,6 @@ export function withoutCronRunContinuation(entry: SessionEntry): SessionEntry {
   return baseEntry;
 }
 
-export function shouldSuppressAgentPromptPersistence(params: {
-  inputProvenance?: InputProvenance;
-  internalEvents?: AgentInternalEvent[];
-}): boolean {
-  return (
-    params.inputProvenance?.kind === "inter_session" &&
-    params.inputProvenance.sourceTool === "subagent_announce" &&
-    params.internalEvents?.some(
-      (event) =>
-        event.type === AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION && event.source === "subagent",
-    ) === true
-  );
-}
-
 export function yieldAfterAgentAcceptedAck(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 10);
@@ -167,7 +163,6 @@ export function yieldAfterAgentAcceptedAck(): Promise<void> {
 
 export function waitForCronContinuationReleaseRecovery(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
-    const timer = setSafeTimeout(resolve, delayMs);
-    timer.unref?.();
+    setSafeTimeout(resolve, delayMs).unref();
   });
 }

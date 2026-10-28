@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { RelayFetch } from "./relay-fetch.js";
 import { RelayRuntime } from "./relay-runtime.js";
 import { RelayTarget } from "./relay-target.js";
@@ -356,26 +357,21 @@ export class RelaySessionOwner {
           return;
         }
         const targetCleanup = physical.target.remove(session);
-        let timer: NodeJS.Timeout | undefined;
         try {
           await Promise.all([
             targetCleanup,
-            Promise.race([
+            raceWithTimeout(
               Promise.all([physical.fetch.close(session), physical.runtime.close(session)]),
-              new Promise<never>((_resolve, reject) => {
-                timer = setTimeout(
-                  () => reject(new Error("Session owner cleanup timed out")),
-                  SESSION_RETIREMENT_MS,
-                );
-                timer.unref?.();
-              }),
-            ]),
+              SESSION_RETIREMENT_MS,
+              () => {
+                throw new Error("Session owner cleanup timed out");
+              },
+              { ref: false },
+            ),
           ]);
         } catch (error) {
           await this.retireAttachment(physical.rootSessionId);
           throw error;
-        } finally {
-          clearTimeout(timer);
         }
         if (parent && parent !== reconciling && !physical.subscribers.size) {
           await parent.target.enqueue(() => this.reconcileChildren(parent));

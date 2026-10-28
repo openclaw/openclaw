@@ -3,12 +3,21 @@ import { describe, expect, it } from "vitest";
 import {
   ambiguousTargetError,
   isReservedTargetLiteralError,
+  missingMessageActionTargetError,
   missingTargetError,
   reservedTargetLiteralError,
   unknownTargetError,
 } from "./target-errors.js";
 
 describe("target error helpers", () => {
+  it("explains how to reply when this turn has no current conversation", () => {
+    expect(
+      missingMessageActionTargetError("send", { hasCurrentSourceConversation: false }).message,
+    ).toBe(
+      "Action send requires a target. This turn has no current conversation; pass an explicit target, or reply in normal text.",
+    );
+    expect(missingMessageActionTargetError("send").message).toBe("Action send requires a target.");
+  });
   it.each([
     {
       actual: missingTargetError("Slack").message,

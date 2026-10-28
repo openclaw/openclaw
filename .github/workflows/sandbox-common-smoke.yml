@@ -52,8 +52,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          timeout --kill-after=30s 5m docker build -t openclaw-sandbox-smoke-base:bookworm-slim - <<'EOF'
-          FROM debian:bookworm-slim
+          timeout --kill-after=30s 5m docker build -t openclaw-sandbox-smoke-base:trixie-slim - <<'EOF'
+          FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
           RUN useradd --create-home --shell /bin/bash sandbox
           USER sandbox
           WORKDIR /home/sandbox
@@ -64,13 +64,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          BASE_IMAGE="openclaw-sandbox-smoke-base:bookworm-slim" \
-            TARGET_IMAGE="openclaw-sandbox-common-smoke:bookworm-slim" \
+          BASE_IMAGE="openclaw-sandbox-smoke-base:trixie-slim" \
+            TARGET_IMAGE="openclaw-sandbox-common-smoke:trixie-slim" \
             PACKAGES="ca-certificates" \
             INSTALL_BUN=0 \
             INSTALL_BREW=0 \
             FINAL_USER=sandbox \
             scripts/sandbox-common-setup.sh
 
-          timeout --kill-after=30s 2m docker run --rm openclaw-sandbox-common-smoke:bookworm-slim sh -lc \
+          timeout --kill-after=30s 2m docker run --rm openclaw-sandbox-common-smoke:trixie-slim sh -lc \
             'set -e; test "$(id -un)" = sandbox; node --version; pnpm --version'

@@ -36,7 +36,7 @@ export function pluginModelCatalogCredentialValues(
       : credential.type === "token"
         ? [credential.token]
         : [credential.access, credential.refresh];
-  return values.filter((value): value is string => typeof value === "string" && value.length > 0);
+  return values.filter((value): value is string => value !== undefined && value.length > 0);
 }
 
 /** Retain credentials acquired during discovery, even if logout removes them before it settles. */

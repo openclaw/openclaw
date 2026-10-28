@@ -49,8 +49,7 @@ enum AudioInputDeviceSelectionResolver {
 final class AudioInputDeviceObserver: @unchecked Sendable {
     private let logger = Logger(subsystem: "ai.openclaw", category: "audio.devices")
     private var isActive = false
-    private var devicesObservation: AudioPropertyObservation?
-    private var defaultInputObservation: AudioPropertyObservation?
+    private var observations: [AudioPropertyObservation] = []
 
     static func defaultInputDeviceUID() -> String? {
         guard let deviceID = self.defaultInputDeviceID() else { return nil }
@@ -180,24 +179,22 @@ final class AudioInputDeviceObserver: @unchecked Sendable {
         self.isActive = true
 
         let systemObject = AudioObjectID(kAudioObjectSystemObject)
-        let devicesObservation = AudioPropertyObservation(
-            objectID: systemObject,
-            selector: kAudioHardwarePropertyDevices,
-            scope: kAudioObjectPropertyScopeGlobal)
-        { _, _ in
-            self.logDefaultInputChange(reason: "devices")
-            onChange()
+        let properties: [(AudioObjectPropertySelector, StaticString)] = [
+            (kAudioHardwarePropertyDevices, "devices"),
+            (kAudioHardwarePropertyDefaultInputDevice, "default"),
+        ]
+        let observations = properties.map { selector, reason in
+            AudioPropertyObservation(
+                objectID: systemObject,
+                selector: selector,
+                scope: kAudioObjectPropertyScopeGlobal)
+            { _, _ in
+                self.logDefaultInputChange(reason: reason)
+                onChange()
+            }
         }
-        let defaultInputObservation = AudioPropertyObservation(
-            objectID: systemObject,
-            selector: kAudioHardwarePropertyDefaultInputDevice,
-            scope: kAudioObjectPropertyScopeGlobal)
-        { _, _ in
-            self.logDefaultInputChange(reason: "default")
-            onChange()
-        }
-        let devicesStatus = devicesObservation.status
-        let defaultStatus = defaultInputObservation.status
+        let devicesStatus = observations[0].status
+        let defaultStatus = observations[1].status
 
         if devicesStatus != noErr || defaultStatus != noErr {
             self.logger.error("audio device observer install failed devices=\(devicesStatus) default=\(defaultStatus)")
@@ -205,17 +202,14 @@ final class AudioInputDeviceObserver: @unchecked Sendable {
 
         self.logger.info("audio device observer started (\(Self.defaultInputDeviceSummary(), privacy: .public))")
 
-        self.devicesObservation = devicesObservation
-        self.defaultInputObservation = defaultInputObservation
+        self.observations = observations
     }
 
     func stop() {
         guard self.isActive else { return }
         self.isActive = false
-        self.devicesObservation?.stop()
-        self.defaultInputObservation?.stop()
-        self.devicesObservation = nil
-        self.defaultInputObservation = nil
+        self.observations.forEach { $0.stop() }
+        self.observations.removeAll()
     }
 
     private static func deviceUID(for deviceID: AudioObjectID) -> String? {

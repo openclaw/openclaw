@@ -2,7 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
@@ -11,7 +11,6 @@ import { supportsSetupTextInference } from "./setup-inference-auth-options.js";
 import {
   throwIfSetupInferenceCancelled,
   type ActivateSetupInferenceParams,
-  type ActivateSetupInferenceDeps,
   type StageFailure,
 } from "./setup-inference-core.js";
 
@@ -27,7 +26,6 @@ export async function withSetupProviderAuthMethod<T>(
     cfg: OpenClawConfig;
     workspace: string;
     choice: ProviderAuthChoiceMetadata;
-    deps: Pick<ActivateSetupInferenceDeps, "resolvePluginProviders">;
     activation?: ActivateSetupInferenceParams;
     beforePersistentEffect?: () => Promise<void>;
     signal?: AbortSignal;
@@ -36,7 +34,7 @@ export async function withSetupProviderAuthMethod<T>(
 ): Promise<T | StageFailure> {
   await using cache = createPluginCache();
   const activation = params.activation;
-  const loaded = await withPluginLifecycleLease(
+  const loaded = await withPluginLifecycleLeaseAsync(
     { signal: params.signal ?? activation?.signal },
     async () =>
       withPluginCache(cache, async (): Promise<SetupProviderAuthMethod | StageFailure> => {
@@ -58,7 +56,7 @@ export async function withSetupProviderAuthMethod<T>(
             error: `${params.choice.choiceLabel} is disabled (${enabled.reason ?? "blocked"}).`,
           };
         }
-        const providers = (params.deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
+        const providers = resolvePluginProvidersCore({
           config: enabled.config,
           workspaceDir: params.workspace,
           mode: "setup",

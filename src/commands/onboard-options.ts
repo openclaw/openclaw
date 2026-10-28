@@ -5,6 +5,7 @@
  * non-interactive handlers reject options, and every one of them must honor --json.
  */
 import { formatInvalidPortOption } from "../cli/error-format.js";
+import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { isGatewayDaemonRuntime } from "./daemon-runtime.js";
 import { isNodeManagerChoice, isOnboardFlow, type OnboardOptions } from "./onboard-types.js";
@@ -18,7 +19,7 @@ export function rejectOnboardingOption(
   // --json promises exactly one machine-readable object per run, so a rejection has to emit one
   // too. Without this the caller sees an empty stdout and cannot tell a bad flag from a crash.
   if (opts.json) {
-    writeRuntimeJson(runtime, { ok: false, phase: "options", message });
+    writeRuntimeJson(runtime, { ...formatCliJsonFailure(message), phase: "options", message });
   }
   runtime.error(message);
   runtime.exit(1);
@@ -51,7 +52,7 @@ export function validateOnboardingChoiceOptions(
     return reject('Invalid --flow. Use "quickstart", "advanced", "manual", or "import".');
   }
   if (opts.daemonRuntime !== undefined && !isGatewayDaemonRuntime(opts.daemonRuntime)) {
-    return reject('Invalid --daemon-runtime. Use "node" or "bun".');
+    return reject('Invalid --daemon-runtime. Use "node", "bun", or "standalone".');
   }
   if (opts.nodeManager !== undefined && !isNodeManagerChoice(opts.nodeManager)) {
     return reject('Invalid --node-manager. Use "npm", "pnpm", or "bun".');

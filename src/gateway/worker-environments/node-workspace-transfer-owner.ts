@@ -28,36 +28,3 @@ export function isNodeWorkspaceTransferOwnerCurrent(
     credential.sessionId === binding.sessionId,
   );
 }
-
-export function createNodeWorkspaceSyncAuthorization(
-  owner: {
-    environmentId: string;
-    ownerEpoch: number;
-    sessionId: string;
-    isAuthorized: () => boolean;
-    signal?: AbortSignal;
-  },
-  authorize: (() => void) | undefined,
-  getOwner: (environmentId: string) => NodeWorkspaceTransferOwner | undefined,
-) {
-  return {
-    assertCurrent: () => {
-      owner.signal?.throwIfAborted();
-      authorize?.();
-      if (
-        !owner.isAuthorized() ||
-        !isNodeWorkspaceTransferOwnerCurrent(owner, getOwner(owner.environmentId))
-      ) {
-        throw new Error("Node workspace transfer owner is no longer current");
-      }
-    },
-    isOperationAuthorized: () => {
-      try {
-        authorize?.();
-        return true;
-      } catch {
-        return false;
-      }
-    },
-  };
-}

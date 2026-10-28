@@ -4,7 +4,6 @@ import {
   listAgentIds,
   resolveAgentConfig,
 } from "../agents/agent-scope-config.js";
-// Summarizes extra security audit findings for user-facing output.
 import {
   resolveConfiguredToolPolicies,
   resolveProviderToolPolicy,
@@ -27,19 +26,23 @@ import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credenti
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { listPotentialMultiUserSignals } from "./audit-extra.sync.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
+import { listConfiguredOpenInboundPolicyPaths } from "./audit-open-inbound.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
 
 const SMALL_MODEL_PARAM_B_MAX = 300;
 
-function summarizeGroupPolicy(cfg: OpenClawConfig): {
+function summarizeGroupPolicy(
+  cfg: OpenClawConfig,
+  openInboundPolicies: string[],
+): {
   open: number;
   allowlist: number;
+  openDm: number;
 } {
   const channels = cfg.channels as Record<string, unknown> | undefined;
   if (!channels || typeof channels !== "object") {
-    return { open: 0, allowlist: 0 };
+    return { open: 0, allowlist: 0, openDm: 0 };
   }
-  let open = 0;
   let allowlist = 0;
   for (const value of Object.values(channels)) {
     if (!value || typeof value !== "object") {
@@ -47,13 +50,15 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
     }
     const section = value as Record<string, unknown>;
     const policy = section.groupPolicy;
-    if (policy === "open") {
-      open += 1;
-    } else if (policy === "allowlist") {
+    if (policy === "allowlist") {
       allowlist += 1;
     }
   }
-  return { open, allowlist };
+  return {
+    open: openInboundPolicies.filter((path) => path.endsWith(".groupPolicy")).length,
+    allowlist,
+    openDm: openInboundPolicies.filter((path) => !path.endsWith(".groupPolicy")).length,
+  };
 }
 
 function extractAgentIdFromSource(source: string): string | null {
@@ -96,7 +101,7 @@ function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolea
   if (enabled === true) {
     return true;
   }
-  return hasConfiguredWebSearchCredential({ config: cfg, env, origin: "bundled" });
+  return hasConfiguredWebSearchCredential({ config: cfg, env });
 }
 
 function isBrowserEnabled(cfg: OpenClawConfig): boolean {
@@ -113,16 +118,20 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
   });
 }
 
-/** Produce a concise inventory of major security-relevant surfaces. */
-export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  const group = summarizeGroupPolicy(cfg);
+export async function collectAttackSurfaceSummaryFindings(
+  cfg: OpenClawConfig,
+  openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg),
+): Promise<SecurityAuditFinding[]> {
+  const group = summarizeGroupPolicy(cfg, openInboundPolicies);
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
-  const internalHooksEnabled = resolveInternalHookSelection(cfg).configured;
+  const internalHooksEnabled = (await resolveInternalHookSelection(cfg)).configured;
   const browserEnabled = isBrowserEnabled(cfg);
 
   const detail =
     `groups: open=${group.open}, allowlist=${group.allowlist}` +
+    `\n` +
+    `direct messages: open=${group.openDm}` +
     `\n` +
     `tools.elevated: ${elevated ? "enabled" : "disabled"}` +
     `\n` +
@@ -132,13 +141,13 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
     `\n` +
     `browser control: ${browserEnabled ? "enabled" : "disabled"}` +
     `\n` +
-    "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting";
+    "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway. For mutually untrusted users or organizations, run separate Gateways with separate credentials, ideally under separate OS users or hosts: https://docs.openclaw.ai/gateway/security/trust-model";
 
   const findings: SecurityAuditFinding[] = [
     {
       checkId: "summary.attack_surface",
       severity: "info",
-      title: "Attack surface summary",
+      title: "Exposure summary",
       detail,
     },
   ];
@@ -163,6 +172,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
 /** Surface default cross-agent session access, escalating when trust boundaries may differ. */
 export function collectCrossAgentSessionAccessFindings(
   cfg: OpenClawConfig,
+  openInboundPolicies = listConfiguredOpenInboundPolicyPaths(cfg),
 ): SecurityAuditFinding[] {
   const agentIds = listAgentIds(cfg);
   if (agentIds.length < 2 || resolveSessionToolsVisibility(cfg) !== "all") {
@@ -220,7 +230,7 @@ export function collectCrossAgentSessionAccessFindings(
   if (reachers.length === 0) {
     return [];
   }
-  signals.push(...listPotentialMultiUserSignals(cfg));
+  signals.push(...listPotentialMultiUserSignals(cfg, openInboundPolicies));
   const trustDetail =
     signals.length > 0
       ? "\nTrust-boundary signals:\n" +

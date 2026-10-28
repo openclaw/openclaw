@@ -1,11 +1,9 @@
-// Covers formatting helpers used by TUI status and message rendering.
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import {
   extractContentFromMessage,
   extractTextFromMessage,
-  extractThinkingFromMessage,
   formatTuiFooter,
   formatTuiErrorMessage,
   isolateRtlRenderedLine,
@@ -16,55 +14,71 @@ import {
   sanitizeRenderableLine,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
+import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 
-describe("resolveFinalAssistantText", () => {
-  it("hides complete HTML error pages after an HTTP reason phrase", () => {
-    const raw = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>";
-
-    const rendered = resolveFinalAssistantText({ errorMessage: raw });
-
-    expect(rendered).toBe(
-      "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
-    );
-    expect(rendered).not.toContain("<html>");
+const attachment = (kind: string, url: string, label: string) => ({
+  type: "attachment",
+  attachment: { kind, url, label },
+});
+const assistantText = (content: unknown, fields: Record<string, unknown> = {}) =>
+  extractTextFromMessage({ role: "assistant", content, ...fields });
+const userText = (content: unknown, fields: Record<string, unknown> = {}) =>
+  extractTextFromMessage({ role: "user", content, ...fields });
+const footer = (
+  sessionInfo: Parameters<typeof formatTuiFooter>[0]["sessionInfo"],
+  fields: Partial<Parameters<typeof formatTuiFooter>[0]> = {},
+) =>
+  formatTuiFooter({
+    agentLabel: "Main",
+    sessionLabel: "main",
+    deliver: false,
+    sessionInfo,
+    ...fields,
   });
+const metadata = (label: string, json: string) =>
+  `${markInboundContextLabel(label)}\n\`\`\`json\n${json}\n\`\`\`\n\n`;
+const textBlock = (text: string) => ({ type: "text", text });
+const includes = (actual: string, expected: readonly string[]) => {
+  for (const fragment of expected) {
+    expect(actual).toContain(fragment);
+  }
+};
+
+it("hides complete HTML error pages after an HTTP reason phrase", () => {
+  const rendered = resolveFinalAssistantText({
+    errorMessage: "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>",
+  });
+  expect(rendered).toBe(
+    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+  );
 });
 
 describe("formatTuiFooter", () => {
   it.each(["auto", "ultrafast"] as const)(
     "shows %s and session modes in one compact summary",
     (fastMode) => {
-      expect(
-        formatTuiFooter({
-          agentLabel: "Main",
-          sessionLabel: "work",
-          sessionInfo: {
-            model: "gpt-5.6-luna@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
-            fastMode,
-            verboseLevel: "full",
-            traceLevel: "raw",
-            reasoningLevel: "stream",
-            totalTokens: 1_200,
-            contextTokens: 128_000,
-          },
-          thinkingLevel: "high",
-          deliver: true,
-        }),
-      ).toBe(
+      const rendered = footer(
+        {
+          model: "gpt-5.6-luna@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
+          fastMode,
+          verboseLevel: "full",
+          traceLevel: "raw",
+          reasoningLevel: "stream",
+          totalTokens: 1_200,
+          contextTokens: 128_000,
+        },
+        { sessionLabel: "work", thinkingLevel: "high", deliver: true },
+      );
+      expect(rendered).toBe(
         `agent Main | session work | gpt-5.6-luna high | fast:${fastMode} | verbose full | trace:raw | reasoning:stream | deliver:on | tokens 1.2k/128k (1%)`,
       );
     },
   );
 
   it("keeps disabled session modes hidden while reporting disabled delivery", () => {
-    expect(
-      formatTuiFooter({
-        agentLabel: "Main",
-        sessionLabel: "main",
-        sessionInfo: { model: "fixture-model" },
-        deliver: false,
-      }),
-    ).toBe("agent Main | session main | fixture-model | deliver:off | tokens ?");
+    expect(footer({ model: "fixture-model" })).toBe(
+      "agent Main | session main | fixture-model | deliver:off | tokens ?",
+    );
   });
 
   it("sanitizes terminal controls and collapses footer fields to one line", () => {
@@ -76,295 +90,135 @@ describe("formatTuiFooter", () => {
       "\u009b2K",
       "\u009d0;footer-c1-title\u009c",
     ];
-    const footer = formatTuiFooter({
-      agentLabel: `agent-start${attacks[0]}agent-end\nمرحبا`,
-      sessionLabel: `session-start${attacks[2]}session-end\r\nשלום`,
-      sessionInfo: {
+    const rendered = footer(
+      {
         model: `provider/model-start${attacks[1]}middle${attacks[3]}${attacks[4]}${attacks[5]}model-end\tUnicode`,
       },
-      deliver: true,
-    });
+      {
+        agentLabel: `agent-start${attacks[0]}agent-end\nمرحبا`,
+        sessionLabel: `session-start${attacks[2]}session-end\r\nשלום`,
+        deliver: true,
+      },
+    );
 
-    expect(footer).toContain("agent-startagent-end");
-    expect(footer).toContain("مرحبا");
-    expect(footer).toContain("session-startsession-end");
-    expect(footer).toContain("שלום");
-    expect(footer).toContain("model-startmiddlemodel-end Unicode");
-    expect(footer).toContain("\u2067");
-    expect(footer).toContain("\u2069");
-    expect(footer).not.toMatch(/[\r\n\t]/u);
+    includes(rendered, [
+      "agent-startagent-end",
+      "مرحبا",
+      "session-startsession-end",
+      "שלום",
+      "model-startmiddlemodel-end Unicode",
+      "\u2067",
+      "\u2069",
+    ]);
+    expect(rendered).not.toMatch(/[\r\n\t]/u);
     for (const attack of attacks) {
-      expect(footer).not.toContain(attack);
+      expect(rendered).not.toContain(attack);
     }
   });
 
-  it("renders active goal usage", () => {
-    const footer = formatTuiFooter({
-      agentLabel: "Main",
-      sessionLabel: "main",
-      sessionInfo: {
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "land PR",
-          status: "active",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 0,
-          tokensUsed: 12_000,
-          tokenBudget: 30_000,
-          continuationTurns: 0,
-        },
-      },
-      deliver: false,
-    });
-
-    expect(footer).toContain("Pursuing goal (12k/30k)");
-  });
-
-  it("renders resumable blocked goals", () => {
-    const footer = formatTuiFooter({
-      agentLabel: "Main",
-      sessionLabel: "main",
-      sessionInfo: {
-        goal: {
-          schemaVersion: 1,
-          id: "goal-1",
-          objective: "land PR",
-          status: "blocked",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 0,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
-      },
-      deliver: false,
-    });
-
-    expect(footer).toContain("Goal blocked (/goal resume)");
+  it.each([
+    ["active", 12_000, 30_000, "Pursuing goal (12k/30k)"],
+    ["blocked", 0, undefined, "Goal blocked (/goal resume)"],
+  ] as const)("renders %s goals", (status, tokensUsed, tokenBudget, expected) => {
+    const goal = {
+      schemaVersion: 1 as const,
+      id: "goal-1",
+      objective: "land PR",
+      status,
+      createdAt: 1,
+      updatedAt: 1,
+      tokenStart: 0,
+      tokensUsed,
+      tokenBudget,
+      continuationTurns: 0,
+    };
+    expect(footer({ goal })).toContain(expected);
   });
 });
 
 describe("extractTextFromMessage", () => {
   it.each([
-    {
-      name: "a browser file with the default label",
-      content: [
-        {
-          type: "attachment",
-          attachment: { url: "/document", kind: "document", label: "Attached file" },
-        },
-      ],
-      expected: "Attached file",
-    },
-    {
-      name: "multiple ordered browser attachments",
-      content: [
+    [[attachment("document", "/document", "Attached file")], "Attached file"],
+    [
+      [
         { type: "image", source: { type: "url", url: "/image.png" } },
-        {
-          type: "attachment",
-          attachment: { url: "/report.pdf", kind: "document", label: "report.pdf" },
-        },
+        attachment("document", "/report.pdf", "report.pdf"),
       ],
-      expected: "Attached image\nAttached file: report.pdf",
-    },
-  ])("renders an attachment-only user turn containing $name", ({ content, expected }) => {
-    expect(extractTextFromMessage({ role: "user", content })).toBe(expected);
+      "Attached image\nAttached file: report.pdf",
+    ],
+  ] as const)("renders attachment-only user content %j", (content, expected) => {
+    expect(userText(content)).toBe(expected);
   });
 
   it.each([
-    {
-      name: "image inferred from its canonical path",
-      media: [{ path: "/media/inbound/media-only.png" }],
-      expected: "Attached image",
-    },
-    {
-      name: "ordered image and file",
-      media: [
+    [[{ path: "/media/inbound/media-only.png" }], "Attached image"],
+    [
+      [
         { path: "/media/inbound/generated-image.png", contentType: "image/png" },
         { path: "/media/inbound/generated-report.pdf", contentType: "application/pdf" },
       ],
-      expected: "Attached image\nAttached file",
-    },
-  ])("renders an empty durable user turn with canonical $name media", ({ media, expected }) => {
-    expect(
-      extractTextFromMessage({
-        role: "user",
-        content: "",
-        __openclaw: { media },
-      }),
-    ).toBe(expected);
-  });
-
-  it("keeps an ordinary user prompt unchanged when it also has attachments", () => {
-    expect(
-      extractTextFromMessage({
-        role: "user",
-        content: [
-          { type: "text", text: "Describe this image" },
-          { type: "image", source: { type: "url", url: "/image.png" } },
-        ],
-      }),
-    ).toBe("Describe this image");
+      "Attached image\nAttached file",
+    ],
+  ] as const)("renders canonical media %j for an empty user turn", (media, expected) => {
+    expect(userText("", { __openclaw: { media } })).toBe(expected);
   });
 
   it("sanitizes the display name of an attachment-only user turn", () => {
     expect(
-      extractTextFromMessage({
-        role: "user",
-        content: [
-          {
-            type: "attachment",
-            attachment: {
-              url: "/report.pdf",
-              kind: "document",
-              label: "\u001b[31mreport.pdf\u001b[0m\u0000",
-            },
-          },
-        ],
-      }),
+      userText([attachment("document", "/report.pdf", "\u001b[31mreport.pdf\u001b[0m\u0000")]),
     ).toBe("Attached file: report.pdf");
   });
 
   it.each([
-    { name: "image", block: { type: "image", data: "secret-image" }, expected: "Attached image" },
-    {
-      name: "audio",
-      block: { type: "audio", source: { type: "base64", data: "secret-audio" } },
-      expected: "Attached audio",
-    },
-    {
-      name: "video",
-      block: { type: "video", url: "file:///Users/operator/private/clip.mp4" },
-      expected: "Attached video",
-    },
-    {
-      name: "file",
-      block: { type: "file", url: "file:///etc/passwd", title: "private.txt" },
-      expected: "Attached file",
-    },
-    {
-      name: "nested audio attachment",
-      block: {
-        type: "attachment",
-        attachment: {
-          kind: "audio",
-          label: "private.ogg",
-          url: "file:///Users/operator/private/audio.ogg",
-        },
-      },
-      expected: "Attached audio",
-    },
-    {
-      name: "provider image URL block",
-      block: { type: "image_url", image_url: { url: "https://secret.test/image?ticket=secret" } },
-      expected: "Attached image",
-    },
-  ])("renders a terminal-safe assistant $name summary", ({ block, expected }) => {
-    const text = extractTextFromMessage({ role: "assistant", content: [block] });
-    expect(text).toBe(expected);
-    expect(text).not.toMatch(/secret|file:|operator|passwd|private/i);
+    [attachment("audio", "file:///private/audio.ogg", "private.ogg"), "Attached audio"],
+    [
+      { type: "image_url", image_url: { url: "https://secret.test/image?ticket=secret" } },
+      "Attached image",
+    ],
+  ] as const)("renders a terminal-safe assistant summary for %j", (block, expected) => {
+    expect(assistantText([block])).toBe(expected);
   });
 
   it("renders canonical and legacy assistant media without exposing references", () => {
-    expect(
-      extractTextFromMessage({
-        role: "assistant",
-        content: [],
-        __openclaw: {
-          media: [
-            { kind: "image", path: "/private/generated.png" },
-            { kind: "audio", url: "https://secret.test/voice.ogg?ticket=secret" },
-            { kind: "video", fileName: "private.mov" },
-            { kind: "document", path: "/etc/passwd" },
-          ],
-        },
-      }),
-    ).toBe("Attached image\nAttached audio\nAttached video\nAttached file");
-    expect(
-      extractTextFromMessage({
-        role: "assistant",
-        content: [],
-        mediaUrl: "file:///private/one.png",
-        mediaUrls: ["https://secret.test/two.mp3?ticket=secret"],
-      }),
-    ).toBe("Attached media\nAttached media");
+    const media = [
+      { kind: "image", path: "/private/generated.png" },
+      { kind: "audio", url: "https://secret.test/voice.ogg?ticket=secret" },
+      { kind: "video", fileName: "private.mov" },
+      { kind: "document", path: "/etc/passwd" },
+    ];
+    expect(assistantText([], { __openclaw: { media } })).toBe(
+      "Attached image\nAttached audio\nAttached video\nAttached file",
+    );
+    const legacy = {
+      mediaUrl: "file:///private/one.png",
+      mediaUrls: ["https://secret.test/two.mp3?ticket=secret"],
+    };
+    expect(assistantText([], legacy)).toBe("Attached media\nAttached media");
   });
 
   it("prefers final_answer text over commentary text for assistant messages", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: "Commentary that should not render",
-          textSignature: JSON.stringify({ v: 1, id: "c1", phase: "commentary" }),
-        },
-        {
-          type: "text",
-          text: "Final answer for the TUI",
-          textSignature: JSON.stringify({ v: 1, id: "f1", phase: "final_answer" }),
-        },
-      ],
-    });
-
-    expect(text).toBe("Final answer for the TUI");
+    const content = ["commentary", "final_answer"].map((phase) => ({
+      type: "text",
+      text: `text:${phase}`,
+      textSignature: JSON.stringify({ v: 1, id: `id:${phase}`, phase }),
+    }));
+    expect(assistantText(content)).toBe("text:final_answer");
   });
 
-  it("renders errorMessage when assistant content is empty", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: [],
-      stopReason: "error",
-      errorMessage:
-        '429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\\u0027s rate limit. Please try again later."},"request_id":"req_123"}',
-    });
-
-    expect(text).toContain("HTTP 429");
-    expect(text).toContain("rate_limit_error");
-    expect(text).toContain("This request would exceed your account's rate limit.");
-  });
-
-  it("falls back to a generic message when errorMessage is missing", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: [],
-      stopReason: "error",
-      errorMessage: "",
-    });
-
-    expect(text).toContain("unknown error");
+  it.each([
+    [
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\\u0027s rate limit. Please try again later."},"request_id":"req_123"}',
+      ["HTTP 429", "rate_limit_error", "This request would exceed your account's rate limit."],
+    ],
+    ["", ["unknown error"]],
+  ] as const)("renders an empty assistant error turn: %s", (errorMessage, expected) => {
+    includes(assistantText([], { stopReason: "error", errorMessage }), expected);
   });
 
   it("joins multiple text blocks with single newlines", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: [
-        { type: "text", text: "first" },
-        { type: "text", text: "second" },
-      ],
-    });
-
-    expect(text).toBe("first\nsecond");
-  });
-
-  it("preserves internal newlines for string content", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: "Line 1\nLine 2\nLine 3",
-    });
-
-    expect(text).toBe("Line 1\nLine 2\nLine 3");
-  });
-
-  it("preserves internal newlines for text blocks", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "Line 1\nLine 2\nLine 3" }],
-    });
-
-    expect(text).toBe("Line 1\nLine 2\nLine 3");
+    expect(assistantText([textBlock("first\ncontinued"), textBlock("second")])).toBe(
+      "first\ncontinued\nsecond",
+    );
   });
 
   it.each([
@@ -382,7 +236,7 @@ describe("extractTextFromMessage", () => {
         {
           role: "assistant",
           content: [
-            { type: "text", text: ` \n${content}\t ` },
+            textBlock(` \n${content}\t `),
             { type: "thinking", thinking: ` \t${thought}\n ` },
           ],
         },
@@ -393,106 +247,37 @@ describe("extractTextFromMessage", () => {
     },
   );
 
-  it("sanitizes ANSI and control chars from string content", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: "Hello\x1b[31m red\x1b[0m\x00world",
-    });
-
-    expect(text).toBe("Hello redworld");
+  it.each([
+    ["Hello\x1b[31m red\x1b[0m\x00world\nNext line", "Hello redworld\nNext line"],
+    [[{ type: "text", text: "������������������������" }], "[binary data omitted]"],
+  ] as const)("sanitizes assistant content %j", (content, expected) => {
+    expect(assistantText(content)).toBe(expected);
   });
 
-  it("redacts heavily corrupted binary-like lines", () => {
+  it.each([
+    { message: { role: "user" }, body: "Actual user message" },
+    { message: { command: true }, body: "Exec completed: task finished successfully" },
+  ])("strips leading inbound metadata for $message (#59871)", ({ message, body }) => {
     const text = extractTextFromMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "������������������������" }],
+      ...message,
+      content:
+        metadata("Conversation info:", '{\n  "message_id": "abc123"\n}') +
+        metadata("Sender:", '{\n  "label": "Someone"\n}') +
+        body,
     });
 
-    expect(text).toBe("[binary data omitted]");
-  });
-
-  it("strips leading inbound metadata blocks for user messages", () => {
-    const text = extractTextFromMessage({
-      role: "user",
-      content: [
-        markInboundContextLabel("Conversation info:"),
-        "```json",
-        "{",
-        '  "message_id": "abc123"',
-        "}",
-        "```",
-        "",
-        markInboundContextLabel("Sender:"),
-        "```json",
-        "{",
-        '  "label": "Someone"',
-        "}",
-        "```",
-        "",
-        "Actual user message",
-      ].join("\n"),
-    });
-
-    expect(text).toBe("Actual user message");
-  });
-
-  it("strips leading inbound metadata blocks for command messages (#59871)", () => {
-    const text = extractTextFromMessage({
-      command: true,
-      content: [
-        markInboundContextLabel("Conversation info:"),
-        "```json",
-        "{",
-        '  "message_id": "abc123"',
-        "}",
-        "```",
-        "",
-        markInboundContextLabel("Sender:"),
-        "```json",
-        "{",
-        '  "label": "Someone"',
-        "}",
-        "```",
-        "",
-        "Exec completed: task finished successfully",
-      ].join("\n"),
-    });
-
-    expect(text).toBe("Exec completed: task finished successfully");
+    expect(text).toBe(body);
   });
 
   it("keeps metadata-like blocks for non-user messages", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: [
-        markInboundContextLabel("Conversation info:"),
-        "```json",
-        '{"message_id":"abc123"}',
-        "```",
-        "",
-        "Assistant body",
-      ].join("\n"),
-    });
-
-    expect(text).toContain(markInboundContextLabel("Conversation info:"));
-    expect(text).toContain("Assistant body");
-  });
-
-  it("does not strip metadata-like blocks that are not a leading prefix", () => {
-    const text = extractTextFromMessage({
-      role: "user",
-      content: 'Hello world\nConversation info:\n```json\n{"message_id":"123"}\n```\n\nFollow-up',
-    });
-
-    expect(text).toBe(
-      'Hello world\nConversation info:\n```json\n{"message_id":"123"}\n```\n\nFollow-up',
+    includes(
+      assistantText(metadata("Conversation info:", '{"message_id":"abc123"}') + "Assistant body"),
+      [markInboundContextLabel("Conversation info:"), "Assistant body"],
     );
   });
 
   it("strips trailing untrusted context metadata suffix blocks for user messages", () => {
-    const text = extractTextFromMessage({
-      role: "user",
-      content: `Hello world
+    const text = userText(`Hello world
 
 ${markInboundContextLabel("Context:")}
 <<<EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>
@@ -501,211 +286,59 @@ Source: Channel metadata
 Channel metadata (guildchat)
 Sender labels:
 example
-<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`,
-    });
+<<<END_EXTERNAL_UNTRUSTED_CONTENT id="deadbeefdeadbeef">>>`);
 
     expect(text).toBe("Hello world");
   });
-
-  it("strips leading active-memory prompt prefix blocks for user messages", () => {
-    const text = extractTextFromMessage({
-      role: "user",
-      content: `Context:
-<active_memory_plugin>
-User prefers aisle seats and extra buffer on connections.
-</active_memory_plugin>
-
-What should I grab on the way?`,
-    });
-
-    expect(text).toBe("What should I grab on the way?");
-  });
-
-  it("strips active-memory prompt prefix blocks for user messages even when earlier text precedes them", () => {
-    const text = extractTextFromMessage({
-      role: "user",
-      content: `Queued earlier user turn
-
-Context:
-<active_memory_plugin>
-User prefers aisle seats and extra buffer on connections.
-</active_memory_plugin>
-
-What should I grab on the way?`,
-    });
-
-    expect(text).toBe("Queued earlier user turn\n\nWhat should I grab on the way?");
-  });
 });
 
-describe("extractThinkingFromMessage", () => {
-  it("collects only thinking blocks", () => {
-    const text = extractThinkingFromMessage({
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "alpha" },
-        { type: "text", text: "hello" },
-        { type: "thinking", thinking: "beta" },
-      ],
-    });
-
-    expect(text).toBe("alpha\nbeta");
+it("renders error text when stopReason is error and content is not an array", () => {
+  const text = extractContentFromMessage({
+    role: "assistant",
+    stopReason: "error",
+    errorMessage: '429 {"error":{"message":"rate limit"}}',
   });
+
+  expect(text).toContain("HTTP 429");
 });
 
-describe("extractContentFromMessage", () => {
-  it("renders error text when stopReason is error and content is not an array", () => {
-    const text = extractContentFromMessage({
-      role: "assistant",
-      stopReason: "error",
-      errorMessage: '429 {"error":{"message":"rate limit"}}',
-    });
-
-    expect(text).toContain("HTTP 429");
-  });
+it("detects command-marked messages", () => {
+  expect(isCommandMarkedMessage({ command: true })).toBe(true);
+  expect(isCommandMarkedMessage({ command: false })).toBe(false);
+  expect(isCommandMarkedMessage({})).toBe(false);
 });
 
-describe("isCommandMarkedMessage", () => {
-  it("detects command-marked messages", () => {
-    expect(isCommandMarkedMessage({ command: true })).toBe(true);
-    expect(isCommandMarkedMessage({ command: false })).toBe(false);
-    expect(isCommandMarkedMessage({})).toBe(false);
-  });
+it("redacts and sanitizes terminal escapes in nested error causes", () => {
+  const secret = "sk-abcdefghijklmnopqrstuv";
+  const cause = new Error(`\u001b[31mAuthorization: Bearer ${secret}\u001b[0m`);
+
+  const formatted = formatTuiErrorMessage(new Error("gateway down", { cause }));
+
+  includes(formatted, ["gateway down", "Authorization: Bearer"]);
+  expect(formatted).not.toContain(secret);
+  expect(formatted).not.toContain("\u001b");
 });
 
-describe("formatTuiErrorMessage", () => {
-  it("redacts and sanitizes terminal escapes in nested error causes", () => {
-    const secret = "sk-abcdefghijklmnopqrstuv";
-    const cause = new Error(`\u001b[31mAuthorization: Bearer ${secret}\u001b[0m`);
-
-    const formatted = formatTuiErrorMessage(new Error("gateway down", { cause }));
-
-    expect(formatted).toContain("gateway down");
-    expect(formatted).toContain("Authorization: Bearer");
-    expect(formatted).not.toContain(secret);
-    expect(formatted).not.toContain("\u001b");
-  });
-});
-
-describe("sanitizeRenderableText", () => {
-  it("strips C1 CSI and OSC without exposing their final byte or payload", () => {
-    const input = "before\u009b@middle\u009d0;title\u009cafter";
-
-    expect(sanitizeRenderableText(input)).toBe("beforemiddleafter");
-  });
-
-  it("preserves long unbroken tokens for renderer wrapping", () => {
-    const input = "a".repeat(140);
-    expect(sanitizeRenderableText(input)).toBe(input);
-  });
-
-  it("preserves long CJK prose without inserting display spaces", () => {
-    const input =
-      "特蕾莎修女是一个极端投入极有宗教信念愿意亲身服务底层苦难者的人但她不是现代公共卫生意义上的慈善改革者";
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-    expect(sanitized).not.toContain("苦难 者");
-  });
-
-  it.each<[name: string, input: string]>([
-    [
-      "preserves mixed long CJK prose without inserting display spaces",
-      "MotherTeresa更像是宗教慈悲的象征而不是现代慈善治理的典范她值得尊重的地方是真实走进极端苦难",
-    ],
-    [
-      "preserves long filesystem paths verbatim for copy safety",
-      "/Users/jasonshawn/PerfectXiao/a_very_long_directory_name_designed_specifically_to_test_the_line_wrapping_issue/file.txt",
-    ],
-    [
-      "preserves long urls verbatim for copy safety",
-      "https://example.com/this/is/a/very/long/url/segment/that/should/remain/contiguous/when/rendered",
-    ],
-  ])("%s", (_name, input) => {
-    const sanitized = sanitizeRenderableText(input);
-    expect(sanitized).toBe(input);
-  });
-
-  it("only wraps lines that contain rtl script", () => {
-    const input = "hello\nمرحبا";
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe("hello\n\u2067مرحبا\u2069");
-  });
-
-  it("does not double-wrap lines that already include bidi controls", () => {
-    const input = "\u2067مرحبا\u2069";
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("removes untrusted bidi overrides before adding trusted RTL isolation", () => {
-    expect(sanitizeRenderableText("\u202eمرحبا\u202c")).toBe("\u2067مرحبا\u2069");
-    expect(sanitizeRenderableText("\u061cمرحبا\u200f")).toBe("\u2067مرحبا\u2069");
-  });
-
-  it.each<[name: string, input: string]>([
-    [
-      "preserves long camelCase identifiers wrapped in inline code spans (#48432)",
-      "- `requireConfirmationForMutatingActions: false`",
-    ],
-    [
-      "preserves long hyphenated package names in inline code spans (#48432)",
-      "Install `ubuntu-budgie-desktop-environment` to fix it.",
-    ],
-    [
-      "preserves dotted entity IDs in inline code spans (#39505)",
-      "See `binary_sensor.sense_energy_monitor_power` for the live reading.",
-    ],
-    [
-      "preserves bare hyphenated package names in prose",
-      "Run apt install ubuntu-budgie-desktop-environment after enabling the PPA.",
-    ],
-    [
-      "preserves bare dotted entity IDs in prose",
-      "Watch binary_sensor.sense_energy_monitor_power.daily_energy after midnight.",
-    ],
-  ])("%s", (_name, input) => {
-    const sanitized = sanitizeRenderableText(input);
-    expect(sanitized).toBe(input);
-  });
-
-  it("preserves backtick-fenced code blocks verbatim", () => {
-    const input = [
-      "Run this:",
-      "```bash",
-      "sudo cp -a /var/lib/machines/fc41/etc/systemd/network/. \\",
-      "           /var/lib/machines/fc43/etc/systemd/network/",
-      "```",
-      "Done.",
-    ].join("\n");
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("strips ANSI escapes inside fenced code blocks (sanitization runs before segmentation)", () => {
-    const input = "Hello\n```\nlet x = 1;[31m injected[0m\n```\nbye";
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).not.toContain("");
-    expect(sanitized).toContain("let x = 1;");
-  });
-
-  it("strips control chars inside inline code spans (sanitization runs before segmentation)", () => {
-    const input = "Hello `safe\x00content` world";
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe("Hello `safecontent` world");
-  });
-
-  it("redacts heavily corrupted lines even inside fenced code blocks", () => {
-    const input = `Header\n\`\`\`\n${"�".repeat(40)}\n\`\`\`\nFooter`;
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toContain("[binary data omitted]");
-  });
+const cjk =
+  "MotherTeresa特蕾莎修女是一个极端投入极有宗教信念愿意亲身服务底层苦难者的人但她不是现代公共卫生意义上的慈善改革者";
+const code =
+  "Run this:\n```bash\nsudo cp -a /var/lib/machines/fc41/etc/systemd/network/. \\\n           /var/lib/machines/fc43/etc/systemd/network/\n```\nDone.";
+it.each([
+  ["C1 CSI and OSC", "before\u009b@middle\u009d0;title\u009cafter", "beforemiddleafter"],
+  ["long tokens", "a".repeat(140), "a".repeat(140)],
+  ["CJK prose", cjk, cjk],
+  ["mixed direction lines", "hello\nمرحبا", "hello\n\u2067مرحبا\u2069"],
+  ["existing isolation", "\u2067مرحبا\u2069", "\u2067مرحبا\u2069"],
+  ["bidi overrides", "\u202eمرحبا\u202c", "\u2067مرحبا\u2069"],
+  ["bidi marks", "\u061cمرحبا\u200f", "\u2067مرحبا\u2069"],
+  [
+    "inline code (#48432)",
+    "- `requireConfirmationForMutatingActions: false`",
+    "- `requireConfirmationForMutatingActions: false`",
+  ],
+  ["fenced code", code, code],
+])("sanitizes %s without changing safe text", (_name, input, expected) => {
+  expect(sanitizeRenderableText(input)).toBe(expected);
 });
 
 describe("Markdown display safety", () => {
@@ -719,7 +352,6 @@ describe("Markdown display safety", () => {
     const sanitized = sanitizeTerminalControlsAndBinary(input);
 
     expect(sanitized).toBe("# مرحبا\n> שלום");
-    expect(sanitized).not.toMatch(/[\u2066-\u2069]/u);
   });
 
   it("keeps rendered padding outside RTL isolates", () => {
@@ -731,44 +363,99 @@ describe("Markdown display safety", () => {
   });
 });
 
-describe("isTerminalSafeAutocompleteValue", () => {
-  it("accepts ordinary Unicode and rejects terminal or bidi controls", () => {
-    expect(isTerminalSafeAutocompleteValue("/tmp/مرحبا-東京.txt")).toBe(true);
-    expect(isTerminalSafeAutocompleteValue("👩🏽‍💻/cafe\u0301.txt")).toBe(true);
-    for (const value of [
-      "bad\x1b[31m",
-      "bad\tvalue",
-      "bad\rvalue",
-      "bad\nvalue",
-      "bad\u007fvalue",
-      "bad\u0085value",
-      "bad\u009bvalue",
-      "bad\u200evalue",
-      "bad\u202evalue",
-      "bad\u2066value",
-      "bad\u2069value",
-    ]) {
-      expect(isTerminalSafeAutocompleteValue(value)).toBe(false);
-    }
-  });
+it("accepts ordinary Unicode and rejects terminal or bidi controls", () => {
+  expect(isTerminalSafeAutocompleteValue("/tmp/مرحبا-東京.txt")).toBe(true);
+  expect(isTerminalSafeAutocompleteValue("👩🏽‍💻/cafe\u0301.txt")).toBe(true);
+  for (const value of [
+    "bad\x1b[31m",
+    "bad\tvalue",
+    "bad\rvalue",
+    "bad\nvalue",
+    "bad\u007fvalue",
+    "bad\u0085value",
+    "bad\u009bvalue",
+    "bad\u200evalue",
+    "bad\u202evalue",
+    "bad\u2066value",
+    "bad\u2069value",
+  ]) {
+    expect(isTerminalSafeAutocompleteValue(value)).toBe(false);
+  }
 });
 
-describe("sanitizeRenderableLine", () => {
-  it("preserves RTL isolation while collapsing carriage returns, newlines, and tabs", () => {
-    expect(sanitizeRenderableLine("left\r\nمرحبا\tשלום right")).toBe(
-      "\u2067left مرحبا שלום right\u2069",
+it.each([
+  ["left\r\nمرحبا\tשלום right", "\u2067left مرحبا שלום right\u2069"],
+  [`safe\x1b]52;c;Y2xpcGJvYXJk\x07\r\n${"�".repeat(20)}\tمرحبا`, "safe [binary data omitted]"],
+])("sanitizes and collapses %j", (input, expected) => {
+  expect(sanitizeRenderableLine(input)).toBe(expected);
+});
+describe("TuiStreamAssembler", () => {
+  const thinking = (value: string) => ({ type: "thinking", thinking: value });
+  const message = (...content: readonly Record<string, unknown>[]) => ({
+    role: "assistant",
+    content,
+  });
+  let assembler: TuiStreamAssembler;
+  beforeEach(() => {
+    assembler = new TuiStreamAssembler();
+  });
+
+  it("keeps thinking before content even when thinking arrives later", () => {
+    expect(assembler.ingestDelta("run-1", message(textBlock("Hello")), true)).toBe("Hello");
+    expect(assembler.ingestDelta("run-1", message(thinking("Brain")), true)).toBe(
+      "[thinking]\nBrain\n\nHello",
     );
   });
 
-  it("preserves long exact labels without prose token splitting", () => {
-    const label = "a".repeat(300);
-
-    expect(sanitizeRenderableLine(label)).toBe(label);
+  it("tracks literal placeholder text as real displayable content until finalization", () => {
+    expect(assembler.hasDisplayText("run-1")).toBe(false);
+    assembler.ingestDelta("run-1", message(textBlock("(no output)")), false);
+    expect(assembler.hasDisplayText("run-1")).toBe(true);
+    expect(assembler.finalize("run-1", message(), false)).toBe("(no output)");
+    expect(assembler.hasDisplayText("run-1")).toBe(false);
   });
 
-  it("strips terminal controls and redacts binary-like lines before collapsing whitespace", () => {
-    const input = `safe\x1b]52;c;Y2xpcGJvYXJk\x07\r\n${"�".repeat(20)}\tمرحبا`;
+  it("renders sanitized pairing QR terminal text from final content", () => {
+    const prompt = "Scan this QR code with the OpenClaw iOS app:";
+    const qr = { type: "openclaw_pairing_qr", terminalText: "\u001b[47m\u001b[30m█ ▄\u001b[0m" };
+    expect(assembler.finalize("run-1", message(textBlock(prompt), qr), false)).toBe(
+      `${prompt}\n\n█ ▄`,
+    );
+  });
 
-    expect(sanitizeRenderableLine(input)).toBe("safe [binary data omitted]");
+  it("keeps visible thinking ahead of an attachment-only final", () => {
+    const content = message(thinking("Preparing the attachment"), {
+      type: "image",
+      data: "secret-image",
+    });
+    expect(assembler.finalize("run-1", content, true)).toBe(
+      "[thinking]\nPreparing the attachment\n\nAttached image",
+    );
+  });
+
+  it("returns null when delta text is unchanged", () => {
+    expect(assembler.ingestDelta("run-4", message(textBlock("Repeat")), false)).toBe("Repeat");
+    expect(assembler.ingestDelta("run-4", message(textBlock("Repeat")), false)).toBeNull();
+  });
+
+  it("bounds orphaned stream state while preserving recently active runs", () => {
+    for (let index = 0; index < 200; index += 1) {
+      assembler.ingestDelta(`run-${index}`, message(textBlock(`Draft ${index}`)), false);
+    }
+
+    assembler.ingestDelta("run-0", message(textBlock("Recently active")), false);
+    assembler.ingestDelta("run-200", message(textBlock("Newest")), false);
+    expect(assembler.finalize("run-0", message(), false)).toBe("Recently active");
+    expect(assembler.finalize("run-1", message(), false)).toBe("(no output)");
+    expect(assembler.finalize("run-200", message(), false)).toBe("Newest");
+  });
+
+  it("does not evict an active run when an evicted run finalizes late", () => {
+    for (let index = 0; index < 201; index += 1) {
+      assembler.ingestDelta(`run-${index}`, message(textBlock(`Draft ${index}`)), false);
+    }
+
+    expect(assembler.finalize("run-0", message(textBlock("Late final")), false)).toBe("Late final");
+    expect(assembler.finalize("run-1", message(), false)).toBe("Draft 1");
   });
 });

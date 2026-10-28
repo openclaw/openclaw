@@ -1,19 +1,16 @@
-import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { ProtocolErrorCode, SdkErrorCode, SdkHttpError } from "@modelcontextprotocol/client";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
-const STREAMABLE_RESPONSE_BODY_MARKER = "Error POSTing to endpoint:";
-const LEGACY_RESPONSE_BODY_RE = /Error POSTing to endpoint \(HTTP \d+\):/;
-
-/** MCP lifecycle errors use the protocol code, including serialized SDK errors. */
+/** SDK deadlines use local string codes; remote numeric errors remain protocol failures. */
 export function isMcpRequestTimeoutError(error: unknown): boolean {
-  return isRecord(error) && error.code === ErrorCode.RequestTimeout;
+  return isRecord(error) && error.code === SdkErrorCode.RequestTimeout;
 }
 
 export function isMcpMethodNotFoundError(error: unknown): boolean {
-  if (isRecord(error) && error.code === ErrorCode.MethodNotFound) {
+  if (isRecord(error) && error.code === ProtocolErrorCode.MethodNotFound) {
     return true;
   }
   const message = String(error);
@@ -22,17 +19,12 @@ export function isMcpMethodNotFoundError(error: unknown): boolean {
 
 /** Redacts MCP diagnostics, including response bodies the SDK includes in thrown errors. */
 export function redactMcpDiagnosticError(error: unknown): string {
-  let message = formatErrorMessage(error);
-  const streamableIndex = message.indexOf(STREAMABLE_RESPONSE_BODY_MARKER);
-  const legacyMatch = LEGACY_RESPONSE_BODY_RE.exec(message);
-  const prefixEnd =
-    streamableIndex >= 0
-      ? streamableIndex + STREAMABLE_RESPONSE_BODY_MARKER.length
-      : legacyMatch
-        ? legacyMatch.index + legacyMatch[0].length
-        : undefined;
-  if (prefixEnd !== undefined) {
-    message = `${message.slice(0, prefixEnd)} [redacted response body]`;
-  }
+  const message =
+    error instanceof SdkHttpError && error.status === 401
+      ? "authentication refused (401); check this MCP server's credentials or sign in again"
+      : formatErrorMessage(error).replace(
+          /(Error POSTing to endpoint(?: \(HTTP \d+\))?:)[\s\S]*/,
+          "$1 [redacted response body]",
+        );
   return redactToolPayloadText(redactSensitiveUrlLikeString(message));
 }

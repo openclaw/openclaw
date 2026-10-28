@@ -9,13 +9,26 @@ title: "Panels and docks"
 sidebarTitle: "Panels and docks"
 ---
 
-Surfaces that dock beside the current page instead of replacing it.
+Surfaces that dock beside the current page instead of replacing it. In mobile
+chat, the rightmost **Panels** button groups **Details**, files, and the available
+tools. A selected tool fills the conversation area instead of sharing a cramped
+split; widening the window restores the saved desktop layout. **Details** opens
+a full-width overlay above the composer. Desktop keeps the **Layout** menu and
+separate **Details** control.
+
+Details keeps session metadata visible. Pull requests and automations appear
+expanded when they contain items; empty sections are omitted entirely. You can
+collapse populated sections without ordinary updates reopening them. Loading or
+failed automation reads show their status and retry action without an empty
+disclosure. Task progress remains independently collapsible.
 
 ## OpenClaw system care
 
 Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. To open it alongside your current page, click **Home** in the sidebar footer and select the **Ask OpenClaw** tab, or use the **Ask OpenClaw** command-palette action. The full page and dockable panel share one machine-wide conversation whose durable history lives on the Gateway. Closing the UI never cancels a turn; reopening Ask OpenClaw shows the completed conversation. The panel docks on the right or bottom, remembers its placement and size in the browser profile, and hides itself while the full page is open.
 
 If no AI provider is configured, Ask OpenClaw offers **Connect an AI provider**. If a configured runtime fails to start or verify, the conversation stays visible with the actual error and **Retry**. Sending stays disabled until verification succeeds. Retry checks the runtime without resending your earlier message or clearing your draft.
+
+Ask OpenClaw has its own identity. Greetings and command planning use the configured owner's model and runtime policy without loading that owner's workspace persona files, such as `SOUL.md` and `IDENTITY.md`.
 
 Onboarding suggestions can focus the recommended answer when nothing else has focus. If you have already focused the composer or another control, arriving suggestions leave your keyboard focus there.
 
@@ -64,16 +77,23 @@ the Gateway's `PATH`; OpenClaw skips Bun's `node` shim, and an unavailable Node
 executable produces a startup error with installation guidance. Windows keeps
 `node-pty`. See [Bun compatibility](/install/bun-compatibility#known-limitations).
 
-Enablement changes hot-apply without restarting the Gateway. Disabling closes
-attached, detached, and conversation-owned terminals and cancels pending opens.
-Re-enabling allows fresh sessions; closed sessions do not return. Reload the
-Control UI page to pick up the updated content security policy.
+Changes to `gateway.terminal.enabled` hot-apply without restarting the Gateway.
+Disabling closes attached, detached, and conversation-owned terminals and
+cancels pending opens. Re-enabling allows fresh sessions; closed sessions do
+not return. Reload the Control UI page to pick up the updated content security
+policy.
 
 <Warning>
-The terminal is an unconfined host shell and inherits the Gateway process environment. Disable it with `gateway.terminal.enabled: false` on deployments where admin operators should not get a host shell. OpenClaw refuses terminal sessions for agents with `sandbox.mode: "all"`; changing an active agent to that mode closes its existing and in-flight terminal sessions.
+A Gateway-local terminal is an unconfined host shell that inherits the Gateway process environment. If the Gateway can read credentials or write configuration files, an operator with this shell can too. Direct file writes bypass Gateway API restrictions such as `OPENCLAW_CONFIG_READONLY`.
+
+If Gateway operators should not have this host access, start the Gateway with `OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS=1`. This deployment control blocks Gateway-local terminals while preserving authorized terminals on connected nodes. Gateway configuration cannot change it; change the launch environment and restart the Gateway to change it. [Gateway-hosted automation](/automation/cron-jobs/managing-jobs#configuration) requires a separate control.
+
+OpenClaw refuses terminal sessions for agents with `sandbox.mode: "all"`; changing an active agent to that mode closes its existing and in-flight terminal sessions.
 </Warning>
 
 Use **Ctrl + backtick** to toggle the **Terminal** tab in the selected Chat pane's unified side panel. You can also open **Terminal** from the panel's **+** menu. The shared panel docks right or bottom, resizes with the browser viewport, can expand over the Chat pane, and keeps multiple shell tabs. The dock remains available for ad-hoc operator shells. Starting a native CLI from **New session**, or opening a Claude Code or Codex catalog session in the terminal, opens the [main terminal page](/web/urls#terminal-urls), keeping the sidebar and application chrome while replacing the composer. See [Gateway configuration](/gateway/configuration-reference#gateway) for `gateway.terminal.enabled` and the optional `gateway.terminal.shell` override.
+
+Selecting terminal text copies it automatically. A brief **Copied to clipboard** notice confirms a successful copy without taking keyboard focus. If clipboard access fails, no success notice appears.
 
 Terminal sessions appear as tabs in the Chat side-panel header; choosing **Terminal** again in the panel's **+** menu opens another shell, while sessions, upload, and dock-to-bottom actions sit in the header. A Terminal moved to the main area keeps its own tab strip.
 
@@ -86,9 +106,11 @@ Chat and each tool have their own named region for assistive navigation. Swappin
 
 A connected **Desktop** viewer stays connected for 30 seconds while its tab is hidden, so a quick switch to Chat and back restores the same desktop and sizing mode. Input and remote resizing pause while hidden. After 30 seconds, the viewer disconnects and reconnects when reopened. Closing the Desktop tab, changing its session or machine, or losing the Gateway connection releases it immediately. Hiding Desktop during a mouse or touch drag also disconnects it so pressed remote buttons cannot linger. **Disconnect** keeps it disconnected until you choose **Reconnect**. Desktop uses one centered loading indicator while resolving its source and connecting.
 
-When you open a chat, the panel automatically reveals an available desktop assigned to that exact session and the browser tab from its latest successful browser-tool result, when that tab is still running. Discovery only reads existing resources: it never starts a browser, provisions a desktop, or attaches an unrelated global or child-session resource. Session and inventory events, plus new browser results, refresh discovery while the chat is visible. Resources without explicit session metadata remain available through the manual panel controls.
+When you open a chat, the panel automatically reveals an available desktop assigned to that exact session. Discovery only reads existing resources: it never provisions a desktop or attaches an unrelated global or child-session resource. Session and inventory events refresh desktop discovery while the chat is visible. Resources without explicit session metadata remain available through the manual panel controls.
 
-Automatic reveals reuse the existing panel and keep an already-selected tool in front. Automatically discovered tabs stay out of the saved layout, including after resizing or docking, so reloading validates the resource again before opening it. Narrow screens use the same bottom-docked layout as manually opened panels. Minimizing the panel or closing a Browser or Desktop tab disables further automatic reveals for that session in the current browser profile, including after reload; the **+** menu can still open them manually.
+Browser-tool results stay inline on desktop and mobile; they do not automatically open the Browser panel. Choose **Open** on a browser preview card, use the panel controls, or ask your agent to show it. A panel you explicitly opened still follows its saved per-session layout when you return or reload.
+
+Automatic desktop reveals reuse the existing panel and keep an already-selected tool in front. Automatically discovered desktops stay out of the saved layout, including after resizing or docking, so reloading validates the resource again before opening it. If discovery confirms that the desktop is no longer available, its automatic tab closes without affecting an explicitly selected desktop or disabling future automatic reveals. Mobile chat shows these panels full-width, just like manually opened panels; other narrow panes retain their bottom-docked layout. Minimizing the panel or closing a Browser or Desktop tab disables further automatic desktop reveals for that session in the current browser profile, including after reload; the **+** menu can still open them manually.
 
 Owner-authorized, unsandboxed agents can use the `terminal` tool to list, read, resize, or close terminals an operator already opened from the same Chat session's Terminal panel. Agents cannot open shells, and access remains exact-session scoped: an agent cannot inspect or control standalone operator terminals or terminals belonging to another session. Terminal input follows the effective session and host-exec permission policy: **Full access** (`full`, or YOLO) sends it immediately; **Guarded** (`guarded`) and **Workspace** (`workspace`, including accept-only or Guardian-reviewed flows) require an explicit, one-time approval for that exact input; **Read only** (`read-only`) or `tools.exec.mode: "deny"` forbids input entirely. Approving one input never grants unrestricted access to the terminal.
 
@@ -112,6 +134,12 @@ Eligibility is per session and per host. Gateway-local sessions start the provid
 
 Standalone operator sessions, including the main terminal page and terminal focus presentation, are connection-owned. Leaving the main terminal route does not close its PTY; returning to its terminal session URL reattaches it. The main page and the dock keep separate terminal tabs. A page reload, laptop sleep, or network blip detaches one on the Gateway instead of killing it, and the same browser tab reattaches on reconnect with recent output replayed. Detached connection-owned sessions are killed after `gateway.terminal.detachedSessionTimeoutSeconds` (default 300 seconds; `0` restores kill-on-disconnect). Attaching one of these sessions remains tmux-style take-over.
 
+During a connection blip, the terminal keeps its tabs, scrollback, selection, and
+upload batch visible. Input pauses until the original sessions reconnect;
+keystrokes are never queued for later replay. Interrupted uploads remain available
+for an explicit retry. A failed session-list or attach request does not discard
+the saved session IDs.
+
 A shell that exits normally with code zero closes its terminal tab automatically, including after `logout`, `exit`, or EOF. Closing the last terminal tab closes its panel, whether docked right or bottom, unless other tool tabs remain. Nonzero exits, signals, disconnects, and errors stay visible for inspection. The fullscreen terminal keeps its new-session control available after the last tab closes.
 
 Closing a connecting tab cancels that opening or attachment request. Other tabs and queued requests remain available, and a late response does not reopen the cancelled tab or display its error.
@@ -125,6 +153,23 @@ PTY sessions and their scrollback are not recovered after the new process starts
 
 The main terminal page at `/terminal` is also available as a [focus presentation](/web/urls#focus-presentation-routes). The iOS and Android apps embed this page in their Terminal screens, reusing the stored gateway credentials; availability follows the same `gateway.terminal.enabled` and `operator.admin` gate, and the page shows a notice when the connected Gateway does not offer the terminal. Focus presentation removes the application chrome; it does not invoke browser fullscreen.
 
+### Terminal fonts
+
+The terminal bundles **JetBrains Mono** with **Symbols Nerd Font Mono** for
+Powerline separators and standard Nerd Font icons. No font installation or
+third-party font service is required for the default.
+
+In **Settings → Appearance → Typography → Terminal font**, enter a local
+monospace family name such as `FiraCode Nerd Font Mono` or choose **Use default**. Clear the field to
+reset it. The font must be installed on the computer running your browser,
+not the remote Gateway or shell host. The setting stays in this browser for
+this Gateway; missing fonts fall back to the bundled default. Changes apply
+to open terminals without restarting their shells, including the full-page
+and focused terminal views.
+
+Programming ligatures (such as a joined arrow for `=>`) are not currently
+supported by the terminal renderer, even with a ligature-capable font.
+
 ## Browser panel
 
 Ask your agent to "open the browser sidebar" or "show the browser side panel"
@@ -135,12 +180,16 @@ expand a [Browser dashboard](/web/dashboards#share-a-browser-dashboard-with-your
 
 The Control UI ships a **Browser** tab in the unified Chat side panel that renders the Gateway-controlled browser (the same one agents drive through the [browser tool](/tools/browser-control)) in any regular web browser - no native webview required. It appears in the panel's **+** menu when the connected Gateway advertises `browser.request` to an `operator.admin` connection; the globe action in **Files** toggles it. In a regular web browser, choosing **Browser** again while its panel tab is already open creates another Agent browser tab. The panel shows a live screencast, with screenshot fallback when streaming is unavailable, plus tabs, an editable URL bar, back/forward/reload, and open-in-your-browser, and forwards clicks, wheel scrolling, and basic typing to the remote page. The remote page follows the shared panel: opening it, resizing it, or switching tabs resizes the remote browser viewport to the panel's available space, so the snapshot fills the panel instead of rendering at whatever size an agent last used.
 
+Wheel scrolling targets the scrollable container under the pointer, including reversed chat lists and horizontal lists in left-to-right or right-to-left layouts.
+
 While the panel or a Browser dashboard is visible, a later remote resize also
 resynchronizes the page to the available space. Hidden panels leave the remote
 viewport alone. A browser that cannot honor a requested size is not repeatedly
 resized while its reported dimensions remain unchanged.
 
 Browser tabs appear directly in the Chat side-panel header, with the URL toolbar below. Each tab shows its page favicon when automatic favicon fetching is enabled and an icon is available. Closing the last browser tab leaves the Browser panel open so you can create another tab with **+**. When Browser is moved to the main area, its tabs appear above its own toolbar.
+
+When the Gateway browser is stopped, choose **Start browser**. The panel shows a loading indicator while startup is pending. If startup fails, it shows the error and restores **Start browser** so you can retry.
 
 While an Agent browser preview refreshes, the current page stays visible and the reload icon spins in the toolbar. A loading skeleton appears only before the first page image is available. If refreshing fails, the panel keeps the previous image and shows the error above it.
 
@@ -184,6 +233,10 @@ same item from chat selects its existing tab. Links inside the reader and URLs
 entered in the address bar navigate the current tab, with independent Back and
 Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
 including their loaded documents while you switch between them.
+
+Loaded reader documents and link previews stay visible while the same Gateway
+reconnects. The reader refreshes after reconnect without clearing its address
+draft. Changing Gateway or losing reader access clears the protected content.
 
 Opening or loading an item keeps keyboard focus where you are typing. The
 **+** button focuses the address bar so you can enter a new URL.

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { addSubagentRunForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { seedSubagentRunForReadTest } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { claimAgentRunContext } from "../infra/agent-run-registry.js";
 import type { SessionsListResult } from "./session-utils.types.js";
@@ -43,7 +43,7 @@ export function registerSubagentSessionStatusTests(
       } as SessionEntry,
     };
 
-    await addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-parent",
       childSessionKey: "agent:main:subagent:parent",
       controllerSessionKey: "agent:main:main",
@@ -56,7 +56,7 @@ export function registerSubagentSessionStatusTests(
       { sessionKey: "agent:main:subagent:parent" },
       { trackOwner: true, ownsContext: true },
     );
-    await addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-child",
       childSessionKey: "agent:main:subagent:child",
       controllerSessionKey: "agent:main:subagent:parent",
@@ -66,7 +66,7 @@ export function registerSubagentSessionStatusTests(
       outcome: { status: "ok" },
       model: "openai/gpt-5.4",
     });
-    await addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-failed",
       childSessionKey: "agent:main:subagent:failed",
       controllerSessionKey: "agent:main:main",
@@ -116,45 +116,4 @@ export function registerSubagentSessionStatusTests(
     );
     expect(interrupted?.status).toBe("interrupted");
   });
-
-  test.each([
-    { lifecycleRunId: "restart-run", status: "failed" },
-    { lifecycleRunId: "replacement-run", status: "interrupted" },
-  ] as const)(
-    "surfaces exhausted parent recovery only for its owning session run ($lifecycleRunId)",
-    async ({ lifecycleRunId, status }) => {
-      const now = Date.now();
-      const childSessionKey = "agent:main:subagent:restart-delivery";
-      await addSubagentRunForTests({
-        runId: "restart-run",
-        childSessionKey,
-        controllerSessionKey: "agent:main:main",
-        createdAt: now - 2_000,
-        execution: {
-          status: "terminal",
-          startedAt: now - 1_000,
-          endedAt: now - 500,
-          outcome: { status: "error" },
-          interruptionReason: "gateway-restart",
-        },
-        delivery: { status: "failed" },
-      });
-      const result = await listSubagentSessions({
-        [childSessionKey]: {
-          sessionId: "restart-delivery-session",
-          updatedAt: now,
-          spawnedBy: "agent:main:main",
-          status: "interrupted",
-          lifecycleRunId,
-        },
-      });
-      const row = result.sessions.find((session) => session.key === childSessionKey);
-      expect(row?.status).toBe(status);
-      expect(row?.lastRunError).toBe(
-        status === "failed"
-          ? "Restart recovery could not reach the parent. Inspect the child session before continuing."
-          : undefined,
-      );
-    },
-  );
 }

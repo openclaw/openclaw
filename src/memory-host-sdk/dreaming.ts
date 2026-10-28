@@ -1,5 +1,6 @@
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import {
+  asFiniteNumberInRange,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
@@ -8,8 +9,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-  normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { DoctorMemoryDreamingPayload } from "../../packages/gateway-protocol/src/doctor-memory.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -134,22 +135,7 @@ export type RepairShortTermPromotionArtifactsResult = {
   removedStaleLock: boolean;
 };
 
-export type ShortTermDreamingStatsEntry = {
-  key: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  snippet: string;
-  recallCount: number;
-  dailyCount: number;
-  groundedCount: number;
-  totalSignalCount: number;
-  lightHits: number;
-  remHits: number;
-  phaseHitCount: number;
-  promotedAt?: string;
-  lastRecalledAt?: string;
-};
+export type ShortTermDreamingStatsEntry = DoctorMemoryDreamingPayload["shortTermEntries"][number];
 
 export type ShortTermDreamingStats = {
   shortTermCount: number;
@@ -260,15 +246,10 @@ const DEFAULT_MEMORY_DEEP_DREAMING_SOURCES: MemoryDeepDreamingSource[] = [
 const DEFAULT_MEMORY_REM_DREAMING_SOURCES: MemoryRemDreamingSource[] = ["memory", "daily", "deep"];
 
 function normalizeScore(value: unknown, fallback: number): number {
-  const normalized = normalizeStringifiedOptionalString(value);
-  if (typeof value === "string" && !normalized) {
+  if (typeof value === "string" && !value.trim()) {
     return fallback;
   }
-  const num = typeof value === "string" ? Number(normalized) : Number(value);
-  if (!Number.isFinite(num) || num < 0 || num > 1) {
-    return fallback;
-  }
-  return num;
+  return asFiniteNumberInRange(Number(value), { min: 0, max: 1 }) ?? fallback;
 }
 
 function normalizeStringArray<T extends string>(value: unknown, fallback: readonly T[]): T[] {
@@ -277,8 +258,7 @@ function normalizeStringArray<T extends string>(value: unknown, fallback: readon
   }
   const normalized: T[] = [];
   for (const entry of value) {
-    const normalizedEntry = normalizeOptionalLowercaseString(entry);
-    const match = fallback.find((option) => option === normalizedEntry);
+    const match = normalizeChoice(entry, fallback);
     if (match && !normalized.includes(match)) {
       normalized.push(match);
     }
@@ -376,6 +356,12 @@ export function resolveMemoryDreamingConfig(params: {
   const deepRecovery = asNullableRecord(deep?.recovery);
   const maxAgeDays = parseStrictPositiveInteger(deep?.maxAgeDays);
   const maxPromotedSnippetTokens = parseStrictPositiveInteger(deep?.maxPromotedSnippetTokens);
+  const phaseExecution = (
+    value: unknown,
+    speed: MemoryDreamingSpeed,
+    thinking: MemoryDreamingThinking,
+    budget: MemoryDreamingBudget,
+  ) => resolveExecutionConfig(value, { ...defaultExecution, speed, thinking, budget });
 
   return {
     enabled: parseBoolean(dreaming?.enabled) ?? true,
@@ -397,12 +383,7 @@ export function resolveMemoryDreamingConfig(params: {
         limit: parseStrictNonNegativeInteger(light?.limit) ?? 100,
         dedupeSimilarity: normalizeScore(light?.dedupeSimilarity, 0.9),
         sources: normalizeStringArray(light?.sources, DEFAULT_MEMORY_LIGHT_DREAMING_SOURCES),
-        execution: resolveExecutionConfig(light?.execution, {
-          ...defaultExecution,
-          speed: "fast",
-          thinking: "low",
-          budget: "cheap",
-        }),
+        execution: phaseExecution(light?.execution, "fast", "low", "cheap"),
       },
       deep: {
         enabled: parseBoolean(deep?.enabled) ?? true,
@@ -435,12 +416,7 @@ export function resolveMemoryDreamingConfig(params: {
           minRecoveryConfidence: normalizeScore(deepRecovery?.minRecoveryConfidence, 0.9),
           autoWriteMinConfidence: normalizeScore(deepRecovery?.autoWriteMinConfidence, 0.97),
         },
-        execution: resolveExecutionConfig(deep?.execution, {
-          ...defaultExecution,
-          speed: "balanced",
-          thinking: "high",
-          budget: "medium",
-        }),
+        execution: phaseExecution(deep?.execution, "balanced", "high", "medium"),
       },
       rem: {
         enabled: parseBoolean(rem?.enabled) ?? true,
@@ -449,12 +425,7 @@ export function resolveMemoryDreamingConfig(params: {
         limit: parseStrictNonNegativeInteger(rem?.limit) ?? 10,
         minPatternStrength: normalizeScore(rem?.minPatternStrength, 0.75),
         sources: normalizeStringArray(rem?.sources, DEFAULT_MEMORY_REM_DREAMING_SOURCES),
-        execution: resolveExecutionConfig(rem?.execution, {
-          ...defaultExecution,
-          speed: "slow",
-          thinking: "high",
-          budget: "expensive",
-        }),
+        execution: phaseExecution(rem?.execution, "slow", "high", "expensive"),
       },
     },
   };
@@ -515,9 +486,7 @@ export function formatMemoryDreamingDay(epochMs: number, timezone?: string): str
     const year = values.get("year");
     const month = values.get("month");
     const day = values.get("day");
-    if (year && month && day) {
-      return `${year}-${month}-${day}`;
-    }
+    return `${year}-${month}-${day}`;
   } catch {
     // Fall back to host-local day for invalid or unsupported timezones.
   }
@@ -539,11 +508,9 @@ export function resolveMemoryDreamingWorkspaces(
   cfg: OpenClawConfig,
   options: MemoryDreamingWorkspaceOptions = {},
 ): MemoryDreamingWorkspace[] {
+  // An explicitly empty roster owns no agent workspaces; listAgentIds already
+  // supplies the implicit owner for raw pre-roster configs.
   const agentIds = listAgentIds(cfg);
-  if (agentIds.length === 0) {
-    agentIds.push(resolveDefaultAgentId(cfg));
-  }
-
   const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
   const addWorkspace = (workspaceDirRaw: string | undefined, agentIdRaw: string): void => {
     const workspaceDir = workspaceDirRaw?.trim();

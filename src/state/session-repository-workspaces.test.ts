@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -17,8 +18,15 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import * as stateWorker from "./openclaw-state-worker-store.js";
-import { createSessionRepositoryWorkspaceStore } from "./session-repository-workspaces.js";
-import { createSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
+import {
+  createSessionRepositoryWorkspaceStore,
+  findSessionRepositoryWorkspaces,
+} from "./session-repository-workspaces.js";
+import {
+  bindSessionRepositoryWorkspaceBaseInDatabase,
+  createSessionRepositoryWorkspaceInDatabase,
+  deleteSessionRepositoryWorkspaceInDatabase,
+} from "./session-repository-workspaces.kernel.js";
 
 const roots: string[] = [];
 const subscriptions: (() => void)[] = [];
@@ -32,6 +40,12 @@ const source = {
 };
 const baseCommit = "a".repeat(40);
 const baseManifestHash = `sha256:${"b".repeat(64)}`;
+const baseInput = (workspace: { workspaceId: string; revision: number }) => ({
+  workspaceId: workspace.workspaceId,
+  expectedRevision: workspace.revision,
+  baseCommit,
+  baseManifestHash,
+});
 
 afterEach(async () => {
   for (const unsubscribe of subscriptions.splice(0)) {
@@ -50,40 +64,28 @@ it("rolls back a revoked native commit without publishing changed repository fac
   const prepared = await store.prepare(initial.workspaceId);
   let current = true;
   let commitRequested = false;
-  const changed = vi.fn();
-  const unsubscribe = sessionChanges.subscribe(changed);
-  const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-  vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-    (admit, attachment) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "commit") {
-          commitRequested = true;
-          current = false;
+  const changed = observeChanges();
+  probe.admission(operationAdmission, (request, grant, admit) => {
+    if (request.stage === "commit") {
+      commitRequested = true;
+      current = false;
+    }
+    admit(request, grant);
+  });
+  await expect(
+    store.bindBase({
+      ...baseInput(initial),
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("repository owner revoked");
         }
-        admit(request, grant);
-      }, attachment),
-  );
-  try {
-    await expect(
-      store.bindBase({
-        workspaceId: initial.workspaceId,
-        expectedRevision: initial.revision,
-        baseCommit,
-        baseManifestHash,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("repository owner revoked");
-          }
-        },
-      }),
-    ).rejects.toThrow("repository owner revoked");
-    expect(commitRequested).toBe(true);
-    expect(changed).not.toHaveBeenCalled();
-    expect(prepared.current()).toEqual(initial);
-    expect(await store.get(initial.workspaceId)).toEqual(initial);
-  } finally {
-    unsubscribe();
-  }
+      },
+    }),
+  ).rejects.toThrow("repository owner revoked");
+  expect(commitRequested).toBe(true);
+  expect(changed).not.toHaveBeenCalled();
+  expect(prepared.current()).toEqual(initial);
+  expect(await store.get(initial.workspaceId)).toEqual(initial);
 });
 
 it("returns the committed workspace identity when ordinary result delivery fails", async () => {
@@ -95,28 +97,79 @@ it("returns the committed workspace identity when ordinary result delivery fails
       throw new Error("result delivery failed after native settlement");
     },
   );
-  const changed = vi.fn();
-  const unsubscribe = sessionChanges.subscribe(changed);
-  try {
-    const created = await store.create(source);
-    expect(await store.find(source)).toEqual(created);
-    expect(changed).toHaveBeenCalledExactlyOnceWith({
-      agentId: source.agentId,
-      sessionKey: source.sessionKey,
+  const changed = observeChanges();
+  const created = await store.create(source);
+  expect(await store.find(source)).toEqual(created);
+  expect(changed).toHaveBeenCalledExactlyOnceWith(owner);
+  await store.delete({ workspaceId: created.workspaceId, assertCurrent });
+  expect(await store.get(created.workspaceId)).toBeUndefined();
+});
+
+it("publishes native base changes and deletion before returning without exposing rollback", async () => {
+  const { database, store, transaction, rollback } = await fixture();
+  const initial = await store.create(source);
+  const prepared = await store.prepare(initial.workspaceId);
+  const bind = () =>
+    bindSessionRepositoryWorkspaceBaseInDatabase(database.db, baseInput(initial), 2);
+  rollback(() => {
+    bind();
+    expect(prepared.current()).toEqual(initial);
+  });
+  expect(prepared.current()).toEqual(initial);
+  transaction(bind);
+  expect(prepared.current()).toMatchObject({ baseCommit, baseManifestHash, revision: 1 });
+  transaction(() => deleteSessionRepositoryWorkspaceInDatabase(database.db, initial.workspaceId));
+  expect(prepared.current()).toBeUndefined();
+});
+
+it("fences detached absence while its removal settles", async () => {
+  const { store } = await fixture();
+  const workspaceId = "00000000-0000-4000-8000-000000000000";
+  const absent = await store.prepare(workspaceId);
+  expect(absent.current()).toBeUndefined();
+  let refused = false;
+  const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+    if (request.stage !== "commit") {
+      admit(request, grant);
+      return;
+    }
+    admit(request, () => {
+      expect(() => absent.current()).toThrow("mutation has not settled");
+      refused = true;
+      throw new Error("workspace successor refused before commit");
     });
-    await store.delete({ workspaceId: created.workspaceId, assertCurrent });
-    expect(await store.get(created.workspaceId)).toBeUndefined();
-  } finally {
-    unsubscribe();
-  }
+  });
+  await expect(store.delete({ workspaceId, assertCurrent })).rejects.toThrow(
+    "workspace successor refused before commit",
+  );
+  admission.mockRestore();
+  expect(refused).toBe(true);
+  expect(absent.current()).toBeUndefined();
+  expect((await store.prepare(workspaceId)).current()).toBeUndefined();
 });
 
 async function fixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-repository-owner-"));
   roots.push(root);
   const database = openOpenClawStateDatabase({ path: path.join(root, "openclaw.sqlite") });
-  return { database, store: createSessionRepositoryWorkspaceStore({ path: database.path }) };
+  const transaction = <T>(write: () => T) => runOpenClawStateWriteTransaction(write, { database });
+  const rollback = (write: () => void) => {
+    expect(() =>
+      transaction(() => {
+        write();
+        throw new Error("rollback");
+      }),
+    ).toThrow("rollback");
+  };
+  return {
+    database,
+    store: createSessionRepositoryWorkspaceStore({ path: database.path }),
+    transaction,
+    rollback,
+  };
 }
+
+const owner = { agentId: source.agentId, sessionKey: source.sessionKey };
 
 function observeChanges() {
   const changed = vi.fn();
@@ -158,29 +211,21 @@ it("captures a lazy store location and retains it across environment changes and
 });
 
 it("retries rolled-back first-use pending owner DDL and preserves the committed column on reopen", async () => {
-  const { database } = await fixture();
+  const { database, transaction, rollback } = await fixture();
   database.db.exec(
     "ALTER TABLE worker_workspace_pending_results DROP COLUMN repository_workspace_id",
   );
   const hasPendingRepositoryColumn = (db = database.db) =>
     tableHasColumn(db, "worker_workspace_pending_results", "repository_workspace_id");
   expect(hasPendingRepositoryColumn()).toBe(false);
-  expect(() =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        ensureRepositoryWorkspacePendingResultSchema(db);
-        // A later first-use writer must not cache this uncommitted column.
-        ensureRepositoryWorkspacePendingResultSchema(db);
-        expect(hasPendingRepositoryColumn(db)).toBe(true);
-        throw new Error("pending result rolled back");
-      },
-      { database },
-    ),
-  ).toThrow("pending result rolled back");
-  expect(hasPendingRepositoryColumn()).toBe(false);
-  runOpenClawStateWriteTransaction(({ db }) => ensureRepositoryWorkspacePendingResultSchema(db), {
-    database,
+  rollback(() => {
+    ensureRepositoryWorkspacePendingResultSchema(database.db);
+    // A later first-use writer must not cache this uncommitted column.
+    ensureRepositoryWorkspacePendingResultSchema(database.db);
+    expect(hasPendingRepositoryColumn()).toBe(true);
   });
+  expect(hasPendingRepositoryColumn()).toBe(false);
+  transaction(() => ensureRepositoryWorkspacePendingResultSchema(database.db));
   expect(hasPendingRepositoryColumn()).toBe(true);
   await closeOpenClawStateDatabaseByPathAsync(database.path);
   expect(hasPendingRepositoryColumn(openOpenClawStateDatabase({ path: database.path }).db)).toBe(
@@ -189,20 +234,14 @@ it("retries rolled-back first-use pending owner DDL and preserves the committed 
 });
 
 it("creates one stable logical-session owner without widening replayed setup intent", async () => {
-  const { database, store } = await fixture();
+  const { database, store, rollback } = await fixture();
   const changed = observeChanges();
   expect(await store.find(source)).toBeUndefined();
   expect(tableExists(database.db, "session_repository_workspaces")).toBe(false);
-  expect(() =>
-    runOpenClawStateWriteTransaction(
-      () => {
-        createSessionRepositoryWorkspaceInDatabase(database.db, source, Date.now());
-        expect(changed).not.toHaveBeenCalled();
-        throw new Error("session creation rolled back");
-      },
-      { database },
-    ),
-  ).toThrow("session creation rolled back");
+  rollback(() => {
+    createSessionRepositoryWorkspaceInDatabase(database.db, source, Date.now());
+    expect(changed).not.toHaveBeenCalled();
+  });
   expect(changed).not.toHaveBeenCalled();
   expect(tableExists(database.db, "session_repository_workspaces")).toBe(false);
   const initial = await store.create(source);
@@ -217,21 +256,29 @@ it("creates one stable logical-session owner without widening replayed setup int
   );
 });
 
+it("skips empty workspace snapshots and reads owners after first-use creation", async () => {
+  const { database, store } = await fixture();
+  const find = (owners: (typeof owner)[]) =>
+    findSessionRepositoryWorkspaces(owners, { path: database.path });
+  expect(await find([])).toEqual([]);
+  expect(await find([owner])).toEqual([]);
+  expect(tableExists(database.db, "session_repository_workspaces")).toBe(false);
+  const initial = await store.create(source);
+  const siblingOwner = { ...owner, sessionKey: "agent:main:sibling" };
+  const sibling = await store.create({ ...source, ...siblingOwner });
+  expect(await find([])).toEqual([]);
+  expect(await find([owner, siblingOwner])).toEqual([initial, sibling]);
+});
+
 it("publishes committed workspace revisions, rejects stale checkpoints, and retires prepared guards on close", async () => {
   const { database, store } = await fixture();
   const changed = observeChanges();
   const initial = await store.create(source);
-  expect(changed).toHaveBeenCalledExactlyOnceWith({
-    agentId: source.agentId,
-    sessionKey: source.sessionKey,
-  });
+  expect(changed).toHaveBeenCalledExactlyOnceWith(owner);
   const prepared = await store.prepare(initial.workspaceId);
   expect(prepared.current()).toEqual(initial);
   const bound = await store.bindBase({
-    workspaceId: initial.workspaceId,
-    expectedRevision: initial.revision,
-    baseCommit,
-    baseManifestHash,
+    ...baseInput(initial),
     assertCurrent: () => expect(prepared.current()).toEqual(initial),
   });
   expect(prepared.current()).toEqual(bound);
@@ -272,12 +319,9 @@ it("publishes committed workspace revisions, rejects stale checkpoints, and reti
   expect(() => prepared.current()).toThrow();
   expect(await store.get(initial.workspaceId)).toEqual(accepted);
   await store.delete({ workspaceId: initial.workspaceId, assertCurrent });
-  expect(changed).toHaveBeenCalledTimes(4);
-  expect(
-    changed.mock.calls.every(
-      ([change]) => change.agentId === source.agentId && change.sessionKey === source.sessionKey,
-    ),
-  ).toBe(true);
+  expect(changed.mock.calls).toEqual(
+    Array.from({ length: 4 }, () => [expect.objectContaining(owner)]),
+  );
 });
 
 it("reopens an owner and finishes only its artifact cleanup while database close waits", async () => {
@@ -359,24 +403,22 @@ it.runIf(process.platform !== "win32")(
     const replacementRoot = path.dirname(replacement.database.path);
     const retired = `${root}-retired`;
     roots.push(retired);
-    let originalMoved = false;
-    let replacementInstalled = false;
+    const restore: (() => void)[] = [];
+    const move = (from: string, to: string) => {
+      renameSync(from, to);
+      restore.unshift(() => renameSync(to, from));
+    };
     const unsubscribe = sessionChanges.subscribe((change) => {
       if ("sessionKey" in change && change.sessionKey === source.sessionKey) {
-        renameSync(root, retired);
-        originalMoved = true;
-        renameSync(replacementRoot, root);
-        replacementInstalled = true;
+        move(root, retired);
+        move(replacementRoot, root);
       }
     });
     try {
       const failure = await store
         .delete({ workspaceId: workspace.workspaceId, assertCurrent })
-        .then(
-          () => undefined,
-          (error: unknown) => error,
-        );
-      expect(replacementInstalled).toBe(true);
+        .catch((error: unknown) => error);
+      expect(restore).toHaveLength(2);
       expect.soft(failure).toMatchObject({
         message: expect.stringContaining("SQLite database file identity changed"),
       });
@@ -384,11 +426,8 @@ it.runIf(process.platform !== "win32")(
       expect(await fs.readFile(database.path)).toEqual(replacementBytes);
     } finally {
       unsubscribe();
-      if (replacementInstalled) {
-        renameSync(root, replacementRoot);
-      }
-      if (originalMoved) {
-        renameSync(retired, root);
+      for (const undo of restore) {
+        undo();
       }
       await closeOpenClawStateDatabaseByPathAsync(database.path);
     }

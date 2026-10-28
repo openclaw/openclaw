@@ -35,18 +35,9 @@ export function summarizeDiscordResponseBody(
 }
 
 export function isDiscordHtmlResponseBody(body: string, contentType?: string | null): boolean {
-  return (
-    /\bhtml\b/i.test(contentType ?? "") ||
-    /^\s*<!doctype\s+html\b/i.test(body) ||
-    /^\s*<html\b/i.test(body)
-  );
+  return /\bhtml\b/i.test(contentType ?? "") || /^\s*(?:<!doctype\s+html\b|<html\b)/i.test(body);
 }
 
 export function isDiscordRateLimitResponseBody(body: string): boolean {
-  const normalized = body.toLowerCase();
-  return (
-    normalized.includes("error 1015") ||
-    normalized.includes("cloudflare") ||
-    normalized.includes("rate limit")
-  );
+  return /error 1015|cloudflare|rate limit/i.test(body);
 }

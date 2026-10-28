@@ -16,25 +16,20 @@ internal object DeviceAuthPayload {
     nonce: String,
     platform: String?,
     deviceFamily: String?,
-  ): String {
-    val scopeString = scopes.joinToString(",")
-    val authToken = token.orEmpty()
-    val platformNorm = normalizeMetadataField(platform)
-    val deviceFamilyNorm = normalizeMetadataField(deviceFamily)
-    return listOf(
+  ): String =
+    listOf(
       "v3",
       deviceId,
       clientId,
       clientMode,
       role,
-      scopeString,
+      scopes.joinToString(","),
       signedAtMs.toString(),
-      authToken,
+      token.orEmpty(),
       nonce,
-      platformNorm,
-      deviceFamilyNorm,
+      normalizeMetadataField(platform),
+      normalizeMetadataField(deviceFamily),
     ).joinToString("|")
-  }
 
   /** Normalizes signed metadata fields without locale-sensitive lowercasing. */
   internal fun normalizeMetadataField(value: String?): String {
@@ -43,11 +38,7 @@ internal object DeviceAuthPayload {
     // lowercase ASCII A-Z only for auth payload metadata fields.
     val out = StringBuilder(trimmed.length)
     for (ch in trimmed) {
-      if (ch in 'A'..'Z') {
-        out.append((ch.code + 32).toChar())
-      } else {
-        out.append(ch)
-      }
+      out.append(if (ch in 'A'..'Z') (ch.code + 32).toChar() else ch)
     }
     return out.toString()
   }

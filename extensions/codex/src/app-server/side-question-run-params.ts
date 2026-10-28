@@ -2,10 +2,61 @@ import type {
   AgentHarnessSideQuestionParamsV2,
   EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { requireCodexSupervisionModelSelection } from "./binding-connection.js";
+import type { CodexAppServerThreadBinding } from "./session-binding.js";
+import type { CodexEffectiveSessionPermissionPolicy } from "./session-permission-policy.js";
+
+export function resolveSideQuestionNativeModelSelection(
+  binding: Pick<
+    CodexAppServerThreadBinding,
+    "connectionScope" | "preserveNativeModel" | "model" | "modelProvider"
+  >,
+) {
+  const { model, modelProvider } = binding;
+  return binding.connectionScope === "supervision"
+    ? requireCodexSupervisionModelSelection(binding)
+    : binding.preserveNativeModel && model && modelProvider
+      ? { model, modelProvider }
+      : undefined;
+}
+
+/** Keep prepared metadata only when it belongs to the native binding's model. */
+export function applySideQuestionModelSelection(
+  params: AgentHarnessSideQuestionParamsV2,
+  selection: { model: string; modelProvider: string } | undefined,
+): AgentHarnessSideQuestionParamsV2 {
+  return selection
+    ? {
+        ...params,
+        provider: selection.modelProvider,
+        model: selection.model,
+        runtimeModel:
+          params.runtimeModel?.id === selection.model &&
+          params.runtimeModel.provider === selection.modelProvider
+            ? params.runtimeModel
+            : ({
+                id: selection.model,
+                name: selection.model,
+                provider: selection.modelProvider,
+                api: "openai-chatgpt-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                // SAFETY: native side runs consume binding capabilities, not generic model token limits.
+              } as NonNullable<AgentHarnessSideQuestionParamsV2["runtimeModel"]>),
+      }
+    : params;
+}
 
 export function buildSideRunAttemptParams(
   params: AgentHarnessSideQuestionParamsV2,
-  options: { cwd: string; authProfileId?: string; runId: string; timeoutMs: number },
+  options: {
+    cwd: string;
+    authProfileId?: string;
+    runId: string;
+    timeoutMs: number;
+    permissionPolicy?: CodexEffectiveSessionPermissionPolicy;
+  },
 ): EmbeddedRunAttemptParamsV2 {
   const sideParams = {
     params,
@@ -17,9 +68,22 @@ export function buildSideRunAttemptParams(
     model: params.runtimeModel ?? ({ id: params.model, provider: params.provider } as never),
     prompt: params.question,
     timeoutMs: options.timeoutMs,
+    permissionMode: options.permissionPolicy?.mode,
+    sessionRoot: options.permissionPolicy?.root,
+    execOverrides: options.permissionPolicy && { mode: options.permissionPolicy.execMode },
     sessionId: params.sessionId,
     sessionFile: params.sessionFile,
     sessionKey: params.sessionKey,
+    ...(params.sessionKey && params.storePath
+      ? {
+          sessionTarget: {
+            agentId: params.agentId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            storePath: params.storePath,
+          },
+        }
+      : {}),
     ...(params.sandboxSessionKey ? { sandboxSessionKey: params.sandboxSessionKey } : {}),
     agentId: params.agentId,
     ...(params.messageChannel ? { messageChannel: params.messageChannel } : {}),
@@ -55,6 +119,7 @@ export function buildSideRunAttemptParams(
     authProfileStore: params.preparedRuntimeAuth.authProfileStore,
     modelRegistry: params.preparedRuntimeAuth.modelRegistry,
     preparedModelRuntime: params.preparedModelRuntime,
+    preparedWebSearchPolicy: params.preparedWebSearchPolicy,
     ...(params.preparedRuntimeAuth.resolvedApiKey
       ? { resolvedApiKey: params.preparedRuntimeAuth.resolvedApiKey }
       : {}),

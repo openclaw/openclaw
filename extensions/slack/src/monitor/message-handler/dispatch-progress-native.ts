@@ -36,8 +36,11 @@ export function createSlackNativeProgressTransport(params: {
     return !delivery.streamFailed;
   };
 
-  const start = async (update: { text?: string; chunks?: AnyChunk[] }): Promise<boolean> => {
-    const streamThreadTs = replyPlan.nextThreadTs();
+  const start = async (
+    update: { text?: string; chunks?: AnyChunk[] },
+    retainedThreadTs?: string,
+  ): Promise<boolean> => {
+    const streamThreadTs = retainedThreadTs ?? replyPlan.nextThreadTs();
     if (!streamThreadTs) {
       logVerbose(
         "slack-stream: no reply thread target for native progress stream start, falling back",
@@ -58,13 +61,18 @@ export function createSlackNativeProgressTransport(params: {
       const delivered = markDelivered(streamThreadTs);
       return update.chunks?.length ? delivered : true;
     } finally {
-      if (delivery.nativeProgressStreamStartPromise === startPromise) {
-        delivery.nativeProgressStreamStartPromise = null;
-      }
+      delivery.nativeProgressStreamStartPromise = null;
     }
   };
 
-  const append = async (update: { text?: string; chunks?: AnyChunk[] }): Promise<boolean> => {
+  const append = async (update: {
+    text?: string;
+    chunks?: AnyChunk[];
+  }): Promise<boolean | "rotated"> => {
+    if (await delivery.rotateInterruptedStream()) {
+      // The caller must reconcile a full snapshot for the replacement stream.
+      return "rotated";
+    }
     const session = delivery.streamSession;
     if (!session) {
       return false;

@@ -1,6 +1,6 @@
-// Node pairing commands: list, approve, reject, remove, and rename paired nodes.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth } from "../../../packages/terminal-core/src/table.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
@@ -19,16 +19,6 @@ import {
 import type { NodesRpcOpts } from "./types.js";
 
 const DEFAULT_NODE_PAIR_APPROVE_SCOPES: OperatorScope[] = ["operator.pairing"];
-function normalizeNodePairApproveScopes(scopes: unknown): OperatorScope[] {
-  const normalized = new Set<OperatorScope>(DEFAULT_NODE_PAIR_APPROVE_SCOPES);
-  for (const scope of Array.isArray(scopes) ? scopes : []) {
-    if (scope === "operator.pairing" || scope === "operator.write" || scope === "operator.admin") {
-      normalized.add(scope);
-    }
-  }
-  return [...normalized];
-}
-
 async function resolveApproveScopesForRequest(
   opts: NodesRpcOpts,
   requestId: string,
@@ -52,13 +42,8 @@ async function resolveApproveScopesForRequest(
   if (!request) {
     throw new Error(buildUnknownNodePairRequestIdMessage(requestId, opts, pendingRequestIds));
   }
-  const declaredScopes = normalizeNodePairApproveScopes(request.requiredApproveScopes);
-  if (declaredScopes.length > DEFAULT_NODE_PAIR_APPROVE_SCOPES.length) {
-    return { scopes: declaredScopes };
-  }
-  // Older pending requests only list requested commands; derive approval scopes from them.
   return {
-    scopes: resolveNodePairApprovalScopes(request.commands) as OperatorScope[],
+    scopes: resolveNodePairApprovalScopes(request.commands, request.requiredApproveScopes),
   };
 }
 
@@ -181,7 +166,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             return;
           }
           const { warn } = getNodesTheme();
-          defaultRuntime.log(warn(`Removed paired node ${nodeId}`));
+          defaultRuntime.log(warn(sanitizeTerminalText(`Removed paired node ${nodeId}`)));
         });
       }),
   );
@@ -210,7 +195,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             return;
           }
           const { ok } = getNodesTheme();
-          defaultRuntime.log(ok(`node rename ok: ${nodeId} -> ${name}`));
+          defaultRuntime.log(ok(sanitizeTerminalText(`node rename ok: ${nodeId} -> ${name}`)));
         });
       }),
   );

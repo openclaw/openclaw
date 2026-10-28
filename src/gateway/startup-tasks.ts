@@ -1,4 +1,3 @@
-// Ordered Gateway startup task runner.
 // Used for best-effort side effects that should not abort the server.
 import { formatErrorMessage } from "../infra/errors.js";
 
@@ -10,18 +9,12 @@ type StartupTaskResult =
   | { status: "ran" }
   | { status: "failed"; reason: string };
 
-/** Startup task descriptor used by gateway startup side-effect runners. */
 export type StartupTask = {
   source: string;
   agentId?: string;
   sessionKey?: string;
   workspaceDir?: string;
   run: () => Promise<StartupTaskResult>;
-};
-
-type StartupTaskLogger = {
-  debug: (message: string, meta?: Record<string, unknown>) => void;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
 };
 
 function taskMeta(task: StartupTask, reason: string): Record<string, unknown> {
@@ -37,7 +30,10 @@ function taskMeta(task: StartupTask, reason: string): Record<string, unknown> {
 /** Runs startup tasks in order and logs failed/skipped task metadata. */
 export async function runStartupTasks(params: {
   tasks: StartupTask[];
-  log: StartupTaskLogger;
+  log: {
+    debug: (message: string, meta?: Record<string, unknown>) => void;
+    warn: (message: string, meta?: Record<string, unknown>) => void;
+  };
 }): Promise<void> {
   for (const task of params.tasks) {
     let result: StartupTaskResult;

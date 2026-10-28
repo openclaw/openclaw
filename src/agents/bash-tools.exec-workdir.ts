@@ -5,7 +5,10 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
 import { isPathInside, safeStatSync } from "../infra/path-guards.js";
@@ -262,40 +265,29 @@ async function resolveBackendValidatedSandboxWorkdir(params: {
     return null;
   }
   const hostCandidate = resolveBackendHostWorkdirCandidate(params);
+  let workdir: SandboxWorkdir | undefined;
   if (hostCandidate) {
     const mappedWorkdir = await mapExistingHostPath(hostCandidate);
     if (mappedWorkdir.kind === "available") {
-      return await validateBackendWorkdir({
-        workdir: mappedWorkdir.workdir,
-        sandbox: params.sandbox,
-      });
-    }
-    if (mappedWorkdir.kind === "missing") {
-      return await validateBackendWorkdir({
-        workdir: {
-          hostCwd: workspaceHostCwd,
-          containerCwd: joinContainerWorkdir(hostCandidate.containerRoot, mappedWorkdir.relative),
-          scriptPreflightCwd: null,
-        },
-        sandbox: params.sandbox,
-      });
-    }
-    if (hostCandidate.failIfInvalid) {
+      workdir = mappedWorkdir.workdir;
+    } else if (mappedWorkdir.kind === "missing") {
+      workdir = {
+        hostCwd: workspaceHostCwd,
+        containerCwd: joinContainerWorkdir(hostCandidate.containerRoot, mappedWorkdir.relative),
+        scriptPreflightCwd: null,
+      };
+    } else if (hostCandidate.failIfInvalid) {
       return null;
     }
   }
-  const containerCwd = resolveBackendContainerWorkdir(params);
-  if (containerCwd) {
-    return await validateBackendWorkdir({
-      workdir: {
-        hostCwd: workspaceHostCwd,
-        containerCwd,
-        scriptPreflightCwd: null,
-      },
-      sandbox: params.sandbox,
-    });
+  if (!workdir) {
+    const containerCwd = resolveBackendContainerWorkdir(params);
+    if (!containerCwd) {
+      return null;
+    }
+    workdir = { hostCwd: workspaceHostCwd, containerCwd, scriptPreflightCwd: null };
   }
-  return null;
+  return await validateBackendWorkdir({ workdir, sandbox: params.sandbox });
 }
 
 async function resolveHostValidatedSandboxWorkdir(params: {
@@ -364,7 +356,8 @@ export async function resolveExecWorkdir(params: {
   }
 
   if (params.host === "node") {
-    const remoteCwd = explicitWorkdir ?? normalizeOptionalString(params.nodeCwd);
+    const remoteCwd = readNonBlankString(params.workdir) ?? readNonBlankString(params.nodeCwd);
+    // Node-host cwd is forwarded verbatim; preserve whitespace (unlike local/sandbox).
     return remoteCwd ? { kind: "node", remoteCwd } : { kind: "node" };
   }
 

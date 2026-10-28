@@ -51,7 +51,6 @@ export function createConfiguredProviderModelResolver<T extends { id: string }>(
   const canonicalize = (id: string) =>
     stripSelfProviderModelPrefix(provider, id) !== id ? id : canonicalizeModelId?.(id).trim() || id;
   let configuredModels: Map<string, T> | undefined;
-  let configuredModelsComplete = false;
   let hasFallback = false;
   let legacyRows: [string, T][] | undefined;
   return (modelId) => {
@@ -72,7 +71,6 @@ export function createConfiguredProviderModelResolver<T extends { id: string }>(
       for (const [candidate, row] of exactRows) {
         configuredModels.set(candidate, row);
       }
-      configuredModelsComplete = true;
     }
     const rows = configuredModels;
     const canonicalId = canonicalize(id);
@@ -82,9 +80,9 @@ export function createConfiguredProviderModelResolver<T extends { id: string }>(
     }
     // Declared equivalents precede legacy self-provider prefixes. The selected
     // namespace itself is never stripped or merged with a legacy row.
-    // One-shot callers keep the original short-circuit scan. Repeated fallbacks
-    // prepare only a completed index; callbacks can expose a partial one.
-    if (configuredModelsComplete && !legacyRows) {
+    // One-shot callers keep the short-circuit scan; repeated fallbacks reuse
+    // the legacy projection. Normalizers must not reenter this resolver.
+    if (!legacyRows) {
       if (hasFallback) {
         legacyRows = [];
         for (const [candidate, row] of rows) {
@@ -96,12 +94,10 @@ export function createConfiguredProviderModelResolver<T extends { id: string }>(
       }
       hasFallback = true;
     }
-    // A callback can reenter and prepare the projection while this scan is live.
-    const fallbackRows = legacyRows;
-    for (const [candidate, row] of fallbackRows ?? rows) {
-      const legacy = fallbackRows ? candidate : stripSelfProviderModelPrefix(provider, candidate);
+    for (const [candidate, row] of legacyRows ?? rows) {
+      const legacy = legacyRows ? candidate : stripSelfProviderModelPrefix(provider, candidate);
       if (
-        (fallbackRows !== undefined || legacy !== candidate) &&
+        (legacyRows !== undefined || legacy !== candidate) &&
         (legacy === id || canonicalize(legacy.trim()) === canonicalId)
       ) {
         return row;
@@ -133,6 +129,14 @@ function hasRequestCompatOverrides(compat: ModelDefinitionConfig["compat"]): boo
             /^(minimal|low|medium|high|xhigh|max|ultra)$/u.test(effort),
         )
       );
+    }
+    // Capability metadata is not an authored request override. Explicit temperature
+    // parameters still count as transport; native runtimes own their tool strategy.
+    if (key === "supportsTemperature") {
+      return typeof value !== "boolean";
+    }
+    if (key === "codeMode") {
+      return value !== "preferred" && value !== "capable";
     }
     return true;
   });

@@ -1,4 +1,3 @@
-// Doctor warnings and repairs for legacy OpenAI Codex model/provider routing.
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeFastMode,
@@ -70,7 +69,7 @@ function formatUnsupportedCompactionWarning(params: {
   fixHint: string;
 }): string {
   return [
-    "- Codex runtime uses native server-side compaction and ignores OpenClaw compaction summarizer overrides.",
+    "- Codex runtime ignores compaction.provider; compaction.model still applies to OpenClaw host summaries.",
     ...params.hits.map(
       (hit) => `- ${hit.path}: ${hit.value} is ignored while this agent uses Codex runtime.`,
     ),
@@ -123,11 +122,15 @@ function formatDisabledCodexPluginWarning(params: {
   ].join("\n");
 }
 
-function collectCodexAppServerCommandWarnings(cfg: OpenClawConfig): string[] {
+function readCodexPluginConfig(cfg: OpenClawConfig) {
   const plugins = asMutableRecord(cfg.plugins);
   const entries = asMutableRecord(plugins?.entries);
   const codex = asMutableRecord(entries?.codex);
-  const config = asMutableRecord(codex?.config);
+  return asMutableRecord(codex?.config);
+}
+
+function collectCodexAppServerCommandWarnings(cfg: OpenClawConfig): string[] {
+  const config = readCodexPluginConfig(cfg);
   const appServer = asMutableRecord(config?.appServer);
   if (typeof appServer?.command !== "string" || !appServer.command.trim()) {
     return [];
@@ -307,10 +310,7 @@ export function collectCodexRuntimeCompatibilityWarnings(
 }
 
 function collectCodexComputerUseWarnings(cfg: OpenClawConfig): string[] {
-  const plugins = asMutableRecord(cfg.plugins);
-  const entries = asMutableRecord(plugins?.entries);
-  const codex = asMutableRecord(entries?.codex);
-  const config = asMutableRecord(codex?.config);
+  const config = readCodexPluginConfig(cfg);
   const computerUse = asMutableRecord(config?.computerUse);
   if (!computerUse) {
     return [];
@@ -325,12 +325,7 @@ function collectCodexComputerUseWarnings(cfg: OpenClawConfig): string[] {
     return [];
   }
   const cadence =
-    computerUse.healthCheckIntervalMinutes === 30 ||
-    computerUse.healthCheckIntervalMinutes === 60 ||
-    computerUse.healthCheckIntervalMinutes === 120 ||
-    computerUse.healthCheckIntervalMinutes === 240
-      ? computerUse.healthCheckIntervalMinutes
-      : 60;
+    [30, 60, 120, 240].find((minutes) => computerUse.healthCheckIntervalMinutes === minutes) ?? 60;
   const healthCheckLine =
     computerUse.healthCheckEnabled === true
       ? `- Periodic Computer Use health checks are enabled with a ${cadence}-minute cadence.`
@@ -356,33 +351,25 @@ export function collectCodexRouteWarnings(params: {
   blockedProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): string[] {
   const env = params.env ?? process.env;
+  const compactionContext = { cfg: params.cfg, env };
   const blockedProviderPlan =
     params.blockedProviderPlan ?? collectBlockedLegacyOpenAICodexProviderPlan(params.cfg);
   const blockedModelIdentities = new Set(blockedProviderPlan.blockedModelIdentities);
   const hits = collectConfigModelRefs(params.cfg, blockedModelIdentities);
   const disabledCodexPluginHits = collectDisabledCodexPluginRouteHits(params.cfg, env);
-  const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs({
-    cfg: params.cfg,
-    env,
-  });
+  const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs(compactionContext);
   const legacyLosslessCompactionPaths = new Set(
     legacyLosslessCompactionConfigs.flatMap((hit) =>
       hit.modelPath ? [hit.providerPath, hit.modelPath] : [hit.providerPath],
     ),
   );
-  const unsupportedCompactionOverrides = collectUnsupportedCodexCompactionOverrides({
-    cfg: params.cfg,
-    env,
-  }).filter((hit) => !legacyLosslessCompactionPaths.has(hit.path));
-  const sharedDefaultCompactionConsumers = getSharedDefaultCompactionOverrideConsumers({
-    cfg: params.cfg,
-    env,
-  });
+  const unsupportedCompactionOverrides = collectUnsupportedCodexCompactionOverrides(
+    compactionContext,
+  ).filter((hit) => !legacyLosslessCompactionPaths.has(hit.path));
+  const sharedDefaultCompactionConsumers =
+    getSharedDefaultCompactionOverrideConsumers(compactionContext);
   const sharedLosslessDefaultHasNonCodexConsumer =
-    sharedDefaultLosslessCompactionHasNonCodexConsumer({
-      cfg: params.cfg,
-      env,
-    });
+    sharedDefaultLosslessCompactionHasNonCodexConsumer(compactionContext);
   const warnings = [
     ...(blockedProviderPlan.warning ? [blockedProviderPlan.warning] : []),
     ...collectCodexRuntimeCompatibilityWarnings(params.cfg, env),
@@ -436,7 +423,7 @@ export function collectCodexRouteWarnings(params: {
       formatUnsupportedCompactionWarning({
         hits: preservedSharedDefaultHits,
         fixHint:
-          "- Move or remove shared `agents.defaults.compaction.model/provider` settings manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
+          "- Move or remove shared `agents.defaults.compaction.provider` manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
       }),
     );
   }
@@ -456,7 +443,6 @@ export function collectCodexRouteWarnings(params: {
 export function maybeRepairCodexRoutes(params: {
   cfg: OpenClawConfigWithLegacyRoster;
   env?: NodeJS.ProcessEnv;
-  shouldRepair: boolean;
   blockedProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): { cfg: OpenClawConfigWithLegacyRoster; warnings: string[]; changes: string[] } {
   const env = params.env ?? process.env;
@@ -465,25 +451,20 @@ export function maybeRepairCodexRoutes(params: {
   const blockedModelIdentities = new Set(blockedProviderPlan.blockedModelIdentities);
   const hits = collectConfigModelRefs(params.cfg, blockedModelIdentities);
   const disabledCodexPluginHits = collectDisabledCodexPluginRouteHits(params.cfg, env);
-  const unsupportedCompactionOverrides = collectUnsupportedCodexCompactionOverrides({
-    cfg: params.cfg,
-    env,
-  });
-  const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs({
-    cfg: params.cfg,
-    env,
-  });
+  const compactionContext = { cfg: params.cfg, env };
+  const unsupportedCompactionOverrides =
+    collectUnsupportedCodexCompactionOverrides(compactionContext);
+  const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs(compactionContext);
   const hasRemovableServiceTier = collectCodexModelParamHits(params.cfg, env).some(
     (hit) => hit.removable,
   );
   if (
-    !params.shouldRepair ||
-    (hits.length === 0 &&
-      disabledCodexPluginHits.length === 0 &&
-      unsupportedCompactionOverrides.length === 0 &&
-      legacyLosslessCompactionConfigs.length === 0 &&
-      !hasRemovableServiceTier &&
-      !blockedProviderPlan.warning)
+    hits.length === 0 &&
+    disabledCodexPluginHits.length === 0 &&
+    unsupportedCompactionOverrides.length === 0 &&
+    legacyLosslessCompactionConfigs.length === 0 &&
+    !hasRemovableServiceTier &&
+    !blockedProviderPlan.warning
   ) {
     return {
       cfg: params.cfg,

@@ -2,6 +2,9 @@ import Foundation
 import OSLog
 
 enum NodeServiceManager {
+    static let runtimeInspectionFailure =
+        "Could not read the node service runtime. Check the node LaunchAgent and retry."
+
     private static let logger = Logger(subsystem: "ai.openclaw", category: "node.service")
     private static let lifecycleQueue = LifecycleQueue()
     private static var launchdPlistURL: URL {
@@ -144,17 +147,12 @@ extension NodeServiceManager {
             guard let cli = self.installedServiceCLI() else {
                 return CommandResult(
                     success: false,
-                    message: "Could not read the node service runtime. Check the node LaunchAgent and retry.",
+                    message: self.runtimeInspectionFailure,
                     parsed: nil)
             }
             command = AppProfile.current.localCLICommand(
                 prefix: cli.prefix, arguments: ["node", action, "--json"])
-            env = GatewayLaunchAgentManager.daemonEnvironment(
-                runtime: nil,
-                installedCLI: cli,
-                environment: ProcessInfo.processInfo.environment,
-                profile: .current,
-                searchPaths: CommandResolver.preferredPaths())
+            env = GatewayLaunchAgentManager.daemonEnvironment(installedCLI: cli)
         } else {
             command = await self.serviceCommand(action)
             var environment = ProcessInfo.processInfo.environment
@@ -167,12 +165,8 @@ extension NodeServiceManager {
         let ok = parsed?.object["ok"] as? Bool
         let message = (parsed?.object["error"] as? String) ?? (parsed?.object["message"] as? String)
         let success = response.success && (ok ?? true)
-        if success {
-            return CommandResult(success: true, message: nil, parsed: parsed)
-        }
-
-        if quiet {
-            return CommandResult(success: false, message: message, parsed: parsed)
+        if success || quiet {
+            return CommandResult(success: success, message: success ? nil : message, parsed: parsed)
         }
 
         let detail = message ?? TextSummarySupport.summarizeLastLine(response.stderr)

@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { GoogleChatEventPayloadError, parseGoogleChatInboundPayload } from "./monitor-event.js";
+import { parseGoogleChatInboundPayload } from "./monitor-event.js";
 import { getGoogleChatRuntime } from "./runtime.js";
 import type { GoogleChatEvent } from "./types.js";
 
@@ -92,12 +92,7 @@ function deserializeGoogleChatIngressEvent(rawEvent: string, claimedId: string):
 
 function normalizeClaimedGoogleChatEvent(raw: unknown, claimedId: string): GoogleChatEvent {
   try {
-    const event = parseGoogleChatInboundPayload(raw);
-    const eventType = event.type ?? event.eventType;
-    if (eventType !== "MESSAGE") {
-      throw new GoogleChatEventPayloadError();
-    }
-    return event;
+    return parseGoogleChatInboundPayload(raw);
   } catch (error) {
     throw new GoogleChatIngressPermanentError(
       "invalid-event",
@@ -144,14 +139,7 @@ export function createGoogleChatIngressMonitor(options: {
     const durableEvent = { ...rawEvent };
     // Authentication is complete before admission; no Add-on authorization token is replay data.
     delete durableEvent.authorizationEventObject;
-    const serialized = JSON.stringify(durableEvent);
-    if (typeof serialized !== "string") {
-      throw new GoogleChatIngressPermanentError(
-        "invalid-event",
-        "Google Chat webhook envelope cannot be serialized.",
-      );
-    }
-    return serialized;
+    return JSON.stringify(durableEvent);
   };
 
   return createStandardRawEventIngressMonitor({

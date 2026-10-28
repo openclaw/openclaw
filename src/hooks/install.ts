@@ -1,5 +1,3 @@
-// Hook install service installs hook packages from archives and local sources.
-
 import path from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -9,7 +7,7 @@ import {
   hasPackageRuntimeDependencies,
 } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir, unscopedPackageName } from "../infra/install-safe-path.js";
-import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
+import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import type { NpmIntegrityDriftPayload as HookNpmIntegrityDriftParams } from "../infra/npm-integrity.js";
 import { detectBundleManifestFormat } from "../plugins/bundle-manifest.js";
 import {
@@ -26,7 +24,6 @@ import { parseHookFrontmatter } from "./frontmatter.js";
 // malformed hook package from OOMing the install path.
 const HOOK_MD_MAX_BYTES = 1024 * 1024;
 
-/** Logger contract used by hook install and update operations. */
 type HookInstallLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
@@ -48,7 +45,6 @@ export type InstallHooksResult =
       targetDir: string;
       version?: string;
       npmResolution?: NpmSpecResolution;
-      integrityDrift?: NpmIntegrityDrift;
     }
   | {
       ok: false;
@@ -169,7 +165,6 @@ function validateHookId(hookId: string): string | null {
   return null;
 }
 
-/** Resolve the canonical local install directory for one hook pack id. */
 export function resolveHookInstallDir(hookId: string, hooksDir?: string): string {
   const hooksBase = hooksDir ? resolveUserPath(hooksDir) : path.join(CONFIG_DIR, "hooks");
   const hookIdError = validateHookId(hookId);
@@ -502,7 +497,6 @@ async function installHookFromDir(
   });
 }
 
-/** Install hooks from an archive after extracting and validating the archive root. */
 async function installHooksFromArchive(
   params: HookArchiveInstallParams,
 ): Promise<InstallHooksResult> {
@@ -542,7 +536,6 @@ async function installHooksFromArchive(
   });
 }
 
-/** Download, verify, and install an npm hook pack tarball. */
 export async function installHooksFromNpmSpec(
   params: {
     spec: string;
@@ -558,34 +551,69 @@ export async function installHooksFromNpmSpec(
   const spec = params.spec;
 
   logger.info?.(`Downloading ${spec.trim()}…`);
-  return await runtime.installFromValidatedNpmSpecArchive({
-    tempDirPrefix: "openclaw-hook-pack-",
-    spec,
-    timeoutMs,
-    workTimeoutMs,
-    expectedIntegrity: params.expectedIntegrity,
-    onIntegrityDrift: params.onIntegrityDrift,
-    warn: (message) => {
-      logger.warn?.(message);
-    },
-    installFromArchive: installHooksFromArchive,
-    archiveInstallParams: buildHookInstallForwardParams({
-      ...params,
+  const parsedSpec = runtime.parseRegistryNpmSpecResult(spec);
+  if (!parsedSpec.ok) {
+    return parsedSpec;
+  }
+  return await runtime.withInstallWorkspace("openclaw-hook-pack-", async (tmpDir) => {
+    const packed = await runtime.packNpmSpecToArchive({
+      spec: spec.trim(),
       timeoutMs,
       workTimeoutMs,
-      logger,
-      mode,
-      dryRun,
-      installPolicyRequest: {
-        kind: "plugin-npm",
-        requestedSpecifier: spec,
-        source: { kind: "npm", authority: "third-party", mutable: false, network: true },
-      },
-    }),
+      cwd: tmpDir,
+    });
+    if (!packed.ok) {
+      return packed;
+    }
+    const npmResolution: NpmSpecResolution = {
+      ...packed.metadata,
+      resolvedAt: new Date().toISOString(),
+    };
+    if (
+      npmResolution.version &&
+      !runtime.isPrereleaseResolutionAllowed({
+        spec: parsedSpec.parsed,
+        resolvedVersion: npmResolution.version,
+      })
+    ) {
+      return {
+        ok: false,
+        error: runtime.formatPrereleaseResolutionError({
+          spec: parsedSpec.parsed,
+          resolvedVersion: npmResolution.version,
+        }),
+      };
+    }
+    const drift = await runtime.resolveNpmIntegrityDriftWithDefaultMessage({
+      spec: spec.trim(),
+      expectedIntegrity: params.expectedIntegrity,
+      resolution: npmResolution,
+      onIntegrityDrift: params.onIntegrityDrift,
+      warn: (message) => logger.warn?.(message),
+    });
+    if (drift.error) {
+      return { ok: false, error: drift.error };
+    }
+    const installed = await installHooksFromArchive({
+      archivePath: packed.archivePath,
+      ...buildHookInstallForwardParams({
+        ...params,
+        timeoutMs,
+        workTimeoutMs,
+        logger,
+        mode,
+        dryRun,
+        installPolicyRequest: {
+          kind: "plugin-npm",
+          requestedSpecifier: spec,
+          source: { kind: "npm", authority: "third-party", mutable: false, network: true },
+        },
+      }),
+    });
+    return installed.ok ? { ...installed, npmResolution } : installed;
   });
 }
 
-/** Install a hook pack or single hook from a local directory/archive path. */
 export async function installHooksFromPath(
   params: HookPathInstallParams,
 ): Promise<InstallHooksResult> {

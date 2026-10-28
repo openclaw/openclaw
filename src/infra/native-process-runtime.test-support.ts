@@ -1,30 +1,17 @@
+import { createTestEntrypoint } from "./runtime-entrypoint.test-support.ts";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.ts";
+
+const entrypoint = createTestEntrypoint(import.meta.url, "infra");
+
 // Native process probes start their deadlines after the invocation owner prepares these modules.
 export const nativeProcessTestEntrypoints = {
-  updateCandidateIo: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "update-candidate-io",
-    distWorkerPath: "infra/update-candidate-io.js",
-  },
-  tailscale: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "tailscale",
-    distWorkerPath: "infra/tailscale.js",
-  },
-  diagnosticsTimeline: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "diagnostics-timeline",
-    distWorkerPath: "infra/diagnostics-timeline.js",
-  },
-  fsSafeCore: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "fs-safe",
-    distWorkerPath: "infra/fs-safe.js",
-  },
-  fsSafeEnv: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "fs-safe-env",
-    distWorkerPath: "infra/fs-safe-env.js",
-  },
+  backupDatabaseDiscovery: runtimeProcessEntrypoints.backupDatabaseDiscovery,
+  databaseBackup: runtimeProcessEntrypoints.databaseBackup,
+  updatePostgresState: runtimeProcessEntrypoints.updatePostgresState,
+  tailscale: entrypoint("tailscale"),
+  diagnosticsTimeline: entrypoint("diagnostics-timeline"),
+  fsSafeCore: entrypoint("fs-safe"),
+  fsSafeEnv: entrypoint("fs-safe-env"),
   memoryFsUtils: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../../packages/memory-host-sdk/src/host/fs-utils",

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { API, type Diagnostic } from "typescript/unstable/sync";
+import { serverFS } from "typescript/fs";
+import { API, type Diagnostic } from "typescript/sync";
 import { createDeclarationFileSystem } from "./native-declaration-filesystem.mts";
 import { formatNativeTypeScriptDiagnostics } from "./native-typescript-diagnostics.mts";
 
@@ -8,7 +9,7 @@ import { formatNativeTypeScriptDiagnostics } from "./native-typescript-diagnosti
 export function readNativeTypeScriptConfig(options: {
   cwd: string;
   configFileName: string;
-  readFile?: (file: string) => string | null;
+  readFile?: (file: string) => string | undefined;
   assertInput?: (file: string) => string;
 }) {
   const cwd = path.resolve(options.cwd);
@@ -29,10 +30,17 @@ export function readNativeTypeScriptConfig(options: {
   const api = new API({
     cwd,
     fs: {
+      directoryExists: serverFS.useOS,
+      fileExists: serverFS.useOS,
+      getAccessibleEntries: serverFS.useOS,
+      realpath: serverFS.useOS,
+      stat: serverFS.useOS,
+      writeFile: serverFS.useOS,
+      removeFile: serverFS.useOS,
       ...view?.filesystem,
       readFile(file) {
         if (view && !view.filesystem.fileExists(file)) {
-          return null;
+          return undefined;
         }
         const cached = contents.get(file);
         if (cached !== undefined) {
@@ -45,7 +53,7 @@ export function readNativeTypeScriptConfig(options: {
         }
         try {
           const text = readFile(file);
-          if (text !== null) {
+          if (text !== undefined) {
             contents.set(file, text);
           }
           return text;
@@ -55,10 +63,10 @@ export function readNativeTypeScriptConfig(options: {
             "code" in error &&
             (error.code === "ENOENT" || error.code === "ENOTDIR")
           ) {
-            return null;
+            return undefined;
           }
           readFailure ??= error instanceof Error ? error : new Error(String(error));
-          return null;
+          return undefined;
         }
       },
     },

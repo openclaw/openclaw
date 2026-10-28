@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { withSqliteIntegrityWorkerScope } from "../infra/sqlite-integrity-worker.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -39,7 +41,7 @@ async function runMaintenanceScope<T>(
     pending: [],
     ownership: ancestors[0]?.ownership ?? {},
   };
-  const assertCurrent = () => {
+  const assertCurrent = (database?: EngineConnection) => {
     if (!scope.active || ancestors.some((parent) => !parent.active)) {
       throw new Error("Agent database maintenance scope is closed");
     }
@@ -47,30 +49,31 @@ async function runMaintenanceScope<T>(
       throw scope.ownership.failure.error;
     }
     try {
-      owner.assertOwned();
+      if (database) {
+        owner.assertOwnedInTransaction(database);
+      } else {
+        owner.assertOwned();
+      }
     } catch (error) {
       // One failed ownership observation retires every scope under the same owner.
+      materializeErrorStack(error);
       scope.ownership.failure = { error };
       throw error;
     }
   };
-  const assertAdmission = () => {
-    assertCurrent();
-    if (!scope.accepting) {
-      throw new Error("Agent database maintenance admission is closed");
-    }
-  };
   const lease: OpenClawStateLeaseContext = {
     signal: owner.signal,
+    assertCurrent,
     assertOwned: assertCurrent,
-    assertOwnedInTransaction(database) {
-      assertCurrent();
-      owner.assertOwnedInTransaction(database);
-    },
+    assertOwnedInTransaction: assertCurrent,
+    holdWriteFence: owner.holdWriteFence,
     ...(owner.renew
       ? {
           renew() {
-            assertAdmission();
+            assertCurrent();
+            if (!scope.accepting) {
+              throw new Error("Agent database maintenance admission is closed");
+            }
             owner.renew!();
           },
         }

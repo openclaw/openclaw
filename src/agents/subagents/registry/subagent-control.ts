@@ -1,3 +1,4 @@
+/** Controller-authorized subagent list and kill operations. */
 export { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control-kill.js";
 export {
   buildControlledSubagentRunsReadContext,

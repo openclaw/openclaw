@@ -5,15 +5,18 @@
   },
   "include": [
     "../../src/infra/**/*.test.ts",
-    "../../src/infra/**/*.test.tsx",
-    "../../src/media/**/*.test.ts",
-    "../../src/media/**/*.test.tsx"
+    "../../src/infra/**/*.test.tsx"
   ],
   "exclude": [
+    "../../src/infra/heartbeat-*.test.ts",
+    "../../src/infra/heartbeat-*.test.tsx",
     "../../node_modules",
     "../../dist",
     "../../**/dist/**",
     "../../src/infra/outbound/**",
+    "../../src/infra/database-engine/*.postgres.test.ts",
+    "../../src/infra/database-engine/*.postgres.test.tsx",
+    "../../src/infra/postgres-sync/**",
     "../../src/infra/sqlite-*.test.ts",
     "../../src/infra/state-migrations*.test.ts",
     "../../src/infra/state-migrations*.test.tsx",

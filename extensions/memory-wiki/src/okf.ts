@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,6 +8,7 @@ import {
   normalizeOptionalString,
   normalizeSingleOrTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
@@ -14,6 +16,10 @@ import { appendMemoryWikiLog } from "./log.js";
 import { forEachMarkdownCodeRange } from "./markdown-links.js";
 import {
   createWikiPageFilename,
+  extractHumanNotesBlock,
+  HUMAN_START_MARKER,
+  HUMAN_END_MARKER,
+  preserveHumanNotesBlock,
   parseWikiMarkdown,
   renderWikiMarkdown,
   slugifyWikiSegment,
@@ -21,7 +27,11 @@ import {
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
-import { readWikiPageStat, writeGuardedVaultPage } from "./vault-page-write.js";
+import {
+  readExistingWikiPageUtf8,
+  readWikiPageStat,
+  writeGuardedVaultPage,
+} from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const OKF_RESERVED_FILENAMES = new Set(["index.md", "log.md"]);
@@ -146,7 +156,15 @@ async function readOkfTextFile(params: {
   relativePath: string;
   warnings: ImportMemoryWikiOkfWarning[];
 }): Promise<string | null> {
-  return await params.bundleRoot.readText(params.relativePath).catch((err: unknown) => {
+  try {
+    const bytes = await params.bundleRoot.readBytes(params.relativePath);
+    if (!isUtf8(bytes)) {
+      throw new Error(
+        "OKF document must be valid UTF-8. Convert the source to UTF-8 and retry the import.",
+      );
+    }
+    return bytes.toString("utf8");
+  } catch (err) {
     params.warnings.push({
       code: "unreadable-entry",
       path: params.relativePath,
@@ -158,7 +176,7 @@ async function readOkfTextFile(params: {
             : "Unable to read OKF concept.",
     });
     return null;
-  });
+  }
 }
 
 function splitMarkdownLinkDestination(target: string): {
@@ -281,6 +299,24 @@ function normalizeOkfRenderedPageForComparison(content: string): string {
   return `---\n${frontmatterBody}---\n${withoutRelated.slice(frontmatterMatch[0].length)}`.trimEnd();
 }
 
+function renderOkfBodyWithHumanNotes(producerBody: string): string {
+  const body = producerBody.trimEnd();
+  const notes = `## Notes\n${HUMAN_START_MARKER}\n${HUMAN_END_MARKER}\n`;
+  const rendered = body + "\n\n" + notes;
+  const notesOffset = body.length + 2;
+  let closingFence = "";
+  // Unclosed producer fences are valid Markdown, but must not swallow the local editing area.
+  forEachMarkdownCodeRange(rendered, (start, end) => {
+    if (start <= notesOffset && notesOffset < end) {
+      closingFence = /^ {0,3}(`{3,}|~{3,})/u.exec(rendered.slice(start))?.[1] ?? "";
+      if (!closingFence) {
+        throw new Error("Close the producer Markdown fence before importing this OKF concept.");
+      }
+    }
+  });
+  return closingFence ? body + "\n" + closingFence + "\n\n" + notes : rendered;
+}
+
 async function writeOkfConceptPage(params: {
   vaultRoot: string;
   pagePath: string;
@@ -288,18 +324,21 @@ async function writeOkfConceptPage(params: {
 }): Promise<{ changed: boolean; created: boolean }> {
   const vault = await fsRoot(params.vaultRoot);
   const pageStat = await readWikiPageStat(vault, params.pagePath);
-  const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
+  const existing = pageStat ? await readExistingWikiPageUtf8(vault, params.pagePath, () => "") : "";
+  const nextRendered = preserveHumanNotesBlock(params.content, existing, {
+    producerMarkdown: true,
+  });
   if (
-    existing === params.content ||
+    existing === nextRendered ||
     normalizeOkfRenderedPageForComparison(existing) ===
-      normalizeOkfRenderedPageForComparison(params.content)
+      normalizeOkfRenderedPageForComparison(nextRendered)
   ) {
     return { changed: false, created: !pageStat };
   }
   await writeGuardedVaultPage({
     vault,
     pagePath: params.pagePath,
-    content: params.content,
+    content: nextRendered,
     pageStat,
     pageLabel: "OKF concept page",
   });
@@ -327,9 +366,12 @@ async function removeStaleOkfConceptPages(params: {
     if (params.currentPagePaths.has(pagePath)) {
       continue;
     }
-    const raw = await vault.readText(pagePath).catch(() => "");
+    const raw = await readExistingWikiPageUtf8(vault, pagePath, () => "");
     const parsed = parseWikiMarkdown(raw);
-    if (asNullableRecord(parsed.frontmatter.okf)?.bundleKey === params.bundleKey) {
+    if (
+      asNullableRecord(parsed.frontmatter.okf)?.bundleKey === params.bundleKey &&
+      !extractHumanNotesBlock(raw, { producerMarkdown: true })
+    ) {
       await vault.remove(pagePath);
       removedPagePaths.push(pagePath);
     }
@@ -338,7 +380,7 @@ async function removeStaleOkfConceptPages(params: {
 }
 
 export function formatOkfImportSummary(result: ImportMemoryWikiOkfResult): string {
-  return `Imported ${result.importedCount} OKF concept${result.importedCount === 1 ? "" : "s"} from ${result.bundlePath} into memory wiki. Updated ${result.updatedCount}; removed ${result.removedCount}; skipped ${result.skippedCount}; refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
+  return terminalText`Imported ${result.importedCount} OKF concept${result.importedCount === 1 ? "" : "s"} from ${result.bundlePath} into memory wiki. Updated ${result.updatedCount}; removed ${result.removedCount}; skipped ${result.skippedCount}; refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
 }
 
 export async function importMemoryWikiOkfBundle(params: {
@@ -361,8 +403,11 @@ export async function importMemoryWikiOkfBundle(params: {
 
   for (const relativePath of markdownFiles) {
     if (relativePath === "index.md") {
-      rootIndexContent =
-        (await readOkfTextFile({ bundleRoot, relativePath, warnings })) ?? undefined;
+      const content = await readOkfTextFile({ bundleRoot, relativePath, warnings });
+      if (content === null) {
+        throw new Error(`Cannot read OKF bundle index.md: ${warnings.at(-1)?.message}`);
+      }
+      rootIndexContent = content;
     }
     if (OKF_RESERVED_FILENAMES.has(path.posix.basename(relativePath))) {
       continue;
@@ -469,7 +514,7 @@ export async function importMemoryWikiOkfBundle(params: {
       pagePath: concept.pagePath,
       content: renderWikiMarkdown({
         frontmatter,
-        body: rewritten.body,
+        body: renderOkfBodyWithHumanNotes(rewritten.body),
       }),
     });
     if (!writeResult.created && writeResult.changed) {

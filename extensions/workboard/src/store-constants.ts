@@ -25,6 +25,7 @@ export const MAX_WORKER_CONTEXT_RECENT_CARDS = 5;
 export const MAX_ATTACHMENT_BYTES = 256 * 1024;
 export const MAX_CARD_DIAGNOSTICS = 12;
 export const MAX_CARD_NOTIFICATIONS = 20;
+export const MAX_RUN_ID_LENGTH = 512;
 export const MAX_CARD_METADATA_BYTES = 24 * 1024;
 export const DEFAULT_CLAIM_TTL_MS = 30 * 60 * 1000;
 export const DEFAULT_WORKBOARD_DISPATCH_OWNER = "workboard-dispatcher";

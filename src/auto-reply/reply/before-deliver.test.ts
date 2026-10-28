@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
 import { createDirectPendingFinalCustody } from "../../channels/turn/direct-delivery-custody.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import * as transcript from "../../config/sessions/transcript.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import {
   OutboundDeliveryError,
@@ -21,15 +22,34 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
-import { captureDeliveredTranscriptMirror } from "./dispatch-from-config.transcript.js";
+import { pendingFinalSessionEntry } from "./dispatch-from-config.session-fixtures.test-support.js";
+import { sendReplyWithTranscriptMirror } from "./dispatch-from-config.transcript.js";
+import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import {
   attachReplyDispatchUndeliveredFallback,
   captureReplyDispatchDeliveryOutcome,
   createReplyDispatcher,
   prepareReplyPayloadForDispatcher,
 } from "./reply-dispatcher.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+function mockTranscriptAppend() {
+  return vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockResolvedValue({
+    ok: true,
+    target: {
+      sessionKey: "agent:test:session",
+      sessionId: "test-session",
+      storePath: "/tmp/transcript-mirror-test/sessions.json",
+    },
+    messageId: "mirrored-reply",
+  });
+}
 
 function planReply(payload: ReplyPayload): OutboundPayloadPlan {
   const [plan] = createStructuredOutboundPayloadPlan([payload]);
@@ -55,18 +75,10 @@ async function makePendingFinalFixture() {
   const sessionKey = "agent:main:telegram:direct:123";
   await replaceSessionEntry(
     { sessionKey, storePath },
-    {
-      sessionId: "session-1",
-      status: "running",
-      updatedAt: Date.now(),
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text: "final answer",
-        createdAt: Date.now(),
-        intentId: "intent-1",
-        deliveries: [{ id: "delivery-1", state: "prepared" }],
-      },
-    },
+    pendingFinalSessionEntry(
+      { sessionId: "session-1", intentId: "intent-1", deliveryId: "delivery-1" },
+      "final answer",
+    ),
   );
   const payload = setReplyPayloadMetadata(
     { text: "final answer" },
@@ -84,6 +96,31 @@ async function makePendingFinalFixture() {
 }
 
 describe("beforeDeliver in reply dispatcher", () => {
+  it.each(["unchanged", "replacement", "in-place"] as const)(
+    "retains delta mode only when a hook keeps the chunk text (%s)",
+    async (rewrite) => {
+      const delivered: ReplyPayload[] = [];
+      const dispatcher = createReplyDispatcher({
+        beforeDeliver: (payload) => {
+          if (rewrite === "in-place") {
+            payload.text = "Replacement snapshot";
+          }
+          return rewrite === "replacement" ? { ...payload, text: "Replacement snapshot" } : payload;
+        },
+        deliver: async (payload) => {
+          delivered.push(payload);
+        },
+      });
+      dispatcher.sendBlockReply({ text: "Answer chunk", textMode: "delta" });
+      await dispatcher.waitForIdle();
+      expect(delivered).toEqual([
+        rewrite !== "unchanged"
+          ? { text: "Replacement snapshot" }
+          : { text: "Answer chunk", textMode: "delta" },
+      ]);
+    },
+  );
+
   it.each(["raw", "prepared"] as const)(
     "retains an in-place media selection through %s dispatch recovery",
     async (operation) => {
@@ -233,6 +270,7 @@ describe("beforeDeliver in reply dispatcher", () => {
   );
 
   it("keeps prepared capture owners separate after hook rewrites on one dispatcher", async () => {
+    const mirror = mockTranscriptAppend();
     const delivered: string[] = [];
     const dispatcher = createReplyDispatcher({
       beforeDeliver: async (payload) => ({ ...payload, text: `Edited ${payload.text}` }),
@@ -243,32 +281,34 @@ describe("beforeDeliver in reply dispatcher", () => {
         delivered.push(plan.parts.text);
       },
     });
-    const captures = ["first", "second"].map((text) => {
-      const captureToken = {};
+    const ledger = createReplyTurnLedger(dispatcher);
+    for (const text of ["first", "second"]) {
       const metadata = { sessionKey: "agent:test:session", idempotencyKey: "source-reply", text };
-      const capture = captureDeliveredTranscriptMirror({ dispatcher, metadata, captureToken });
       const plan = planReply(
-        setReplyPayloadMetadata(
-          { text },
-          { finalDeliveryCapture: captureToken, sourceReplyTranscriptMirror: metadata },
-        ),
+        setReplyPayloadMetadata({ text }, { sourceReplyTranscriptMirror: metadata }),
       );
-      return { capture, plan };
-    });
-
-    for (const { plan } of captures) {
-      expect(dispatcher.sendPreparedReply("final", plan)).toBe(true);
+      const delivery = sendReplyWithTranscriptMirror({
+        dispatcher,
+        cfg: {},
+        metadata,
+        payload: plan.payload,
+        send: () => ledger.sendPreparedQueued("final", plan),
+      });
+      expect(delivery.queued).toBe(true);
     }
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
+    await settleReplyDispatcher({ dispatcher });
 
     expect(delivered).toEqual(["Edited first", "Edited second"]);
-    expect(captures.map(({ capture }) => capture()?.text)).toEqual(delivered);
+    expect(mirror.mock.calls.map(([params]) => params.text)).toEqual([
+      "Edited first",
+      "Edited second",
+    ]);
   });
 
   it.each([false, true])(
     "preserves prepared BTW text through prefixes and hook replacement (%s)",
     async (replaceText) => {
+      const mirror = mockTranscriptAppend();
       const delivered: string[] = [];
       const dispatcher = createReplyDispatcher({
         responsePrefix: "[bot]",
@@ -287,23 +327,26 @@ describe("beforeDeliver in reply dispatcher", () => {
       if (!plan) {
         throw new Error("expected a planned BTW reply");
       }
-      const captureToken = {};
       const metadata = { sessionKey: "agent:test:session", idempotencyKey: "btw-reply" };
       setReplyPayloadMetadata(plan.payload, {
-        finalDeliveryCapture: captureToken,
         sourceReplyTranscriptMirror: metadata,
       });
-      const capture = captureDeliveredTranscriptMirror({ dispatcher, metadata, captureToken });
-
-      expect(dispatcher.sendPreparedReply("final", plan)).toBe(true);
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
+      const ledger = createReplyTurnLedger(dispatcher);
+      const delivery = sendReplyWithTranscriptMirror({
+        dispatcher,
+        cfg: {},
+        metadata,
+        payload: plan.payload,
+        send: () => ledger.sendPreparedQueued("final", plan),
+      });
+      expect(delivery.queued).toBe(true);
+      await settleReplyDispatcher({ dispatcher });
 
       const expected = replaceText
         ? "Replacement answer"
         : "[bot] BTW\nQuestion: Q\n\nAnswer Updated.";
       expect(delivered).toEqual([expected]);
-      expect(capture()?.text).toBe(expected);
+      expect(mirror.mock.calls.map(([params]) => params.text)).toEqual([expected]);
     },
   );
 
@@ -621,6 +664,8 @@ describe("beforeDeliver in reply dispatcher", () => {
         ).toEqual([{ id: "delivery-1", state: suppressed ? "suppressed" : "delivered" }]);
       } finally {
         release.resolve();
+        await closeOpenClawAgentDatabasesAsync(fixture.tmpDir);
+        closeOpenClawAgentDatabasesForTest(fixture.tmpDir);
         await fs.rm(fixture.tmpDir, { recursive: true, force: true });
       }
     },
@@ -693,7 +738,12 @@ describe("beforeDeliver in reply dispatcher", () => {
       try {
         const deliver = vi.fn(async (payload: ReplyPayload) => {
           if (admitDirect) {
-            await createDirectPendingFinalCustody(payload)?.onPlatformSendDispatch();
+            const custody = await createDirectPendingFinalCustody(payload);
+            try {
+              await custody?.onPlatformSendDispatch();
+            } finally {
+              custody?.release();
+            }
           }
           if (deferred) {
             return { finalization: Promise.reject(failure) };
@@ -734,6 +784,8 @@ describe("beforeDeliver in reply dispatcher", () => {
           (loadSessionEntry(fixture) as InternalSessionEntry)?.pendingFinalDelivery?.deliveries,
         ).toEqual([{ id: "delivery-1", state: expected }]);
       } finally {
+        await closeOpenClawAgentDatabasesAsync(fixture.tmpDir);
+        closeOpenClawAgentDatabasesForTest(fixture.tmpDir);
         await fs.rm(fixture.tmpDir, { recursive: true, force: true });
       }
     },
@@ -779,6 +831,8 @@ describe("beforeDeliver in reply dispatcher", () => {
         expect(deliver).toHaveBeenCalledTimes(replaced ? 0 : 1);
         expect(receipt?.counts.final.cancelled).toBe(1);
       } finally {
+        await closeOpenClawAgentDatabasesAsync(fixture.tmpDir);
+        closeOpenClawAgentDatabasesForTest(fixture.tmpDir);
         await fs.rm(fixture.tmpDir, { recursive: true, force: true });
       }
     },

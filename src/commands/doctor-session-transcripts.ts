@@ -2,10 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { note } from "../../packages/terminal-core/src/note.js";
-import {
-  repairAcpSessionMetaKeysForDoctor,
-  type AcpSessionKeyRepairReport,
-} from "../acp/runtime/session-meta-doctor.js";
+import { repairAcpSessionMetaKeysForDoctor } from "../acp/runtime/session-meta-doctor.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -18,6 +15,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isHistoricalSessionSqliteMigrationIssue } from "../infra/session-sqlite-migration-issues.js";
 import { listExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
 import { createLegacyStateMigrationStepReceipt } from "../infra/state-migrations.messages.js";
 import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.plugin-doctor.js";
@@ -26,27 +24,21 @@ import type {
   MigrationMessages,
   PreparedPostSessionPluginMigration,
 } from "../infra/state-migrations.types.js";
-import {
-  repairCanonicalSessionKeys,
-  type CanonicalSessionKeyRepairReport,
-} from "./doctor-session-canonical-keys.js";
+import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
+import { repairLegacyDashboardChatTypes } from "./doctor-session-dashboard-chat-type.js";
 import {
   repairCanonicalSessionDeliveryStates,
   repairLegacySessionEntryStates,
   repairCanonicalSessionResolvedSkills,
-  type SessionDeliveryStateRepairReport,
 } from "./doctor-session-delivery-state.js";
 import { repairLegacySessionExecPolicy } from "./doctor-session-exec-policy.js";
-import {
-  repairReservedIncognitoSessionKeys,
-  type ReservedIncognitoKeyRepairReport,
-} from "./doctor-session-incognito-key-repair.js";
+import { repairReservedIncognitoSessionKeys } from "./doctor-session-incognito-key-repair.js";
 import { isInformationalMissingSessionIndex } from "./doctor-session-sqlite-types.js";
-import { formatSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
 import {
-  repairLegacySessionTitles,
-  type SessionTitleRepairReport,
-} from "./doctor-session-title-repair.js";
+  collectSessionSqliteMigrationFindings,
+  formatSessionSqliteMigrationWarnings,
+} from "./doctor-session-sqlite-warnings.js";
+import { repairLegacySessionTitles } from "./doctor-session-title-repair.js";
 import { repairLegacySessionWorktreeWorkspaces } from "./doctor-session-worktree-workspace.js";
 import {
   DoctorSqliteMaintenanceLockUnavailableError,
@@ -131,12 +123,12 @@ async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string
   return files.toSorted((a, b) => a.localeCompare(b));
 }
 
-export async function detectSessionTranscriptHealthIssues(params?: {
-  sessionDirs?: string[];
-}): Promise<SessionTranscriptHealthIssue[]> {
-  let sessionDirs = params?.sessionDirs;
+export async function detectSessionTranscriptHealthIssues(): Promise<
+  SessionTranscriptHealthIssue[]
+> {
+  let sessionDirs: string[];
   try {
-    sessionDirs ??= await resolveAgentSessionDirs(resolveStateDir(process.env));
+    sessionDirs = await resolveAgentSessionDirs(resolveStateDir(process.env));
   } catch {
     return [];
   }
@@ -189,10 +181,12 @@ export async function noteSessionTranscriptHealth(options?: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   shouldRepair?: boolean;
+  integrityCheck?: "quick" | "full";
   postSessionPluginMigration?: PreparedPostSessionPluginMigration;
   postSessionPluginMigrationPlanBound?: boolean;
   onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
   onWarnings?: (warnings: readonly string[]) => void;
+  onFindings?: (findings: readonly import("../flows/health-checks.js").HealthFinding[]) => void;
 }): Promise<LegacyStateMigrationStepReceipt | undefined> {
   const params = {
     ...options,
@@ -203,50 +197,6 @@ export async function noteSessionTranscriptHealth(options?: {
   // --session-sqlite subcommand remains the diagnostic/proof surface.
   const { hasRetainedDoctorSessionSources, runDoctorSessionSqlite } =
     await import("./doctor-session-sqlite.js");
-  let reservedKeyReport: ReservedIncognitoKeyRepairReport = { found: 0, repaired: 0 };
-  let deliveryReport: SessionDeliveryStateRepairReport = {
-    found: 0,
-    repaired: 0,
-    scannedStores: 0,
-  };
-  let resolvedSkillsReport: SessionDeliveryStateRepairReport = {
-    found: 0,
-    repaired: 0,
-    scannedStores: 0,
-  };
-  let entryStateReport: SessionDeliveryStateRepairReport = {
-    found: 0,
-    repaired: 0,
-    scannedStores: 0,
-  };
-  let canonicalKeyReport: CanonicalSessionKeyRepairReport = {
-    archivedTranscriptDirectories: [],
-    foundGroups: 0,
-    repairBatches: 0,
-    removedRows: 0,
-    repairedGroups: 0,
-    scannedStores: 0,
-  };
-  let worktreeWorkspaceReport = { found: 0, repaired: 0, scannedStores: 0 };
-  let acpKeyReport: AcpSessionKeyRepairReport = {
-    found: 0,
-    repaired: 0,
-    scannedRows: 0,
-    warnings: [],
-  };
-  let titleReport: SessionTitleRepairReport = {
-    found: 0,
-    repaired: 0,
-    scannedStores: 0,
-    warnings: [],
-  };
-  let legacyMainSessionResult:
-    | Awaited<
-        ReturnType<
-          typeof import("../config/sessions/legacy-main-session-migration.js").migrateLegacyMainSessionKeys
-        >
-      >
-    | undefined;
   let postSessionPluginReceipt: LegacyStateMigrationStepReceipt | undefined;
   const recordPostSessionRefusal = (refusal: { code: string; message: string }) => {
     if (!params.postSessionPluginMigration || postSessionPluginReceipt) {
@@ -264,14 +214,14 @@ export async function noteSessionTranscriptHealth(options?: {
       ? undefined
       : listExistingAgentDatabaseTargets(params.cfg ?? {}, params.env);
     if (!params.shouldRepair) {
-      entryStateReport = await repairLegacySessionEntryStates({
+      const entryStateReport = await repairLegacySessionEntryStates({
         apply: false,
         cfg: params.cfg ?? {},
         env: params.env,
         targets: previewTargets,
       });
       if (entryStateReport.found > 0) {
-        return undefined;
+        return { entryStateReport };
       }
     }
     const report = await runDoctorSessionSqlite(
@@ -280,12 +230,13 @@ export async function noteSessionTranscriptHealth(options?: {
         ...(params.cfg ? { cfg: params.cfg } : {}),
         env: params.env,
         mode: params.shouldRepair ? "import" : "dry-run",
+        integrityCheck: params.integrityCheck,
       },
       maintenanceAuthority,
     );
     const { migrateLegacyMainSessionKeys } =
       await import("../config/sessions/legacy-main-session-migration.js");
-    legacyMainSessionResult = await migrateLegacyMainSessionKeys({
+    const legacyMainSessionResult = await migrateLegacyMainSessionKeys({
       cfg: params.cfg ?? {},
       env: params.env,
       mode: params.shouldRepair ? "doctor-fix" : "detect",
@@ -294,35 +245,50 @@ export async function noteSessionTranscriptHealth(options?: {
       apply: params.shouldRepair,
       cfg: params.cfg ?? {},
       env: params.env,
+      integrityCheck: params.integrityCheck,
     };
-    canonicalKeyReport = await repairCanonicalSessionKeys(repairParams);
+    const canonicalKeyReport = await repairCanonicalSessionKeys(repairParams);
     // Preview reuses its read-only inventory; import and key repair can create stores.
     const rowRepairParams = {
       ...repairParams,
       targets: previewTargets ?? listExistingAgentDatabaseTargets(repairParams.cfg, params.env),
     };
     // Canonical-key ties compare complete entry JSON, so select their winner before stripping it.
-    resolvedSkillsReport = repairCanonicalSessionResolvedSkills(rowRepairParams);
+    const resolvedSkillsReport = repairCanonicalSessionResolvedSkills(rowRepairParams);
     // Import may create the first durable SQLite row for a colliding legacy key.
-    reservedKeyReport = await repairReservedIncognitoSessionKeys(rowRepairParams);
-    deliveryReport = repairCanonicalSessionDeliveryStates(rowRepairParams);
+    const reservedKeyReport = await repairReservedIncognitoSessionKeys(rowRepairParams);
+    const deliveryReport = repairCanonicalSessionDeliveryStates(rowRepairParams);
     repairLegacySessionExecPolicy(rowRepairParams);
-    acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
+    repairLegacyDashboardChatTypes(rowRepairParams);
+    const acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
+      ...rowRepairParams,
+      authority: maintenanceAuthority,
+      integrityCheck: params.integrityCheck,
+    });
+    const titleReport = await repairLegacySessionTitles({
       ...rowRepairParams,
       authority: maintenanceAuthority,
     });
-    titleReport = await repairLegacySessionTitles({
-      ...rowRepairParams,
-      authority: maintenanceAuthority,
-    });
-    worktreeWorkspaceReport = await repairLegacySessionWorktreeWorkspaces({
+    const worktreeWorkspaceReport = await repairLegacySessionWorktreeWorkspaces({
       ...rowRepairParams,
       // Workspace metadata participates in an unfinished legacy-main source claim.
       apply:
         params.shouldRepair && (!legacyMainSessionResult.armed || legacyMainSessionResult.complete),
     });
+    const results = {
+      entryStateReport: undefined,
+      report,
+      legacyMainSessionResult,
+      canonicalKeyReport,
+      resolvedSkillsReport,
+      reservedKeyReport,
+      deliveryReport,
+      acpKeyReport,
+      titleReport,
+      worktreeWorkspaceReport,
+    };
     if (params.postSessionPluginMigrationPlanBound && !params.postSessionPluginMigration) {
-      return report;
+      return results;
     }
     if (params.postSessionPluginMigration?.step.requiredness === "not-required") {
       postSessionPluginReceipt = createLegacyStateMigrationStepReceipt(
@@ -330,14 +296,14 @@ export async function noteSessionTranscriptHealth(options?: {
         { changes: [], warnings: [] },
       );
       params.onStepReceipt?.(postSessionPluginReceipt);
-      return report;
+      return results;
     }
     if (!params.shouldRepair && params.postSessionPluginMigration) {
       recordPostSessionRefusal({
         code: "repair-not-authorized",
         message: "Post-session plugin repair was planned but Doctor repair was not authorized.",
       });
-      return report;
+      return results;
     }
     let pluginRepair: MigrationMessages;
     let receiptStep = params.postSessionPluginMigration?.step;
@@ -386,11 +352,11 @@ export async function noteSessionTranscriptHealth(options?: {
     if (pluginMessages.length > 0) {
       note(pluginMessages.join("\n"), "Plugin session repair");
     }
-    return report;
+    return results;
   };
-  let report: Awaited<ReturnType<typeof runSessionSqlite>>;
+  let result: Awaited<ReturnType<typeof runSessionSqlite>>;
   try {
-    report = params.shouldRepair
+    result = params.shouldRepair
       ? await withDoctorSqliteMaintenanceLock({
           env: params.env,
           operation: "session SQLite import",
@@ -416,23 +382,35 @@ export async function noteSessionTranscriptHealth(options?: {
     });
     return postSessionPluginReceipt;
   }
-  if (entryStateReport.found > 0) {
+  if (result.entryStateReport) {
     note(
-      `- Found ${entryStateReport.found} durable session row(s) with legacy pending-delivery, fallback, or memory-flush state. Run "openclaw doctor --fix" before further session inspection.`,
+      `- Found ${result.entryStateReport.found} durable session row(s) with legacy pending-delivery, fallback, or memory-flush state. Run "openclaw doctor --fix" before further session inspection.`,
       "Session SQLite",
     );
-  }
-  if (!report) {
     return postSessionPluginReceipt;
   }
-  if (worktreeWorkspaceReport.found > 0) {
-    note(
-      params.shouldRepair
-        ? `- Repaired canonical workspace metadata for ${worktreeWorkspaceReport.repaired} of ${worktreeWorkspaceReport.found} managed-worktree session(s). Check project/worktree ownership for any remaining entries.`
-        : `- Found ${worktreeWorkspaceReport.found} managed-worktree session(s) missing canonical workspace metadata. Run "openclaw doctor --fix" to repair them.`,
-      "Session worktrees",
-    );
-  }
+  const {
+    report,
+    worktreeWorkspaceReport,
+    acpKeyReport,
+    titleReport,
+    reservedKeyReport,
+    canonicalKeyReport,
+    deliveryReport,
+    resolvedSkillsReport,
+    legacyMainSessionResult,
+  } = result;
+  const noteRepair = (found: number, title: string, message: () => string): void => {
+    if (found > 0) {
+      note(message(), title);
+    }
+  };
+
+  noteRepair(worktreeWorkspaceReport.found, "Session worktrees", () =>
+    params.shouldRepair
+      ? `- Repaired saved workspace metadata for ${worktreeWorkspaceReport.repaired} of ${worktreeWorkspaceReport.found} managed-worktree session(s). Check project/worktree ownership for any remaining entries.`
+      : `- Found ${worktreeWorkspaceReport.found} managed-worktree session(s) missing saved workspace metadata. Run "openclaw doctor --fix" to repair them.`,
+  );
   if (acpKeyReport.found > 0 || acpKeyReport.warnings.length > 0) {
     params.onWarnings?.(acpKeyReport.warnings);
     note(
@@ -457,42 +435,27 @@ export async function noteSessionTranscriptHealth(options?: {
       "Session titles",
     );
   }
-  if (reservedKeyReport.found > 0) {
-    note(
-      params.shouldRepair
-        ? `- Renamed ${reservedKeyReport.repaired} durable session key(s) that collided with the reserved incognito namespace.`
-        : `- Found ${reservedKeyReport.found} durable session key(s) that collide with the reserved incognito namespace. Run "openclaw doctor --fix" to rename them.`,
-      "Session SQLite",
-    );
-  }
-  if (canonicalKeyReport.foundGroups > 0) {
-    note(
-      params.shouldRepair
-        ? `- Canonicalized ${canonicalKeyReport.repairedGroups} session-key group(s) in ${canonicalKeyReport.repairBatches} transaction batch(es), removed ${canonicalKeyReport.removedRows} duplicate or alias row(s), and preserved cross-store history in ${canonicalKeyReport.archivedTranscriptDirectories.length} archive director${canonicalKeyReport.archivedTranscriptDirectories.length === 1 ? "y" : "ies"}.`
-        : `- Found ${canonicalKeyReport.foundGroups} non-canonical or duplicate session-key group(s). Run "openclaw doctor --fix" to preserve their history and canonicalize the rows.`,
-      "Session SQLite",
-    );
-  }
-  if (deliveryReport.found > 0) {
-    note(
-      params.shouldRepair
-        ? `- Canonicalized delivery state for ${deliveryReport.repaired} durable session row(s).`
-        : `- Found ${deliveryReport.found} durable session row(s) with legacy delivery fields. Run "openclaw doctor --fix" to canonicalize them.`,
-      "Session SQLite",
-    );
-  }
-  if (resolvedSkillsReport.found > 0) {
-    note(
-      params.shouldRepair
-        ? `- Stripped the runtime-only skills catalog from ${resolvedSkillsReport.repaired} durable session row(s). Logical SQLite pages are freed; shrinking the on-disk database requires "openclaw doctor --session-sqlite compact --session-sqlite-all-agents".`
-        : `- Found ${resolvedSkillsReport.found} durable session row(s) carrying a runtime-only skills catalog. Run "openclaw doctor --fix" to strip it.`,
-      "Session SQLite",
-    );
-  }
-  if (
-    legacyMainSessionResult &&
-    (legacyMainSessionResult.changes.length > 0 || legacyMainSessionResult.warnings.length > 0)
-  ) {
+  noteRepair(reservedKeyReport.found, "Session SQLite", () =>
+    params.shouldRepair
+      ? `- Renamed ${reservedKeyReport.repaired} durable session key(s) that collided with the reserved incognito namespace.`
+      : `- Found ${reservedKeyReport.found} durable session key(s) that collide with the reserved incognito namespace. Run "openclaw doctor --fix" to rename them.`,
+  );
+  noteRepair(canonicalKeyReport.foundGroups, "Session SQLite", () =>
+    params.shouldRepair
+      ? `- Canonicalized ${canonicalKeyReport.repairedGroups} session-key group(s) in ${canonicalKeyReport.repairBatches} transaction batch(es), removed ${canonicalKeyReport.removedRows} duplicate or alias row(s), and preserved cross-store history in ${canonicalKeyReport.archivedTranscriptDirectories.length} archive director${canonicalKeyReport.archivedTranscriptDirectories.length === 1 ? "y" : "ies"}.`
+      : `- Found ${canonicalKeyReport.foundGroups} outdated or duplicate session-key group(s). Run "openclaw doctor --fix" to preserve their history and update the rows to use the current keys.`,
+  );
+  noteRepair(deliveryReport.found, "Session SQLite", () =>
+    params.shouldRepair
+      ? `- Canonicalized delivery state for ${deliveryReport.repaired} durable session row(s).`
+      : `- Found ${deliveryReport.found} durable session row(s) with legacy delivery fields. Run "openclaw doctor --fix" to canonicalize them.`,
+  );
+  noteRepair(resolvedSkillsReport.found, "Session SQLite", () =>
+    params.shouldRepair
+      ? `- Stripped the runtime-only skills catalog from ${resolvedSkillsReport.repaired} durable session row(s). Logical SQLite pages are freed; shrinking the on-disk database requires "openclaw doctor --session-sqlite compact --session-sqlite-all-agents".`
+      : `- Found ${resolvedSkillsReport.found} durable session row(s) carrying a runtime-only skills catalog. Run "openclaw doctor --fix" to strip it.`,
+  );
+  if (legacyMainSessionResult.changes.length > 0 || legacyMainSessionResult.warnings.length > 0) {
     note(
       [
         ...legacyMainSessionResult.changes.map((change) => `- ${change}`),
@@ -513,7 +476,9 @@ export async function noteSessionTranscriptHealth(options?: {
     (target) => !isInformationalMissingSessionIndex(target),
   );
   const actionableIssues = actionableTargets.reduce(
-    (count, target) => count + target.issues.length,
+    (count, target) =>
+      count +
+      target.issues.filter((issue) => !isHistoricalSessionSqliteMigrationIssue(issue)).length,
     0,
   );
   const lines = [
@@ -521,7 +486,9 @@ export async function noteSessionTranscriptHealth(options?: {
     `- Transcript events: imported=${report.totals.importedTranscriptEvents}; validated=${report.totals.validatedTranscriptEvents}.`,
   ];
   for (const target of informationalIndexes) {
-    lines.push(...target.issues.map((issue) => `- ${issue.message}`));
+    for (const issue of target.issues) {
+      lines.push(`- ${issue.message}`);
+    }
   }
   if (report.totals.archivedTranscriptFiles > 0) {
     lines.push(
@@ -533,15 +500,22 @@ export async function noteSessionTranscriptHealth(options?: {
       `- Archived ${report.totals.archivedUnreferencedJsonlFiles} unreferenced JSONL artifact(s).`,
     );
   }
+  const warnings = formatSessionSqliteMigrationWarnings(actionableTargets, params.env);
+  params.onWarnings?.(warnings);
+  const findings = collectSessionSqliteMigrationFindings(actionableTargets, params.env);
+  if (params.onFindings) {
+    params.onFindings(findings);
+  } else {
+    for (const warning of warnings) {
+      lines.push(`- ${warning}`);
+    }
+  }
   if (actionableIssues > 0) {
-    const warnings = formatSessionSqliteMigrationWarnings(actionableTargets, params.env);
-    params.onWarnings?.(warnings);
-    lines.push(...warnings.map((warning) => `- ${warning}`));
     lines.push(
       `- Found ${actionableIssues} session SQLite issue(s). Inspect with "${formatCliCommand("openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents", params.env)}".`,
     );
   }
-  if (!params.shouldRepair && actionableTargets.length > 0) {
+  if (!params.shouldRepair && actionableTargets.some((target) => target.legacyEntries > 0)) {
     lines.push(
       '- Run "openclaw doctor --fix" to migrate legacy session metadata/transcripts to SQLite.',
     );

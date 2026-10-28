@@ -3,14 +3,15 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   applySessionEntryReplacements,
-  appendTranscriptEventSync,
   assignSessionOwner,
   listSessionParticipantsReadOnly,
   loadSessionEntry,
@@ -25,6 +26,7 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import * as candidates from "./session-accessor.sqlite-maintenance-candidates.js";
+import { prepareSessionEntryMaintenanceInDatabase } from "./session-accessor.sqlite-maintenance-store.js";
 import {
   prepareSessionMaintenanceInWorker,
   reclaimSessionMaintenanceInTransaction,
@@ -33,6 +35,7 @@ import { applySessionEntryMaintenance } from "./session-accessor.sqlite-maintena
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sqlite-replacement-state.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import * as maintenanceRuntime from "./store-maintenance-runtime.js";
 import {
@@ -62,6 +65,110 @@ function createStore(entryCount: number, updatedAt = Date.now()) {
   }, options);
   return { database, options, storePath };
 }
+
+it("bounds expired-session SQL per maintenance request and drains the same archived set", async () => {
+  const { database, options, storePath } = createStore(500, Date.now() - 90 * DAY_MS);
+  const operation = await createPlanningOperation(options, {
+    maxAgeEntries: 64,
+    maxCapEntries: 64,
+    maintenance: resolveMaintenanceConfigFromInput({
+      mode: "enforce",
+      maxEntries: 1000,
+      pruneAfter: "30d",
+      preserveRecent: "1d",
+    }),
+  });
+  const statements = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["sql"],
+    () => "sql",
+  );
+  const preparedCounts: number[] = [];
+  const preparedRows: number[] = [];
+  const writerCounts: number[] = [];
+  const archived: string[] = [];
+  try {
+    for (let pass = 0; pass < 10; pass += 1) {
+      let before = statements.counts.sql;
+      const beforeRows = statements.rowCounts.sql;
+      const prepared = runSqliteReadSnapshotSync(database.db, () =>
+        prepareSessionEntryMaintenanceInDatabase(
+          database,
+          operation.input,
+          () => operation.input.preservation,
+        ),
+      );
+      preparedCounts.push(statements.counts.sql - before);
+      preparedRows.push(statements.rowCounts.sql - beforeRows);
+      before = statements.counts.sql;
+      const plan = runOpenClawAgentWriteTransaction((current) => prepared.apply(current), options);
+      writerCounts.push(statements.counts.sql - before);
+      expect(plan.archived).toBeLessThanOrEqual(64);
+      archived.push(...plan.archivedEntries.map((entry) => entry.sessionKey));
+      if (!plan.ageContinuation) {
+        break;
+      }
+      operation.input.ageContinuation = plan.ageContinuation;
+    }
+    expect(archived.toSorted()).toEqual(
+      Array.from({ length: 500 }, (_, index) => key(index)).toSorted(),
+    );
+    expect(Math.max(...preparedCounts)).toBeLessThanOrEqual(24);
+    expect(Math.max(...preparedRows)).toBeLessThanOrEqual(256);
+    expect(Math.max(...writerCounts)).toBeLessThanOrEqual(96);
+  } finally {
+    statements.restore();
+  }
+  expect(
+    Array.from(
+      { length: 500 },
+      (_, index) => loadSessionEntry({ storePath, sessionKey: key(index) })?.archiveReason,
+    ),
+  ).toEqual(Array.from({ length: 500 }, () => "age-retention"));
+});
+
+it("pins age eligibility across pages and immediately revisits the next due boundary", async () => {
+  const now = Date.now();
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(now);
+  const { options, storePath } = createStore(64, now - 2_000);
+  runOpenClawAgentWriteTransaction((database) => {
+    writeSessionEntry(database, key(64), { sessionId: "cadence-64", updatedAt: now - 999 });
+  }, options);
+  const operation = await createPlanningOperation(options, {
+    maxAgeEntries: 64,
+    maxCapEntries: 64,
+    maintenance: {
+      ...resolveMaintenanceConfigFromInput(),
+      pruneAfterMs: 1_000,
+      archiveDashboardAfterMs: null,
+      preserveRecentMs: null,
+      maxEntries: 1_000,
+    },
+  });
+  const pass = () => {
+    const result = reclaimSessionMaintenanceInTransaction(operation, {});
+    if (result.kind !== "maintenance-plan") {
+      throw new Error("Expected an admitted age-retention page");
+    }
+    return result;
+  };
+  const first = pass();
+  expect(first.value.archived).toBe(64);
+  expect(first.value.ageContinuation).toMatchObject({ at: now });
+  operation.input.ageContinuation = first.value.ageContinuation;
+  vi.setSystemTime(now + 5);
+  const last = pass();
+  expect(last.value).toMatchObject({ archived: 0, entryRemovals: [] });
+  expect(last.value.ageContinuation).toBeUndefined();
+  expect(last.nextAt).toBe(now + 2);
+  expect(loadSessionEntry({ storePath, sessionKey: key(64) })?.archivedAt).toBeUndefined();
+
+  delete operation.input.ageContinuation;
+  const next = pass();
+  expect(next.value.archivedEntries).toEqual([{ sessionKey: key(64), sessionId: "cadence-64" }]);
+  expect(loadSessionEntry({ storePath, sessionKey: key(64) })?.archiveReason).toBe("age-retention");
+});
 
 async function createPlanningOperation(
   options: ReturnType<typeof createStore>["options"],
@@ -147,12 +254,12 @@ it.each(["participant", "owner"] as const)(
     const { database, storePath } = createStore(24);
     writeMetadata(storePath, kind, 0);
     const factReads = vi.spyOn(ageFacts, "recordSessionEntryMaintenanceAgeFact");
-    // One fact uses separate indexed probes; metadata writes must not repeat any of them.
+    // One fact combines dashboard and pending rows; metadata writes must not repeat either probe.
     const queries = trackSqliteStatementExecutions(
-      database.db,
+      requireNativeSqliteDatabase(database.db),
       ["after", "dashboards", "pending", "unexpected"],
       (sql) => {
-        if (!sql.includes('as "session_started_at"') || !sql.includes('from "session_nodes"')) {
+        if (!sql.includes('"session_started_at"') || !sql.includes('from "session_nodes"')) {
           return null;
         }
         if (sql.includes('"age_namespaces"')) {
@@ -164,7 +271,7 @@ it.each(["participant", "owner"] as const)(
         return sql.includes('"updated_at" > ?') ? "after" : "unexpected";
       },
     );
-    const expectedProbes = { after: 1, dashboards: 1, pending: 1, unexpected: 0 };
+    const expectedProbes = { after: 1, dashboards: 1, pending: 0, unexpected: 0 };
     const expectedRows = { after: 1, dashboards: 0, pending: 0, unexpected: 0 };
     try {
       await renameEntry(storePath, 0, "warm age facts");
@@ -205,48 +312,49 @@ it.each(["participant", "owner"] as const)(
   },
 );
 
-it.each([
-  { scenario: "4,000 fresh entries with foreign commits", count: 4_000, ageDays: 0 },
-  { scenario: "eight-day entries with a protected primary", count: 2, ageDays: 8 },
-])("does not rescan $scenario across 20 writes", async ({ count, ageDays }) => {
-  const { database, options, storePath } = createStore(count, Date.now() - ageDays * DAY_MS);
-  if (ageDays) {
-    runOpenClawAgentWriteTransaction((owner) => {
-      writeSessionEntry(owner, "agent:main:main", {
-        sessionId: "primary",
-        updatedAt: Date.now() - 100 * DAY_MS,
-      });
-    }, options);
-    await renameEntry(storePath, 0, "warm age facts");
-  }
-  const writer = ageDays ? undefined : new DatabaseSync(database.path);
-  writer?.exec("CREATE TABLE maintenance_cadence_noise (value INTEGER)");
-  const factReads = vi.spyOn(ageFacts, "recordSessionEntryMaintenanceAgeFact");
-  const ageReads = vi.spyOn(candidates, "readSessionMaintenanceAgeCandidates");
-  const keyReads = vi.spyOn(candidates, "readSessionMaintenanceKeyProjection");
-  const writes = 20;
+it("reports a maintenance deadline without an unused revision snapshot", () => {
+  const now = Date.now();
+  const { database, options } = createStore(1, now);
+  const maintenance: ResolvedSessionMaintenanceConfig = {
+    ...resolveMaintenanceConfigFromInput(),
+    mode: "enforce",
+    pruneAfterMs: DAY_MS,
+    archiveDashboardAfterMs: null,
+    preserveRecentMs: null,
+  };
+  runOpenClawAgentWriteTransaction(
+    (current) => ageFacts.recordSessionEntryMaintenanceAgeFact(current, maintenance, now),
+    options,
+  );
+  const reads = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["revision"],
+    (sql) => (/^PRAGMA data_version\b/i.test(sql) ? "revision" : null),
+  );
+  let admittedReads = 0;
   try {
-    for (let index = 0; index < writes; index += 1) {
-      writer?.prepare("INSERT INTO maintenance_cadence_noise VALUES (?)").run(index);
-      await renameEntry(storePath, index % count, `renamed-${index}`);
-    }
-  } finally {
-    writer?.close();
-  }
-  for (let index = 0; index < Math.min(count, writes); index += 1) {
-    expect(loadSessionEntry({ storePath, sessionKey: key(index) })).toMatchObject({
-      label: `renamed-${ageDays ? writes - count + index : index}`,
+    const result = reclaimSessionMaintenanceInTransaction(
+      {
+        kind: "maintenance-age",
+        databaseOptions: resolveSessionReclamationDatabaseOptions(options),
+        materializedPlans: [],
+        maintenance,
+      },
+      {
+        beforeMutation() {
+          // The transaction's freshness probe remains; the deadline needs no second snapshot.
+          admittedReads = reads.counts.revision;
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      kind: "maintenance-age",
+      nextAt: now + ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
     });
+    expect(reads.counts.revision - admittedReads).toBe(0);
+  } finally {
+    reads.restore();
   }
-  if (ageDays) {
-    expect(
-      loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.archivedAt,
-    ).toBeUndefined();
-  } else {
-    expect(factReads).toHaveBeenCalledTimes(1);
-  }
-  expect(ageReads).toHaveBeenCalledTimes(ageDays ? 0 : 1);
-  expect(keyReads).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -393,19 +501,6 @@ it("does not retain an age fact from a rolled-back archive", async () => {
   expect(loadSessionEntry({ storePath, sessionKey: key(0) })).toMatchObject({
     archiveReason: "age-retention",
   });
-});
-
-it("keeps age facts scoped to the store that produced them", async () => {
-  const fresh = createStore(1);
-  const old = createStore(1, Date.now() - 31 * DAY_MS);
-  await renameEntry(fresh.storePath, 0, "fresh store");
-  await renameEntry(old.storePath, 0, "old store");
-  expect(loadSessionEntry({ storePath: old.storePath, sessionKey: key(0) })).toMatchObject({
-    archiveReason: "age-retention",
-  });
-  expect(
-    loadSessionEntry({ storePath: fresh.storePath, sessionKey: key(0) })?.archivedAt,
-  ).toBeUndefined();
 });
 
 it("reconsiders a session unarchived without changing its timestamp", async () => {

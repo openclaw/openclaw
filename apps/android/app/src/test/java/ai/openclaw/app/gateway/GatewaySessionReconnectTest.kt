@@ -23,6 +23,10 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -921,6 +925,43 @@ class GatewaySessionReconnectTest {
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { harness.session.disconnectAndJoin() }
         harness.sessionJob.cancelAndJoin()
         server.shutdown()
+      }
+    }
+
+  @Test
+  fun failedTalkDetachReconnectsOnlyItsOwningSocket() =
+    runBlocking {
+      val ready = Channel<GatewaySession.RequestLease>(Channel.UNLIMITED)
+      val server =
+        startGatewayServer(json = Json) { webSocket, id, method ->
+          webSocket.send(
+            if (method == "connect") {
+              connectResponseFrame(id, capabilities = setOf("talk-session-close-disposition"))
+            } else {
+              """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"close unavailable"}}"""
+            },
+          )
+        }
+      val harness = createReconnectHarness()
+      try {
+        connectSession(harness.session, server.port, onReady = {
+          ready.trySend(requireNotNull(harness.session.captureRequestLease()))
+        })
+        val original = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() }
+        val abort = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Abort) }
+        assertTrue(abort.exceptionOrNull() is GatewayRequestRejected)
+        assertTrue(original.isCurrent())
+
+        val detach = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Detach) }
+        assertTrue(detach.exceptionOrNull() is GatewayRequestRejected)
+        val replacement = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() }
+        assertFalse(original.isCurrent())
+
+        val stale = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Detach) }
+        assertTrue(stale.exceptionOrNull() is GatewayRequestNotEnqueued)
+        assertTrue(replacement.isCurrent())
+      } finally {
+        shutdownReconnectHarness(harness, server)
       }
     }
 
@@ -1835,7 +1876,7 @@ class GatewaySessionReconnectTest {
         socketField.set(connection, RejectFirstSendWebSocket(socket) { rejectedNodeEvent.complete(Unit) })
         val outbox =
           NotificationNodeEventOutbox {
-            harness.session.sendNodeEventWithOutcome(it.event, it.payloadJson)
+            harness.session.sendNodeEventWithOutcomeForEndpoint(null, it.event, it.payloadJson)
           }
         val deliveryJob = launch { outbox.deliver() }
 
@@ -1941,6 +1982,120 @@ class GatewaySessionReconnectTest {
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { readyPublished.await() }
         assertEquals(2, callbackCount.get())
         assertEquals("The throwing hello callback must not publish readiness", 1, readyCount.get())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun startupAdmissionWaitRetainsItsInputBeyondFiveMinutesAndStopsWithoutReplay() =
+    runTest {
+      val params = """{"message":"Keep this voice turn","idempotencyKey":"original-send"}"""
+      val startup =
+        GatewaySession.ErrorShape(
+          "UNAVAILABLE",
+          "Synthetic preparation",
+          GatewayErrorDetails(null, false, null, reason = "startup-sidecars", method = "chat.send"),
+          retryable = true,
+        )
+      for (ending in listOf("ready", "cancel", "timeout")) {
+        var preparing = true
+        var attempts = 0
+        val unknown = GatewayRequestOutcomeUnknown("request timeout")
+        val lease =
+          GatewaySession.RequestLease("captured-gateway") { method, payload, timeoutMs, enqueue ->
+            assertEquals("chat.send", method)
+            assertEquals(params, payload)
+            assertEquals(321L, timeoutMs)
+            enqueue { attempts += 1 }
+            if (preparing) throw GatewayRequestRejected(startup)
+            if (ending == "timeout") throw unknown
+            "accepted"
+          }
+        val send = async { runCatching { lease.requestAwaitingStartup("chat.send", params, timeoutMs = 321) } }
+        runCurrent()
+        advanceTimeBy(300_001)
+        runCurrent()
+        assertFalse("Known startup refusals must retain the original caller beyond five minutes", send.isCompleted)
+        val refusedAttempts = attempts
+        assertTrue(refusedAttempts > 1)
+        preparing = false
+        if (ending == "cancel") send.cancel()
+        advanceUntilIdle()
+        when (ending) {
+          "cancel" -> assertTrue(send.isCancelled)
+          "timeout" -> assertEquals(unknown, send.await().exceptionOrNull())
+          else -> assertEquals("accepted", send.await().getOrThrow())
+        }
+        advanceTimeBy(300_001)
+        runCurrent()
+        assertEquals(refusedAttempts + if (ending == "cancel") 0 else 1, attempts)
+      }
+    }
+
+  @Test
+  fun startupAdmissionRetryRequiresTheClosedWireContract() {
+    val details = GatewayErrorDetails(null, false, null, reason = "startup-sidecars", method = "chat.send", retryable = true)
+    val startup = GatewaySession.ErrorShape("UNAVAILABLE", "Any display text", details, retryable = true)
+    assertEquals(500L, startup.startupRetryDelayMs("chat.send"))
+    assertEquals(100L, startup.copy(details = details.copy(retryAfterMs = -1)).startupRetryDelayMs("chat.send"))
+    assertEquals(2_000L, startup.copy(details = details.copy(retryAfterMs = Int.MAX_VALUE)).startupRetryDelayMs("chat.send"))
+    val unrelatedErrors =
+      listOf(
+        startup.copy(code = "FORBIDDEN"),
+        startup.copy(retryable = false),
+        startup.copy(details = null),
+        startup.copy(details = details.copy(reason = "other")),
+        startup.copy(details = details.copy(method = null)),
+        startup.copy(details = details.copy(method = "agent")),
+      )
+    for (error in unrelatedErrors) {
+      assertNull(error.startupRetryDelayMs("chat.send"))
+    }
+    assertNull(startup.startupRetryDelayMs("agent"))
+  }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun audioSendWaitsForAdmissionWithoutChangingExplicitRequestDeadlines() =
+    runBlocking {
+      val connected = CompletableDeferred<Unit>()
+      val issued = Channel<Pair<WebSocket, String>>(Channel.UNLIMITED)
+      val server =
+        startGatewayServer(json = Json) { socket, id, method ->
+          when (method) {
+            "connect" -> socket.send(connectResponseFrame(id))
+            "chat.send" -> issued.trySend(socket to id).getOrThrow()
+          }
+        }
+      val harness = createReconnectHarness(onConnected = { connected.complete(Unit) })
+      val scheduler = TestCoroutineScheduler()
+      val dispatcher = StandardTestDispatcher(scheduler)
+      val params = """{"attachments":[{"type":"file","mimeType":"audio/wav","fileName":"voice.wav","content":"abc"}]}"""
+      try {
+        connectSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        val send = async(dispatcher) { harness.session.requestDetailed("chat.send", params) }
+        scheduler.runCurrent()
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { issued.receive() }
+        scheduler.advanceTimeBy(60_000)
+        scheduler.runCurrent()
+        assertFalse("Slow transcription must retain the original request", send.isCompleted)
+        send.cancel()
+        scheduler.runCurrent()
+        send.join()
+        assertTrue(send.isCancelled)
+
+        val bounded =
+          async(dispatcher) {
+            runCatching { harness.session.requestDetailed("chat.send", params, timeoutMs = 1200) }
+          }
+        scheduler.runCurrent()
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { issued.receive() }
+        scheduler.advanceTimeBy(1200)
+        scheduler.runCurrent()
+        assertTrue(bounded.await().exceptionOrNull() is GatewayRequestOutcomeUnknown)
       } finally {
         shutdownReconnectHarness(harness, server)
       }

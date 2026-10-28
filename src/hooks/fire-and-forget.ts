@@ -1,5 +1,7 @@
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-// Fire-and-forget hook helpers schedule hook work without blocking hot paths.
+import {
+  asPositiveInteger,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -22,7 +24,6 @@ type FireAndForgetHookState = {
   queue: FireAndForgetHookJob[];
 };
 
-/** Queue limits for bounded fire-and-forget hook execution. */
 type FireAndForgetBoundedHookOptions = {
   maxConcurrency?: number;
   maxQueue?: number;
@@ -38,10 +39,6 @@ const getFireAndForgetHookState = () =>
     }),
   );
 
-function positiveIntegerOrDefault(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
-}
-
 /** Format hook errors as bounded single-line log messages with secrets redacted upstream. */
 export function formatHookErrorForLog(err: unknown): string {
   const formatted = formatErrorMessage(err)
@@ -51,7 +48,6 @@ export function formatHookErrorForLog(err: unknown): string {
   return truncateUtf16Safe(formatted || "unknown error", MAX_HOOK_LOG_MESSAGE_LENGTH);
 }
 
-/** Run a hook promise without awaiting it, logging rejection safely. */
 export function fireAndForgetHook(
   task: Promise<unknown>,
   label: string,
@@ -109,16 +105,11 @@ export function fireAndForgetBoundedHook(
   options: FireAndForgetBoundedHookOptions = {},
 ): void {
   const state = getFireAndForgetHookState();
-  const maxConcurrency = positiveIntegerOrDefault(
-    options.maxConcurrency,
-    DEFAULT_MAX_CONCURRENT_FIRE_AND_FORGET_HOOKS,
-  );
-  const maxQueue = positiveIntegerOrDefault(
-    options.maxQueue,
-    DEFAULT_MAX_QUEUED_FIRE_AND_FORGET_HOOKS,
-  );
+  const maxConcurrency =
+    asPositiveInteger(options.maxConcurrency) ?? DEFAULT_MAX_CONCURRENT_FIRE_AND_FORGET_HOOKS;
+  const maxQueue = asPositiveInteger(options.maxQueue) ?? DEFAULT_MAX_QUEUED_FIRE_AND_FORGET_HOOKS;
   const timeoutMs = resolveTimerTimeoutMs(
-    positiveIntegerOrDefault(options.timeoutMs, DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS),
+    asPositiveInteger(options.timeoutMs) ?? DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS,
     DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS,
   );
 

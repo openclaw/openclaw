@@ -213,7 +213,7 @@ export const CreateResponseBodySchema = z
 export type CreateResponseBody = z.infer<typeof CreateResponseBodySchema>;
 
 type OutputTextContentPart = Extract<ContentPart, { type: "output_text" }>;
-type OutputStatus = "in_progress" | "completed" | "incomplete";
+type OutputStatus = z.infer<typeof ItemStatusSchema>;
 
 export type OutputItem =
   | (Omit<Extract<ItemParam, { type: "message" }>, "id" | "role" | "content" | "status"> & {
@@ -238,7 +238,7 @@ export type ResponseResource = {
   status: "in_progress" | "completed" | "failed" | "cancelled" | "incomplete";
   model: string;
   output: OutputItem[];
-  usage: Usage;
+  usage?: Usage;
   error?: { code: string; message: string } | undefined;
   // Provider content filters are failures, not incomplete output.
   incomplete_details?: { reason: "max_output_tokens" } | undefined;

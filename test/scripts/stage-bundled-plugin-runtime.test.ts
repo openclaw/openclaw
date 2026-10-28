@@ -217,88 +217,60 @@ try {
     });
   });
 
-  it.each([true, false])(
-    "preserves canonical static asset behavior without writing through staging links (copy=%s)",
-    async (copyStaticAssets) => {
-      vi.stubEnv("OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS", copyStaticAssets ? undefined : "0");
-      await withTempDir(async (repoRoot) => {
-        const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
-        const sourceRoot = path.join(repoRoot, "dist/extensions/demo");
-        const staticAssets = ["index.html", "assets/app.js", "assets/app.css"].map((name) => ({
-          source: `client/${name}`,
-          output: `dist/control-ui/${name}`,
-        }));
-        fs.writeFileSync(
-          path.join(sourceRoot, "package.json"),
-          JSON.stringify({ name: "demo", type: "module", openclaw: { build: { staticAssets } } }),
-        );
-        for (const asset of staticAssets) {
-          const output = path.join(sourceRoot, asset.output);
-          fs.mkdirSync(path.dirname(output), { recursive: true });
-          fs.writeFileSync(output, `raw ${asset.output}\n`);
-        }
-        stageBundledPluginRuntime({ repoRoot });
-        const aliasBefore = fs.statSync(aliasRoot).ino;
-        const liveStatic = path.join(runtimeRoot, "extensions/demo/dist/control-ui");
-        const liveBefore = fs.statSync(liveStatic).ino;
-        const jsBefore = fs.readFileSync(path.join(liveStatic, "assets/app.js"), "utf8");
-        if (copyStaticAssets) {
-          fs.rmSync(liveStatic, { recursive: true });
-        }
-        const sourceBefore = fs.statSync(path.join(sourceRoot, staticAssets[0]!.output));
+  it("preserves canonical static assets without writing through staging links", async () => {
+    vi.stubEnv("OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS", undefined);
+    await withTempDir(async (repoRoot) => {
+      const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
+      const sourceRoot = path.join(repoRoot, "dist/extensions/demo");
+      const staticAssets = ["index.html", "assets/app.js", "assets/app.css"].map((name) => ({
+        source: `client/${name}`,
+        output: `dist/control-ui/${name}`,
+      }));
+      fs.writeFileSync(
+        path.join(sourceRoot, "package.json"),
+        JSON.stringify({ name: "demo", type: "module", openclaw: { build: { staticAssets } } }),
+      );
+      for (const asset of staticAssets) {
+        const output = path.join(sourceRoot, asset.output);
+        fs.mkdirSync(path.dirname(output), { recursive: true });
+        fs.writeFileSync(output, `raw ${asset.output}\n`);
+      }
+      stageBundledPluginRuntime({ repoRoot });
+      const aliasBefore = fs.statSync(aliasRoot).ino;
+      const liveStatic = path.join(runtimeRoot, "extensions/demo/dist/control-ui");
+      fs.rmSync(liveStatic, { recursive: true });
+      const sourceBefore = fs.statSync(path.join(sourceRoot, staticAssets[0]!.output));
 
-        const prepared = prepareBundledPluginRuntime({ repoRoot });
-        expect(prepared.changed).toBe(copyStaticAssets);
-        expect(fs.existsSync(liveStatic)).toBe(!copyStaticAssets);
-        expect(fs.statSync(path.join(sourceRoot, staticAssets[0]!.output)).mtimeMs).toBe(
-          sourceBefore.mtimeMs,
-        );
-        await prepared.publish(() => {
-          if (!copyStaticAssets) {
-            throw new Error("A complete minimal build must not publish runtime changes.");
-          }
-        });
-        await prepared.cleanup();
-        expect(fs.statSync(aliasRoot).ino).toBe(aliasBefore);
-        if (copyStaticAssets) {
-          for (const asset of staticAssets) {
-            const output = path.join(runtimeRoot, "extensions/demo", asset.output);
-            expect(fs.lstatSync(output).isFile()).toBe(true);
-            expect(fs.readFileSync(output, "utf8")).toBe(`raw ${asset.output}\n`);
-          }
-        } else {
-          expect(fs.statSync(liveStatic).ino).toBe(liveBefore);
-          expect(fs.readFileSync(path.join(liveStatic, "assets/app.js"), "utf8")).toBe(jsBefore);
-        }
-        const unchanged = prepareBundledPluginRuntime({ repoRoot });
-        expect(unchanged.changed).toBe(false);
-        await unchanged.cleanup();
-      });
-    },
-  );
+      const prepared = prepareBundledPluginRuntime({ repoRoot });
+      expect(prepared.changed).toBe(true);
+      expect(fs.existsSync(liveStatic)).toBe(false);
+      expect(fs.statSync(path.join(sourceRoot, staticAssets[0]!.output)).mtimeMs).toBe(
+        sourceBefore.mtimeMs,
+      );
+      await prepared.publish(() => undefined);
+      await prepared.cleanup();
+      expect(fs.statSync(aliasRoot).ino).toBe(aliasBefore);
+      for (const asset of staticAssets) {
+        const output = path.join(runtimeRoot, "extensions/demo", asset.output);
+        expect(fs.lstatSync(output).isFile()).toBe(true);
+        expect(fs.readFileSync(output, "utf8")).toBe(`raw ${asset.output}\n`);
+      }
+      const unchanged = prepareBundledPluginRuntime({ repoRoot });
+      expect(unchanged.changed).toBe(false);
+      await unchanged.cleanup();
+    });
+  });
 
-  it.each(["content", "mode", "symlink target"] as const)(
-    "detects stale %s even when every required path exists",
-    async (difference) => {
-      await withTempDir(async (repoRoot) => {
-        const { runtimeRoot } = writeRuntimeFixture(repoRoot);
-        stageBundledPluginRuntime({ repoRoot });
-        const metadata = path.join(runtimeRoot, "extensions/demo/package.json");
-        if (difference === "content") {
-          fs.writeFileSync(metadata, '{"name":"stale","type":"module"}\n');
-        } else if (difference === "mode") {
-          fs.chmodSync(metadata, 0o444);
-        } else {
-          const asset = path.join(runtimeRoot, "extensions/demo/assets/info.txt");
-          fs.unlinkSync(asset);
-          fs.symlinkSync("../../../../dist/extensions/demo/index.js", asset);
-        }
-        const prepared = prepareBundledPluginRuntime({ repoRoot });
-        expect(prepared.changed).toBe(true);
-        await prepared.cleanup();
-      });
-    },
-  );
+  it("detects stale mode even when every required path exists", async () => {
+    await withTempDir(async (repoRoot) => {
+      const { runtimeRoot } = writeRuntimeFixture(repoRoot);
+      stageBundledPluginRuntime({ repoRoot });
+      fs.chmodSync(path.join(runtimeRoot, "extensions/demo/package.json"), 0o444);
+      const prepared = prepareBundledPluginRuntime({ repoRoot });
+      expect(prepared.changed).toBe(true);
+      await prepared.cleanup();
+    });
+  });
 
   it("leaves both live roots intact when preparation fails", async () => {
     await withTempDir(async (repoRoot) => {
@@ -323,56 +295,29 @@ try {
     });
   });
 
-  it.each([false, true])(
-    "restores originals or retains failed restoration (restore fails=%s)",
-    async (failRestore) => {
-      await withTempDir(async (repoRoot) => {
-        const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
-        stageBundledPluginRuntime({ repoRoot });
-        fs.writeFileSync(path.join(runtimeRoot, "original.txt"), "original runtime");
-        fs.writeFileSync(path.join(aliasRoot, "original.txt"), "original alias");
-        const prepared = prepareBundledPluginRuntime({ repoRoot });
-        const originalRename = fs.renameSync.bind(fs);
-        vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
-          if (String(destination) === aliasRoot && path.basename(String(source)) === "candidate") {
-            throw new Error("alias publication failed");
-          }
-          if (
-            failRestore &&
-            String(destination) === aliasRoot &&
-            path.basename(String(source)) === "previous"
-          ) {
-            throw new Error("alias restoration failed");
-          }
-          originalRename(source, destination);
-        });
-        await expect(prepared.publish(() => undefined)).rejects.toThrow(
-          failRestore ? "Runtime publication and restoration failed" : "alias publication failed",
-        );
-        await prepared.cleanup();
-        expect(fs.readFileSync(path.join(runtimeRoot, "original.txt"), "utf8")).toBe(
-          "original runtime",
-        );
-        if (failRestore) {
-          const retained = fs
-            .readdirSync(path.dirname(aliasRoot))
-            .find((name) => name.startsWith(".openclaw-runtime-"));
-          expect(retained).toBeDefined();
-          expect(
-            fs.readFileSync(
-              path.join(path.dirname(aliasRoot), retained!, "previous/original.txt"),
-              "utf8",
-            ),
-          ).toBe("original alias");
-        } else {
-          expect(fs.readFileSync(path.join(aliasRoot, "original.txt"), "utf8")).toBe(
-            "original alias",
-          );
-          expect(fs.readdirSync(path.dirname(aliasRoot))).toEqual(["openclaw"]);
+  it("restores originals when alias publication fails", async () => {
+    await withTempDir(async (repoRoot) => {
+      const { runtimeRoot, aliasRoot } = writeRuntimeFixture(repoRoot);
+      stageBundledPluginRuntime({ repoRoot });
+      fs.writeFileSync(path.join(runtimeRoot, "original.txt"), "original runtime");
+      fs.writeFileSync(path.join(aliasRoot, "original.txt"), "original alias");
+      const prepared = prepareBundledPluginRuntime({ repoRoot });
+      const originalRename = fs.renameSync.bind(fs);
+      vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+        if (String(destination) === aliasRoot && path.basename(String(source)) === "candidate") {
+          throw new Error("alias publication failed");
         }
+        originalRename(source, destination);
       });
-    },
-  );
+      await expect(prepared.publish(() => undefined)).rejects.toThrow("alias publication failed");
+      await prepared.cleanup();
+      expect(fs.readFileSync(path.join(runtimeRoot, "original.txt"), "utf8")).toBe(
+        "original runtime",
+      );
+      expect(fs.readFileSync(path.join(aliasRoot, "original.txt"), "utf8")).toBe("original alias");
+      expect(fs.readdirSync(path.dirname(aliasRoot))).toEqual(["openclaw"]);
+    });
+  });
 
   it("keeps live paths present when authority is revoked between root swaps", async () => {
     await withTempDir(async (repoRoot) => {

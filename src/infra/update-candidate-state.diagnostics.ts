@@ -8,10 +8,17 @@ import {
   extractErrorCode,
   formatErrorMessageWithCode,
 } from "./errors.js";
+import { findUpdateCaptureSpaceError, UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
-
-export const UPDATE_STATE_INSPECTION_PROGRESS_PREFIX = "State schema progress: ";
+import { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
 const DIAGNOSTIC_TAIL_CHARS = 12_000;
+const CAPTURE_SPACE_PREFIX = "Update capture space: ";
+const CaptureSpaceSchema = z
+  .object({
+    requiredBytes: z.number().int().nonnegative(),
+    availableBytes: z.number().int().nonnegative(),
+  })
+  .refine(({ requiredBytes, availableBytes }) => availableBytes < requiredBytes);
 
 export function formatUpdateStateInspectionError(error: unknown): string {
   const causes = collectErrorGraphCandidates(error, (current) => [current.cause]);
@@ -21,9 +28,13 @@ export function formatUpdateStateInspectionError(error: unknown): string {
   // Put the recognized cause before message paths, whose private suffixes are discarded.
   const detail = `${code ? `${code}\n` : ""}${formatErrorMessageWithCode(error)}`;
   // The update ledger retains the final diagnostic line within its existing bound.
-  return causes.length > 1
-    ? `${detail}\nCaused by: ${formatErrorMessageWithCode(causes.at(-1))}`
-    : detail;
+  const message =
+    causes.length > 1
+      ? `${detail}\nCaused by: ${formatErrorMessageWithCode(causes.at(-1))}`
+      : detail;
+  const space = findUpdateCaptureSpaceError(error);
+  // Keep measured capacity across the subprocess without changing released stdout contracts.
+  return space ? `${CAPTURE_SPACE_PREFIX}${JSON.stringify(space.capacity)}\n${message}` : message;
 }
 
 const ProgressSchema = z.object({
@@ -40,6 +51,13 @@ const ProgressSchema = z.object({
     .optional(),
 });
 export type UpdateStateInspectionProgress = z.infer<typeof ProgressSchema>;
+
+export function formatUpdateStateInspectionProgress(
+  progress: UpdateStateInspectionProgress,
+): string {
+  const { phase, path, snapshot } = progress;
+  return `${phase}${snapshot ? `: ${snapshot.status}, attempt 1, ${snapshot.copiedPages}/${snapshot.totalPages} pages${snapshot.copiedBytes === undefined ? "" : `, ${snapshot.copiedBytes.toLocaleString("en-US")} bytes`}, ${(snapshot.elapsedMs / 1000).toFixed(3)} seconds` : ""}${path ? ` for ${path}` : ""}`;
+}
 
 export function createUpdateStateSnapshotReporter(
   path: string,
@@ -86,14 +104,22 @@ export function createUpdateStateInspectionReporter(legacy = false) {
       return;
     }
     let line = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify(progress)}\n`;
-    if (legacy && emittedBytes + Buffer.byteLength(line) > 12_000) {
-      // Released parents cap stderr at 20 KB. Stop naming an active source once
-      // progress is suppressed, and leave room for the worker's final error.
-      exhausted = true;
+    const omitDetails = legacy && emittedBytes + Buffer.byteLength(line) > 12_000;
+    if (omitDetails) {
+      // Released parents cap stderr at 20 KB; reserve room for the worker's final error.
       line = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "schema inspection; detailed progress omitted" })}\n`;
     }
-    emittedBytes += Buffer.byteLength(line);
-    writeSync(2, line);
+    try {
+      writeSync(2, line);
+      emittedBytes += Buffer.byteLength(line);
+      exhausted = omitDetails;
+    } catch (error) {
+      // Advisory progress must not fail inspection when the nonblocking pipe is full.
+      const code = extractErrorCode(error);
+      if (code !== "EAGAIN" && code !== "EWOULDBLOCK") {
+        throw error;
+      }
+    }
   };
 }
 
@@ -104,6 +130,7 @@ export function createUpdateStateInspectionDiagnostics(params: {
   paths: readonly string[];
   onProgress?: (progress: UpdateStateInspectionProgress) => void;
   stderrLimit?: { bytes: number; onExceeded: () => void };
+  retryAdvice?: boolean;
 }) {
   const startedAt = Date.now();
   const decoder = new StringDecoder("utf8");
@@ -111,15 +138,33 @@ export function createUpdateStateInspectionDiagnostics(params: {
     phase: params.phase,
     ...(params.paths.length === 1 ? { path: params.paths[0] } : {}),
   };
+  let progressAt = startedAt;
+  let lastSnapshot: UpdateStateInspectionProgress | undefined;
   let pending = "";
   let tail = "";
   let diagnosticBytes = 0;
+  let captureSpaceFailure: UpdateCaptureSpaceError | undefined;
   const checkLimit = (pendingBytes = 0) => {
     if (params.stderrLimit && diagnosticBytes + pendingBytes > params.stderrLimit.bytes) {
       params.stderrLimit.onExceeded();
     }
   };
   const receiveLine = (line: string) => {
+    if (line.startsWith(CAPTURE_SPACE_PREFIX)) {
+      try {
+        const capacity = CaptureSpaceSchema.safeParse(
+          JSON.parse(line.slice(CAPTURE_SPACE_PREFIX.length)),
+        );
+        if (capacity.success) {
+          captureSpaceFailure = new UpdateCaptureSpaceError(
+            "Insufficient measured disk space for update capture.",
+            capacity.data,
+          );
+        }
+      } catch {
+        // Malformed metadata remains ordinary stderr, never a classified refusal.
+      }
+    }
     if (line.startsWith(UPDATE_STATE_INSPECTION_PROGRESS_PREFIX)) {
       let decoded: unknown;
       try {
@@ -130,6 +175,10 @@ export function createUpdateStateInspectionDiagnostics(params: {
       const value = ProgressSchema.safeParse(decoded);
       if (value.success) {
         progress = value.data;
+        progressAt = Date.now();
+        if (progress.snapshot) {
+          lastSnapshot = progress;
+        }
         params.onProgress?.(progress);
         return;
       }
@@ -155,19 +204,44 @@ export function createUpdateStateInspectionDiagnostics(params: {
     stderr: () => `${tail}${pending}`.trim(),
     failure(reason: unknown, termination?: string) {
       const detail = formatErrorMessageWithCode(reason ?? "").trim();
+      const outputLimited =
+        termination === "output-limit" || termination?.startsWith("output-limit,");
       // Worker causes may follow warnings or a generic first line. Promote only closed public facts.
-      const summary = detail
-        ? redactPublicSupportDiagnosticLine(detail, { env: {}, stateDir: "" })
-        : "Worker exited without diagnostic output";
+      const summary = outputLimited
+        ? "Worker output exceeded its capture limit"
+        : detail
+          ? redactPublicSupportDiagnosticLine(detail, { env: {}, stateDir: "" })
+          : "Worker exited without diagnostic output";
       const elapsed = Math.max(0, Date.now() - startedAt) / 1000;
+      const idle = Math.max(0, Date.now() - progressAt) / 1000;
       const scope = params.paths.slice(0, 3).join(", ");
       const source =
         progress.path ?? `source scope [${scope}${params.paths.length > 3 ? ", …" : ""}]`;
+      const signaled = termination === "signal" || termination?.startsWith("signal,");
+      // Storage remediation and retries are next steps only for callers that stop on failure.
+      const advice = outputLimited
+        ? params.retryAdvice === false
+          ? ""
+          : " Report this update failure with its run ID."
+        : params.retryAdvice === false
+          ? signaled
+            ? " The worker was terminated by a signal during the reported step."
+            : ""
+          : signaled
+            ? " The worker was terminated by a signal during the reported step. Check the host crash report or process supervisor, then retry the update."
+            : " Check access to the reported source, free space, and storage performance, then retry the update.";
       // Path redaction discards raw detail; only the closed summary precedes source context.
-      return new Error(
-        `${params.operation} failed${termination ? ` (${termination})` : ""}: ${summary}; after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}. Check access to the reported source, free space, and storage performance, then retry the update.`,
-        reason instanceof Error ? { cause: reason } : undefined,
+      const error = new Error(
+        `${params.operation} failed${termination ? ` (${termination})` : ""}: ${summary}; after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}.${advice}\nLast progress ${idle.toFixed(3)} seconds ago: ${formatUpdateStateInspectionProgress(progress)}${lastSnapshot && lastSnapshot !== progress ? `\nLast snapshot: ${formatUpdateStateInspectionProgress(lastSnapshot)}` : ""}`,
+        reason instanceof Error
+          ? { cause: reason }
+          : captureSpaceFailure && termination === "exit"
+            ? { cause: captureSpaceFailure }
+            : undefined,
       );
+      // The supervisor's SIGTERM is a consequence of this recorded stop reason.
+      // Keep the public code even when warning text and private paths are redacted.
+      return outputLimited ? Object.assign(error, { code: "output-limit" }) : error;
     },
   };
 }

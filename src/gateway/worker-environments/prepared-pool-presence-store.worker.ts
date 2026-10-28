@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
 import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
@@ -64,7 +64,7 @@ function parsePresenceDemand(value: unknown): PreparedPoolPresenceDemand {
 }
 
 export function readPreparedPoolPresenceDemandInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
 ): PreparedPoolPresenceDemand | undefined {
   const row = executeSqliteQueryTakeFirstSync(
     database,
@@ -83,7 +83,7 @@ export function readPreparedPoolPresenceDemandInDatabase(
 }
 
 export function writePreparedPoolPresenceDemandInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   value: PreparedPoolPresenceDemand | null,
 ): PreparedPoolPresenceDemand | undefined {
   const db = getNodeSqliteKysely<StateDatabase>(database);

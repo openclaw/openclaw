@@ -14,11 +14,13 @@ import {
   DesktopSessionStoppedError,
   type DesktopSessionRegistry,
 } from "../desktop/session-registry.js";
+import { isSuccess } from "./bootstrap-command.js";
 import {
   prepareWorkerSsh,
   type PreparedWorkerSsh,
   type WorkerSshIdentityResolver,
   workerSshCommandOptions,
+  workerSshCommandPrefix,
   workerSshOptions,
   workerSshRemoteCommand,
 } from "./ssh.js";
@@ -60,19 +62,9 @@ class WorkerDesktopUnsupportedError extends Error {
   }
 }
 
-function successful(result: Awaited<ReturnType<WorkerSshRunner["run"]>>): boolean {
-  return result.termination === "exit" && result.code === 0;
-}
-
 function desktopSshCommand(prepared: PreparedWorkerSsh, argv: readonly string[]): string[] {
   return [
-    "ssh",
-    ...workerSshOptions(prepared, { forwarding: "disabled" }),
-    "-a",
-    "-x",
-    "-T",
-    "-p",
-    String(prepared.port),
+    ...workerSshCommandPrefix(prepared),
     "--",
     prepared.sshTarget,
     workerSshRemoteCommand(argv),
@@ -83,11 +75,9 @@ function desktopSshCommand(prepared: PreparedWorkerSsh, argv: readonly string[])
 export function createWorkerDesktopTunnels(deps: {
   runner: WorkerSshRunner;
   registry?: DesktopSessionRegistry;
-  lingerMs?: number;
-  platform?: NodeJS.Platform;
 }) {
-  const platform = deps.platform ?? process.platform;
-  const sessions = deps.registry ?? createDesktopSessionRegistry({ lingerMs: deps.lingerMs });
+  const platform = process.platform;
+  const sessions = deps.registry ?? createDesktopSessionRegistry();
   const appLaunches = new Map<string, DesktopAppLaunchEntry>();
 
   const stopAppLaunches = async (
@@ -192,7 +182,7 @@ export function createWorkerDesktopTunnels(deps: {
           workerSshCommandOptions({ timeoutMs: PASSWORD_READ_TIMEOUT_MS }),
         );
         assertCurrent();
-        if (!successful(result)) {
+        if (!isSuccess(result)) {
           throw workerSshProcessError(result.stderr);
         }
         vncPassword = result.stdout.replace(/(?:\r?\n)+$/u, "");
@@ -309,7 +299,7 @@ export function createWorkerDesktopTunnels(deps: {
             signal: abortController.signal,
           }),
         );
-        if (!successful(result)) {
+        if (!isSuccess(result)) {
           throw workerSshProcessError(result.stderr || result.stdout);
         }
       } finally {

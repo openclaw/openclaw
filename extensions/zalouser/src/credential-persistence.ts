@@ -1,3 +1,4 @@
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   captureZalouserCredentialsEnv,
@@ -7,7 +8,7 @@ import {
   saveStoredZaloCredentials,
   type StoredZaloCredentials,
 } from "./session-state.js";
-import type { API, Credentials } from "./zca-client.js";
+import type { API } from "./zca-client.js";
 
 export type ZaloCredentialPayload = Omit<
   StoredZaloCredentials,
@@ -17,55 +18,10 @@ export type ZaloCredentialPayload = Omit<
 function credentialSignature(credentials: ZaloCredentialPayload): string {
   return JSON.stringify({
     imei: credentials.imei,
-    cookie: canonicalCredentialCookie(credentials.cookie),
+    cookie: credentials.cookie,
     userAgent: credentials.userAgent,
     language: credentials.language,
   });
-}
-
-function stableCanonicalValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stableCanonicalValue);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [key, stableCanonicalValue(entry)]),
-  );
-}
-
-function stableSignatureValue(value: unknown): string {
-  return JSON.stringify(stableCanonicalValue(value)) ?? "undefined";
-}
-
-function canonicalCookieArray(value: unknown[]): unknown[] {
-  return value
-    .map(stableCanonicalValue)
-    .toSorted((left, right) =>
-      stableSignatureValue(left).localeCompare(stableSignatureValue(right)),
-    );
-}
-
-function canonicalCredentialCookie(cookie: Credentials["cookie"]): unknown {
-  if (Array.isArray(cookie)) {
-    return canonicalCookieArray(cookie);
-  }
-  if (!cookie || typeof cookie !== "object") {
-    return cookie;
-  }
-  return Object.fromEntries(
-    Object.entries(cookie)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [
-        key,
-        key === "cookies" && Array.isArray(entry)
-          ? canonicalCookieArray(entry)
-          : stableCanonicalValue(entry),
-      ]),
-  );
 }
 
 export function snapshotApiCredentials(
@@ -100,6 +56,12 @@ export class ZaloCredentialPersistence {
   private readonly credentialRevocationsByProfile = new Map<string, Promise<boolean>>();
 
   constructor(private readonly isCurrentApi: (profile: string, api: API) => boolean) {}
+
+  dispose(): void {
+    this.credentialSignaturesByProfile.clear();
+    this.credentialRefreshesByProfile.clear();
+    this.credentialRevocationsByProfile.clear();
+  }
 
   pendingRevocation(profile: string): Promise<boolean> | undefined {
     return this.credentialRevocationsByProfile.get(profile);
@@ -142,34 +104,32 @@ export class ZaloCredentialPersistence {
   }
 
   async persistApiCredentialsIfChanged(profile: string, api: API): Promise<void> {
-    const previous = this.credentialRefreshesByProfile.get(profile) ?? Promise.resolve();
-    const refresh = previous.then(async () => {
-      try {
-        const isCurrent = () => this.isCurrentApi(profile, api);
-        if (!isCurrent()) {
-          return;
+    await enqueueKeyedTask({
+      tails: this.credentialRefreshesByProfile,
+      key: profile,
+      task: async () => {
+        try {
+          const isCurrent = () => this.isCurrentApi(profile, api);
+          if (!isCurrent()) {
+            return;
+          }
+          const credentials = snapshotApiCredentials(api);
+          const signature = credentialSignature(credentials);
+          if (this.credentialSignaturesByProfile.get(profile) === signature) {
+            return;
+          }
+          if (
+            (await refreshStoredZaloCredentials(profile, credentials, isCurrent)) &&
+            isCurrent()
+          ) {
+            this.credentialSignaturesByProfile.set(profile, signature);
+          }
+        } catch {
+          // Do not fail an already-successful Zalo operation only because the
+          // best-effort session refresh could not be persisted.
         }
-        const credentials = snapshotApiCredentials(api);
-        const signature = credentialSignature(credentials);
-        if (this.credentialSignaturesByProfile.get(profile) === signature) {
-          return;
-        }
-        if ((await refreshStoredZaloCredentials(profile, credentials, isCurrent)) && isCurrent()) {
-          this.credentialSignaturesByProfile.set(profile, signature);
-        }
-      } catch {
-        // Do not fail an already-successful Zalo operation only because the
-        // best-effort session refresh could not be persisted.
-      }
+      },
     });
-    this.credentialRefreshesByProfile.set(profile, refresh);
-    try {
-      await refresh;
-    } finally {
-      if (this.credentialRefreshesByProfile.get(profile) === refresh) {
-        this.credentialRefreshesByProfile.delete(profile);
-      }
-    }
   }
 
   async clearCredentials(profile: string, assertCurrent?: () => void): Promise<boolean> {

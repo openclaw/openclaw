@@ -32,6 +32,25 @@ repo_root() {
   (cd "$base_dir/.." && pwd)
 }
 
+show_pr_workspace() {
+  local root state
+  root=$(repo_root) || return 1
+  state=$(pr_worktree_state "$root/.worktrees/pr-$1" "" entry) || return 1
+  node - "$root" "$state" <<'EOF_WORKSPACE'
+const path = require("node:path");
+const [canonicalRoot, stateJson] = process.argv.slice(2);
+const state = JSON.parse(stateJson);
+const artifactDirectory = path.join(state.path, ".local");
+process.stdout.write(JSON.stringify({
+  canonicalRoot,
+  commonGitDir: state.common,
+  worktree: state.path,
+  artifactDirectory,
+  reviewJson: path.join(artifactDirectory, "review.json"),
+}) + "\n");
+EOF_WORKSPACE
+}
+
 ensure_gh_api_auth() {
   local context login
   # Keep credential selection in non-exported process memory; never record it in artifacts.
@@ -155,19 +174,54 @@ write_review_transition_journal() {
 
 validate_prep_baseline_transition() {
   local command="$1" pr="$2" source="$3" target="$4" branch="$5"
-  local root observation incoming head_ref
+  local root observation archive helper
+  helper="$(dirname "${BASH_SOURCE[0]}")/baseline-refresh.mjs"
   root=$(repo_root) || return 1
+  # Replay once before observing live authority. The private facts stay in this
+  # recovery invocation; retry must reconstruct them from the admitted journal.
+  PREP_TRANSITION_FACTS=$(node "$helper" validate-transition \
+    "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
+  validate_review_transition_state "$pr" "$source" "$target" || return 1
+  observation=$(cat .local/pr-meta.json) || return 1
+  archive=$(printf '%s' "$PREP_TRANSITION_FACTS" | jq -er '.binding | @base64d | fromjson | .archive') || return 1
+  revalidate_baseline_publication "$pr" "$observation" "$source" "$archive" || return 1
   if [ "$command" = install-transition ]; then
-    observation=$(cat .local/pr-meta.json) || return 1
-    incoming=$(printf '%s' "$observation" | jq -er .headRefOid) || return 1
-    head_ref=$(printf '%s' "$observation" | jq -er .headRefName) || return 1
-    revalidate_pr_publication "$pr" "$observation" "$head_ref" "$incoming" "$incoming" || return 1
+    PREP_TRANSITION_FACTS=$(printf '%s' "$PREP_TRANSITION_FACTS" | node "$helper" install-transition \
+      "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID") || return 1
+  else
+    check_prep_baseline_transition check-transition "$pr" "$source" "$target" "$branch" || return 1
   fi
-  pr_operation_lock_owner_is_current "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
-  node "$(dirname "${BASH_SOURCE[0]}")/baseline-refresh.mjs" \
-    "$command" "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
-  pr_operation_lock_owner_is_current "$root" \
-    "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+}
+
+check_prep_baseline_transition() {
+  local command="$1" pr="$2" source="$3" target="$4" branch="$5" root
+  root=$(repo_root) || return 1
+  printf '%s' "$PREP_TRANSITION_FACTS" | node "$(dirname "${BASH_SOURCE[0]}")/baseline-refresh.mjs" \
+    "$command" "$pr" "$source" "$target" "$branch" "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
+}
+
+prefetch_review_transition_objects() {
+  # Path-based restore fetches cold blobs individually. Refetch skips Git's
+  # local-history negotiation; bounded batches keep each fetch small. Retain
+  # one restore because directory/file replacements can span path batches.
+  GIT_NO_LAZY_FETCH=1 pr_git rev-list --objects --missing=print --no-object-names \
+    --quiet --max-count=1 "$1" |
+    {
+      local oid
+      local batch=()
+      while IFS= read -r oid; do
+        case "$oid" in \?*) batch+=("${oid#?}") ;; *) continue ;; esac
+        if [ "${#batch[@]}" -eq 1024 ]; then
+          printf '%s\n' "${batch[@]}" |
+            fetch_canonical_ref "${batch[0]}" --stdin --refetch --no-write-fetch-head || return 1
+          batch=()
+        fi
+      done
+      if [ "${#batch[@]}" -gt 0 ]; then
+        printf '%s\n' "${batch[@]}" |
+          fetch_canonical_ref "${batch[0]}" --stdin --refetch --no-write-fetch-head || return 1
+      fi
+    }
 }
 
 recover_review_transition() {
@@ -175,7 +229,14 @@ recover_review_transition() {
   local journal=.local/review-transition.json
   [ -e "$journal" ] || return 0
 
-  local fields source target mode branch
+  # A correction continuation retires metadata only. It must not enter the
+  # baseline transition's source/index restoration or branch movement path.
+  if [ "$(jq -r .mode "$journal")" = correction ]; then
+    recover_correction_continuation "$pr"
+    return $?
+  fi
+
+  local fields source target mode branch PREP_TRANSITION_FACTS
   fields=$(jq -er --argjson pr "$pr" '
     select(type == "object" and
       (if .mode == "prep" then (keys | sort) == ["binding","branch","mode","pr","source","target","version"] and (.binding | type == "string")
@@ -198,14 +259,21 @@ recover_review_transition() {
     return 1
   fi
 
+  # Network preparation precedes the existing admission immediately before writes.
+  prefetch_review_transition_objects "$target" || return 1
   validate_review_transition_state "$pr" "$source" "$target" || return 1
   if [ "$mode" = prep ]; then
-    validate_prep_baseline_transition validate-transition "$pr" "$source" "$target" "$branch" || return 1
     validate_prep_baseline_transition install-transition "$pr" "$source" "$target" "$branch" || return 1
   fi
   # Restore can write files before committing its index. Rebuild the validated
   # source index so replay also owns source-only files left after index deletion.
+  if [ "$mode" = prep ]; then
+    check_prep_baseline_transition check-transition "$pr" "$source" "$target" "$branch" || return 1
+  fi
   pr_git read-tree "$source" || return 1
+  if [ "$mode" = prep ]; then
+    check_prep_baseline_transition restore-transition "$pr" "$source" "$target" "$branch" || return 1
+  fi
   if ! pr_git diff --quiet "$source" "$target"; then
     pr_git diff --name-only --no-renames -z "$source" "$target" |
       pr_git --literal-pathspecs restore --source="$target" --staged --worktree \
@@ -216,7 +284,7 @@ recover_review_transition() {
     return 1
   fi
   if [ "$mode" = prep ]; then
-    validate_prep_baseline_transition validate-transition "$pr" "$source" "$target" "$branch" || return 1
+    validate_prep_baseline_transition finalize-transition "$pr" "$source" "$target" "$branch" || return 1
     if [ "$(pr_git rev-parse "refs/heads/$branch")" = "$source" ]; then
       pr_git update-ref --no-deref "refs/heads/$branch" "$target" "$source" || return 1
     fi
@@ -300,7 +368,7 @@ fetch_pr_head() {
     return 1
   fi
   case "$destination" in
-    ""|"refs/heads/pr-$pr"|"refs/heads/pr-$pr-verify") ;;
+    ""|"refs/heads/pr-$pr") ;;
     *) echo "Invalid PR head acquisition destination for #$pr: $destination" >&2; return 1 ;;
   esac
 
@@ -555,7 +623,23 @@ pr_meta_json() {
 write_pr_meta_files() {
   local json="$1"
 
-  printf '%s\n' "$json" > .local/pr-meta.json
+  # A fresh hosted review must not destroy the incoming identity still bound to
+  # a retained correction. Finish and verify the snapshot before either write.
+  local archive="" artifact
+  for artifact in .local/pr-meta.json .local/pr-meta.env .local/review.json .local/review.md; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    if [ ! -f "$artifact" ] || [ -L "$artifact" ]; then
+      echo "Cannot retain review identity at $artifact: expected a regular file." >&2
+      return 1
+    fi
+    if [ -z "$archive" ]; then
+      archive=$(mktemp -d .local/review-evidence.XXXXXX) || return 1
+    fi
+    cp -p "$artifact" "$archive/" || return 1
+    cmp -s "$artifact" "$archive/${artifact##*/}" || return 1
+  done
+
+  printf '%s\n' "$json" > .local/pr-meta.json || return 1
 
   # Security: shell-escape all values with printf %q to prevent command injection
   # via malicious branch names containing $() or backticks. See GHSA-xxxx-xxxx-xxxx.
@@ -615,14 +699,18 @@ list_pr_worktrees() {
 }
 
 gc_pr_worktrees() {
-  local dry_run="${1:-false}"
+  local dry_run="${1:-false}" selected_pr="${2:-}"
+  [ -z "$selected_pr" ] || is_canonical_pr_number "$selected_pr" || return 2
   local root
   root=$(repo_root)
   cd "$root"
 
   local dir
   local removed=0
-  for dir in .worktrees/pr-*; do
+  # Select before locks or remote reads: scoped cleanup must not observe sibling PRs.
+  local directories=(".worktrees/pr-$selected_pr")
+  [ -n "$selected_pr" ] || directories=(.worktrees/pr-*)
+  for dir in "${directories[@]}"; do
     [ -d "$dir" ] || continue
     local pr
     if ! pr=$(pr_number_from_worktree_dir "$dir"); then
@@ -640,6 +728,22 @@ gc_pr_worktrees() {
       else
         echo "skipping $dir (PR #$pr operation lock state is indeterminate)"
       fi
+      continue
+    fi
+    # A failed clone has no review state or PR registration. Retire only its
+    # directory, even while the PR is open; keep branches for a native retry.
+    local checkout_state
+    if checkout_state=$(pr_worktree_state "$dir" "" entry) &&
+      printf '%s\n' "$checkout_state" | jq -e '.failedTemplateClone' >/dev/null; then
+      if remove_worktree_if_present "$dir" "$dry_run"; then
+        if [ "$dry_run" = true ]; then
+          echo "would remove $dir (failed template clone)"
+        else
+          echo "removed $dir (failed template clone)"
+        fi
+        removed=$((removed + 1))
+      fi
+      release_pr_operation_lock
       continue
     fi
     local state

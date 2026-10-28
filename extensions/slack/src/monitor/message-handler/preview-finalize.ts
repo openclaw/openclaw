@@ -9,48 +9,6 @@ import { hasSlackNativeDataBlock } from "../../native-data-blocks.js";
 import { buildSlackNativeDataDeliveryPlan } from "../../native-data-fallback.js";
 import { truncateSlackTextByUtf8Bytes } from "../../truncate.js";
 
-type SlackReadbackMessage = {
-  ts?: string;
-  text?: string;
-  blocks?: unknown[];
-};
-
-function buildExpectedSlackEditText(params: {
-  text: string;
-  blocks?: (Block | KnownBlock)[];
-}): string {
-  const trimmedText = params.text.trim();
-  if (trimmedText) {
-    return normalizeSlackOutboundText(trimmedText);
-  }
-  if (params.blocks?.length) {
-    return normalizeSlackOutboundText(buildSlackBlocksFallbackText(params.blocks));
-  }
-  return " ";
-}
-
-function buildAcceptedSlackEditTexts(params: {
-  text: string;
-  blocks?: (Block | KnownBlock)[];
-}): Set<string> {
-  const expected = buildExpectedSlackEditText(params);
-  const texts = new Set([
-    expected,
-    normalizeSlackOutboundText(truncateSlackTextByUtf8Bytes(expected, SLACK_EDIT_TEXT_MAX_BYTES)),
-    normalizeSlackOutboundText(buildSlackEditTextPayload(params.text, params.blocks)),
-  ]);
-  if (params.blocks?.length && hasSlackNativeDataBlock(params.blocks)) {
-    const fallbackPlan = buildSlackNativeDataDeliveryPlan({
-      baseText: params.text,
-      blocks: params.blocks,
-    });
-    for (const message of fallbackPlan.fallbackMessages) {
-      texts.add(normalizeSlackOutboundText(message.text));
-    }
-  }
-  return texts;
-}
-
 function blocksMatch(expected?: (Block | KnownBlock)[], actual?: unknown[]): boolean {
   if (!expected?.length) {
     return !actual?.length;
@@ -89,58 +47,6 @@ function blocksMatch(expected?: (Block | KnownBlock)[], actual?: unknown[]): boo
   }
 }
 
-async function readSlackMessageAfterEditError(params: {
-  client: WebClient;
-  token: string;
-  channelId: string;
-  messageId: string;
-  threadTs?: string;
-}): Promise<SlackReadbackMessage | null> {
-  const query = {
-    token: params.token,
-    channel: params.channelId,
-    latest: params.messageId,
-    oldest: params.messageId,
-    inclusive: true,
-    limit: 1,
-  };
-  const result = params.threadTs
-    ? await params.client.conversations.replies({ ...query, ts: params.threadTs })
-    : await params.client.conversations.history(query);
-  const message = params.threadTs
-    ? result.messages?.find((entry) => entry?.ts === params.messageId)
-    : result.messages?.[0];
-  return message?.ts && message.ts === params.messageId ? message : null;
-}
-
-async function didSlackPreviewEditApplyAfterError(params: {
-  client: WebClient;
-  token: string;
-  channelId: string;
-  messageId: string;
-  text: string;
-  blocks?: (Block | KnownBlock)[];
-  threadTs?: string;
-}): Promise<boolean> {
-  const readback = await readSlackMessageAfterEditError(params);
-  if (!readback) {
-    return false;
-  }
-  const expectedText = buildExpectedSlackEditText({
-    text: params.text,
-    blocks: params.blocks,
-  });
-  const acceptedTexts = buildAcceptedSlackEditTexts({
-    text: params.text,
-    blocks: params.blocks,
-  });
-  const actualText = normalizeSlackOutboundText((readback.text ?? "").trim());
-  if (params.blocks?.length) {
-    return acceptedTexts.has(actualText) && blocksMatch(params.blocks, readback.blocks);
-  }
-  return actualText === expectedText;
-}
-
 export async function finalizeSlackPreviewEdit(params: {
   client: WebClient;
   token: string;
@@ -160,12 +66,54 @@ export async function finalizeSlackPreviewEdit(params: {
     });
   } catch (err) {
     try {
-      const applied = await didSlackPreviewEditApplyAfterError(params);
-      if (applied) {
-        logVerbose(
-          `slack: preview final edit response failed but readback matched message ${params.channelId}/${params.messageId}; suppressing duplicate fallback send`,
-        );
-        return;
+      const query = {
+        token: params.token,
+        channel: params.channelId,
+        latest: params.messageId,
+        oldest: params.messageId,
+        inclusive: true,
+        limit: 1,
+      };
+      const result = params.threadTs
+        ? await params.client.conversations.replies({ ...query, ts: params.threadTs })
+        : await params.client.conversations.history(query);
+      const message = params.threadTs
+        ? result.messages?.find((entry) => entry?.ts === params.messageId)
+        : result.messages?.[0];
+      const readback = message?.ts && message.ts === params.messageId ? message : null;
+      if (readback) {
+        const trimmedText = params.text.trim();
+        const expectedText = trimmedText
+          ? normalizeSlackOutboundText(trimmedText)
+          : params.blocks?.length
+            ? normalizeSlackOutboundText(buildSlackBlocksFallbackText(params.blocks))
+            : " ";
+        const acceptedTexts = new Set([
+          expectedText,
+          normalizeSlackOutboundText(
+            truncateSlackTextByUtf8Bytes(expectedText, SLACK_EDIT_TEXT_MAX_BYTES),
+          ),
+          normalizeSlackOutboundText(buildSlackEditTextPayload(params.text, params.blocks)),
+        ]);
+        if (params.blocks?.length && hasSlackNativeDataBlock(params.blocks)) {
+          const fallbackPlan = buildSlackNativeDataDeliveryPlan({
+            baseText: params.text,
+            blocks: params.blocks,
+          });
+          for (const fallbackMessage of fallbackPlan.fallbackMessages) {
+            acceptedTexts.add(normalizeSlackOutboundText(fallbackMessage.text));
+          }
+        }
+        const actualText = normalizeSlackOutboundText((readback.text ?? "").trim());
+        const applied = params.blocks?.length
+          ? acceptedTexts.has(actualText) && blocksMatch(params.blocks, readback.blocks)
+          : actualText === expectedText;
+        if (applied) {
+          logVerbose(
+            `slack: preview final edit response failed but readback matched message ${params.channelId}/${params.messageId}; suppressing duplicate fallback send`,
+          );
+          return;
+        }
       }
     } catch (readbackErr) {
       logVerbose(`slack: preview final edit readback failed (${String(readbackErr)})`);

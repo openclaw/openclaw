@@ -5,6 +5,7 @@ export function createAttemptSetupFixture(
   overrides: Partial<EmbeddedAttemptSetup> = {},
 ): EmbeddedAttemptSetup {
   return {
+    [Symbol.dispose]() {},
     agentCoreThinkingLevel: "off",
     providerThinkingLevel: undefined,
     effectiveCwd: "/tmp/workspace",

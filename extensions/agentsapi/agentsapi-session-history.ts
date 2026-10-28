@@ -141,3 +141,19 @@ export function createAgentsApiSessionHistory(options: {
     readUsageTurns,
   };
 }
+
+/** Retain the live reader while bounding reconciliation of late saved records. */
+export async function waitForAgentsApiEventOrRecovery<T>(
+  nextEvent: Promise<T>,
+  signal: AbortSignal,
+): Promise<T | undefined> {
+  const refresh = new AbortController();
+  try {
+    return await Promise.race([
+      nextEvent,
+      delay(1_000, undefined, { signal: AbortSignal.any([signal, refresh.signal]) }),
+    ]);
+  } finally {
+    refresh.abort();
+  }
+}

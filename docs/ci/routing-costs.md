@@ -10,7 +10,7 @@ read_when:
 
 Use GitHub-hosted runners for independent checks that fit the workflow's remaining time. Retain Blacksmith where the measured job tail threatens completion. Qualify RunsOn by workload before assigning it a production tier. Requested Blacksmith 8/16/32 labels delivered 2/4/8 CPUs in the capacity check; labels are not worker counts.
 
-The table compares eleven successful B1/R1 main runs with five later successful main runs: `35679872894`, `35679457587`, `35678156129`, `35677164460`, and `35675497006`. These are longitudinal observations with different source revisions, not controlled provider comparisons. Values are median [maximum] complete job seconds; a dash means unmeasured. Existing trust, retry, and [hosted assignment admission](/ci/runners#hybrid-hosted-assignment-guard) still apply.
+The historical table compares eleven successful B1/R1 main runs with five later successful main runs: `35679872894`, `35679457587`, `35678156129`, `35677164460`, and `35675497006`. These are longitudinal observations with different source revisions, not controlled provider comparisons. Values are median [maximum] complete job seconds; a dash means unmeasured. Placement describes that historical routing; the current critical-control policy is recorded below. Existing trust, retry, and [hosted assignment admission](/ci/runners#hybrid-hosted-assignment-guard) still apply.
 
 | Job family                                                 |            Blacksmith |                               GitHub-hosted | Hybrid placement               |
 | ---------------------------------------------------------- | --------------------: | ------------------------------------------: | ------------------------------ |
@@ -37,18 +37,26 @@ The table compares eleven successful B1/R1 main runs with five later successful 
 
 Independent hosted checks reached at most 664 seconds in this sample. Artifact builds reached 898 seconds before the shared preflight and gate; they retain Blacksmith. Only the gate depends on `build-artifacts`: the workflow does not contain a serial build-to-test job dependency.
 
-The package-boundary check now requests the existing Blacksmith 32-class when
-its route selects Blacksmith. In successful PR run
-`36248684656`, its 16-class allocation delivered four CPUs and the existing
-two-CPU reservation admitted two compilers. The 527-second check comprised
-257 seconds of declaration preparation and 268 seconds compiling all 125
-plugins. The 32-class delivers eight CPUs, allowing four compilers under that
-same policy. It adds no jobs or registrations. At the observed 569-second job
-duration, doubling the class would add 151.7 class-vCPU-minutes, or 1.17% of
-that run's 12,921.2 total. The later complete green run `36269840991` measured
-301 seconds and 160.5 class-vCPU-minutes with all 125 plugins checked. Upstream
-compiler optimization also contributed, so this is not an isolated runner
-speedup. Hosted, retry, trust, and cache policies remain unchanged.
+Current package-boundary checks request the Blacksmith 16-class in both the
+additional-check matrix and the shared SDK producer. Frozen targets retain the
+32-class. The existing two-CPU reservation admits two compilers on the observed
+four-CPU 16-class allocation, versus four on the eight-CPU 32-class allocation.
+Compiler, canary, hosted, retry, trust, and cache policies remain unchanged;
+this adds no jobs or registrations. The additional-check row has a 40-minute
+deadline; the SDK producer keeps its own budget.
+
+The October 13 sizing review covered 2,063 boundary jobs in the preceding
+24 hours. On the 32-class, median and p95 peak memory were 26.35% and 27.66%
+of approximately 31 GiB, with no reported OOMs. Median and p95 job durations
+were 183 and 292 seconds. These measurements support qualifying the smaller
+runner; they do not measure its runtime or savings.
+
+Historical full-inventory runs completed in 569 seconds on the 16-class
+(`36248684656`) and 301 seconds on the 32-class (`36269840991`). Compiler
+optimization also changed between those runs, so they do not isolate the
+runner's effect. Compare equivalent workloads and cache states before claiming
+a cost reduction: halving the runner rate only saves money if runtime grows
+by less than two times.
 
 Exact plugin envelopes and unsplit two-worker command envelopes now feed the
 existing timing owner using config, complete file inventory, and worker-bound
@@ -76,7 +84,7 @@ measurements keep their existing estimates.
 Source-only Telegram database-worker envelopes with at least two singleton
 processes can overlap two inner processes on current self-hosted Linux runners.
 Admission requires an explicit current target (`FROZEN_TARGET=false`), one unchanged
-Node invocation from the canonical runtime selector (including `bun-compatible`),
+Node invocation from the shared runtime selector,
 two workers, one outer plan, scheduler-owned caches, at least two actual CPUs, and
 7.5 GiB of effective memory. Effective memory is the smaller
 of physical memory and a positive finite process constraint. Other selections or
@@ -124,6 +132,33 @@ Numbered compact bins change when membership changes. A matching suffix does not
 
 ## Hosted assignment on the critical path
 
+Ordinary push and scheduled runs in `openclaw/openclaw`, and its same-repository
+PRs, now route `preflight`, the selected `pr-failure-report`, and
+`openclaw/ci-gate` to hosted `ubuntu-24.04` in hybrid mode. Fork first attempts
+retain Blacksmith preflight and gate, with their reporter already hosted. All
+dispatch qualification/release overrides, runner groups, retries and other
+backend modes keep their existing routes. This removes three Blacksmith
+assignments per eligible PR and two per eligible main run. The mandatory hosted
+controls count within the existing 40-row base threshold and 45-row admission
+limit before optional offloads; there are no new jobs or higher limits.
+
+An October 15 sample of 26 PR runs recorded 148 minutes of preflight waiting,
+mean 5.69 minutes per run, p75 12.9 minutes and maximum 24.3 minutes; eight of the
+26 waited more than five minutes. Median PR wall time was 35.6 minutes, while
+preflight execution took about one to two minutes. A separate tail-control
+sample waited 27 minutes for 12 seconds of work. These observations identify
+queue exposure; they do not measure the result of the hosted routing change.
+
+Estimated hosted cost is three to four nominal rounded runner-minutes per
+same-repository PR, for roughly two to three compute minutes across the three
+controls. This is an estimate, not observed billing or a demonstrated workflow
+speedup. Hosted queues can also delay completion; measure the first natural
+runs before claiming queue avoidance or lower workflow wall time. Heavy jobs,
+optional offload admission and all validation commands remain unchanged.
+
+The following September observations explain the previous routing decision and
+are retained as historical evidence.
+
 In main run `35810905247` (September 23, 2026), the gate completed 1,068 seconds
 after `run_started_at`; the run metadata finalized one second later. The jobs
 endpoint reports 105 rows, including skipped jobs, so the second page is required
@@ -156,12 +191,13 @@ That chain spends 130 seconds in hosted queueing, two in creation, 632 executing
 and 16 in Blacksmith queueing. No test depends on the artifact build in either
 chain. Changing matrix shape would not remove the gate's serial queue.
 
-Trusted hybrid first attempts therefore request the 16-class for both
-packed core-lint rows and the 4-class for the gate. The logical lint partitions, single
-lint thread, extension-lint rows, main parity slots,
-workflow dependencies, and deadlines stay unchanged. Hosted remains the route
-for independent cheap work. RunsOn's cron evidence does not qualify lint or a
-Bash-only gate, so those workloads retain the measured Blacksmith route.
+These September observations previously motivated the 16-class for both
+packed core-lint rows and the 4-class for the gate. Core lint retains its measured
+Blacksmith route. The current ordinary same-repository hybrid controls use the
+hosted routing above; fork, dispatch and RunsOn overrides remain. Logical lint
+partitions, the single lint thread, extension-lint rows, main parity slots,
+workflow dependencies and deadlines are unchanged. RunsOn's cron evidence does
+not qualify lint or the gate for RunsOn placement.
 The existing health owner also rejects optional check offloads after observed
 hosted waits reach sixty seconds, replacing its former three-minute threshold.
 This protects the central type and dependency rows when assignment consumes
@@ -204,6 +240,34 @@ headroom or changing matrix caps. Manual/frozen release jobs and other workflows
 are outside this conditional arrival envelope; it does not establish complete
 organization-wide usage.
 
+## Compiler planning queue
+
+The October 15 post-batching cohort still showed a separate Blacksmith queue
+before type/lint admission. In the first three assigned planners whose PR bases
+contained both `908efae6fe8b` and `9915d01d074a`, creation-to-start wait was
+559 seconds median and 637 seconds p75. Two completed planners then took
+113 and 151 seconds. These are incomplete natural-run observations, not a
+whole-workflow speedup measurement.
+
+Same-repository hybrid PR first attempts therefore use hosted `check-plan`
+with its existing serial discovery mode. A current-source replay produced an
+identical complete plan in both modes: batched discovery took 16.7 seconds
+and serial took 87.7 seconds on the same Mac; maximum RSS fell from 16.5 GB to
+5.65 GB. A Node 24.21.0 Linux replay also returned the identical plan in 225 seconds
+under a hard two-CPU, 7-GiB limit with no swap. It reused the same pinned native
+compiler on ARM64; GitHub x64 latency remains unmeasured. These local
+measurements establish the execution tradeoff, not hosted job latency. The complete graph validator and all compiler/lint execution
+owners remain unchanged. The extra mandatory hosted row is reserved before
+optional offloads within the existing 40-row threshold and 45-row limit.
+
+Only the planner moves; memory-heavy type/lint workers retain their qualified
+runner classes. Pushes, schedules, forks, retries and manual/release overrides
+retain their routes. Natural CI must establish the new planner queue, complete
+job duration and workflow wall time. Setup plus the Linux replay suggests about
+five to six hosted runner-minutes per eligible PR, replacing one Blacksmith
+16-class assignment; this is an estimate, not billing evidence. No dispatch or
+rerun is needed for that observation.
+
 ## Ratchet admission and Node tests
 
 Selected baseline ratchets and Node rows start independently after preflight.
@@ -230,7 +294,7 @@ and one actual hybrid Blacksmith registration. The job already belonged to the
 potentially self-hosted non-Node union under the default backend, so the existing
 84-row allowance and 5,110-registration envelope stay unchanged. Hosted routing
 remains for the GitHub override, hybrid retries, ordinary manual or frozen targets, and
-noncanonical repositories. Ratchet checks, merge-tree
+repositories other than upstream. Ratchet checks, merge-tree
 validation, parallel Node admission, dependency reconciliation, and deadlines are unchanged.
 
 The same five runs spent 165–209 seconds in the separate `check-plan` prerequisite.
@@ -276,7 +340,7 @@ RunsOn's job duration was 36 seconds shorter than the Blacksmith control's, an 8
 
 The earlier [baseline run 35688659765](https://github.com/openclaw/openclaw/actions/runs/35688659765) measured the same cron descriptors at 252.63 combined child seconds. The newer 393.71-second control replaces that 4.21-minute costing assumption; the variation is another reason not to equate a child-duration forecast with realized savings.
 
-Selection uses the `runson` backend on a canonical same-repository PR's first attempt, or the [maintainer qualification dispatch](/ci/runners#runson-qualification) with an exact current PR head. The repository variable remains unchanged. The existing RunsOn GitHub App supplies runners from workflow labels; no interactive AWS login is part of dispatch. The latest operator identity check failed because the AWS SSO session was expired, so administrative state, teardown, and selected-AZ prices remain unverified. The public regional price feed is available without those credentials.
+Selection uses the `runson` backend on an upstream same-repository PR's first attempt, or the [maintainer qualification dispatch](/ci/runners#runson-qualification) with an exact current PR head. The repository variable remains unchanged. The existing RunsOn GitHub App supplies runners from workflow labels; no interactive AWS login is part of dispatch. The latest operator identity check failed because the AWS SSO session was expired, so administrative state, teardown, and selected-AZ prices remain unverified. The public regional price feed is available without those credentials.
 
 Jobs request `spot=true/retry=false`. Spot has native on-demand fallback when capacity is unavailable; the [provider's fallback documentation](https://runs-on.com/docs/costs/spot-pricing/#default-behavior) describes an additional 2–3 seconds, not a complete assignment SLA. `retry=false` opts out of automatic interruption reruns because the full-workflow recovery delay has not been shown to fit the original 900-second wall. An interruption can therefore fail this qualification. This is a Spot placement experiment, not an interruption-safe fifteen-minute tier.
 
@@ -308,17 +372,17 @@ Predictions can be wrong. The old 982-second extension job included database-wor
 
 ## Measured compact packing
 
-Hybrid placement reuses the canonical tooling estimator from the [capacity-pricing work](https://github.com/openclaw/openclaw/pull/155277). It reads committed Blacksmith file measurements through `readToolingFileTimings` and passes them through the existing estimator's optional file-map argument. Only this hybrid placement pass consumes that additional map; RunsOn inherits the hybrid plan. The broader timing payload and global pricing coefficients are unchanged, so this route does not create a competing file-price table.
+Hybrid placement reuses the shared tooling estimator from the [capacity-pricing work](https://github.com/openclaw/openclaw/pull/155277). It reads committed Blacksmith file measurements through `readToolingFileTimings` and passes them through the existing estimator's optional file-map argument. Only this hybrid placement pass consumes that additional map; RunsOn inherits the hybrid plan. The broader timing payload and global pricing coefficients are unchanged, so this route does not create a competing file-price table.
 
-The canonical collector accepts a complete singleton invocation duration when one declared tooling file, one passing file summary, one duration, matching reporter identity and successful exit agree. Native file summaries retain precedence. Six singleton file prices were refitted from successful jobs and children in three failed workflows; a seventh stayed within the owner's 15% threshold. Seven scoped native Testbox file updates fill missing eligible prices and correct the provision estimate. Failed workflows and cancelled lease cleanup never supply complete-inventory or pruning evidence.
+The shared collector accepts a complete singleton invocation duration when one declared tooling file, one passing file summary, one duration, matching reporter identity and successful exit agree. Native file summaries retain precedence. Six singleton file prices were refitted from successful jobs and children in three failed workflows; a seventh stayed within the owner's 15% threshold. Seven scoped native Testbox file updates fill missing eligible prices and correct the provision estimate. Failed workflows and cancelled lease cleanup never supply complete-inventory or pruning evidence.
 
 Packing admits serial Blacksmith 8-class jobs with the existing two-worker ceiling, numbered tooling children and no runtime-build prerequisite. Every child needs **complete per-file measurements or an exact complete-child native observation** before its job can acquire additional packed work. Default two-second hints for unknown files do not satisfy that requirement. An incompletely measured job keeps its original membership and receives its conservative quoted cost and setup allowance.
 
-The complete packed estimate is **60 seconds of setup plus the greater of the existing owner job price and summed canonical group prices**, retaining compatible native child observations as lower bounds. Native wall floors are not discounted by a worker ratio; the canonical file estimator keeps its normal worker-aware calculation. Each packed job must fit **720 seconds including setup**, preserve complete children and their order, respect sibling-family separation and retain its deadline. Higher owner prices cannot be replaced by faster historical samples.
+The complete packed estimate is **60 seconds of setup plus the greater of the existing owner job price and summed standard group prices**, retaining compatible native child observations as lower bounds. Native wall floors are not discounted by a worker ratio; the shared file estimator keeps its normal worker-aware calculation. Each packed job must fit **720 seconds including setup**, preserve complete children and their order, respect sibling-family separation and retain its deadline. Higher owner prices cannot be replaced by faster historical samples.
 
 Four new main tooling tests changed the earlier selectors. The same estimator now prices the changed inventory instead of disabling packing wholesale. Only affected jobs lacking complete file or native evidence are excluded from merging. Native observations bind to the executed config, environment, ordered selectors, child name and build mode; a parent timing key remains provenance, not admission authority. An unchanged child can therefore retain its observation when a sibling changes, while a changed executed contract expires the old observation safely.
 
-Eligible serial tooling jobs with multiple children split above a **600-second complete-wall estimate**. Complete native child totals drive this decision when available, while the existing job prediction remains a floor; otherwise canonical estimates supply the child costs. Packing still retains any higher canonical price. Exact observed critical pairs also split. Runtime preparation stays only on the requiring child, and newly split critical rows cannot be repacked or charged another setup by that pass. The 703-second CLI forecast remains an unresolved indivisible tail.
+Eligible serial tooling jobs with multiple children split above a **600-second complete-wall estimate**. Complete native child totals drive this decision when available, while the existing job prediction remains a floor; otherwise standard estimates supply the child costs. Packing still retains any higher standard price. Exact observed critical pairs also split. Runtime preparation stays only on the requiring child, and newly split critical rows cannot be repacked or charged another setup by that pass. The 703-second CLI forecast remains an unresolved indivisible tail.
 
 ### Native calibration
 
@@ -331,13 +395,13 @@ Eligible serial tooling jobs with multiple children split above a **600-second c
 | `compact-small-35` | `12-hosted-1`: 140.024s; `13-hosted-2`: 350.159s        |             491.441s |                            — |
 | `compact-small-36` | `12-hosted-2`: 148.109s; `13-hosted-1`: 101.797s        |             251.121s |                            — |
 
-Rounded native components plus one 60-second setup yield **235/466-second floors** for the first pair and **388/698-second floors** for the second. Preparation is charged only to `9-hosted-1`. The new complete `9-hosted-2` sample replaces no failure outcome: the earlier failed 631-second observation remains censored. The four packing-child measurements update only their new exact fingerprints; final packing also retains the higher canonical prices. These are child/build receipts and forecasts, not complete Actions job walls with queueing.
+Rounded native components plus one 60-second setup yield **235/466-second floors** for the first pair and **388/698-second floors** for the second. Preparation is charged only to `9-hosted-1`. The new complete `9-hosted-2` sample replaces no failure outcome: the earlier failed 631-second observation remains censored. The four packing-child measurements update only their new exact fingerprints; final packing also retains the higher standard prices. These are child/build receipts and forecasts, not complete Actions job walls with queueing.
 
 ### Current inventory
 
 Main now includes the separately owned [runtime release tier](https://github.com/openclaw/openclaw/pull/155606); its coverage movement is not an R3 saving. On the candidate rebased onto `0a5b5381a26b`, hybrid's broad-PR plan separates two critical pairs and packs **seven eligible jobs into three**. Four removed setups save 3–4 minutes; the two splits add 1.5–2 minutes, leaving a conditional **1.5–2 Blacksmith 8-class minutes /$0.024–$0.032** before runtime interactions. Main adds one split and its setup. Extension packing retains its separate controlled 47→40-job comparison.
 
-The immutable nine-job calibration cohort fits four jobs with canonical forecasts of **629, 539, 662 and 672 seconds**. That cohort checks the policy; it does not define the current inventory's job count. Current packed `compact-small-20` forecasts 617 seconds, and tooling `compact-small-32` forecasts 576.5 seconds. The longest known forecast remains the 703-second CLI child.
+The immutable nine-job calibration cohort fits four jobs with standard forecasts of **629, 539, 662 and 672 seconds**. That cohort checks the policy; it does not define the current inventory's job count. Current packed `compact-small-20` forecasts 617 seconds, and tooling `compact-small-32` forecasts 576.5 seconds. The longest known forecast remains the 703-second CLI child.
 
 | Profile and shape                | Before Node /compact | Final Node /compact | Final Node classes        | Caps Node /compact |
 | -------------------------------- | -------------------: | ------------------: | ------------------------- | -----------------: |
