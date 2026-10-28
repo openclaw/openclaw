@@ -65,6 +65,7 @@ import {
 import { updateFinalizeCommand, type UpdateCoreCompletion } from "./update-command-finalize.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
+import { withUpdateDatabaseEngine } from "./update-command.js";
 import { updateMaintenanceError } from "./update-maintenance-error.js";
 import {
   reportRetainedUpdateCustody,
@@ -72,7 +73,10 @@ import {
 } from "./update-retained-custody.js";
 
 export function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
-  return repairUpdate(opts).catch((error: unknown) => {
+  // Without the authored engine selection a PostgreSQL state anchor is read as SQLite.
+  return withUpdateDatabaseEngine(resolveServiceRefreshEnv(process.env, tryProcessCwd()), () =>
+    repairUpdate(opts),
+  ).catch((error: unknown) => {
     throw updateMaintenanceError(error);
   });
 }

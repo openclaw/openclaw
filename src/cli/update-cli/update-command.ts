@@ -73,7 +73,8 @@ export async function updateCommand(
   );
 }
 
-async function withUpdateDatabaseEngine<T>(
+/** Updater-owned commands skip boot-time engine selection; every entry point scopes it here. */
+export async function withUpdateDatabaseEngine<T>(
   env: NodeJS.ProcessEnv,
   run: () => Promise<T>,
 ): Promise<T> {

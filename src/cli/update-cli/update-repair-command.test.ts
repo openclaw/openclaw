@@ -59,6 +59,7 @@ const mocks = vi.hoisted(() => ({
     typeof import("../daemon-cli/restart-health-probe.js").waitForGatewayHttpReadiness
   >(async () => ({ healthz: 200, readyz: 200 })),
   runtime: { log: vi.fn(), error: vi.fn(), writeJson: vi.fn(), exit: vi.fn() },
+  withEngine: vi.fn(async (_env: NodeJS.ProcessEnv, run: () => Promise<unknown>) => await run()),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -75,6 +76,7 @@ vi.mock("../daemon-cli/restart-health-probe.js", () => ({
   waitForGatewayHttpReadiness: mocks.readiness,
 }));
 vi.mock("./update-command-finalize.js", () => ({ updateFinalizeCommand: mocks.finalize }));
+vi.mock("./update-command.js", () => ({ withUpdateDatabaseEngine: mocks.withEngine }));
 vi.mock("../../infra/update-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-check.js")>()),
   resolveNpmChannelTag: mocks.resolveChannel,
@@ -152,6 +154,31 @@ afterEach(async () => {
 });
 
 describe("update repair ledger recovery", () => {
+  it("scopes the configured database-engine selection around the whole repair", async () => {
+    // Repair must select the authored engines before it reads shared state, or a
+    // PostgreSQL state anchor is opened as SQLite and refused ("schema role missing").
+    const order: string[] = [];
+    mocks.withEngine.mockImplementationOnce(async (env, run) => {
+      expect(env.OPENCLAW_STATE_DIR).toBe(process.env.OPENCLAW_STATE_DIR);
+      order.push("select");
+      try {
+        return await run();
+      } finally {
+        order.push("release");
+      }
+    });
+    mocks.ownershipAllowed.mockImplementationOnce(async () => {
+      order.push("ownership");
+    });
+    mocks.finalize.mockImplementationOnce(async () => {
+      order.push("finalize");
+    });
+
+    await updateRepairCommand({ json: true });
+
+    expect(mocks.withEngine).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["select", "ownership", "finalize", "release"]);
+  });
   it("tells operators to stop the live Gateway owner before repair", async () => {
     const run = seedRun();
     mocks.ownershipAllowed.mockRejectedValueOnce(
