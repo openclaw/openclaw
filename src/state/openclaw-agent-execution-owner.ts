@@ -21,7 +21,10 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { notifyListeners } from "../shared/listeners.js";
 import * as creationClaims from "./agent-creation-claim.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
-import { captureAgentDatabaseAdmission } from "./agent-database-admission.js";
+import {
+  captureAgentDatabaseAdmission,
+  retainAgentDatabaseStartupWorker,
+} from "./agent-database-admission.js";
 import {
   assertAgentDeletionExecutionCleanupAccess,
   getAgentDeletionDatabaseCleanup,
@@ -255,6 +258,9 @@ export function createAgentDatabaseExecution(
         reportTerminal,
         fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
         creationClaim?.witness,
+        retainAgentDatabaseStartupWorker(agentId, { env: context.environment }, () =>
+          closeNative(created),
+        ),
       );
       generation = created;
     }

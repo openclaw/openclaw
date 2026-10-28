@@ -80,6 +80,7 @@ export function createAgentDatabaseNativeGeneration(
   onTerminal: (reason: Error) => void,
   creatingIdentity?: DatabasePathIdentity,
   creationClaim?: AgentDatabaseFileExecutionOpen["creationClaim"],
+  startupPreparation = false,
 ): AgentDatabaseNativeGeneration {
   const inPreparation = AsyncLocalStorage.snapshot();
   const input: AgentDatabaseFileExecutionOpen = {
@@ -456,6 +457,7 @@ export function createAgentDatabaseNativeGeneration(
               existingOnly: preparingShared || !createIfMissing,
             },
             {
+              startupPreparation,
               stateContext: context,
               stateDatabasePath: context.admission.databasePath,
               assertCurrent: preparingShared ? assertCurrent : assertOpening,
@@ -497,9 +499,7 @@ export function createAgentDatabaseNativeGeneration(
         try {
           assertCurrent();
           // An eager opener has already settled registration and its topology publication.
-          if (nativeIdentity) {
-            preparationPublished = true;
-          }
+          preparationPublished ||= nativeIdentity !== undefined;
           return store;
         } catch (error) {
           try {

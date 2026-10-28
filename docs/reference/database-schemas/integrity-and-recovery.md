@@ -272,12 +272,14 @@ and session/model preparation after the listener is ready. Other agents and the
 Control UI can start in the meantime. Inspection starts during foreground
 readiness and continues without an idle retry delay. Deferred writable admission
 starts after Gateway sidecars are ready, with at most two databases opening
-concurrently. Agent writers, generic plugin stores, and shared state use separate
-SQLite carriers and cold-open queues, so agent integrity scans cannot hold plugin
-reads, durable channel intake, or shared configuration reads behind them. Agent
-and generic stores each retain up to two carriers; shared state retains one. Each
-class can lend one additional carrier to a retained runtime generation during an
-update. Physical database ownership and the global store/input budgets stay shared. Channels and accounts prepare independently;
+concurrently. Startup preparation uses temporary SQLite carriers and cold-open
+queues, so agent integrity scans cannot hold plugin reads, durable channel intake,
+or shared configuration reads behind them. Admission closes those native workers
+before releasing write refusal, preserving their validated database facts. Later
+agent opens share the ordinary two-carrier pool with plugins; shared state retains
+one carrier. Each pool can lend one additional carrier to a retained runtime
+generation during an update. Physical database ownership and the global store/input
+budgets stay shared. Channels and accounts prepare independently;
 pending channel starts remain tracked for shutdown while plugin services and
 recovery continue. Agent-local session preparation then
 runs with up to four agents concurrently. Only credential/model publication
@@ -810,7 +812,9 @@ Readers still validate schema, ownership, canonical session rows, file identity,
 and quarantine. Read readiness does not certify unchecked pages elsewhere in the
 database and does not publish an integrity receipt. A failed inspection or retired
 startup owner revokes read readiness. The Gateway clears writable refusal only
-after integrity inspection, session validation, and transcript preparation finish.
+after integrity inspection, session validation, transcript preparation, and temporary
+worker cleanup finish. When early-read admission ends, reads use the ordinary
+database admission turn without consulting inspection state.
 
 Operator `send` requests check admission before delivery even when they specify
 only an `agentId` and omit `sessionKey`. Pending preparation returns a retryable
