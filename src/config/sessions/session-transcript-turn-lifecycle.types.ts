@@ -5,8 +5,6 @@ export type SessionLifecycleRevisionExpectation = string | null;
 
 /** Authoritative lifecycle snapshot required for an atomic transcript admission. */
 export type SessionTranscriptTurnExpectedState = {
-  /** When supplied, fences a goal mutation committed with the transcript. */
-  goal?: SessionEntry["goal"];
   /** When supplied, fences exact pending-final custody; null requires its absence. */
   pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"] | null;
   /** Rejects a run-owned turn after another admitted run takes writer ownership. */
@@ -17,7 +15,6 @@ export type SessionTranscriptTurnExpectedState = {
 
 /** Lifecycle fields committed with an accepted transcript turn. */
 export type SessionTranscriptTurnLifecyclePatch = {
-  goal?: SessionEntry["goal"];
   abortedLastRun?: boolean;
   endedAt?: number;
   lifecycleRunId?: SessionEntry["lifecycleRunId"];

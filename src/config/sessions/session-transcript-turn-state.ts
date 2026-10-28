@@ -41,8 +41,6 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
         selected.entry.activeWriterRunId === expected.expectedOwner.activeWriterRunId)) &&
     (expectedState === undefined ||
       (selected.entry.abortedLastRun === expectedState.abortedLastRun &&
-        (expectedState.goal === undefined ||
-          isDeepStrictEqual(selected.entry.goal, expectedState.goal)) &&
         (expectedState.pendingFinalDelivery === undefined ||
           isDeepStrictEqual(
             selected.entry.pendingFinalDelivery,
