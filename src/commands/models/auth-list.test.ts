@@ -78,15 +78,10 @@ function setOAuthProfile(
   provider: string,
   usage: NonNullable<AuthProfileStore["usageStats"]>[string],
 ) {
+  const profile = createOAuthRefreshCredential({ provider, expires: 1_900_000_000_000 });
   mocks.ensureAuthProfileStore.mockReturnValue({
-    ...createAuthProfileStoreFixture({
-      [id]: createOAuthRefreshCredential({
-        provider,
-        access: "secret",
-        refresh: "secret",
-        expires: 1_900_000_000_000,
-      }),
-    }),
+    version: 1,
+    profiles: { [id]: profile },
     usageStats: { [id]: usage },
   } satisfies AuthProfileStore);
 }
@@ -124,20 +119,11 @@ describe("modelsAuthListCommand", () => {
         disabledUntil: until,
         disabledReason: "billing",
       });
-
       const { text, json } = await listBoth();
       expect(text.at(-1)).not.toMatch(/cooldown|disabled|Top up credits/u);
-      const { profiles } = json as { profiles: Array<Record<string, unknown>> };
-      for (const field of [
-        "cooldownUntil",
-        "cooldownReason",
-        "cooldownClassification",
-        "disabledUntil",
-        "disabledReason",
-        "recoveryHint",
-      ]) {
-        expect(profiles[0]).not.toHaveProperty(field);
-      }
+      expect((json as { profiles: unknown[] }).profiles).toEqual([
+        summary("anthropic:expired", "oauth", { expiresAt: "2030-03-17T17:46:40.000Z" }),
+      ]);
     },
   );
 
@@ -293,8 +279,6 @@ describe("modelsAuthListCommand", () => {
     async (expires, expectedExpiry) => {
       const store: AuthProfileStore = createAuthProfileStoreFixture({
         "openai:user@example.com": createOAuthRefreshCredential({
-          access: "access-secret",
-          refresh: "refresh-secret",
           expires,
           email: "user@example.com",
         }),
@@ -344,15 +328,10 @@ describe("models auth order", () => {
   const order = ["anthropic:b", "anthropic:a"];
   let runtime: ReturnType<typeof createRuntimeEnv>;
   function store(ids: string[], savedOrder?: string[], provider = "anthropic"): AuthProfileStore {
+    const credential = (id: string) => createOAuthRefreshCredential({ provider: id });
     return {
-      ...createAuthProfileStoreFixture(
-        Object.fromEntries(
-          ids.map((id) => [
-            id,
-            createOAuthRefreshCredential({ provider: id.split(":")[0], access: "tok" }),
-          ]),
-        ),
-      ),
+      version: 1,
+      profiles: Object.fromEntries(ids.map((id) => [id, credential(id.slice(0, id.indexOf(":")))])),
       ...(savedOrder ? { order: { [provider]: savedOrder } } : {}),
     };
   }
@@ -380,28 +359,21 @@ describe("models auth order", () => {
   });
 
   it.each([
-    { agent: "ops", order, message: "Auth profile order override: anthropic:b, anthropic:a" },
-    {
-      agent: undefined,
-      order: null,
-      message: expect.stringContaining("Auth profile order override cleared"),
-    },
-  ])(
-    "writes order $order for $agent and refreshes the gateway",
-    async ({ agent, order: ids, message }) => {
-      await modelsAuthOrderUpdateCommand({ provider: "anthropic", agent, order: ids }, runtime);
-      expectWrite(agent ?? "main", "anthropic", ids);
-      expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(expect.anything(), agent, {
-        kind: "mutation",
-      });
-      expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith(
-        agent ?? "main",
-        "update",
-        runtime,
-      );
-      expect(runtime.log).toHaveBeenCalledWith(message);
-    },
-  );
+    ["ops", order, "Auth profile order override: anthropic:b, anthropic:a"],
+    [undefined, null, expect.stringContaining("Auth profile order override cleared")],
+  ] as const)("writes order %s and refreshes the gateway", async (agent, ids, message) => {
+    await modelsAuthOrderUpdateCommand({ provider: "anthropic", agent, order: ids }, runtime);
+    expectWrite(agent ?? "main", "anthropic", ids);
+    expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(expect.anything(), agent, {
+      kind: "mutation",
+    });
+    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith(
+      agent ?? "main",
+      "update",
+      runtime,
+    );
+    expect(runtime.log).toHaveBeenCalledWith(message);
+  });
 
   it("accepts alias-provider profiles and reports the canonical stored order", async () => {
     mocks.ensureAuthProfileStore.mockReturnValue(store(["xai:a"]));
