@@ -10,7 +10,6 @@ import {
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
 } from "../agents/subagents/registry/subagent-registry-read.js";
-import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   isSameSubagentRun,
   isSameSubagentRunOwner,
@@ -91,8 +90,8 @@ export async function reactivateCompletedSubagentSession(params: {
     activeSessionAgentId: string;
     sessionEntry?: SessionEntry;
   };
-  /** Continue only this yielded task; any other owner leaves the turn a separate follow-up. */
-  expectedPausedRun?: SubagentRunRecord;
+  /** Continue only the task paused by this run; any other pause leaves the turn a follow-up. */
+  pausedRunId?: string;
 }): Promise<boolean> {
   const runId = params.runId?.trim();
   if (!runId) {
@@ -107,10 +106,9 @@ export async function reactivateCompletedSubagentSession(params: {
     (entry) => entry.pauseReason === "sessions_yield",
   );
   if (
-    params.expectedPausedRun &&
-    (!isSameSubagentRunOwner(paused, params.expectedPausedRun) ||
-      paused?.killIntent ||
-      paused?.killReconciliation)
+    params.pausedRunId &&
+    // A stopped task stays stopped; its late handoff result runs as an ordinary follow-up.
+    (paused?.runId !== params.pausedRunId || paused.killIntent || paused.killReconciliation)
   ) {
     return false;
   }
@@ -191,7 +189,6 @@ export async function reactivateCompletedSubagentSession(params: {
       ? await runtime.adoptPausedSubagentRunForFollowUp({
           childSessionKey: params.sessionKey,
           runId,
-          ...(params.expectedPausedRun ? { expected: params.expectedPausedRun } : {}),
           task: hasTask ? task : source.task,
           assertCurrent: assertOriginalOwnerCurrent,
           ...gatewayBinding,

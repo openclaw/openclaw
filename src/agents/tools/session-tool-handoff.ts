@@ -30,7 +30,6 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
-import { captureSubagentTaskHandoff } from "../subagents/registry/subagent-task-handoff.js";
 import { jsonResult, ToolInputError } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
@@ -125,12 +124,6 @@ export async function handoffSessionTool(
     const target = await captureSessionEventTargetForHost(caller.agentId, caller.sessionKey, {
       operatorAuthority: continuation.operatorAuthority,
       ...(params.senderIsOwner === true ? { ownerContinuation: true as const } : {}),
-      // A yielding native task resumes as that task, so its parent still receives completion.
-      subagentTask: captureSubagentTaskHandoff({
-        sessionKey: caller.sessionKey,
-        agentId: caller.agentId,
-        runId: params.runId,
-      }),
     });
     const storePath = target.storePath;
     if (target.sessionId !== params.sessionId || !storePath) {
@@ -234,6 +227,8 @@ export async function handoffSessionTool(
                     agentId: caller.agentId,
                     sessionKey: caller.sessionKey,
                     source: "tool_handoff",
+                    // A yielded subagent task resumes as itself only from its own run's handoff.
+                    sourceRunId: params.runId,
                     contextKey,
                     expectedTarget: target,
                     assertCurrent: retained.assertCurrent,

@@ -1,5 +1,4 @@
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { bindSubagentTaskHandoff } from "../../agents/subagents/registry/subagent-task-handoff.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -19,7 +18,6 @@ import {
   readSessionEventTargetEnvironment,
   readSessionEventTargetOperatorAuthority,
   readSessionEventTargetOwnerContinuation,
-  readSessionEventTargetSubagentTask,
   resolveSessionEventKey,
 } from "./session-event-target.js";
 import { setChannelSourceTurnId } from "./source-turn-id.js";
@@ -147,10 +145,6 @@ export function buildSessionEventContext(params: {
         return true;
       },
     });
-  }
-  if (options.source === "tool_handoff") {
-    // The yielded task's result resumes that task; the reply runner redeems this exact binding.
-    bindSubagentTaskHandoff(ctx, readSessionEventTargetSubagentTask(target));
   }
   setChannelSourceTurnId(ctx, options.sourceTurnId);
   return ctx;

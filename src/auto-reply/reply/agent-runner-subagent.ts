@@ -1,13 +1,12 @@
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
-import { readSubagentTaskHandoff } from "../../agents/subagents/registry/subagent-task-handoff.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 
 /**
- * Human replies and operator recovery inherit the retained child's native custody. A session-tool
- * handoff result continues only the exact yielded task that handed off; other internal turns stay
+ * Human replies and operator recovery inherit the retained child's native custody. A tool
+ * handoff result continues the task whose own run handed off; other internal turns stay
  * separate follow-ups.
  */
 export async function prepareReplySubagentContinuation(
@@ -22,13 +21,13 @@ export async function prepareReplySubagentContinuation(
     provenance?.kind === "internal_system" &&
     provenance.sourceTool === "sessions.recover" &&
     provenance.sourceSessionKey === turn.sessionKey;
-  const taskHandoff =
+  const handoffRunId =
     provenance?.kind === "internal_system" && provenance.sourceTool === "tool_handoff"
-      ? readSubagentTaskHandoff(turn.followupRun.run)
+      ? provenance.runId
       : undefined;
   if (
     !turn.sessionKey ||
-    (provenance && provenance.kind !== "external_user" && !operatorRecovery && !taskHandoff) ||
+    (provenance && provenance.kind !== "external_user" && !operatorRecovery && !handoffRunId) ||
     !(entry?.spawnedBy || entry?.subagentRole || (entry?.spawnDepth ?? 0) > 0)
   ) {
     return;
@@ -47,8 +46,8 @@ export async function prepareReplySubagentContinuation(
     sessionKey: turn.sessionKey,
     runId,
     // Recovery and handoff results continue the original task rather than restating it.
-    ...(operatorRecovery || taskHandoff ? {} : { task: turn.followupRun.prompt }),
-    ...(taskHandoff ? { expectedPausedRun: taskHandoff.task } : {}),
+    ...(operatorRecovery || handoffRunId ? {} : { task: turn.followupRun.prompt }),
+    ...(handoffRunId ? { pausedRunId: handoffRunId } : {}),
     gatewayContextResolver:
       readChannelContextGatewayContextResolver(turn.sessionCtx) ??
       getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
