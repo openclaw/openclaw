@@ -3,6 +3,11 @@ import "./update-command-execution.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import {
+  createCanaryProcessFixture,
+  createCanaryStartupRuntimeFixture,
+} from "../../infra/update-candidate-canary.test-support.js";
+import * as rehearsals from "../../infra/update-candidate-rehearsal.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import {
   updateRunStepsFromResultStep,
@@ -20,6 +25,7 @@ import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 const {
   bindExecutionGuards,
   executionParams,
+  inspectOrStopService,
   mocks,
   packageCandidate,
   readyCanary,
@@ -32,9 +38,11 @@ const execute = async (params = executionParams("git")) =>
 function gitCandidate(onValidated: (steps: unknown) => void = () => {}, gitMode = false) {
   mocks.runGitUpdate.mockImplementation(
     async ({
+      inspectGitTarget,
       validateCandidate,
     }: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0]) => {
       expect(validateCandidate).toBeTypeOf("function");
+      await inspectGitTarget({ sha: "a".repeat(40), version: "1.0.1" });
       onValidated(await validateCandidate!("/candidate"));
       return gitMode ? { ...successfulUpdate, mode: "git" } : successfulUpdate;
     },
@@ -221,6 +229,11 @@ it("retains rejected Git canary findings in the terminal result", async () => {
       }),
     ],
   });
+  const executable = "/opt/service-runtime/bun";
+  mocks.maybeStopService.mockImplementation(async ({ phase, onOwnedStartupRuntime }) => {
+    if (phase === "inspect") onOwnedStartupRuntime?.(executable);
+    return inspectOrStopService(phase);
+  });
   gitCandidate(undefined, true);
 
   const execution = await execute();
@@ -231,4 +244,88 @@ it("retains rejected Git canary findings in the terminal result", async () => {
     steps: [{ failureFacts: [fact] }],
   });
   expect(mocks.serviceStopped).toBe(false);
+  expect(mocks.validateCanary).toHaveBeenCalledWith(
+    expect.objectContaining({ gatewayStartupRuntime: executable }),
+  );
 });
+
+it.each(["git", "package"] as const)(
+  "keeps the observed service runtime scoped to Git startup (%s)",
+  async (kind) => {
+    const executable = "/opt/service-runtime/bun";
+    mocks.maybeStopService.mockImplementation(async ({ phase, onOwnedStartupRuntime }) => {
+      expect(typeof onOwnedStartupRuntime).toBe(kind === "git" ? "function" : "undefined");
+      if (phase === "inspect") {
+        onOwnedStartupRuntime?.(executable);
+      }
+      return inspectOrStopService(phase);
+    });
+    if (kind === "git") {
+      gitCandidate();
+    } else {
+      mocks.runPackageUpdate.mockImplementation(packageCandidate("/candidate"));
+    }
+
+    await execute({ ...executionParams(kind), shouldRestart: false });
+
+    expect(mocks.validateCanary).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ gatewayStartupRuntime: kind === "git" ? executable : undefined }),
+    );
+    expect(mocks.validateCanary.mock.calls[0]![0].nodeRunner).toBeUndefined();
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "rejects the service startup executable before service stop or Git publication",
+  async () =>
+    withTestDir({ prefix: "candidate-service-runtime-" }, async (root) => {
+      const rehearsal = await createCanaryProcessFixture(
+        root,
+        `
+const args = process.argv.slice(2);
+if (args.includes("--help")) console.log("  --full-integrity-check  Verify copied state");
+if (args.includes("--lint")) console.log(JSON.stringify({ok: true, checksRun: 1, findings: [], warnings: []}));
+if (args.includes("plugins")) console.log(JSON.stringify({plugins: [], diagnostics: []}));
+`,
+      );
+      const { runner, dispatched } = await createCanaryStartupRuntimeFixture(root, true);
+      vi.spyOn(rehearsals, "prepareUpdateCandidateRehearsal").mockResolvedValue(rehearsal);
+      const actual = await vi.importActual<typeof import("../../infra/update-candidate-canary.js")>(
+        "../../infra/update-candidate-canary.js",
+      );
+      mocks.validateCanary.mockImplementation(actual.validateUpdateCandidateCanary);
+      mocks.maybeStopService.mockImplementation(async ({ phase, onOwnedStartupRuntime }) => {
+        if (phase === "inspect") onOwnedStartupRuntime?.(runner);
+        return inspectOrStopService(phase);
+      });
+      const publish = vi.fn();
+      mocks.runGitUpdate.mockImplementation(async ({ inspectGitTarget, validateCandidate }) => {
+        await inspectGitTarget({ sha: "a".repeat(40), version: "1.0.1" });
+        await validateCandidate(root);
+        publish();
+        return { ...successfulUpdate, mode: "git" };
+      });
+      const onActivation = vi.fn();
+
+      const execution = await execute({ ...executionParams("git"), onActivation });
+
+      expect(execution?.result).toMatchObject({
+        status: "error",
+        reason: "runtime-verification-failed",
+      });
+      expect(execution?.result.steps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "candidate-gateway-startup", exitCode: 1 }),
+        ]),
+      );
+      expect(JSON.parse(await fs.readFile(dispatched, "utf8"))).toEqual(
+        expect.arrayContaining(["gateway", "run"]),
+      );
+      expect(mocks.serviceStopped).toBe(false);
+      expect(
+        mocks.maybeStopService.mock.calls.every(([params]) => params.phase === "inspect"),
+      ).toBe(true);
+      expect(onActivation).not.toHaveBeenCalled();
+      expect(publish).not.toHaveBeenCalled();
+    }),
+);
