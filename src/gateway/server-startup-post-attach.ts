@@ -90,7 +90,7 @@ export async function startGatewayPostAttachRuntime(params: {
   getCurrentPluginRegistry?: () => PluginRegistry;
   shouldStartPluginServices?: () => boolean;
   getCronService?: () => PluginServiceCronHost | null | undefined;
-  onChannelsStarted?: () => Awaitable<void>;
+  onChannelsStarted?: () => void;
   onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
   onPostReadySidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
   onGatewayLifetimeSidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
@@ -316,7 +316,6 @@ export async function startGatewayPostAttachRuntime(params: {
                   logHooks: params.logHooks,
                   logChannels: params.logChannels,
                   startupTrace: params.startupTrace,
-                  onChannelsStarted: params.onChannelsStarted,
                   onPluginServices: params.onPluginServices,
                   onPostReadySidecars: params.onPostReadySidecars,
                   shouldCreatePostReadySidecars: () => params.isClosing?.() !== true,
@@ -420,7 +419,10 @@ export async function startGatewayPostAttachRuntime(params: {
             | PluginHookGatewayCronService
             | undefined,
         isClosing: params.isClosing,
-        unlockStartupMethods: params.unlockStartupMethods,
+        unlockStartupMethods: () => {
+          params.onChannelsStarted?.();
+          params.unlockStartupMethods();
+        },
         startupTrace: params.startupTrace,
         log: params.log,
         logHooks: params.logHooks,

@@ -997,6 +997,7 @@ describe("startGatewayPostAttachRuntime", () => {
   it("starts independent sidecars while channels prepare and retains their shutdown custody", async () => {
     const channels = createDeferred();
     const channelsStarted = createDeferred();
+    const accountStartsReleased = createDeferred();
     const recoveryStarted = createDeferred();
     const events: string[] = [];
     const lifetime = new AsyncWorkScope();
@@ -1027,6 +1028,7 @@ describe("startGatewayPostAttachRuntime", () => {
         },
         onChannelsStarted: () => {
           events.push("channels-started");
+          accountStartsReleased.resolve();
         },
         onPluginServices,
         onSidecarsReady,
@@ -1038,7 +1040,8 @@ describe("startGatewayPostAttachRuntime", () => {
       await waitForGatewayTestState(() => expect(onSidecarsReady).toHaveBeenCalledOnce());
       await runtime.startupSettled;
       await recoveryStarted.promise;
-      expect(events).toEqual(["channels-start", "channels-started", "plugin-services"]);
+      await accountStartsReleased.promise;
+      expect(events).toEqual(["channels-start", "plugin-services", "channels-started"]);
       expect(onPluginServices).toHaveBeenCalledOnce();
       expect(onPluginServices).toHaveBeenLastCalledWith(pluginServices);
       const owner: PluginServicesHandle = onPluginServices.mock.calls[0]?.[0];
@@ -1389,7 +1392,6 @@ describe("startGatewayPostAttachRuntime", () => {
   it("publishes models when channels are skipped", async () => {
     const trace = createStartupTraceRecorder();
     const logChannels = { info: vi.fn(), error: vi.fn() };
-    const onChannelsStarted = vi.fn();
 
     await withEnvAsync(
       {
@@ -1404,7 +1406,6 @@ describe("startGatewayPostAttachRuntime", () => {
           } as never,
           logChannels,
           startupTrace: trace.startupTrace,
-          onChannelsStarted,
         });
       },
     );
@@ -1416,7 +1417,6 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(logChannels.info).toHaveBeenCalledWith(
       "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
     );
-    expect(onChannelsStarted).toHaveBeenCalledOnce();
   });
 
   it("traces plugin services when channel startup fails", async () => {

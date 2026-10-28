@@ -31,8 +31,6 @@ import {
 } from "./server-startup-sidecar-scheduler.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
-type Awaitable<T> = T | Promise<T>;
-
 const loadAgentDefaultsModule = createLazyRuntimeModule(() => import("../agents/defaults.js"));
 
 const loadAgentModelSelectionModule = createLazyRuntimeModule(
@@ -66,7 +64,6 @@ export async function startGatewaySidecars(params: {
   trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
   shouldStartChannels?: () => boolean;
   refreshChatMetadata?: () => Promise<void>;
-  onChannelsStarted?: () => Awaitable<void>;
   onPostReadySidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
   shouldCreatePostReadySidecars?: () => boolean;
   logHooks: {
@@ -189,8 +186,8 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.chat-metadata", async () => {
     await params.refreshChatMetadata?.();
   });
-  // Transports can connect while recovery runs; channel turns retain their per-agent
-  // database and saved-input admission gates. Shutdown still owns this producer.
+  // Accounts prepare independently; the startup owner releases their existing
+  // start gate after retained inputs acquire ordinary queue custody.
   void params
     .trackStartupWork(() =>
       measureStartup(params.startupTrace, "sidecars.channels", async () => {
@@ -204,11 +201,7 @@ export async function startGatewaySidecars(params: {
           : shouldStartChannels
             ? measureStartup(params.startupTrace, "sidecars.channel-start", params.startChannels)
             : Promise.resolve();
-        // Release the generation gate before any account's preparation settles.
-        const accountStartGateRelease = shouldStartChannels
-          ? params.onChannelsStarted?.()
-          : undefined;
-        await Promise.all([accountStartGateRelease, channelStart]);
+        await channelStart;
       }),
     )
     .catch((err: unknown) => params.logChannels.error(`channel startup failed: ${String(err)}`));

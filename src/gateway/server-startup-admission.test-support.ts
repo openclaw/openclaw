@@ -27,7 +27,7 @@ export function registerGatewayStartupAdmissionTests(params: {
   startupModuleRestorers: Array<() => void>;
   stopSidecar: (sidecar: GatewayPostReadySidecarHandle) => Promise<void>;
 }): void {
-  it("keeps external input closed until retained inputs have acquired queue custody", async () => {
+  it("keeps channel and external input closed until retained inputs have acquired queue custody", async () => {
     const resume = createStartupGate();
     const unlocked = createDeferred();
     const tracked: Promise<unknown>[] = [];
@@ -35,6 +35,7 @@ export function registerGatewayStartupAdmissionTests(params: {
     const owner = await import("./session-restart-resume.js");
     const resumeSpy = vi.spyOn(owner, "resumeMarkedSessions").mockImplementation(resume.run);
     const unlockStartupMethods = vi.fn(() => unlocked.resolve());
+    const onChannelsStarted = vi.fn();
     try {
       const runtime = await params.start(
         params.createParams({
@@ -46,15 +47,18 @@ export function registerGatewayStartupAdmissionTests(params: {
           },
           isClosing: () => lifetime.signal.aborted,
           unlockStartupMethods,
+          onChannelsStarted,
         }),
         params.createRuntimeDeps(),
       );
       await runtime.startupSettled;
       await resume.entered;
       expect(unlockStartupMethods).not.toHaveBeenCalled();
+      expect(onChannelsStarted).not.toHaveBeenCalled();
       resume.release();
       await unlocked.promise;
       expect(unlockStartupMethods).toHaveBeenCalledOnce();
+      expect(onChannelsStarted).toHaveBeenCalledOnce();
     } finally {
       lifetime.abort();
       resume.release();
@@ -71,6 +75,7 @@ export function registerGatewayStartupAdmissionTests(params: {
       .spyOn(owner, "resumeMarkedSessions")
       .mockRejectedValueOnce(new Error("fixture store unavailable"));
     const unlockStartupMethods = vi.fn();
+    const onChannelsStarted = vi.fn();
     const startup = params.createParams({
       sidecarStartup: "defer",
       trackStartupWork: (run) => {
@@ -80,12 +85,14 @@ export function registerGatewayStartupAdmissionTests(params: {
       },
       isClosing: () => lifetime.signal.aborted,
       unlockStartupMethods,
+      onChannelsStarted,
     });
     try {
       const runtime = await params.start(startup, params.createRuntimeDeps());
       await runtime.startupSettled;
       await Promise.allSettled(tracked);
       expect(unlockStartupMethods).toHaveBeenCalledOnce();
+      expect(onChannelsStarted).toHaveBeenCalledOnce();
       expect(startup.log.warn).toHaveBeenCalledWith(
         expect.stringContaining("Restart resume discovery failed"),
       );
