@@ -151,6 +151,7 @@ export const SessionsPatchMutationSchema = Type.Object(SessionsPatchMutationProp
 
 export const SessionsPatchManyTargetSchema = closedObject({
   key: NonEmptyString,
+  expectedMarkedUnreadAt: ExpectedMarkedUnreadAt,
   ...SessionOrganizationExpectations,
   agentId: Type.Optional(NonEmptyString),
   expectedSessionId: Type.Optional(NonEmptyString),

@@ -20,6 +20,10 @@ import {
   withReplyDispatcher,
 } from "../../auto-reply/dispatch-dispatcher.js";
 import { formatAgentEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
+import type {
+  GetReplyOptions,
+  TurnAdoptionLifecycle,
+} from "../../auto-reply/get-reply-options.types.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -137,23 +141,57 @@ function bindChannelCallbacks<T extends object>(callbacks: T, consumer: PluginIn
       }),
   });
 }
-function bindChannelDelivery<T extends { delivery: object; replyOptions?: object }>(
-  params: T,
-  consumer?: PluginInstanceConsumer,
-): T {
+type ChannelDeliveryCustody = { deferred: boolean };
+function bindChannelDelivery<
+  T extends {
+    delivery: object;
+    replyOptions?: GetReplyOptions;
+    turnAdoptionLifecycle?: TurnAdoptionLifecycle;
+  },
+>(params: T, consumer?: PluginInstanceConsumer, custody?: ChannelDeliveryCustody): T {
+  let replyOptions = params.replyOptions;
+  let adoption: TurnAdoptionLifecycle | undefined;
+  if (consumer && custody && replyOptions?.onQueuedFollowupReplyBatch) {
+    // Queued source delivery outlives dispatch; the queue owns its final release.
+    const source = params.turnAdoptionLifecycle ?? replyOptions.turnAdoptionLifecycle;
+    adoption = {
+      ...source,
+      onAdopted: source?.onAdopted ?? (() => {}),
+      onDeferred: () => {
+        const accepted = source?.onDeferred?.();
+        if (accepted !== false) {
+          custody.deferred = true;
+        }
+        return accepted;
+      },
+      onSettled: async () => {
+        try {
+          await source?.onSettled?.();
+        } finally {
+          if (custody.deferred) {
+            consumer.release();
+          }
+        }
+      },
+    };
+    replyOptions = { ...replyOptions, turnAdoptionLifecycle: adoption };
+  }
   return consumer
     ? {
         ...params,
         delivery: consumer.wrap(params.delivery),
-        ...(params.replyOptions
-          ? { replyOptions: bindChannelCallbacks(params.replyOptions, consumer) }
-          : {}),
+        ...(adoption ? { turnAdoptionLifecycle: bindChannelCallbacks(adoption, consumer) } : {}),
+        ...(replyOptions ? { replyOptions: bindChannelCallbacks(replyOptions, consumer) } : {}),
       }
     : params;
 }
 async function withChannelDeliveryCustody<T, R>(
   params: T,
-  dispatch: (params: T, consumer?: PluginInstanceConsumer) => Promise<R>,
+  dispatch: (
+    params: T,
+    consumer?: PluginInstanceConsumer,
+    custody?: ChannelDeliveryCustody,
+  ) => Promise<R>,
 ): Promise<R> {
   const invocation = pluginInstanceInvocation.getStore();
   const owner = invocation && getPluginInstanceOwner(invocation.instance);
@@ -162,17 +200,22 @@ async function withChannelDeliveryCustody<T, R>(
     undefined,
     generation?.plugins.includes(owner.record) ? generation : owner.registry,
   );
+  const custody: ChannelDeliveryCustody = { deferred: false };
   try {
-    return await dispatch(params, consumer);
+    return await dispatch(params, consumer, custody);
   } finally {
-    consumer?.release();
+    if (!custody.deferred) {
+      consumer?.release();
+    }
   }
 }
 const dispatchAssembledChannelTurn: PluginRuntime["channel"]["inbound"]["dispatchReply"] = (
   params,
 ) =>
-  withChannelDeliveryCustody(params, (turn, consumer) =>
-    dispatchAssembledChannelTurnCore(publicChannelTurn(bindChannelDelivery(turn, consumer))),
+  withChannelDeliveryCustody(params, (turn, consumer, custody) =>
+    dispatchAssembledChannelTurnCore(
+      publicChannelTurn(bindChannelDelivery(turn, consumer, custody)),
+    ),
   );
 const loadPreparedChannelTurn = createLazyRuntimeModule(
   () => import("../../channels/turn/execution.js"),
@@ -186,7 +229,7 @@ const runChannelTurnCore = createLazyRuntimeMethod(
   // SAFETY: Forwarding async overloads unchanged preserves the raw-event and dispatch-result generics.
 ) as typeof import("../../channels/turn/run-channel-turn.js").runChannelTurn;
 const runChannelTurn = ((params: Parameters<typeof runChannelTurnCore>[0]) =>
-  withChannelDeliveryCustody(params, (turn, consumer) => {
+  withChannelDeliveryCustody(params, (turn, consumer, custody) => {
     if (!consumer) {
       return runChannelTurnCore(publicChannelTurnParams(turn));
     }
@@ -196,7 +239,7 @@ const runChannelTurn = ((params: Parameters<typeof runChannelTurnCore>[0]) =>
       const instance = getPluginValueInstance(consumer.wrap(() => undefined))!;
       // SAFETY: Exact-owner restoration preserves the adapter's resolved turn contract.
       const original = (getPluginOriginalValue(resolved, instance) ?? resolved) as typeof resolved;
-      return "delivery" in original ? bindChannelDelivery(original, consumer) : original;
+      return "delivery" in original ? bindChannelDelivery(original, consumer, custody) : original;
     };
     return runChannelTurnCore(
       publicChannelTurnParams({
@@ -223,9 +266,9 @@ export function createRuntimeChannel(options?: {
     return run(params);
   };
   const dispatchInbound: PluginRuntime["channel"]["inbound"]["dispatch"] = (params) =>
-    withChannelDeliveryCustody(params, async (turn, consumer) =>
+    withChannelDeliveryCustody(params, async (turn, consumer, custody) =>
       (await loadChannelTurnLifecycle()).dispatchRoutedChannelTurn({
-        ...publicChannelTurn(bindChannelDelivery(turn, consumer)),
+        ...publicChannelTurn(bindChannelDelivery(turn, consumer, custody)),
         ...(options?.dispatchReplyFromConfig
           ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
           : {}),

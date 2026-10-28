@@ -289,7 +289,8 @@ describe("cross-region Home composer ownership", () => {
         showInputs: false,
       });
       expect(
-        container.querySelector<HTMLElement>(".chat-attachment-loading > span")?.style.transform,
+        container.querySelector<HTMLElement>(".chat-attachment-loading__line > span")?.style
+          .transform,
       ).toBe("scaleX(0.5)");
 
       if (outcome === "remove") {

@@ -3,10 +3,12 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexTurn, CodexUserInput } from "./protocol.js";
 import { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
+import { isCodexTurnContextHandoff } from "./test-support.js";
 
 const cleanup = vi.hoisted(() => ({ interrupt: vi.fn(), retire: vi.fn() }));
 const references = vi.hoisted(() => ({ delivered: false, accepted: vi.fn() }));
-vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
   embeddedAgentLog: { debug: vi.fn(), warn: vi.fn() },
   formatErrorMessage: String,
 }));
@@ -27,7 +29,8 @@ vi.mock("./client-runtime.js", () => ({
     },
   }),
 }));
-vi.mock("./client.js", () => ({
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
   isCodexAppServerIndeterminateRequestCancellationError: () => false,
 }));
 vi.mock("./explicit-skill-input.js", () => ({ resolveCodexExplicitSkillInputs: async () => [] }));
@@ -124,6 +127,9 @@ async function prepare(native = createNativeThread(), usesSupervisionConnection 
       options.assertCurrent?.();
       if (method === "thread/turns/list") {
         return { data: [native.latest] };
+      }
+      if (method === "thread/inject_items") {
+        return {};
       }
       if (method === "turn/start") {
         native.latest = { id: "new-turn", status: "inProgress", items: [] };
@@ -249,7 +255,14 @@ function expectNotAccepted(attempt: Attempt) {
   expect(references.accepted).not.toHaveBeenCalled();
 }
 function expectOnlyReviewRead(attempt: Attempt) {
-  expect(attempt.request.mock.calls.map(([method]) => method)).toEqual(["thread/turns/list"]);
+  expect(
+    attempt.request.mock.calls
+      .filter(
+        ([method, payload]) =>
+          method !== "thread/inject_items" || !isCodexTurnContextHandoff(payload),
+      )
+      .map(([method]) => method),
+  ).toEqual(["thread/turns/list"]);
 }
 
 describe("native acknowledged turn requests", () => {
@@ -316,16 +329,28 @@ describe("native acknowledged turn requests", () => {
 
   it("selects the replacement thread on a fresh ordinary retry", async () => {
     const attempt = await prepare(createNativeThread(), false);
-    attempt.request.mockRejectedValueOnce(new Error("context overflow"));
+    const request = attempt.request.getMockImplementation()!;
+    let rejectTurnStart = true;
+    attempt.request.mockImplementation(async (...args) => {
+      if (args[0] === "turn/start" && rejectTurnStart) {
+        rejectTurnStart = false;
+        throw new Error("context overflow");
+      }
+      return request(...args);
+    });
     await expect(attempt.start()).rejects.toThrow("context overflow");
     changeSelection(attempt, "thread");
     await expect(attempt.start()).resolves.toMatchObject({
       turn: { turn: { id: "new-turn" } },
     });
-    expect(attempt.request.mock.calls.map(([, payload]) => payload.threadId)).toEqual([
-      "same-thread",
-      "replacement-thread",
-    ]);
+    expect(
+      attempt.request.mock.calls
+        .filter(
+          ([method, payload]) =>
+            method !== "thread/inject_items" || !isCodexTurnContextHandoff(payload),
+        )
+        .map(([, payload]) => payload.threadId),
+    ).toEqual(["same-thread", "replacement-thread"]);
     expect(references.accepted).toHaveBeenCalledOnce();
     expect(cleanup.interrupt).not.toHaveBeenCalled();
   });

@@ -95,7 +95,7 @@ export class TooltipOwner {
 
   #triggerElement: HTMLElement | SVGElement | null = null;
   #triggerListeners: (() => void)[] = [];
-  #stopEscape: (() => void) | undefined;
+  #stopDismissal: (() => void) | undefined;
   #pinned = false;
   #pending = false;
   #describedElement: Element | null = null;
@@ -367,7 +367,7 @@ export class TooltipOwner {
     this.#pending = true;
     this.#observePresentation();
     TooltipOwner.#pendingByDocument.set(this.host.ownerDocument, this);
-    this.#listenForEscape();
+    this.#listenForDismissal();
   }
 
   /** Apply only lifecycle-admitted state; canceled requests never alter interaction policy. */
@@ -382,8 +382,8 @@ export class TooltipOwner {
       this.#pinned = false;
       this.host.removeAttribute("open");
       this.options.richContainer()?.setAttribute("inert", "");
-      this.#stopEscape?.();
-      this.#stopEscape = undefined;
+      this.#stopDismissal?.();
+      this.#stopDismissal = undefined;
       this.#clearTimers();
       if (TooltipOwner.#activeByDocument.get(this.host.ownerDocument) === this) {
         TooltipOwner.#activeByDocument.delete(this.host.ownerDocument);
@@ -398,14 +398,14 @@ export class TooltipOwner {
     this.#syncDescription();
     this.host.setAttribute("open", "");
     this.options.richContainer()?.removeAttribute("inert");
-    this.#listenForEscape();
+    this.#listenForDismissal();
   }
 
-  #listenForEscape() {
+  #listenForDismissal() {
     const view = this.host.ownerDocument.defaultView;
-    // Pending intent and its accepted view share one capture listener, ahead of dialogs.
-    if (view && !this.#stopEscape) {
-      this.#stopEscape = listen(
+    // Pending intent and its accepted view share dismissal listeners, ahead of dialogs.
+    if (view && !this.#stopDismissal) {
+      const stopEscape = listen(
         view,
         "keydown",
         (event) => {
@@ -415,6 +415,22 @@ export class TooltipOwner {
         },
         true,
       );
+      const stopInput = listen(
+        view,
+        "input",
+        (event) => {
+          const target = event.composedPath()[0];
+          // Layout can move a hovered action under the pointer while another field is typing.
+          if (target instanceof view.Node && !this.#containsInteractionTarget(target)) {
+            this.#close();
+          }
+        },
+        true,
+      );
+      this.#stopDismissal = () => {
+        stopEscape();
+        stopInput();
+      };
     }
   }
 

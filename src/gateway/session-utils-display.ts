@@ -9,6 +9,7 @@ import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   isSubagentRunLive,
+  isSubagentRunPausedForContinuation,
   isSubagentRunQueued,
   resolveSubagentSessionStatus,
 } from "../agents/subagents/registry/subagent-registry-read.js";
@@ -29,6 +30,11 @@ import type {
   SessionListActiveRunProjector,
   SessionListRowContext,
 } from "./session-utils-contracts.js";
+import {
+  resolveSessionChildOwners,
+  shouldPropagateChildActivity,
+  type SessionChildLink,
+} from "./session-utils-core.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
@@ -202,13 +208,17 @@ export function projectGatewaySessionRunState(params: {
   if (subagentRun) {
     const endedAt = subagentRun.execution.endedAt;
     const subagentStatus = resolveSubagentSessionStatus(subagentRun);
+    // A kill claim keeps the pause marker until its reconciliation commits, so a
+    // killed paused child can read "paused" briefly before it reads "killed".
     fields.subagentRunState = liveSubagentRunActive
       ? "active"
-      : typeof endedAt === "number" ||
-          isTerminalSessionStatus(fields.status) ||
-          typeof fields.endedAt === "number"
-        ? "historical"
-        : "interrupted";
+      : isSubagentRunPausedForContinuation(subagentRun)
+        ? "paused"
+        : typeof endedAt === "number" ||
+            isTerminalSessionStatus(fields.status) ||
+            typeof fields.endedAt === "number"
+          ? "historical"
+          : "interrupted";
     fields.status = liveSubagentRunActive
       ? subagentStatus
       : (fields.status ?? (typeof endedAt === "number" ? subagentStatus : undefined));
@@ -306,4 +316,24 @@ export function applyGatewaySessionRowMode(
     }
     row.rowMode = "compact";
   }
+}
+
+/** One child contribution serves retained aggregates and standalone row presentation. */
+export function projectPreparedSessionChild(
+  child: SessionChildLink & { parsedKey?: ReturnType<typeof parseAgentSessionKey> },
+  parentKey: string,
+  now: number,
+  rowContext: NonNullable<Parameters<typeof projectGatewaySessionRunState>[0]["rowContext"]>,
+) {
+  const active = projectGatewaySessionRunState({ ...child, now, rowContext }).fields
+    .hasActiveSubagentRun;
+  return {
+    included: resolveSessionChildOwners({
+      ...child,
+      now,
+      subagentRuns: rowContext.subagentRuns,
+      hasActiveRun: active,
+    }).includes(parentKey),
+    active: active && shouldPropagateChildActivity(child.key, child.entry, parentKey),
+  };
 }

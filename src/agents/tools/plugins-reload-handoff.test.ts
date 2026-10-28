@@ -300,6 +300,7 @@ it.for([
   "replaced",
   "system",
   "non-owner",
+  "operator-owner",
 ] as const)(
   "preserves authenticated plugin execution across reload handoff: %s",
   async (scenario, { signal, onTestFinished }) => {
@@ -403,15 +404,15 @@ it.for([
           scenario === "system"
             ? undefined
             : createOperatorClient(
-                scenario === "non-owner"
-                  ? { profileName: "reload-guest", scopes: ["operator.admin"] }
+                scenario === "non-owner" || scenario === "operator-owner"
+                  ? { profileName: `reload-${scenario}`, scopes: ["operator.admin"] }
                   : { profileId: GATEWAY_OWNER_PROFILE_ID, scopes: ["operator.admin"] },
               );
         if (client) {
           client.internal = {
             authenticatedOperator: true,
             operatorRoleActor:
-              scenario === "non-owner"
+              scenario === "non-owner" || scenario === "operator-owner"
                 ? { kind: "operator", profileId: client.authenticatedUserProfile!.profileId }
                 : { kind: "system" },
             operatorAccessAuthority: {
@@ -534,9 +535,11 @@ it.for([
             expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority?.profileId).toBe(
               client?.authenticatedUserProfile?.profileId,
             );
+            // Only the yielding turn's owner decision plus a live operator source grants owner tools.
             const tool = createPluginsTool({
               sessionId,
               runId: "reload-source",
+              senderIsOwner: isOwner || scenario === "system",
               onYield: () => {
                 operation.completeWithAfterClearBarrier(cleanup.promise);
               },

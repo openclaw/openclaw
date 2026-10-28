@@ -261,6 +261,17 @@ selection, noninteractive Doctor preserves retired heartbeat settings and report
 the combined selection and migration step. Rollback restores the verified
 pre-migration backup with its matching binary.
 
+Agent schema 38 makes PostgreSQL full-text search tokenize like SQLite FTS5:
+punctuation runs are replaced by spaces before `to_tsvector` and before the query
+parser, so words inside dates, paths, and file names match. The stored `tsvector`
+is maintained by a `<table>_search_sync` trigger instead of a generated column,
+because PostgreSQL 16 cannot replace a generated expression in place and dropping
+the column would move it out of the sealed catalog position. The migration drops
+the generated expression in place, installs the trigger, and reparses existing
+rows once for the transcript index and every persisted search extension. SQLite
+advances version metadata only. Historical admission and backup descriptors keep
+the generated column; rollback restores the verified pre-upgrade backup.
+
 The transcript navigation CHECK keeps its JSON validation for present metadata.
 Its PostgreSQL helper is strict, so absent metadata passes the CHECK without
 calling the helper. A fixed `pg_catalog` search path avoids repeatedly parsing

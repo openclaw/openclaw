@@ -9,7 +9,7 @@ import {
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
-  compareCliHistoryRows,
+  orderCliHistoryRows,
   createCliHistoryRow,
   DEDUPE_TIMESTAMP_WINDOW_MS,
   mergeCliHistoryRow,
@@ -377,14 +377,12 @@ export class CliSessionHistoryIndex {
         }
       });
     }
-    // Preserve the existing stable comparator even for mixed/missing timestamps.
-    const order = executeSqliteQuerySync(
+    // Local rows keep transcript order. Unmatched imports splice in by timestamp.
+    const selected = executeSqliteQuerySync(
       this.database,
-      this.db.selectFrom("messages").select(["id", "timestamp"]).orderBy("id"),
+      this.db.selectFrom("messages").select(["id", "local_seq", "timestamp"]).orderBy("id"),
     ).rows;
-    if (this.expanded) {
-      order.sort(compareCliHistoryRows);
-    }
+    const order = this.expanded ? orderCliHistoryRows(selected) : selected;
     for (let offset = 0; offset < order.length; offset += INDEX_ORDINAL_BATCH_ROWS) {
       const end = Math.min(order.length, offset + INDEX_ORDINAL_BATCH_ROWS);
       runSqliteImmediateTransactionSync(this.database, () => {
