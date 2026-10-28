@@ -23,6 +23,14 @@ export const DISMISS_TASK_TOOL_DISPLAY_SUMMARY = "Withdraw a pending task sugges
 export const SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY =
   "Save, improve, archive, and restore your learned skills.";
 
+export function describeCronTool(params: { readOnly: boolean; managementOnly: boolean }): string {
+  return (
+    (params.readOnly && "Inspect recorded automation state.") ||
+    (params.managementOnly && "Manage existing automations within this turn's scope.") ||
+    CRON_TOOL_DISPLAY_SUMMARY
+  );
+}
+
 export function describeAgentsListTool(sessionsSpawnAvailable: boolean): string {
   return sessionsSpawnAvailable
     ? 'List configured agent ids with name/model/runtime metadata, allowed as `sessions_spawn(runtime:"subagent")` targets.'

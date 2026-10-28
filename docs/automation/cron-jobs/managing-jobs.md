@@ -90,6 +90,8 @@ The Gateway grants this authority from the authenticated turn's admission facts.
 
 When an admitted owner or administrator turn uses `sessions_yield` to wait for its subagents, the verified requester continuation retains automation management for that task. It receives fresh grants for its new run; the original run's grants expire normally. The continuation remains management-only; it cannot capture new creator execution authority. Removing the channel sender from the global owner list, cancellation, session reset or archive, a new direct user turn, and Gateway restart invalidate the handoff. Ordinary inter-session messages and child results do not grant management access.
 
+When `/tools verbose` or tool discovery runs inside an admitted turn, its automation description and schema reflect that turn's management scope. Management-only continuations do not advertise creation; fresh remote administrator turns retain caller-scoped creation. Discovery outside an admitted turn describes the configured tool surface, not an execution grant.
+
 Each admin management request records its method, run, operational instance, and success or failure in the Gateway's `cron: admin management` log, alongside the ordinary tool audit record. Management authority does not transfer creator attribution or replace the job's scheduled execution policy.
 
 ### CLI management
