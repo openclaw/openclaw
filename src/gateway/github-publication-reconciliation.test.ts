@@ -364,3 +364,89 @@ it.each([
     expect(f.publishedTitles).toEqual(["first-publication"]);
   },
 );
+
+it.each(["local", "repository"] as const)(
+  "settles an accepted update on a closed PR with retained %s authority",
+  async (backend) => {
+    const { f, first, pullRequest, transport, observePush } =
+      await prepareExistingPullRequest(backend);
+    let pushed = false;
+    let readbackAvailable = false;
+    let unavailableLookups = 0;
+    let closedHead: string | undefined;
+    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+      if (argv.includes("state=all")) {
+        if (pushed && !readbackAvailable) {
+          unavailableLookups++;
+          return commandResult("", 1);
+        }
+        return commandResult(JSON.stringify([pullRequest]));
+      }
+      const response = await transport(argv, options);
+      if (argv.includes("push") || argv.includes("graphql")) {
+        await observePush();
+        if (closedHead) {
+          pullRequest.headSha = closedHead;
+        }
+        pushed = true;
+      }
+      return response;
+    });
+
+    const idempotencyKey = "retained-authority-closed-update";
+    const publication = f.coordinator.requestForSessionV2(f.request(idempotencyKey, f.guest));
+    let requestId: string;
+    if (backend === "local") {
+      await expect(publication).rejects.toBeInstanceOf(GitHubPublicationRecoveryPendingError);
+      requestId = readGitHubPublicationRequest(f.database.db, {
+        sessionId: f.session.sessionId,
+        idempotencyKey,
+      })!.request_id;
+    } else {
+      const result = await publication;
+      expect(result.status).toBe("requested");
+      requestId = result.requestId;
+    }
+    expect(pushed).toBe(true);
+    expect(unavailableLookups).toBeGreaterThan(0);
+    expect(f.guest.assertCurrent).not.toThrow();
+    expect(f.readReceipt(requestId)).toMatchObject({
+      pull_request_url: null,
+      head_commit: pullRequest.headSha,
+    });
+    const acceptedWrites = [...f.externalWrites];
+
+    pullRequest.state = "closed";
+    closedHead = pullRequest.headSha;
+    readbackAvailable = true;
+    await f.restart().resumeSessionRequests();
+    expect(f.readReceipt(requestId)).toMatchObject({
+      status: "published",
+      pull_request_url: first.url,
+      head_commit: pullRequest.headSha,
+    });
+    expect(f.externalWrites).toEqual(acceptedWrites);
+  },
+);
+
+it("creates a new local publication request after its original PR closes", async () => {
+    const { f, pullRequest, transport } = await prepareExistingPullRequest("local");
+    pullRequest.state = "closed";
+    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+      if (argv.includes("state=all")) {
+        return commandResult(JSON.stringify([pullRequest]));
+      }
+      return transport(argv, options);
+    });
+
+    const beforeNewRequest = mocks.runCommand.mock.calls.length;
+    const publication = await f.coordinator.requestForSessionV2(
+      f.request("new-publication-after-closure", f.guest),
+    );
+    expect(publication.status).toBe("published");
+    expect(
+      mocks.runCommand.mock.calls
+        .slice(beforeNewRequest)
+        .filter(([argv]) => isPullCreation(argv)),
+    ).toHaveLength(1);
+});

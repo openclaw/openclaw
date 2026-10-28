@@ -144,14 +144,15 @@ export async function findGitHubPublicationPullRequest(
       candidate.headRef === params.branch &&
       candidate.baseRef === params.baseBranch,
   );
+  // Updating a PR keeps its original body marker, so the accepted exact head identifies this request.
   const found =
     exact.find((candidate) => candidate.state === "open") ??
     exact.find(
-      (candidate) => candidate.state === "closed" && candidate.body.includes(params.marker),
+      (candidate) => candidate.state === "closed",
     );
   if (found) {
     await params.recordObserved?.(found.url);
-    if (found.state === "closed") {
+    if (found.state === "closed" && found.body.includes(params.marker)) {
       params.assertCurrent();
       throw new GitHubPublicationKnownFailure(
         "GitHub pull request was closed before publication completed.",
