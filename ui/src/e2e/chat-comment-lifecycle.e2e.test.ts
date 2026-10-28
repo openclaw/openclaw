@@ -4,6 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { auditMarkdownTable } from "./chat-markdown-table-layout.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI comment lifecycle" });
@@ -82,70 +83,6 @@ async function addComment(page: Page, source: Locator, comment: string) {
 }
 
 suite.define(() => {
-  it.each([1600, 390])(
-    "keeps transcript geometry stable when comments change at %s px",
-    async (width) => {
-      await suite.withPage(
-        { ...pageOptions, viewport: { width, height: 900 } },
-        async ({ page }) => {
-          const content = `| Garden plan | Growing location | Sunlight exposure | Watering schedule | Best harvest time |
-| --- | --- | --- | --- | --- |
-| Kitchen herbs | Near the back door | Six sunny hours | Three mornings weekly | Early summer days |
-| Fresh vegetables | Beside the south wall | Full morning light | Check soil each day | Late summer weeks |
-
-**${passage}** Keep the garden plan simple and check the soil before watering. Leave enough room for each plant to grow and enjoy the harvest.`;
-          const { source, composer, chip } = await openChat(page, content);
-          await composer.fill("Preserve the draft.");
-          const table = page.locator(".chat-group.assistant .markdown-table");
-          const geometry = async () => {
-            const boxes = await Promise.all([table.boundingBox(), source.boundingBox()]);
-            return boxes.map((box) => ({ x: box!.x, width: box!.width }));
-          };
-          await table.waitFor({ state: "visible" });
-          await source.waitFor({ state: "visible" });
-          await waitForChatScrollIdle(page);
-          const before = await geometry();
-          await addComment(page, source.locator("strong"), "Check the watering plan.");
-          await chip.waitFor();
-          await expect.poll(geometry).toEqual(before);
-          const pin = page.locator(".chat-comment-pin");
-          await pin.waitFor({ state: "visible" });
-          const clearance = await pin.evaluate((element) => {
-            const bounds = element.getBoundingClientRect();
-            const thread = element.closest(".chat-thread")!;
-            const walker = document.createTreeWalker(
-              thread.querySelector(".chat-text")!,
-              NodeFilter.SHOW_TEXT,
-            );
-            const range = document.createRange();
-            let right = 0;
-            while (walker.nextNode()) {
-              range.selectNodeContents(walker.currentNode);
-              for (const rect of range.getClientRects()) {
-                if (
-                  rect.top < bounds.y + bounds.height / 2 &&
-                  rect.bottom > bounds.y + bounds.height / 2
-                ) {
-                  right = Math.max(right, rect.right);
-                }
-              }
-            }
-            return {
-              text: bounds.left - right,
-              edge: thread.getBoundingClientRect().right - bounds.right,
-            };
-          });
-          expect(clearance.text).toBeGreaterThanOrEqual(0);
-          expect(clearance.edge).toBeGreaterThanOrEqual(0);
-          await button(page, "Remove all comments").click();
-          await chip.waitFor({ state: "detached" });
-          await expect.poll(geometry).toEqual(before);
-          expect(await composer.inputValue()).toBe("Preserve the draft.");
-        },
-      );
-    },
-  );
-
   it("keeps the annotation-only bubble visible while its sent attachment is read", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const { source, gateway } = await openChat(page);
@@ -316,52 +253,71 @@ suite.define(() => {
     },
   );
 
-  it("keeps deletion in place and clears all with the keyboard", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
-      const { gateway, composer, source, preview } = await openChat(page);
-      await composer.fill("Preserve the draft.");
-      for (const comment of ["First note", "Second note"]) {
-        await addComment(page, source, comment);
-      }
-      const chip = page.locator(".chat-attachments-preview .chat-selection-annotations__chip");
-      const trigger = chip.getByRole("button", { name: /^\d+ comments?$/ });
-      await page.mouse.move(0, 0);
-      const restingBounds = await chip.boundingBox();
-      await chip.hover();
-      await preview.waitFor({ state: "visible" });
-      expect(await chip.boundingBox()).toEqual(restingBounds);
-      const deletes = button(preview, "Delete comment");
-      await deletes.first().click();
-      await expect.poll(() => chip.textContent()).toContain("1 comment");
-      expect(await page.locator("openclaw-toast-host [role=status]").count()).toBe(0);
-      // Shrinking above the chip moves the first row away from a stationary pointer.
-      await page.waitForTimeout(250);
-      expect(await preview.isVisible()).toBe(true);
-      await expectFocus(deletes.first());
-      expect(await preview.textContent()).not.toContain("First note");
-      expect(await button(preview, "Edit comment 1").count()).toBe(1);
-      expect(await button(preview, "Edit comment 2").count()).toBe(0);
-      await page.keyboard.press("Escape");
-      await expect.poll(() => preview.isVisible()).toBe(false);
-      await trigger.press("Space");
-      await preview.waitFor({ state: "visible" });
-      await composer.click();
-      await expect.poll(() => preview.isVisible()).toBe(false);
-      await trigger.focus();
-      await page.keyboard.press("Tab");
-      const clear = button(page, "Remove all comments");
-      expect(await focused(clear)).toBe(true);
-      await page.keyboard.press("Shift+Tab");
-      expect(await focused(trigger)).toBe(true);
-      await page.keyboard.press("Tab");
-      await page.keyboard.press("Enter");
-      await chip.waitFor({ state: "detached" });
-      await expectFocus(composer);
-      expect(await composer.inputValue()).toBe("Preserve the draft.");
-      expect(await page.locator("openclaw-toast-host [role=status]").count()).toBe(0);
-      await sendWithoutComments(page, gateway);
-    });
-  });
+  it.each([1600, 390])(
+    "keeps transcript and deletion stable with the keyboard at %s px",
+    async (width) => {
+      await suite.withPage(
+        { ...pageOptions, viewport: { width, height: 900 } },
+        async ({ page }) => {
+          const content = `${auditMarkdownTable}\n\n${passage}`;
+          const { gateway, composer, source, preview } = await openChat(page, content);
+          await composer.fill("Preserve the draft.");
+          const table = page.locator(".chat-group.assistant .markdown-table");
+          const geometry = async () =>
+            (await Promise.all([table.boundingBox(), source.boundingBox()])).map((box) => ({
+              x: box!.x,
+              width: box!.width,
+            }));
+          await Promise.all([table.waitFor(), source.waitFor()]);
+          await waitForChatScrollIdle(page);
+          const before = await geometry();
+          for (const comment of ["First note", "Second note"]) {
+            await addComment(page, source, comment);
+            await expect.poll(geometry).toEqual(before);
+          }
+          const chip = page.locator(".chat-attachments-preview .chat-selection-annotations__chip");
+          const trigger = chip.getByRole("button", { name: /^\d+ comments?$/ });
+          await page.mouse.move(0, 0);
+          const restingBounds = await chip.boundingBox();
+          await chip.hover();
+          await preview.waitFor({ state: "visible" });
+          expect(await chip.boundingBox()).toEqual(restingBounds);
+          const deletes = button(preview, "Delete comment");
+          await deletes.first().click();
+          await expect.poll(() => chip.textContent()).toContain("1 comment");
+          await expect.poll(geometry).toEqual(before);
+          expect(await page.locator("openclaw-toast-host [role=status]").count()).toBe(0);
+          // Shrinking above the chip moves the first row away from a stationary pointer.
+          await page.waitForTimeout(250);
+          expect(await preview.isVisible()).toBe(true);
+          await expectFocus(deletes.first());
+          expect(await preview.textContent()).not.toContain("First note");
+          expect(await button(preview, "Edit comment 1").count()).toBe(1);
+          expect(await button(preview, "Edit comment 2").count()).toBe(0);
+          await page.keyboard.press("Escape");
+          await expect.poll(() => preview.isVisible()).toBe(false);
+          await trigger.press("Space");
+          await preview.waitFor({ state: "visible" });
+          await composer.click();
+          await expect.poll(() => preview.isVisible()).toBe(false);
+          await trigger.focus();
+          await page.keyboard.press("Tab");
+          const clear = button(page, "Remove all comments");
+          expect(await focused(clear)).toBe(true);
+          await page.keyboard.press("Shift+Tab");
+          expect(await focused(trigger)).toBe(true);
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("Enter");
+          await chip.waitFor({ state: "detached" });
+          await expect.poll(geometry).toEqual(before);
+          await expectFocus(composer);
+          expect(await composer.inputValue()).toBe("Preserve the draft.");
+          expect(await page.locator("openclaw-toast-host [role=status]").count()).toBe(0);
+          await sendWithoutComments(page, gateway);
+        },
+      );
+    },
+  );
 
   it("opens an offscreen comment from the composer without dismissing its own editor", async () => {
     await suite.withPage(

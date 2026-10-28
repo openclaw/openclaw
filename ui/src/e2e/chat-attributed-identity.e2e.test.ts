@@ -248,34 +248,29 @@ suite.define(() => {
               transcript.getByText("The response uses the available transcript width."),
               label,
             ).toBeVisible();
-            const expectColumn = async (content: Locator, phase: string) => {
-              const frame = await transcript.boundingBox();
-              const bounds = await content.boundingBox();
-              const columnLabel = `${label}: ${phase}`;
-              expect(frame, columnLabel).not.toBeNull();
-              expect(bounds, columnLabel).not.toBeNull();
-              expect(bounds!.x, columnLabel).toBeCloseTo(frame!.x, 0);
-              expect(bounds!.width, columnLabel).toBeCloseTo(frame!.width, 0);
-            };
-            const expectComposer = async (phase: string) => {
+            const expectColumn = async (content: Locator, phase: string, outer = false) => {
               const frame = (await transcript.boundingBox())!;
-              const bounds = (await pane.locator(".agent-chat__composer-shell").boundingBox())!;
+              const bounds = (await content.boundingBox())!;
               const columnLabel = `${label}: ${phase}`;
-              // The transcript reserves pin space while sharing the composer's usable center.
-              expect(frame.x, columnLabel).toBeGreaterThanOrEqual(bounds.x);
-              expect(frame.x + frame.width, columnLabel).toBeLessThanOrEqual(
-                bounds.x + bounds.width,
-              );
-              expect(frame.x + frame.width / 2, columnLabel).toBeCloseTo(
-                bounds.x + bounds.width / 2,
+              expect(bounds.x + bounds.width / 2, columnLabel).toBeCloseTo(
+                frame.x + frame.width / 2,
                 0,
               );
+              if (outer) {
+                expect(bounds.width, columnLabel).toBeGreaterThanOrEqual(frame.width);
+              } else {
+                expect(bounds.width, columnLabel).toBeCloseTo(frame.width, 0);
+              }
             };
             for (const direction of ["ltr", "rtl"]) {
               await page.evaluate((dir) => {
                 document.documentElement.dir = dir;
               }, direction);
-              await expectComposer(`${direction} composer`);
+              await expectColumn(
+                pane.locator(".agent-chat__composer-shell"),
+                `${direction} composer`,
+                true,
+              );
               const frame = await transcript.boundingBox();
               const directionLabel = `${label} (${direction})`;
               expect(frame!.x, directionLabel).toBeGreaterThanOrEqual(safeAreaLeft + 16);
@@ -376,7 +371,11 @@ suite.define(() => {
               await expect
                 .poll(() => thread.evaluate((element) => element.scrollTop), { message: label })
                 .toBeGreaterThan(0);
-              await expectComposer("scrolled composer");
+              await expectColumn(
+                pane.locator(".agent-chat__composer-shell"),
+                "scrolled composer",
+                true,
+              );
             }
           }
         },
