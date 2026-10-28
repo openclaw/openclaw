@@ -304,6 +304,7 @@ export async function resolveSessionMutationAuthorizationAsync(
         allowMissing: true,
         followLifecycle: params.method === "chat.send",
         followTranscript: params.method === "chat.send",
+        sessionAccessOnly: params.method === "chat.send",
       });
       reads.push(retained);
       const initialFacts = retained.readCurrent(cfg);
@@ -426,8 +427,9 @@ export async function resolveSessionMutationAuthorizationAsync(
             membership: new Set(),
           });
           creationReleases.push(retained.release);
+          const readScope = params.method === "chat.send" ? "session-access" : "sharing";
           const read = () => {
-            const current = retained.readCurrent();
+            const current = retained.readCurrent(readScope);
             if (!active || !current?.entry) {
               throw sessionMutationTargetChanged(params.method, created.sessionKey);
             }
@@ -449,7 +451,7 @@ export async function resolveSessionMutationAuthorizationAsync(
               members: [],
               isMember: (identityId: string) => current.membership.has(identityId),
               assertCurrent: () => {
-                if (!active || !retained.readCurrent()) {
+                if (!active || !retained.readCurrent(readScope)) {
                   throw sessionMutationTargetChanged(params.method, created.sessionKey);
                 }
               },

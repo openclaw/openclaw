@@ -114,12 +114,23 @@ export function createSessionEntryCreationOperation(): SessionEntryCreationOpera
 export function sessionSharingEntriesEqual(
   previous: InternalSessionEntry | undefined,
   current: InternalSessionEntry | undefined,
+  scope: "sharing" | "session-access" = "sharing",
 ): boolean {
   if (!previous || !current) {
     return false;
   }
   const { updatedAt: _previousUpdatedAt, ...before } = selectSessionSharingEntry(previous);
   const { updatedAt: _currentUpdatedAt, ...after } = selectSessionSharingEntry(current);
+  if (scope === "session-access") {
+    // A person's access does not depend on which run currently owns transcript writes.
+    const {
+      lifecycleRunId: _beforeRun,
+      activeWriterRunId: _beforeWriter,
+      ...beforeAccess
+    } = before;
+    const { lifecycleRunId: _afterRun, activeWriterRunId: _afterWriter, ...afterAccess } = after;
+    return isDeepStrictEqual(beforeAccess, afterAccess);
+  }
   return isDeepStrictEqual(before, after);
 }
 

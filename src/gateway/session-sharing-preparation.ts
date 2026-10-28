@@ -79,6 +79,7 @@ export async function prepareSessionMutationFacts(
     return memory;
   }
   const initialStoreKeys = [params.sessionKey.trim(), canonicalKey];
+  const readScope = params.sessionAccessOnly ? "session-access" : "sharing";
   const releases: Array<() => void> = [];
   let active = true;
   let beforeDiscovery = params.storageReady !== undefined;
@@ -440,7 +441,7 @@ export async function prepareSessionMutationFacts(
                   await pending;
                   assertActive();
                 }
-                const current = retained.readCurrent();
+                const current = retained.readCurrent(readScope);
                 if (!current) {
                   throw new SessionMutationFactsUnavailableError();
                 }
@@ -497,7 +498,7 @@ export async function prepareSessionMutationFacts(
         readSource,
       };
       const retained = sharing && retainedReads.get(`${sharing.databaseIdentity}\0${canonicalKey}`);
-      expectedPlaceholder = retained?.readCurrent()?.placeholder;
+      expectedPlaceholder = retained?.readCurrent(readScope)?.placeholder;
       adoptCreatedEntry = (entry) => {
         retained?.adoptCreatedEntry(entry);
         facts = {
@@ -514,7 +515,7 @@ export async function prepareSessionMutationFacts(
         };
       };
       readFacts = () => {
-        const current = retained?.readCurrent();
+        const current = retained?.readCurrent(readScope);
         if (facts!.target && current?.entry) {
           return {
             ...facts!,
@@ -558,7 +559,7 @@ export async function prepareSessionMutationFacts(
         throw new SessionMutationFactsUnavailableError();
       }
       readFacts = () => {
-        const current = retained.readCurrent();
+        const current = retained.readCurrent(readScope);
         if (!current?.entry) {
           throw new SessionMutationFactsUnavailableError();
         }

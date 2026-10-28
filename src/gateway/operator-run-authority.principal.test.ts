@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
 import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
@@ -257,6 +259,64 @@ it("admits a principal's same-store writer while its own sharing publication is 
       accepted.release();
     }
   }));
+
+it.each([
+  {
+    change: "run bookkeeping",
+    patch: { lifecycleRunId: "resumed-run", activeWriterRunId: "resumed-run" },
+    allowed: true,
+  },
+  { change: "archive", patch: { archivedAt: 1 }, allowed: false },
+])(
+  "checks retained principal authority during a competing $change publication",
+  ({ patch, allowed }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const { admit } = fixture();
+      const accepted = await admit();
+      const independently = AsyncLocalStorage.snapshot();
+      const pendingChecks: Array<{ allowed: boolean; error?: unknown }> = [];
+      const probe = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, check) => {
+        const publication = asOptionalRecord(asOptionalRecord(request.facts)?.publication);
+        if (request.stage !== "commit" || publication?.kind !== "session-entry-patch-committed") {
+          check(request, grant);
+          return;
+        }
+        check(request, (beforeRelease) =>
+          grant(() => {
+            beforeRelease?.();
+            // Observe the real staged publication outside the competing writer's source context.
+            independently(() => {
+              try {
+                accepted.authority.assertCurrent();
+                pendingChecks.push({ allowed: true });
+              } catch (error) {
+                pendingChecks.push({ allowed: false, error });
+              }
+            });
+          }),
+        );
+      });
+      try {
+        const committed = await patchSessionEntryCore(scope, () => patch, {
+          skipMaintenance: true,
+        });
+        expect(committed).toMatchObject(patch);
+        expect(pendingChecks).toHaveLength(1);
+        expect(pendingChecks[0]?.allowed).toBe(allowed);
+        if (allowed) {
+          expect(accepted.authority.assertCurrent).not.toThrow();
+          expect(accepted.authority.signal?.aborted).toBe(false);
+        } else {
+          expect(pendingChecks[0]?.error).toBeInstanceOf(Error);
+          expect(accepted.authority.assertCurrent).toThrow();
+          await expect(admit()).rejects.toThrow("Session is unavailable");
+        }
+      } finally {
+        probe.mockRestore();
+        accepted.release();
+      }
+    }),
+);
 
 it("admits the recorded Gateway owner without roles and never substitutes it for another person", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {

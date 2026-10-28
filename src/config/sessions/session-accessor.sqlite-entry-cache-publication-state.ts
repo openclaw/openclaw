@@ -10,6 +10,7 @@ import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import {
   readSessionEntryCreationIdentity,
   projectSessionSharingEntry,
+  sessionSharingEntriesEqual,
   type CreatedSessionEntryReceipt,
   type CreationRecord,
   type PendingSessionEntryPublication,
@@ -299,13 +300,21 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
   reads.add(read);
   preparedSharingReads.set(key, reads);
   let active = true;
-  const pending = () =>
+  const pending = (scope: "sharing" | "session-access") =>
     read.pending.size > 0 ||
     [...(pendingSessionEntryPublications.get(key) ?? [])].some(
       (publication) =>
         !publication.settled &&
         ((!publication.superseded.has(sessionKey) &&
-          !publication.sharingUnchanged.has(sessionKey)) ||
+          !publication.sharingUnchanged.has(sessionKey) &&
+          !(
+            scope === "session-access" &&
+            sessionSharingEntriesEqual(
+              read.facts?.entry,
+              publication.entryPostimages?.get(sessionKey),
+              scope,
+            )
+          )) ||
           publication.membershipInvalidated.has(sessionKey)),
     );
   // Unchanged identity and settings remain usable during unrelated metadata writes.
@@ -401,7 +410,8 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
     readGeneration: () => (active && !generationPending() ? read.generation?.current : undefined),
     readGenerationSettings: () =>
       active && !generationPending(true) ? read.generation?.current : undefined,
-    readCurrent: () => (pending() || unknownSharingAuthorities.has(key) ? undefined : read.facts),
+    readCurrent: (scope: "sharing" | "session-access" = "sharing") =>
+      pending(scope) || unknownSharingAuthorities.has(key) ? undefined : read.facts,
     release: () => {
       if (!active) {
         return;
