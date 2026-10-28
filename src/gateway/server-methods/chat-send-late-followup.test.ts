@@ -40,9 +40,7 @@ describe("chat.send late queued follow-up disposition", () => {
       { text: "working", mediaUrl: "https://example.test/progress.png" },
       setReplyPayloadMetadata(
         { text: "queue full", isStatusNotice: true },
-        {
-          queueAdmissionNotice: true,
-        },
+        { queueAdmissionNotice: true },
       ),
     ];
     const progress = {
@@ -50,9 +48,7 @@ describe("chat.send late queued follow-up disposition", () => {
       payloads: [
         setReplyPayloadMetadata(
           { text: "queued", isStatusNotice: true },
-          {
-            queueAdmissionNotice: "queued",
-          },
+          { queueAdmissionNotice: "queued" },
         ),
         ...retained,
       ],
