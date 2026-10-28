@@ -92,6 +92,38 @@ export type UsageCostFreshnessCheckpoint =
   | Pick<UsageCostJsonlCheckpoint, "kind" | "observedSize" | "observedMtimeMs" | "device" | "inode">
   | Pick<UsageCostSqliteCheckpoint, "kind" | "maxSeq" | "eventCount" | "size" | "mtimeMs">;
 
+export function readUsageCostDeferredMetadata(
+  envelope: UsageCostRollupEnvelope,
+): { checkpoint: UsageCostFreshnessCheckpoint; scannedAt: number } | undefined {
+  const source = envelope.checkpoint;
+  const checkpoint: UsageCostFreshnessCheckpoint =
+    source.kind === "jsonl"
+      ? {
+          kind: source.kind,
+          observedSize: source.observedSize,
+          observedMtimeMs: source.observedMtimeMs,
+          device: source.device,
+          inode: source.inode,
+        }
+      : {
+          kind: source.kind,
+          maxSeq: source.maxSeq,
+          eventCount: source.eventCount,
+          size: source.size,
+          mtimeMs: source.mtimeMs,
+        };
+  // Only numeric freshness facts fit the reserved descriptor allowance.
+  if (
+    Object.entries(checkpoint).every(
+      ([key, value]) => key === "kind" || (typeof value === "number" && Number.isFinite(value)),
+    ) &&
+    Number.isFinite(envelope.scannedAt)
+  ) {
+    return { checkpoint, scannedAt: envelope.scannedAt };
+  }
+  return undefined;
+}
+
 export function decodeUsageCostRollupEnvelope(
   valueJson: string,
   pricingFingerprint?: string,

@@ -1,8 +1,8 @@
-import { getAgentToolInputScope } from "../../packages/agent-core/src/tool-execution-context.js";
 import {
   attachInternalToolResultProvenance,
   getInternalToolResultProvenance,
-} from "./runtime/internal-hooks.js";
+} from "../../packages/agent-core/src/internal-hooks.js";
+import { getAgentToolInputScope } from "../../packages/agent-core/src/tool-execution-context.js";
 
 const finalSourceReply = {};
 type SourceReplyControl = { cell: ToolSourceReplyCell; inputScope: object | undefined };

@@ -10,6 +10,7 @@ import { assertStateDatabaseReadAllowed } from "../infra/gateway-state-owner.js"
 import { hasSqliteDatabaseSchemaAdmissionForIdentity } from "../infra/sqlite-database-admission.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
+  type SqliteWorkerCommand,
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-contract.js";
 import type {
@@ -23,6 +24,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
+  canRejectResidentPluginStateClaim,
   ensurePluginStateNamespace,
   listResidentPluginStateEntries,
   livePluginStateRow,
@@ -88,12 +90,7 @@ type ObservationCheck<Key extends keyof PluginStateWorkerOperations> = (
 type ReadDependency = { pluginId: string; namespace: string; keys: readonly string[] };
 
 type PluginStateCommandOrder = { ready: Promise<void> | undefined; finish?: () => void };
-type PluginStateCommand = {
-  [Key in keyof PluginStateWorkerOperations]: {
-    type: Key;
-    input: PluginStateWorkerOperations[Key]["input"];
-  };
-}[keyof PluginStateWorkerOperations];
+type PluginStateCommand = SqliteWorkerCommand<PluginStateWorkerOperations>;
 
 function publicationScope(command: PluginStateCommand): PluginStatePublicationScope | undefined {
   switch (command.type) {
@@ -259,6 +256,8 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         typedCommand.type === "pluginState.lookupMany" ||
         typedCommand.type === "pluginState.entries" ||
         typedCommand.type === "pluginState.count" ||
+        (typedCommand.type === "pluginState.registerIfAbsent" &&
+          readCommittedPluginStateNamespace(context.admission.identity.key, typedCommand.input)) ||
         (typedCommand.type === "pluginState.entriesInKeyRange" &&
           !typedCommand.input.valueFilter) ||
         typedCommand.type === "pluginState.clearRuntimeHealth")
@@ -343,7 +342,8 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         }
         // Capture all namespaces without yielding. A fallback never mixes resident and SQL views.
         const rows = scopes.map((scope) =>
-          typedCommand.type === "pluginState.clearRuntimeHealth"
+          typedCommand.type === "pluginState.clearRuntimeHealth" ||
+          typedCommand.type === "pluginState.registerIfAbsent"
             ? readCommittedPluginStateNamespace(identity, scope)
             : readPluginStateNamespace(identity, scope),
         );
@@ -358,6 +358,14 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
           const view = rows[0]!;
           const postgres = context.databaseEngineSelection?.effectiveEngines.state === "postgres";
           switch (typedCommand.type) {
+            case "pluginState.registerIfAbsent":
+              if (
+                canRejectResidentPluginStateClaim(view, typedCommand.input, databasePath, postgres)
+              ) {
+                // SAFETY: Earlier writes settled above; an occupied claim returns false unchanged.
+                return false as PluginStateWorkerRequests[Key]["output"];
+              }
+              break;
             case "pluginState.executeOperation": {
               const snapshots: Record<string, readonly PluginStateReadRow[]> = {};
               for (const [index, scope] of scopes.entries()) {

@@ -7,10 +7,10 @@ import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-con
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
-  resolveModelFallbackAvailability,
 } from "../../agents/agent-scope.js";
 import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../../agents/harness/tool-authority-preparation.js";
+import { resolveModelFallbackAvailability } from "../../agents/model-selection-config.js";
 import { resolveCommandAuthorizationAsync } from "../../auto-reply/command-auth.js";
 import { resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js";
@@ -28,6 +28,7 @@ import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-deliver
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { QueueConfig } from "../../config/types.messages.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
 import type { InboundDocumentContext } from "../../media-understanding/file-context.js";
@@ -163,14 +164,11 @@ export function createChatSendMessageInjectionStarter(params: {
         documentImages.length > 0
           ? [
               ...(replyOptionImages ?? []),
-              // Extracted page images follow the prepared inbound images, the
-              // same inline-then-extracted ordering reply dispatch produces; each
-              // keeps its attachment index as ordering provenance.
+              // Keep the same inline-then-extracted ordering reply dispatch produces.
               ...documentImages.map((image): ChatImageContent => ({
                 type: "image",
                 data: image.data,
                 mimeType: image.mimeType,
-                sourceIndex: image.attachmentIndex,
               })),
             ]
           : replyOptionImages;
@@ -214,6 +212,7 @@ export function createChatSendMessageInjectionStarter(params: {
             cfg,
             agentId,
             sessionKey,
+            selectedModel: resolvedSessionModel,
             hasSessionModelOverride:
               entry?.modelOverrideSource !== "default" &&
               Boolean(entry?.modelOverride || entry?.providerOverride) &&
@@ -329,21 +328,25 @@ export function createChatSendMessageInjectionStarter(params: {
 /** Keep a terminal injection decision through detached preparation and reply dispatch. */
 export function createChatSendInjectionDisposition(
   run: Parameters<typeof refuseCollaborativeSteering>[0],
+  queue: QueueConfig | undefined,
 ) {
-  let refused = false;
+  let collaborationBlocked = false;
   const runState: ReplyOperationRunState = {};
   const isRefused = () =>
-    refused ||
+    (collaborationBlocked && queue?.collaborativeSteeringFallback === "reject") ||
     (runState.admission?.status === "skipped" &&
       runState.admission.reason === "collaborative-steering-disabled");
   return {
     runState,
     isRefused,
+    isCollaborationBlocked: () => collaborationBlocked,
     async observe(attempt: ReplyMessageInjectionAttempt | undefined) {
       const outcome = await attempt?.outcome;
       if (outcome?.status === "rejected" && outcome.reason === "collaborative_steering_disabled") {
-        refused = true;
-        runState.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
+        collaborationBlocked = true;
+        if (queue?.collaborativeSteeringFallback === "reject") {
+          runState.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
+        }
         return undefined;
       }
       return attempt;

@@ -125,6 +125,7 @@ export async function startGatewayPostAttachRuntime(params: {
   // Rehearsal loads plugins without resuming copied jobs, services, or notices.
   const candidateCanary = params.updateCanary === true;
   const subagentRecoverySettled = createDeferredCore();
+  const initialInputRecoveryReady = createDeferredCore();
   const mainSessionOrphansReady = params
     .trackStartupWork(async (signal) => {
       await params.waitForPostReadyWork?.();
@@ -416,9 +417,10 @@ export async function startGatewayPostAttachRuntime(params: {
                 getConfig: params.getConfig,
                 shouldContinue: () => params.isClosing?.() !== true,
                 startupCheckedStorePaths: params.mainSessionRecoveryStartupCheckedStorePaths,
-                // Requester continuations need the restored cohort's Gateway binding
-                // and operator authority before their first recovery attempt.
-                waitForStart: () => subagentRecoverySettled.promise,
+                // Initial recovery registers each agent's custody; pending cohorts
+                // keep their own source-restoration gate instead of blocking all agents.
+                waitForStart: () => initialInputRecoveryReady.promise,
+                inputRecovery: params.resolveGatewayContext()?.inputRecovery,
                 gatewayRuntime: params.recoveryRuntime,
               });
             }
@@ -495,7 +497,10 @@ export async function startGatewayPostAttachRuntime(params: {
             | undefined,
         isClosing: params.isClosing,
         onSubagentRecoverySettled: subagentRecoverySettled.resolve,
-        unlockStartupMethods: params.unlockStartupMethods,
+        unlockStartupMethods: () => {
+          params.unlockStartupMethods();
+          initialInputRecoveryReady.resolve();
+        },
         trackInputRecovery: params.trackInputRecovery,
         startupTrace: params.startupTrace,
         log: params.log,

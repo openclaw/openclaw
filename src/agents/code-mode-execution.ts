@@ -1,3 +1,5 @@
+import { setImmediate as yieldToScheduler } from "node:timers/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { codeModeGcAttribution, logCodeModeFailure } from "../logging/code-mode-diagnostic.js";
 import type { AgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
@@ -13,6 +15,7 @@ import {
 import {
   usableResumeBudgetMs,
   waitForCodeModePending,
+  isCodeModePendingReady,
   type CodeModeCallBudget,
 } from "./code-mode-execution-budget.js";
 import type {
@@ -274,6 +277,19 @@ function dispatchCodeModeRequests(
   );
 }
 
+function codeModeDiagnosticError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  // Worker notifications serialize Errors. Only native names may select a diagnostic category.
+  const name = isRecord(error) ? error.name : undefined;
+  const Constructor =
+    [EvalError, RangeError, ReferenceError, SyntaxError, TypeError, URIError].find(
+      (candidate) => candidate.name === name,
+    ) ?? Error;
+  return new Constructor(codeModeFailureMessage(error));
+}
+
 function createInlineHost(
   params: Omit<CodeModeSettlementContext, "result">,
   pending: PendingBridgeState[],
@@ -290,7 +306,7 @@ function createInlineHost(
       if (failurePhase === "bridge") {
         return;
       }
-      logCodeModeFailure(error, {
+      logCodeModeFailure(codeModeDiagnosticError(error), {
         sessionId: params.ctx.sessionId,
         sessionKey: params.ctx.sessionKey,
         runId: params.ctx.runId,
@@ -320,13 +336,20 @@ function createInlineHost(
       // Own an existing run slot before any host effect, through internal parking.
       reserve();
       dispatchCodeModeRequests(params, pending, boundary.pendingRequests);
-      // Required waits park the VM, not the caller. The same owner resumes its
-      // exact continuation on settlement without returning an abandonable handle.
+      // A ready required reply needs no checkpoint. Give immediate bridge promise
+      // chains one turn to settle, charged to the original allowance. Actual waits
+      // still park to pause guest time and release compute; pressure always wins.
+      const signal = AbortSignal.any([params.signal, context.signal, context.yieldSignal]);
       if (params.owner.completionRequired) {
-        return { kind: "checkpoint" };
+        if (signal.aborted || params.budget.deadlineMs <= performance.now()) {
+          return { kind: "checkpoint" };
+        }
+        await yieldToScheduler();
+        if (!isCodeModePendingReady(pending, boundary.settlementMode)) {
+          return { kind: "checkpoint" };
+        }
       }
       // Pressure parks the VM, never the cell-owned host operations.
-      const signal = AbortSignal.any([params.signal, context.signal, context.yieldSignal]);
       const ready = await waitForCodeModePending(
         pending,
         boundary.settlementMode,

@@ -129,7 +129,7 @@ export const PROMETHEUS_FAMILY_RESERVES = {
   openclaw_worker_heap_space_used_bytes: 640,
   openclaw_worker_heap_used_bytes: 128,
   openclaw_worker_heap_used_high_water_bytes: 128,
-  openclaw_worker_message_payload_bytes_total: 64,
+  openclaw_worker_message_payload_bytes_total: 512,
   openclaw_worker_message_unmeasured_total: 64,
   openclaw_worker_messages_total: 64,
   openclaw_worker_queue_depth: 512,

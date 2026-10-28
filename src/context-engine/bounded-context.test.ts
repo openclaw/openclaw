@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@openclaw/agent-core";
 import { describe, expect, it } from "vitest";
 import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
 import { boundContextEngineAssembly } from "./bounded-context.js";
@@ -19,6 +20,51 @@ const result = (text: string) => ({
 });
 
 describe("bounded context assembly", () => {
+  it.each([
+    { kind: "runtime-context", clear: true, retained: true },
+    { kind: "runtime-context", clear: false, retained: false },
+    { kind: "prompt-update", clear: true, retained: false },
+  ])(
+    "charges only visible bodies without rewriting replay ($kind, cleared=$clear)",
+    ({ kind, clear, retained }) => {
+      const update = (): AgentMessage => ({
+        role: "custom",
+        customType: "openclaw.system-update",
+        content: "quoted ingress context ".padEnd(30 * 1024, "x"),
+        display: false,
+        details: { kind, turnScoped: kind === "runtime-context" },
+        timestamp: 1,
+      });
+      const messages: AgentMessage[] = [user("current request")];
+      for (let round = 0; round < 10; round++) {
+        messages.push(update());
+        if (clear) {
+          messages.push(call(), result("read complete"));
+        }
+      }
+      // The final renewal remains visible and must still consume its full budget.
+      messages.push(update());
+      const original = JSON.stringify(messages);
+      const assembled: AssembleResult = { messages, estimatedTokens: 90_000 };
+      const cap = 64 * 1024;
+      expect(boundContextEngineAssembly(assembled, cap).messages).not.toEqual(messages);
+      const bounded = boundContextEngineAssembly(assembled, cap, 10_000, undefined, true);
+      if (retained) {
+        expect(bounded).toBe(assembled);
+        const withOldHistory: AssembleResult = {
+          ...assembled,
+          messages: [user("older history ".repeat(10_000)), ...messages],
+        };
+        expect(
+          boundContextEngineAssembly(withOldHistory, cap, 10_000, undefined, true).messages,
+        ).toEqual(messages);
+      } else {
+        expect(bounded.messages).not.toEqual(messages);
+      }
+      expect(JSON.stringify(messages)).toBe(original);
+    },
+  );
+
   it("drops displaced call/result occurrences together and retains the newest complete pair", () => {
     const messages = [
       user("older history ".repeat(1000)),

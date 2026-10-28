@@ -239,6 +239,7 @@ export function executeCronStateCommand(
         database,
         command.input.storeKey,
         command.input.defaultStorePath,
+        command.input.includeConfigRevisions,
       );
     case "cron.recoverRuns":
       if (!recovery) {

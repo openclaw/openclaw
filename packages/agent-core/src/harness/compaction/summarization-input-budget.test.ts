@@ -122,12 +122,18 @@ async function summarize(messages: AgentMessage[], model: Model, previousSummary
 }
 
 describe("summary request input budget", () => {
-  it("sends a small history unchanged", async () => {
-    const messages = createLongSession(3);
-    const prompt = await summarize(messages, createModel(1_000_000));
+  it("sends terminal facts from long ordinary tool results to the summarizer", async () => {
+    const output = `REPORT-START\n${"ordinary observation\n".repeat(600)}RESULT_CODE=STUDY-01-OK`;
+    const messages = [toolResult(output)];
 
-    expect(conversationOf(prompt)).toBe(serializeConversation(convertToLlm(messages)));
-    expect(prompt).not.toContain("entries omitted ...]");
+    const prompt = await summarize(messages, createModel(32_768));
+    const projected = conversationOf(prompt).split("[Tool result]: ")[1] ?? "";
+
+    expect(projected).toContain("REPORT-START\n");
+    expect(projected).toContain("RESULT_CODE=STUDY-01-OK");
+    expect(projected).toMatch(/\[\.\.\. \d+ .*characters (?:truncated|omitted)/u);
+    expect(projected.length).toBeLessThanOrEqual(2_000);
+    expect(messages[0]?.content).toEqual([{ type: "text", text: output }]);
   });
 
   it("keeps one summary request bounded when the history fills a 1M-token window", async () => {

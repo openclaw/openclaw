@@ -148,6 +148,8 @@ export type MessageActionResult =
       channel: ChannelId;
       action: "send";
       to: string;
+      /** Account selected by the message routing owner, not the original tool arguments. */
+      accountId?: string;
       handledBy: "plugin" | "core" | "internal-source";
       payload: unknown;
       normalization?: MessageActionNormalization;

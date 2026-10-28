@@ -44,6 +44,10 @@ Explicit `decision_evaluate` remains independent of Labs.
 
 Configure the provider plugin before selecting its model:
 
+- [Liquid AI](/providers/liquid-ai) connects directly to hosted d1 and d1 Ultra.
+  Install the plugin candidate from a compatible development checkout and
+  configure a Liquid AI API key. Text/JSON and inline image evidence use the
+  native Decision endpoint; connecting it does not change the chat model.
 - [ONNX](/plugins/onnx) runs local CPU classifiers in a persistent subprocess.
   Follow its development-checkout or compatible-package setup, then explicitly
   download the model or prepare a local export. Inference needs no hosted API credential.

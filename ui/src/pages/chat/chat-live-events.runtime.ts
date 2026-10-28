@@ -246,7 +246,7 @@ function applyPageGatewayEvent(
           if (sessionMatches) {
             chatRunPresentation(state).publish(
               payload?.state === "delta" ? "animation-frame" : "immediate",
-              payload?.state === "delta",
+              payload?.state !== "delta",
             );
           }
         },
@@ -308,8 +308,13 @@ function applyPageGatewayEvent(
   }
   if (event.event === "agent" || event.event === "session.tool") {
     // SAFETY: AgentEvent streams; the reducer checks session, sequence, and stream-specific data.
-    if (handleAgentEvent(state, event.payload as AgentEventPayload | undefined)) {
-      chatRunPresentation(state).publish("animation-frame");
+    const payload = event.payload as AgentEventPayload | undefined;
+    const knownToolActivity =
+      (payload?.stream === "tool" || payload?.stream === "item") &&
+      state.knownAgentRunIds?.has(payload.runId);
+    if (handleAgentEvent(state, payload)) {
+      // Tool messages publish at their flush; first observed activity still wakes the pane.
+      chatRunPresentation(state).publish("animation-frame", !knownToolActivity);
     }
     return;
   }

@@ -348,7 +348,7 @@ describe("usage archive identity", () => {
     });
   });
 
-  it("keeps cold usage inventory cheap, restores for scanning, and reports a missing archive", async () => {
+  it("refreshes cold usage without restoring transcripts and reports a missing archive", async () => {
     const scope = scopeFor("cold-usage");
     const coldConfig = {
       ...config,
@@ -408,8 +408,30 @@ describe("usage archive identity", () => {
     });
     expect(readCold(database.db, scope.sessionId)).toBeDefined();
     await expectTotal("main", 36);
-    expect(readCold(database.db, scope.sessionId)).toBeUndefined();
+    expect(readCold(database.db, scope.sessionId)).toBeDefined();
+    expect(
+      executeSqliteQuerySync(
+        database.db,
+        getNodeSqliteKysely<DB>(database.db)
+          .selectFrom("transcript_events")
+          .select("seq")
+          .where("session_id", "=", scope.sessionId),
+      ).rows,
+    ).toEqual([]);
+    const discovered = expectDefined(
+      (await discoverAllSessions(main)).find((session) => session.sessionId === scope.sessionId),
+      "cold usage discovery",
+    );
+    expect(
+      await cachedSessions({ ...main, sessions: [discovered], requestRefresh: false }),
+    ).toMatchObject({
+      summaries: [{ totalTokens: 17, totalCost: 0.017 }],
+      cacheStatus: { status: "fresh" },
+    });
     const rollups = readRollups("main");
+    await refreshCostUsageCacheForAgent(main);
+    expect(readRollups("main")).toEqual(rollups);
+    expect(readCold(database.db, scope.sessionId)).toBeDefined();
     const missingScope = scopeFor("missing-usage", scope.storePath);
     await seed(missingScope, 19, false);
     await ageTranscript(missingScope);
@@ -420,6 +442,8 @@ describe("usage archive identity", () => {
     await archiveOne();
     const archive = expectDefined(readCold(database.db, missingScope.sessionId), "cold archive");
     await fs.unlink(resolveSessionColdArchivePath(database.path, archive.archive_name));
+    await expect(refreshCostUsageCacheForAgent(main)).rejects.toThrow(/missing|unreadable/);
+    expect(readRollups("main")).toEqual(rollups);
     await expect(
       loadSessionLogs({ agentId: "main", sessionFile: missingFile.filePath }),
     ).rejects.toThrow(/missing|unreadable/);

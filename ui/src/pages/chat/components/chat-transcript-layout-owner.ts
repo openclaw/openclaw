@@ -112,8 +112,8 @@ export class TranscriptLayoutOwner {
     return Math.max(size, this.rowMinimum(instance.indexFromElement(element)));
   };
 
-  persistRows(instance: Virtualizer<HTMLDivElement, HTMLElement>): void {
-    if (this.recordingRows || !this.rowLayout) {
+  persistRows(instance: Virtualizer<HTMLDivElement, HTMLElement>, positionPending: boolean): void {
+    if (positionPending || !this.ready || this.recordingRows || !this.rowLayout) {
       return;
     }
     this.recordingRows = true;

@@ -39,6 +39,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket. N
 - Restart-recovered WebChat turns retain their current conversation as the message tool's reply destination, including turns started by CLI/RPC operator clients through `sessions.send` or `chat.send`. Progress sends without an explicit target continue to appear in that session. For an internal recovery without an external delivery context, an external-channel session key does not authorize sending to that channel.
 - Foreground sends also include the displayed branch's leaf from the rendered history as `expectedLeafEntryId`. If another client switched branches first, Control UI parks the message for review and refreshes the transcript instead of posting it to the new branch. Reconnect and restored-outbox replays intentionally omit this precondition after reconciling current history.
 - When you change a chat setting and immediately send, Control UI shows **Applying chat settings** until that change and its session refresh finish. Later background session refreshes do not extend this wait. Opening a pane without changing a setting does not create a settings wait.
+- Control UI shows an attempted prompt immediately with its normal message footer and working indicator. Routine send latency does not add a **Queued** footer or a **Waiting for turn to start** notice. Failed sends, review holds, and connection recovery keep their visible recovery actions; unsubmitted follow-ups remain in the composer queue.
 - `chat.send` takes a key that prevents duplicate requests (Control UI uses the run id). The Gateway dedupes repeated requests that reuse the same key. Retried or duplicate in-flight submits do not create a second run when the session, message, attachments, and mention selections match. Reusing that key with different mention selections is rejected.
 - Audio uploads declared with an `audio/*` MIME type wait for the durable `chat.send` acknowledgment without the usual client request deadline, because transcription can take longer. Disconnecting still ends the wait. Native clients also preserve caller cancellation and explicitly supplied request deadlines.
 - Queued messages keep their original send identity even when execution starts under a different run id. Clients reconcile the local pending message with its saved transcript entry by that send identity, so completion and history reload show one copy.
@@ -116,6 +117,8 @@ produce partial captions. An explicit Talk transcription provider, matching
 `agents.defaults.voiceModel`, or Voice Call streaming configuration keeps the
 streaming path. Dictation is unavailable when none of the configured file
 providers or CLI commands can run.
+The microphone menu's Dictation **Configure** action opens Talk settings without
+changing the default chat model.
 Loopback and private-network endpoints use the existing provider opt-in:
 `models.providers.<id>.request.allowPrivateNetwork: true`.
 

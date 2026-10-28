@@ -449,7 +449,7 @@ it("keeps persisted tool-step reasoning visible until its run finishes", async (
   final("The answer is 42.", ++seq);
   show();
   expect(worked()).toHaveLength(2);
-  expect(thinkingNodes()).toHaveLength(1);
+  expect(thinkingNodes()).toHaveLength(0);
   worked()[1]!.click();
   show();
   expect(rawDetails().getAttribute("aria-expanded")).toBe("false");

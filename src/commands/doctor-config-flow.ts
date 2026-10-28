@@ -5,7 +5,6 @@ import { listAgentEntries, tryResolveSoleAgentId } from "../agents/agent-scope-c
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
-import { applyMessageQueueDefaults } from "../config/defaults.js";
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import {
@@ -309,18 +308,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }),
   );
   applyConfigMutation(normalized, `Run "${doctorFixCommand}" to apply these changes.`);
-
-  const queueDefaults = applyMessageQueueDefaults(state.candidate);
-  applyConfigMutation(
-    {
-      config: queueDefaults,
-      changes:
-        queueDefaults === state.candidate
-          ? []
-          : ["Set messages.queue.allowCollaborativeSteering to false (default)."],
-    },
-    `Run "${doctorFixCommand}" to persist the collaborative steering default.`,
-  );
 
   const { recoverCommandOwnerTargetKinds } = await import("./doctor-command-owner-recovery.js");
   applyConfigMutation(

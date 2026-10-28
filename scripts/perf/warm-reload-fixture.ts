@@ -7,6 +7,7 @@ import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "./team-shape-fixture.ts";
+import type { startWarmReloadAdmission } from "./warm-reload-admission.ts";
 
 type RequestGateway = (method: string, params: Record<string, unknown>) => Promise<unknown>;
 
@@ -15,6 +16,10 @@ export type WarmReloadFixtureOptions = {
   port: number;
   uiRoot?: string;
   sessions?: number;
+  admission?: Pick<
+    Awaited<ReturnType<typeof startWarmReloadAdmission>>,
+    "origin" | "gatewayAuth" | "viewerEmail" | "peerSessions"
+  >;
 };
 
 function transcript(session: number, now: number, imageBlocks: readonly unknown[]) {
@@ -206,6 +211,9 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     USER: "synthetic-fixture",
     LOGNAME: "synthetic-fixture",
     OPENAI_API_KEY: "synthetic-loopback-provider-key",
+    ...(options.admission
+      ? { OPENCLAW_GATEWAY_PASSWORD: options.admission.gatewayAuth.password }
+      : {}),
   };
   const previousEnv = process.env;
   let stopMock: (() => Promise<void>) | undefined;
@@ -223,9 +231,11 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     config.gateway = {
       ...config.gateway,
       port: options.port,
-      auth: { mode: "token", token },
+      auth: options.admission?.gatewayAuth ?? { mode: "token", token },
+      ...(options.admission ? { trustedProxies: ["127.0.0.1"] } : {}),
       controlUi: {
         enabled: true,
+        ...(options.admission ? { allowedOrigins: [options.admission.origin] } : {}),
         ...(options.uiRoot ? { root: path.resolve(options.uiRoot) } : {}),
       },
     };
@@ -308,8 +318,39 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       git("init", "--initial-branch=main");
       git("add", "README.md", "avatar.png");
       git("-c", "commit.gpgSign=false", "commit", "-m", "test: seed synthetic reload workspace");
-      const viewer = profiles.ensureGatewayOwnerProfile("Synthetic proof operator", { env });
-      await profileWrites.setCanonicalUserProfileAvatar(viewer.id, avatar, "image/png", { env });
+      const gatewayOwner = profiles.ensureGatewayOwnerProfile("Synthetic proof operator", { env });
+      await profileWrites.setCanonicalUserProfileAvatar(gatewayOwner.id, avatar, "image/png", {
+        env,
+      });
+      const viewer = options.admission
+        ? await profileWrites.ensureCanonicalUserProfileForEmail(options.admission.viewerEmail, {
+            env,
+          })
+        : gatewayOwner;
+      if (options.admission) {
+        await profileWrites.setCanonicalUserProfileDisplayName(
+          viewer.id,
+          "Synthetic proof operator",
+          { env },
+        );
+        await profileWrites.setCanonicalUserProfileAvatar(viewer.id, avatar, "image/png", { env });
+        for (const [index, peer] of options.admission.peerSessions.entries()) {
+          const profile = await profileWrites.ensureCanonicalUserProfileForEmail(peer.email, {
+            env,
+          });
+          await profileWrites.setCanonicalUserProfileDisplayName(
+            profile.id,
+            `Synthetic viewer ${index + 1}`,
+            { env },
+          );
+          await profileWrites.setCanonicalUserProfileAvatar(
+            profile.id,
+            png.createSolidPngBuffer(40, 40, { r: 55 + index * 60, g: 135, b: 185 - index * 40 }),
+            "image/png",
+            { env },
+          );
+        }
+      }
       stateDb.runOpenClawStateWriteTransaction(
         (owner) => {
           const storeKey = cronKey.cronStoreKey(path.join(stateDir, "cron", "jobs.json"));
@@ -425,6 +466,8 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       reactionsPerRoute: 1,
       noticeRowsPerRoute: 1,
       mockProvider: "QA loopback OpenAI Responses",
+      admission: options.admission ? "signed-in" : "token",
+      otherViewers: options.admission?.peerSessions.length ?? 0,
       targets,
     };
     writeFileSync(

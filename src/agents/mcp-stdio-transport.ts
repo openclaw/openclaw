@@ -10,7 +10,7 @@ import {
   type JSONRPCMessage,
 } from "@modelcontextprotocol/client";
 import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
-import { throwCollectedErrors } from "../infra/error-graph-internal.js";
+import { materializeErrorStack, throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -86,16 +86,20 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
       try {
         await fs.mkdir(prepareDataDir, { recursive: true });
       } catch (error) {
-        throw new Error(
+        const failure = new Error(
           `unable to prepare PLUGIN_DATA directory "${prepareDataDir}": ${formatErrorMessage(error)}`,
           { cause: error },
         );
+        materializeErrorStack(failure);
+        throw failure;
       }
     }
 
     // Directory preparation may finish after shutdown has retired this launch.
     if (this.startupAbort.signal.aborted) {
-      throw new Error("MCP stdio transport is closed");
+      const failure = new Error("MCP stdio transport is closed");
+      materializeErrorStack(failure);
+      throw failure;
     }
 
     try {
@@ -168,6 +172,7 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
         },
       );
     } catch (error) {
+      materializeErrorStack(error);
       if (error instanceof OwnedStdioCleanupError) {
         this.startupCleanupError = error;
         recordAgentCleanupFailure();
@@ -264,6 +269,7 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
         }
         throwCollectedErrors(failures, "MCP container and host-process cleanup failed");
       } catch (error) {
+        materializeErrorStack(error);
         recordAgentCleanupFailure();
         throw error;
       } finally {

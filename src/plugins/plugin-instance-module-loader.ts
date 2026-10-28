@@ -96,6 +96,10 @@ type RetainedNativeEsmTarget = Pick<
 > & { registry: PluginRegistry | undefined };
 
 function retainedNativeEsmLocation(target: RetainedNativeEsmTarget) {
+  // Bundled modules use the shared host loader; embedded entries may have no disk file.
+  if (target.origin === "bundled") {
+    return undefined;
+  }
   // Explicit recovery keeps its own source custody and must not join an installed entry.
   if (target.nativeRecovery || target.recoverySourceMap) {
     return undefined;
@@ -257,13 +261,16 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       rootDir: params.rootDir,
       cache,
       loader,
-      source: captureBundledPluginStateOperationModules({
-        rootDir: params.rootDir,
-        source: params.source,
-        devSourceRoot: params.devSourceRoot,
-        pluginSdkResolution: params.pluginSdkResolution,
-        preparedArtifact: params.preparedArtifact?.artifact,
-      }),
+      source:
+        params.stateOperations === false
+          ? undefined
+          : captureBundledPluginStateOperationModules({
+              rootDir: params.rootDir,
+              source: params.source,
+              devSourceRoot: params.devSourceRoot,
+              pluginSdkResolution: params.pluginSdkResolution,
+              preparedArtifact: params.preparedArtifact?.artifact,
+            }),
     });
     return;
   }

@@ -5,6 +5,7 @@ import { resolveStoredSessionKeyForAgentStore } from "../../gateway/session-stor
 import { createGatewaySessionLineageReaderAsync } from "../../gateway/session-utils-store-lineage.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { readWithSessionStoreTopology } from "../../sessions/session-row-changes.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { prepareAgentDatabaseDeletionSnapshotRead } from "../../state/agent-deletion-journal.read.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
@@ -141,6 +142,7 @@ export async function prepareCombinedSessionStoreLineage(
       const owner = normalizeAgentId(parsed.agentId);
       if (
         !owners.has(owner) &&
+        !readAgentDatabaseAdmissionRefusal(owner, { env: discovery?.env }) &&
         !excluded(resolveOpenClawAgentSqlitePath({ agentId: owner, env: discovery?.env }), owner)
       ) {
         parents.set(identity(agentId, parentKey), {
@@ -217,15 +219,20 @@ async function readCombinedSessionStoreTopology(
   };
   // Discovery leaves deleting stores before their resource owner starts closing readers.
   const excluded = createGatewayRetainedStoreMatcher(config, discovery);
+  // Registry aliases must not reacquire stores excluded by startup admission.
+  const unavailable = inventory.recoveryExclusions;
+  const unavailablePaths = new Set(unavailable?.databasePaths);
   const candidates = [
     ...inventory.candidates,
-    ...(discovery.snapshot?.registeredAgentDatabases ?? []).flatMap(({ path }) =>
-      captureSessionStoreReadCandidates(path),
+    ...(discovery.snapshot?.registeredAgentDatabases ?? []).flatMap(({ agentId, path }) =>
+      unavailable?.agentIds.includes(agentId) ? [] : captureSessionStoreReadCandidates(path),
     ),
   ].filter(
     (candidate) =>
       // Existing siblings are captured exactly; family custody would also retain excluded files.
       candidate.scope !== "sibling-family" &&
+      !unavailablePaths.has(candidate.path) &&
+      !unavailablePaths.has(candidate.physicalPath) &&
       !excluded(candidate.path) &&
       !excluded(candidate.physicalPath),
   );
@@ -234,7 +241,11 @@ async function readCombinedSessionStoreTopology(
     async (owner) => {
       const result = await owner.readCombinedTopology({
         config,
-        options: { ...options, includeIncognito: false, discovery },
+        options: {
+          ...options,
+          includeIncognito: false,
+          discovery: { ...discovery, recoveryExclusions: unavailable },
+        },
         scopeAgentIds,
       });
       result.prepared.targets.incognitoTargets =

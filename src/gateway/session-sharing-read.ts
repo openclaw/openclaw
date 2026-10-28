@@ -127,6 +127,7 @@ export function prepareSessionSharing(
     );
   const entryFilter = createSessionListEntryFilter(params, isCreator, { sessionCap });
   return {
+    identity,
     isCreator,
     sessionCap,
     entryFilter,
@@ -312,6 +313,11 @@ export function createSessionSharingInputAuthority(
   return {
     // Transport/source custody owns lifetime; profile selection ends at input acceptance.
     assertLifetimeCurrent: () => {},
+    prepareForSourceScope: () =>
+      withCurrentSessionSharingProfiles(ownedParams.client, async (profiles) => {
+        profiles.readCurrent();
+        ownedParams.preparedProfiles = profiles;
+      }),
     withCurrent: (consume) =>
       withCurrentSessionSharingProfiles(ownedParams.client, (profiles, beginConsume) => {
         ownedParams.preparedProfiles = profiles;
@@ -342,6 +348,7 @@ const projectedSharingKeys = new WeakMap<
   object,
   WeakMap<object, { facts: readonly unknown[]; key: string }>
 >();
+const emptyProfileAliases: ReadonlySet<string> = new Set();
 
 export function prepareProjectedSessionSharing(params: {
   cfg: OpenClawConfig;
@@ -375,7 +382,7 @@ export function prepareProjectedSessionSharing(params: {
   let cacheKey: string | undefined;
   return {
     ...prepareSessionSharing(params, {
-      aliases: profile?.aliases ?? new Set(),
+      aliases: profile?.aliases ?? emptyProfileAliases,
       sessionCap: policy?.sessions.others,
       isMember,
     }),

@@ -2,7 +2,6 @@ import { isGatewayProtocolResponseError } from "@openclaw/gateway-client/browser
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { onCleanup } from "solid-js";
 import { Check } from "typebox/value";
-import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   PluginsInstallProgressEventSchema,
   type PluginsSetEnabledParams,
@@ -26,11 +25,7 @@ import {
   type PluginMutationResult,
   type PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
-import type {
-  PluginConsentInspectionRead,
-  PluginConsentIntent,
-  PluginConsentState,
-} from "./consent-dialog.tsx";
+import type { PluginConsentInspectionRead, PluginConsentState } from "./consent-dialog.tsx";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
@@ -122,41 +117,6 @@ export function createPluginsConsent(host: {
     return progress?.finishedAt === undefined ? progress : undefined;
   }
 
-  function reset(): void {
-    close();
-    mutationTokens.clear();
-    state.installProgress.clear();
-    installPolicyScopes.clear();
-  }
-
-  function reconcileInstallMessages(
-    result: PluginListResult | null,
-  ): Record<string, PluginRowMessage> {
-    const messages = { ...host.getMessages() };
-    const previous = host.getResult();
-    for (const [key, message] of Object.entries(messages)) {
-      const id = message.savedInstall;
-      if (!id) {
-        continue;
-      }
-      const installed = result?.plugins.some((plugin) => plugin.id === id && plugin.installed);
-      // Inventory takes ownership of a saved install and its later removal. Retire only
-      // finished attempts; an active install still owns progress until its final response.
-      if (
-        installed ||
-        (result && previous?.plugins.some((plugin) => plugin.id === id && plugin.installed))
-      ) {
-        if (state.installProgress.get(key)?.finishedAt !== undefined) {
-          state.installProgress.delete(key);
-        }
-        if (!installed || key !== pluginRowKey(id)) {
-          delete messages[key];
-        }
-      }
-    }
-    return messages;
-  }
-
   async function runMutation<Result>(
     rowKey: string,
     mutate: (client: GatewayBrowserClient) => Promise<Result>,
@@ -233,34 +193,6 @@ export function createPluginsConsent(host: {
     }
   }
 
-  function open(
-    intent: PluginConsentIntent,
-    pluginId: string,
-    details?: CapabilityConsentErrorDetails,
-  ): void {
-    if (!host.canMutate()) {
-      return;
-    }
-    const plugin = host.getResult()?.plugins.find((entry) => entry.id === pluginId);
-    host.closeDetails();
-    retireInspection();
-    state.inspection = null;
-    state.inspectionError = null;
-    state.inspectionLoading = true;
-    state.consent = {
-      intent,
-      pluginId,
-      fallback: {
-        name: plugin?.name ?? pluginId,
-        ...(plugin?.version ? { version: plugin.version } : {}),
-        ...(plugin?.origin === "official" ? { official: true } : {}),
-      },
-      ...(details ? { details } : {}),
-    };
-    host.onChange();
-    void inspect();
-  }
-
   function close(): void {
     retireInspection();
     state.consent = null;
@@ -307,191 +239,6 @@ export function createPluginsConsent(host: {
       }
       completion.resolve(error);
     }
-  }
-
-  function confirm(): void {
-    const intent = state.consent?.intent;
-    const reviewToken = state.inspection?.reviewToken;
-    if (!intent || state.inspectionLoading || state.inspectionError || !reviewToken) {
-      return;
-    }
-    close();
-    void mutateInstalledPlugin(intent.pluginId, intent.kind, intent.rowKey, {
-      acknowledgeCapabilities: { reviewToken },
-    });
-  }
-
-  async function install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
-    const installed = host
-      .getResult()
-      ?.plugins.find(
-        (plugin) =>
-          plugin.installed &&
-          (request.source === "official" || request.source === "bundled"
-            ? plugin.id === request.pluginId
-            : request.source === "clawhub"
-              ? plugin.packageName === request.packageName
-              : "expectedPluginId" in request && plugin.id === request.expectedPluginId),
-      );
-    const messages = host.getMessages();
-    const saved =
-      messages[installIdentity] ?? (installed ? messages[pluginRowKey(installed.id)] : undefined);
-    if (saved?.savedInstall) {
-      return;
-    }
-    const confirmedScope = installPolicyScopes.get(installIdentity);
-    installPolicyScopes.delete(installIdentity);
-    if (
-      request.acknowledgeInstallPolicyWarning &&
-      (!confirmedScope || !host.gateway.isCurrent(confirmedScope))
-    ) {
-      host.setMessage(installIdentity, {
-        kind: "error",
-        text: t("pluginsPage.installDestinationChanged"),
-      });
-      return;
-    }
-    // The Gateway owns artifact acceptance and validation within this install request.
-    await runMutation(
-      installIdentity,
-      async (client) => {
-        const scope = host.gateway.capture();
-        let progress: PluginInstallProgress = { startedAt: Date.now(), activities: [] };
-        state.installProgress.set(installIdentity, progress);
-        host.onChange();
-        const current = () =>
-          scope &&
-          host.gateway.isCurrent(scope) &&
-          state.installProgress.get(installIdentity) === progress;
-        let requestId: string | undefined;
-        const unsubscribe = client.addEventListener((event) => {
-          if (
-            event.event !== "plugins.install.progress" ||
-            !Check(PluginsInstallProgressEventSchema, event.payload) ||
-            event.payload.requestId !== requestId ||
-            !current()
-          ) {
-            return;
-          }
-          const activity = event.payload;
-          const index = progress.activities.findIndex(
-            (row) => row.activityId === activity.activityId,
-          );
-          progress = {
-            ...progress,
-            activities:
-              index < 0
-                ? [...progress.activities, activity]
-                : progress.activities.map((row, at) => (at === index ? activity : row)),
-          };
-          state.installProgress.set(installIdentity, progress);
-          host.onChange();
-        });
-        let result: PluginMutationResult;
-        try {
-          result = await client.request<PluginMutationResult>("plugins.install", request, {
-            onSent: (id) => {
-              requestId = id;
-            },
-          });
-        } finally {
-          unsubscribe();
-        }
-        if (current()) {
-          // The final RPC result settles installation before optional config/catalog refreshes.
-          state.installProgress.delete(installIdentity);
-          host.applyMutationResult(result);
-        }
-        return result;
-      },
-      async (result, refreshError, client) => {
-        const installedPluginKey = pluginRowKey(result.plugin.id);
-        if (installedPluginKey !== installIdentity) {
-          host.setMessage(installIdentity, null);
-        }
-        host.setMessage(installedPluginKey, pluginMutationWarnings(result, refreshError));
-        await host.refreshCatalogAfterMutation(client);
-      },
-      {
-        action: "install",
-        preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true,
-      },
-      async (error, scope, isCurrent) => {
-        const details =
-          error instanceof GatewayRequestError ? asOptionalRecord(error.details) : undefined;
-        const persistence = asOptionalRecord(details?.persistence);
-        const policyWarning = readPluginInstallPolicyWarning(error);
-        const canRetry = isGatewayProtocolResponseError(error) && !persistence && !policyWarning;
-        const savedInstall =
-          persistence?.operation === "install" &&
-          typeof persistence.pluginId === "string" &&
-          persistence.pluginId.trim()
-            ? persistence.pluginId
-            : undefined;
-        const failureState = savedInstall
-          ? "saved"
-          : details?.pluginInstallRejected === true
-            ? "rejected"
-            : canRetry
-              ? "retry"
-              : "unknown";
-        const failure = {
-          title: t(`pluginsPage.installProgress.${failureState}.title`),
-          recovery: t(`pluginsPage.installProgress.${failureState}.recovery`),
-          detail: formatUiError(error),
-        };
-        const progress = state.installProgress.get(installIdentity);
-        if (progress) {
-          // Only a correlated final rejection proves an unsaved attempt can restart.
-          // Transport loss and saved installs retain their recovery state instead.
-          state.installProgress.set(installIdentity, {
-            ...progress,
-            finishedAt: Date.now(),
-            canRetry,
-            ...(!policyWarning || savedInstall ? { failure } : {}),
-          });
-          host.onChange();
-        }
-        if (savedInstall) {
-          const pluginId = savedInstall;
-          const key = pluginRowKey(pluginId);
-          const runtime = asOptionalRecord(details?.runtime);
-          const message: PluginRowMessage = {
-            kind: "error",
-            savedInstall: pluginId,
-            text: pluginRuntimeFailureText(
-              details,
-              t(
-                runtime?.committed === false
-                  ? "pluginsPage.installSavedNotApplied"
-                  : "pluginsPage.installSaved",
-                {
-                  name: pluginId,
-                  error: formatUiError(error),
-                },
-              ),
-            ),
-          };
-          // Persistence is independent of runtime publication. Do not offer an install retry
-          // while the authoritative reads catch up or fail after this saved outcome.
-          await reconcileCommittedFailure([installIdentity, key], message, scope.client, isCurrent);
-          return;
-        }
-        if (policyWarning) {
-          installPolicyScopes.set(installIdentity, scope);
-          host.setMessage(installIdentity, {
-            kind: "warning",
-            text: policyWarning.reason,
-            installPolicyWarning: { details: policyWarning, request },
-          });
-          return;
-        }
-        host.setMessage(installIdentity, {
-          kind: "error",
-          text: `${failure.recovery}\n${failure.detail}`,
-        });
-      },
-    );
   }
 
   async function reconcileCommittedFailure(
@@ -541,7 +288,28 @@ export function createPluginsConsent(host: {
         const runtime = asOptionalRecord(details?.runtime);
         const consent = readPluginCapabilityConsentError(error);
         if (action !== "disable" && runtime?.committed !== true && consent && host.canMutate()) {
-          open({ kind: action, pluginId, rowKey }, consent.pluginId, consent);
+          if (!host.canMutate()) {
+            return;
+          }
+          const consentPluginId = consent.pluginId;
+          const plugin = host.getResult()?.plugins.find((entry) => entry.id === consentPluginId);
+          host.closeDetails();
+          retireInspection();
+          state.inspection = null;
+          state.inspectionError = null;
+          state.inspectionLoading = true;
+          state.consent = {
+            intent: { kind: action, pluginId, rowKey },
+            pluginId: consentPluginId,
+            fallback: {
+              name: plugin?.name ?? consentPluginId,
+              ...(plugin?.version ? { version: plugin.version } : {}),
+              ...(plugin?.origin === "official" ? { official: true } : {}),
+            },
+            ...(consent ? { details: consent } : {}),
+          };
+          host.onChange();
+          void inspect();
           return;
         }
         const savedInstall = host.getMessages()[rowKey]?.savedInstall;
@@ -562,13 +330,228 @@ export function createPluginsConsent(host: {
   return {
     read: () => state,
     getActiveInstall,
-    reset,
-    reconcileInstallMessages,
+    reset(): void {
+      close();
+      mutationTokens.clear();
+      state.installProgress.clear();
+      installPolicyScopes.clear();
+    },
+    reconcileInstallMessages(result: PluginListResult | null): Record<string, PluginRowMessage> {
+      const messages = { ...host.getMessages() };
+      const previous = host.getResult();
+      for (const [key, message] of Object.entries(messages)) {
+        const id = message.savedInstall;
+        if (!id) {
+          continue;
+        }
+        const installed = result?.plugins.some((plugin) => plugin.id === id && plugin.installed);
+        // Inventory takes ownership of a saved install and its later removal. Retire only
+        // finished attempts; an active install still owns progress until its final response.
+        if (
+          installed ||
+          (result && previous?.plugins.some((plugin) => plugin.id === id && plugin.installed))
+        ) {
+          if (state.installProgress.get(key)?.finishedAt !== undefined) {
+            state.installProgress.delete(key);
+          }
+          if (!installed || key !== pluginRowKey(id)) {
+            delete messages[key];
+          }
+        }
+      }
+      return messages;
+    },
     runMutation,
     close,
     inspect,
-    confirm,
-    install,
+    confirm(): void {
+      const intent = state.consent?.intent;
+      const reviewToken = state.inspection?.reviewToken;
+      if (!intent || state.inspectionLoading || state.inspectionError || !reviewToken) {
+        return;
+      }
+      close();
+      void mutateInstalledPlugin(intent.pluginId, intent.kind, intent.rowKey, {
+        acknowledgeCapabilities: { reviewToken },
+      });
+    },
+    async install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
+      const installed = host
+        .getResult()
+        ?.plugins.find(
+          (plugin) =>
+            plugin.installed &&
+            (request.source === "official" || request.source === "bundled"
+              ? plugin.id === request.pluginId
+              : request.source === "clawhub"
+                ? plugin.packageName === request.packageName
+                : "expectedPluginId" in request && plugin.id === request.expectedPluginId),
+        );
+      const messages = host.getMessages();
+      const saved =
+        messages[installIdentity] ?? (installed ? messages[pluginRowKey(installed.id)] : undefined);
+      if (saved?.savedInstall) {
+        return;
+      }
+      const confirmedScope = installPolicyScopes.get(installIdentity);
+      installPolicyScopes.delete(installIdentity);
+      if (
+        request.acknowledgeInstallPolicyWarning &&
+        (!confirmedScope || !host.gateway.isCurrent(confirmedScope))
+      ) {
+        host.setMessage(installIdentity, {
+          kind: "error",
+          text: t("pluginsPage.installDestinationChanged"),
+        });
+        return;
+      }
+      // The Gateway owns artifact acceptance and validation within this install request.
+      await runMutation(
+        installIdentity,
+        async (client) => {
+          const scope = host.gateway.capture();
+          let progress: PluginInstallProgress = { startedAt: Date.now(), activities: [] };
+          state.installProgress.set(installIdentity, progress);
+          host.onChange();
+          const current = () =>
+            scope &&
+            host.gateway.isCurrent(scope) &&
+            state.installProgress.get(installIdentity) === progress;
+          let requestId: string | undefined;
+          const unsubscribe = client.addEventListener((event) => {
+            if (
+              event.event !== "plugins.install.progress" ||
+              !Check(PluginsInstallProgressEventSchema, event.payload) ||
+              event.payload.requestId !== requestId ||
+              !current()
+            ) {
+              return;
+            }
+            const activity = event.payload;
+            const index = progress.activities.findIndex(
+              (row) => row.activityId === activity.activityId,
+            );
+            progress = {
+              ...progress,
+              activities:
+                index < 0
+                  ? [...progress.activities, activity]
+                  : progress.activities.map((row, at) => (at === index ? activity : row)),
+            };
+            state.installProgress.set(installIdentity, progress);
+            host.onChange();
+          });
+          let result: PluginMutationResult;
+          try {
+            result = await client.request<PluginMutationResult>("plugins.install", request, {
+              onSent: (id) => {
+                requestId = id;
+              },
+            });
+          } finally {
+            unsubscribe();
+          }
+          if (current()) {
+            // The final RPC result settles installation before optional config/catalog refreshes.
+            state.installProgress.delete(installIdentity);
+            host.applyMutationResult(result);
+          }
+          return result;
+        },
+        async (result, refreshError, client) => {
+          const installedPluginKey = pluginRowKey(result.plugin.id);
+          if (installedPluginKey !== installIdentity) {
+            host.setMessage(installIdentity, null);
+          }
+          host.setMessage(installedPluginKey, pluginMutationWarnings(result, refreshError));
+          await host.refreshCatalogAfterMutation(client);
+        },
+        {
+          action: "install",
+          preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true,
+        },
+        async (error, scope, isCurrent) => {
+          const details =
+            error instanceof GatewayRequestError ? asOptionalRecord(error.details) : undefined;
+          const persistence = asOptionalRecord(details?.persistence);
+          const policyWarning = readPluginInstallPolicyWarning(error);
+          const canRetry = isGatewayProtocolResponseError(error) && !persistence && !policyWarning;
+          const savedInstall =
+            persistence?.operation === "install" &&
+            typeof persistence.pluginId === "string" &&
+            persistence.pluginId.trim()
+              ? persistence.pluginId
+              : undefined;
+          const failureState = savedInstall
+            ? "saved"
+            : details?.pluginInstallRejected === true
+              ? "rejected"
+              : canRetry
+                ? "retry"
+                : "unknown";
+          const failure = {
+            title: t(`pluginsPage.installProgress.${failureState}.title`),
+            recovery: t(`pluginsPage.installProgress.${failureState}.recovery`),
+            detail: formatUiError(error),
+          };
+          const progress = state.installProgress.get(installIdentity);
+          if (progress) {
+            // Only a correlated final rejection proves an unsaved attempt can restart.
+            // Transport loss and saved installs retain their recovery state instead.
+            state.installProgress.set(installIdentity, {
+              ...progress,
+              finishedAt: Date.now(),
+              canRetry,
+              ...(!policyWarning || savedInstall ? { failure } : {}),
+            });
+            host.onChange();
+          }
+          if (savedInstall) {
+            const pluginId = savedInstall;
+            const key = pluginRowKey(pluginId);
+            const runtime = asOptionalRecord(details?.runtime);
+            const message: PluginRowMessage = {
+              kind: "error",
+              savedInstall: pluginId,
+              text: pluginRuntimeFailureText(
+                details,
+                t(
+                  runtime?.committed === false
+                    ? "pluginsPage.installSavedNotApplied"
+                    : "pluginsPage.installSaved",
+                  {
+                    name: pluginId,
+                    error: formatUiError(error),
+                  },
+                ),
+              ),
+            };
+            // Persistence is independent of runtime publication. Do not offer an install retry
+            // while the authoritative reads catch up or fail after this saved outcome.
+            await reconcileCommittedFailure(
+              [installIdentity, key],
+              message,
+              scope.client,
+              isCurrent,
+            );
+            return;
+          }
+          if (policyWarning) {
+            installPolicyScopes.set(installIdentity, scope);
+            host.setMessage(installIdentity, {
+              kind: "warning",
+              text: policyWarning.reason,
+              installPolicyWarning: { details: policyWarning, request },
+            });
+            return;
+          }
+          host.setMessage(installIdentity, {
+            kind: "error",
+            text: `${failure.recovery}\n${failure.detail}`,
+          });
+        },
+      );
+    },
     mutateInstalledPlugin,
   };
 }

@@ -174,10 +174,10 @@ suite.define(() => {
 
       const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
       await message.fill(longPrompt);
-      // Native input commits its overflow presentation on the next animation frame.
+      // Classic scrollbars retain their gutter at the cap to prevent draft-height oscillation.
       await expect
         .poll(() => message.evaluate((element) => getComputedStyle(element).overflowY))
-        .toBe("auto");
+        .toBe("scroll");
       const capped = await message.evaluate((element) => ({
         clientHeight: element.clientHeight,
         scrollHeight: element.scrollHeight,
@@ -723,6 +723,9 @@ suite.define(() => {
         await page.getByRole("button", { name: "Retry queued message" }).click();
         const retry = await gateway.waitForRequest("chat.send");
         expect(retry.params).toMatchObject({ sessionKey, message, attachments: [pngAttachment] });
+        const retriedTurn = page.locator(".chat-group.user", { hasText: message });
+        await pollCount(retriedTurn.locator(".chat-send-status")).toBe(0);
+        await retriedTurn.locator("time.chat-group-timestamp").waitFor();
         expect(await gateway.getRequests("sessions.create")).toHaveLength(quota ? 1 : 0);
       });
     },

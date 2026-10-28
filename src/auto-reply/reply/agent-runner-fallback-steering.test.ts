@@ -247,7 +247,8 @@ describe("ordinary steering into automatic model fallback", () => {
     run.run.sessionKey = key;
     run.run.sessionId = `fallback-${scenario}`;
     const modelConfig = {
-      primary: "openai/gpt-test",
+      // A strict pin differs from the primary; a remembered default still permits fallback.
+      primary: scenario.endsWith("pinned-selection") ? "openai/other-primary" : "openai/gpt-test",
       fallbacks: scenario === "policy-fallback" ? undefined : ["test-alias/test-model"],
     };
     run.run.config = {
@@ -487,7 +488,11 @@ describe("ordinary steering into automatic model fallback", () => {
       await incoming;
       expect(resultState.admission).toEqual(
         crossProfile && run.run.config.messages?.queue?.allowCollaborativeSteering !== true
-          ? { status: "skipped", reason: "collaborative-steering-disabled" }
+          ? {
+              status: "accepted",
+              mode: "followup",
+              reason: "collaborative-steering-disabled",
+            }
           : {
               status: "accepted",
               mode: shouldSteer ? "steer" : "followup",
@@ -498,7 +503,7 @@ describe("ordinary steering into automatic model fallback", () => {
       );
       expect(delivered).toEqual(shouldSteer ? [run.prompt] : []);
       if (crossProfile && run.run.config.messages?.queue?.allowCollaborativeSteering !== true) {
-        expect(getFollowupQueueDepth(key)).toBe(0);
+        expect(getFollowupQueueDepth(key)).toBe(1);
       }
       expect(operation.requesterPrincipalKey).toBe(requesterPrincipalKey);
       expect(operation.toolAuthorityFingerprint).toBe(toolAuthorityFingerprint);

@@ -66,6 +66,7 @@ DISPLAY_OVERRIDDEN=0
 ORIGINAL_WM_SIZE=""
 ORIGINAL_WM_DENSITY=""
 SCREENSHOT_DENSITY=""
+DIAGNOSTICS_STARTED=0
 TIMEZONE_OVERRIDDEN=0
 ORIGINAL_AUTO_TIME_ZONE=""
 ORIGINAL_TIME_ZONE=""
@@ -264,6 +265,9 @@ restore_device_timezone() {
 cleanup() {
   local status=$?
   set +e
+  if [[ "$DIAGNOSTICS_STARTED" == "1" ]]; then
+    screenshot_diagnostics_finish "$status" "${ADB_SERIAL:-}" "$EMULATOR_PID"
+  fi
   if [[ "$DRY_RUN" != "1" && -d "$ARTIFACT_DIR" ]]; then
     {
       printf 'exit_status=%s\n' "$status"
@@ -282,6 +286,12 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+diagnostic_phase() {
+  if [[ "$DIAGNOSTICS_STARTED" == "1" ]]; then
+    screenshot_diagnostics_phase "$1" "${ADB_SERIAL:-}" "$EMULATOR_PID" || true
+  fi
+}
 
 adb_bin() {
   if [[ -n "${ADB:-}" ]]; then
@@ -541,6 +551,7 @@ boot_emulator() {
   "$emulator" "${emulator_args[@]}" >"$EMULATOR_LOG" 2>&1 &
   EMULATOR_PID="$!"
   STARTED_EMULATOR=1
+  diagnostic_phase emulator-started
 
   serial="$(wait_for_single_device "$adb")"
   wait_for_boot_completed "$adb" "$serial"
@@ -744,42 +755,61 @@ fi
 rm -rf "$ARTIFACT_DIR"
 mkdir -p "$ARTIFACT_DIR/screenshots" "$ARTIFACT_DIR/ui-dumps" "$ARTIFACT_DIR/activity-start"
 ADB_BIN="$(adb_bin)"
+if [[ "${ANDROID_SCREENSHOT_DIAGNOSTICS:-0}" == "1" ]]; then
+  source "$ROOT_DIR/scripts/lib/android-screenshot-diagnostics.sh"
+  screenshot_diagnostics_start "$ARTIFACT_DIR" "$ADB_BIN"
+  DIAGNOSTICS_STARTED=1
+fi
 if [[ -n "$SNOOZE_PROOF" && -n "$("$ADB_BIN" devices | awk 'NR > 1 && NF { print $1 }')" ]]; then
   echo "Snooze proof stopped: an Android device already exists and is not owned by this run." >&2
   "$ADB_BIN" devices >&2
   exit 1
 fi
+
+# Keep compilation off the emulator's boot and rendering CPU budget.
+if [[ "$SKIP_BUILD" != "1" ]]; then
+  diagnostic_phase before-build
+  (
+    cd "$ANDROID_DIR"
+    ./gradlew "$GRADLE_ASSEMBLE_TASK"
+  )
+  diagnostic_phase after-build
+fi
+
+diagnostic_phase before-device
 resolve_device "$ADB_BIN"
+diagnostic_phase boot-complete
 if [[ -n "$SNOOZE_PROOF" && "$STARTED_EMULATOR" != "1" ]]; then
   echo "Snooze proof stopped: the selected emulator was not started by this run." >&2
   exit 1
 fi
 require_emulator_device "$ADB_BIN" "$ADB_SERIAL"
+diagnostic_phase before-device-configuration
 stabilize_device_for_screenshots "$ADB_BIN" "$ADB_SERIAL"
+diagnostic_phase before-display
 configure_screenshot_display "$ADB_BIN" "$ADB_SERIAL"
+diagnostic_phase after-display
 if [[ -z "$SNOOZE_PROOF" ]]; then
   mkdir -p "$OUTPUT_DIR"
   rm -f "$OUTPUT_DIR"/*.png "$OUTPUT_DIR"/*.jpg "$OUTPUT_DIR"/*.jpeg
 fi
 
-if [[ "$SKIP_BUILD" != "1" ]]; then
-  (
-    cd "$ANDROID_DIR"
-    ./gradlew "$GRADLE_ASSEMBLE_TASK"
-  )
-fi
 if [[ "$SKIP_INSTALL" != "1" ]]; then
+  diagnostic_phase before-install
   APK_PATH="$(latest_debug_apk)"
   if [[ -z "$APK_PATH" ]]; then
     echo "No existing ${FORM_FACTOR} debug APK found. Run without --skip-build first." >&2
     exit 1
   fi
   "$ADB_BIN" -s "$ADB_SERIAL" install -r "$APK_PATH" >/dev/null
+  diagnostic_phase after-install
 fi
 
 "$ADB_BIN" -s "$ADB_SERIAL" shell pm clear "$APP_PACKAGE" >/dev/null
 "$ADB_BIN" -s "$ADB_SERIAL" shell pm grant "$APP_PACKAGE" android.permission.RECORD_AUDIO >/dev/null
-"$ADB_BIN" -s "$ADB_SERIAL" logcat -c >/dev/null 2>&1 || true
+if [[ "${ANDROID_SCREENSHOT_DIAGNOSTICS:-0}" != "1" ]]; then
+  "$ADB_BIN" -s "$ADB_SERIAL" logcat -c >/dev/null 2>&1 || true
+fi
 
 if [[ -n "$SNOOZE_PROOF" ]]; then
   python3 "$ANDROID_DIR/scripts/capture-session-snooze.py" "$ADB_BIN" "$ADB_SERIAL" "$SNOOZE_PROOF" "$ARTIFACT_DIR"
@@ -787,6 +817,7 @@ if [[ -n "$SNOOZE_PROOF" ]]; then
 fi
 
 for scene in "${SCENES[@]}"; do
+  diagnostic_phase "scene-${scene}-start"
   output_path="${OUTPUT_DIR}/openclaw-${scene}.jpg"
   raw_path="${OUTPUT_DIR}/openclaw-${scene}.raw.png"
   artifact_path="${ARTIFACT_DIR}/screenshots/openclaw-${scene}.jpg"
@@ -800,6 +831,7 @@ for scene in "${SCENES[@]}"; do
     --ez openclaw.screenshotMode true \
     --es openclaw.screenshotScene "$scene" >"$activity_start_path"
   wait_for_scene_ready "$ADB_BIN" "$ADB_SERIAL" "$scene" "$ui_dump_path"
+  diagnostic_phase "scene-${scene}-ready"
   sleep "${ANDROID_SCREENSHOT_SETTLE_SECONDS:-0.5}"
   "$ADB_BIN" -s "$ADB_SERIAL" exec-out screencap -p >"$raw_path"
   normalize_capture_for_play "$raw_path" "$output_path"

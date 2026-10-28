@@ -24,6 +24,26 @@ import type { ChatComposerPlusMenuProps as Menu } from "./chat-composer-plus-men
 import { createSlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
 import { SlashMenu } from "./chat-composer-slash-menu.tsx";
 
+function mountSlashMenu(paneId: string) {
+  const host: SlashMenuHost = {
+    paneId,
+    getDraft: () => "/",
+    commitDraft: vi.fn(),
+    getTextarea: () => null,
+    resolveArgOptions: () => [],
+    runCommand: vi.fn(),
+    canRun: () => true,
+  };
+  let menu!: ReturnType<typeof createSlashMenu>;
+  const view = mountSolid(() => {
+    menu = createSlashMenu();
+    return <SlashMenu menu={menu} host={host} draft="/" />;
+  });
+  menu.update("/", host);
+  flush();
+  return { menu, host, view };
+}
+
 it("keeps loading suggestions named, selected and actionable", () => {
   const select = vi.fn();
   const [activeId, setActiveId] = createSignal("pending-status");
@@ -61,22 +81,7 @@ it("keeps loading suggestions named, selected and actionable", () => {
 });
 
 it("keeps current editing state when suggestion rows load after dismissal", async () => {
-  let menu!: ReturnType<typeof createSlashMenu>;
-  const host: SlashMenuHost = {
-    paneId: "lazy-menu-dismissal",
-    getDraft: () => "/",
-    commitDraft: vi.fn(),
-    getTextarea: () => null,
-    resolveArgOptions: () => [],
-    runCommand: vi.fn(),
-    canRun: () => true,
-  };
-  const view = mountSolid(() => {
-    menu = createSlashMenu();
-    return <SlashMenu menu={menu} host={host} draft="/" />;
-  });
-  menu.update("/", host);
-  flush();
+  const { menu, host, view } = mountSlashMenu("lazy-menu-dismissal");
   expect(view.getByRole("listbox")).toBeTruthy();
   expect(view.container.querySelectorAll(".slash-menu-item")).toHaveLength(
     menu.state.slashMenuItems.length,
@@ -124,22 +129,7 @@ it("uses the current focus policy on a retained suggestion option", () => {
 
 it("retains the slash viewport through row loading and selection changes, and resets it for a new mode", async () => {
   const command = { key: "status", name: "status", description: "Show status" };
-  const host: SlashMenuHost = {
-    paneId: "menu-retention",
-    getDraft: () => "/",
-    commitDraft: vi.fn(),
-    getTextarea: () => null,
-    resolveArgOptions: () => [],
-    runCommand: vi.fn(),
-    canRun: () => true,
-  };
-  let menu!: ReturnType<typeof createSlashMenu>;
-  const view = mountSolid(() => {
-    menu = createSlashMenu();
-    return <SlashMenu menu={menu} host={host} draft="/" />;
-  });
-  menu.update("/", host);
-  flush();
+  const { menu, host, view } = mountSlashMenu("menu-retention");
   const viewport = view.container.querySelector<HTMLElement>(".slash-menu__scroll")!;
   viewport.scrollTop = 120;
   await waitForSolid(() => expect(view.getByRole("option", { selected: true })).toBeTruthy());
@@ -185,12 +175,12 @@ it("retains the focused capability row and management link through catalog refre
   const checkbox = (name: string) => view.getByRole("menuitemcheckbox", { name, hidden: true });
   const update = (
     changes: Partial<Menu>,
-    capability: Partial<NonNullable<Menu["capabilityMenu"]>> = {},
+    capability: Partial<NonNullable<ReturnType<NonNullable<Menu["capabilityMenu"]>["read"]>>> = {},
   ) =>
     setMenu((previous) => ({
       ...previous,
       ...changes,
-      capabilityMenu: { ...previous.capabilityMenu!, ...capability },
+      capabilityMenu: makeCapabilities({ ...previous.capabilityMenu!.read()!, ...capability }),
     }));
   await import("./chat-composer-plus-menu-content.tsx");
   await waitForSolid(() => expect(checkbox("Focused skill")).toBeTruthy());
@@ -301,6 +291,7 @@ it("retains attachment choices while the native menu closes and reopens", async 
   )!;
   trigger.click();
   await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  await import("./chat-composer-plus-menu-content.tsx");
   await waitForSolid(() =>
     expect(view.getByRole("menuitemcheckbox", { name: "Test toggle", hidden: true })).toBeTruthy(),
   );
@@ -334,6 +325,7 @@ it.each(["item", "external", "closed"] as const)(
         />
       </>
     ));
+    await import("./chat-composer-plus-menu-content.tsx");
     await waitForSolid(() =>
       expect(view.getByRole("menuitem", { name: "Plugins", hidden: true })).toBeTruthy(),
     );
@@ -452,6 +444,7 @@ it("keeps skill navigation live through failure, retry and a retired connection 
   const panel = view.container.querySelector<HTMLElement>(".agent-chat__capability-menu-panel")!;
   expect(request).not.toHaveBeenCalled();
   trigger.click();
+  await import("./chat-composer-plus-menu-content.tsx");
   await waitForSolid(() =>
     expect(view.getByRole("menuitem", { name: "Skills", hidden: true })).toBeTruthy(),
   );
@@ -629,8 +622,8 @@ it("filters skills across groups and restores the catalog when header search clo
   setMenu((previous) => ({
     ...previous,
     view: "library:release",
-    capabilityMenu: {
-      ...previous.capabilityMenu!,
+    capabilityMenu: makeCapabilities({
+      ...previous.capabilityMenu!.read()!,
       library: {
         loading: false,
         busy: false,
@@ -663,7 +656,7 @@ it("filters skills across groups and restores the catalog when header search clo
           },
         },
       },
-    },
+    }),
   }));
   await waitForSolid(() =>
     expect(view.getByRole("menuitem", { name: "release-notes", hidden: true })).not.toBeNull(),

@@ -341,7 +341,8 @@ self.addEventListener("activate", (event) => {
 });
 
 async function reportControlUiHttpFailure(event) {
-  if (!event.clientId) {
+  // Reachability owns expected outage failures; they are not failed app reads.
+  if (!event.clientId || event.request.headers.get("X-OpenClaw-Reachability-Probe") === "1") {
     return;
   }
   try {

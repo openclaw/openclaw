@@ -2,7 +2,10 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { afterEach, expect, it } from "vitest";
-import { analyzeReloadFrames } from "../../scripts/perf/warm-reload-frames.ts";
+import {
+  analyzeReloadFrames,
+  type ReloadAnimationSample,
+} from "../../scripts/perf/warm-reload-frames.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -126,4 +129,279 @@ it("rejects mixed viewport dimensions and nonchronological captures rather than 
       ],
     }),
   ).rejects.toThrow("capture order");
+});
+
+it("groups attributed shimmer phase while retaining simultaneous content, identity and geometry changes", async () => {
+  const directory = temporary.make("reload-animation-");
+  const changes: Array<Array<[number, number]>> = [
+    [],
+    [
+      [0, 200],
+      [1, 200],
+      [128, 200],
+      [129, 200],
+    ],
+    [
+      [0, 100],
+      [1, 100],
+      [128, 100],
+      [129, 100],
+      [50, 200],
+      [51, 200],
+      [178, 200],
+      [179, 200],
+    ],
+    [
+      [0, 240],
+      [1, 240],
+      [128, 240],
+      [129, 240],
+      [50, 200],
+      [51, 200],
+      [178, 200],
+      [179, 200],
+    ],
+    [
+      [0, 20],
+      [1, 20],
+      [128, 20],
+      [129, 20],
+      [50, 200],
+      [51, 200],
+      [178, 200],
+      [179, 200],
+    ],
+  ];
+  const frames = await Promise.all(
+    changes.map(async (edits, index) => ({
+      file: await png(directory, `frame-${index}.png`, edits),
+      atMs: index * 10,
+    })),
+  );
+  const samples: ReloadAnimationSample[] = changes.map((_, index) => ({
+    atMs: index * 10,
+    animations: [
+      {
+        name: "shimmer",
+        key: "same-element",
+        kind: "shimmer",
+        active: true,
+        signature: index < 3 ? "same-content-and-layout" : "identity-changed",
+        x: index === 4 ? 1 : 0,
+        y: 0,
+        width: 16,
+        height: 16,
+      },
+    ],
+  }));
+  const report = await analyzeReloadFrames({
+    frames,
+    animationSamples: samples,
+    masks: [],
+    outputDir: directory,
+    regions: [
+      { name: "sidebar", x: 0, y: 0, width: 16, height: 16 },
+      { name: "transcript", x: 40, y: 0, width: 16, height: 16 },
+    ],
+    minChangedPixels: 3,
+    minChangedRatio: 0,
+  });
+  expect(report).toMatchObject({
+    distinctStates: 5,
+    transitionCount: 4,
+    unmasked: { distinctStates: 5, transitionCount: 4 },
+  });
+  expect(report.visibleChangeCensus).toMatchObject({
+    distinctStates: 4,
+    transitionCount: 3,
+    lastVisualChangeMs: 40,
+    regions: {
+      sidebar: { transitionCount: 2 },
+      transcript: { transitionCount: 1 },
+    },
+  });
+  expect(
+    report.visibleChangeCensus.timeline.map(({ atMs, regions }) => ({ atMs, regions })),
+  ).toEqual([
+    { atMs: 0, regions: ["sidebar", "transcript"] },
+    { atMs: 20, regions: ["transcript"] },
+    { atMs: 30, regions: ["sidebar"] },
+    { atMs: 40, regions: ["sidebar"] },
+  ]);
+  expect(report.visibleChangeCensus.suppressedAnimationPairs.map(({ atMs }) => atMs)).toEqual([
+    10, 20,
+  ]);
+  expect(report.visibleChangeCensus.contactSheets[0]).toBe("visible-contact-sheet-01.png");
+});
+
+it("retains gradual unexplained changes and avoids inventing a state when a matched fade finishes", async () => {
+  const directory = temporary.make("reload-fade-");
+  const frames = await Promise.all(
+    [0, 1, 2, 3, 4].map(async (index) => ({
+      file: await png(directory, `fade-${index}.png`, [
+        ...[0, 1, 128, 129].map((pixel): [number, number] => [
+          pixel,
+          [160, 180, 200, 250, 250][index]!,
+        ]),
+        ...[50, 51, 178, 179].map((pixel): [number, number] => [pixel, Math.min(index, 3) * 8]),
+      ]),
+      atMs: index * 10,
+    })),
+  );
+  const report = await analyzeReloadFrames({
+    frames,
+    masks: [],
+    regions: [],
+    outputDir: directory,
+    minChangedPixels: 3,
+    minChangedRatio: 0,
+    animationSamples: [0, 1, 2, 3, 4].map((index) => ({
+      atMs: index * 10,
+      animations: [
+        {
+          name: "fade",
+          key: "fade-target",
+          kind: "fade",
+          signature: "same-visible-content",
+          active: index < 3,
+          x: 0,
+          y: 0,
+          width: 16,
+          height: 16,
+        },
+      ],
+    })),
+  });
+  expect(report.transitionCount).toBe(3);
+  expect(report.visibleChangeCensus.timeline.map(({ atMs }) => atMs)).toEqual([0, 20]);
+  expect(report.visibleChangeCensus).toMatchObject({ distinctStates: 2, transitionCount: 1 });
+});
+
+it("counts first painted content and spatial changes despite identical ahead-of-paint DOM fade signatures", async () => {
+  const directory = temporary.make("reload-fade-paint-");
+  const patterns: Array<Array<[number, number]>> = [
+    [],
+    [0, 1, 128, 129].map((pixel) => [pixel, 180]),
+    [0, 1, 128, 129].map((pixel) => [pixel, 240]),
+    [2, 3, 130, 131].map((pixel) => [pixel, 240]),
+  ];
+  const frames = await Promise.all(
+    patterns.map(async (edits, index) => ({
+      file: await png(directory, `paint-${index}.png`, edits),
+      atMs: index * 10,
+    })),
+  );
+  const report = await analyzeReloadFrames({
+    frames,
+    masks: [],
+    regions: [],
+    outputDir: directory,
+    minChangedPixels: 3,
+    minChangedRatio: 0,
+    animationSamples: patterns.map((_, index) => ({
+      atMs: index * 10,
+      animations: [
+        {
+          name: "fade",
+          key: "same-target",
+          kind: "fade",
+          signature: "DOM-already-has-final-content",
+          active: true,
+          x: 0,
+          y: 0,
+          width: 16,
+          height: 16,
+        },
+      ],
+    })),
+  });
+  expect(report.transitionCount).toBe(3);
+  expect(report.visibleChangeCensus.timeline.map(({ atMs }) => atMs)).toEqual([0, 10, 30]);
+  expect(report.visibleChangeCensus.suppressedAnimationPairs.map(({ atMs }) => atMs)).toEqual([20]);
+});
+
+it("does not apply a current animation mask when matching a different historical content state", async () => {
+  const directory = temporary.make("reload-animation-history-");
+  const content: Array<[number, number]> = [0, 1, 128, 129].map((pixel) => [pixel, 200]);
+  const chrome: Array<[number, number]> = [50, 51, 178, 179].map((pixel) => [pixel, 200]);
+  const frames = await Promise.all(
+    [[...content, ...chrome], [], chrome].map(async (edits, index) => ({
+      file: await png(directory, `history-${index}.png`, edits),
+      atMs: index * 10,
+    })),
+  );
+  const report = await analyzeReloadFrames({
+    frames,
+    masks: [],
+    regions: [],
+    outputDir: directory,
+    minChangedPixels: 3,
+    minChangedRatio: 0,
+    animationSamples: frames.map((frame, index) => ({
+      atMs: frame.atMs,
+      animations: [
+        {
+          name: "shimmer",
+          key: "target",
+          kind: "shimmer",
+          signature: index ? "skeleton-B" : "content-A",
+          active: true,
+          x: 0,
+          y: 0,
+          width: 16,
+          height: 16,
+        },
+      ],
+    })),
+  });
+  expect(report.visibleChangeCensus).toMatchObject({ distinctStates: 3, transitionCount: 2 });
+  expect(report.visibleChangeCensus.timeline.map(({ stateId }) => stateId)).toEqual([0, 1, 2]);
+});
+
+it("accumulates a region's small changes independently when another region changes every frame", async () => {
+  const directory = temporary.make("reload-region-baselines-");
+  const frames = await Promise.all(
+    [0, 1, 2, 3].map(async (index) => ({
+      file: await png(directory, `regions-${index}.png`, [
+        ...[0, 1, 128, 129].map((pixel): [number, number] => [pixel, 100 + index * 30]),
+        ...[50, 51, 178, 179].map((pixel): [number, number] => [pixel, index * 8]),
+        ...[80, 81, 208, 209].map((pixel): [number, number] => [pixel, index % 2 ? 200 : 0]),
+      ]),
+      atMs: index * 10,
+    })),
+  );
+  const report = await analyzeReloadFrames({
+    frames,
+    masks: [],
+    outputDir: directory,
+    minChangedPixels: 3,
+    minChangedRatio: 0,
+    regions: [
+      { name: "regionA", x: 40, y: 0, width: 16, height: 16 },
+      { name: "regionB", x: 70, y: 0, width: 16, height: 16 },
+    ],
+    animationSamples: frames.map(({ atMs }) => ({
+      atMs,
+      animations: [
+        {
+          name: "shimmer",
+          key: "animation",
+          kind: "shimmer",
+          signature: "same-skeleton",
+          active: true,
+          x: 0,
+          y: 0,
+          width: 16,
+          height: 16,
+        },
+      ],
+    })),
+  });
+  expect(report.visibleChangeCensus.suppressedAnimationPairs).toHaveLength(3);
+  expect(report.visibleChangeCensus.regions.regionB?.timeline.map(({ atMs }) => atMs)).toEqual([
+    0, 10, 20, 30,
+  ]);
+  expect(report.visibleChangeCensus.regions.regionA?.timeline.map(({ atMs }) => atMs)).toEqual([
+    0, 20,
+  ]);
 });

@@ -3,10 +3,8 @@ import { formatUiExternalText } from "../../../lib/format-error.ts";
 import { i18nRevision } from "../../../lib/reactive/i18n.ts";
 import { countSessionToolOverrides, readOwnEntry } from "../../../lib/sessions/tool-overrides.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
-import type {
-  ChatComposerPlusMenuContentProps,
-  ChatComposerPlusMenuView,
-} from "./chat-composer-plus-menu.types.ts";
+import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
+import type { ChatComposerPlusMenuContentProps } from "./chat-composer-plus-menu.types.ts";
 
 type McpToolEntry = ToolsEffectiveEntry & { mcpServer: string; mcpToolName: string };
 export const toolsForServer = (

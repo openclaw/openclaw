@@ -8,13 +8,30 @@
  * --reuse-fixture reopens a successfully completed fixture without reseeding or augmentation;
  * runs sharing a directory must be serial. --base-filter <adjacent baseline .ts copy>
  * compares both filter owners in one process, with --pairs 5 alternating AB/BA.
- * Compare identical scripts on pinned revisions in alternating AB/BA launch order.
+ * --base-model-facts <adjacent baseline .ts copy> compares the model vocabulary owner
+ * over identical resident rows and catalog/context inputs; --candidate-model-facts
+ * optionally pins its candidate copy. Other selection and model-facts reads stay current.
+ * For CPU/allocation comparisons, run one revision per fresh process: pass the SAME
+ * owner paths to both internal roles, then counterbalance revision processes AB/BA.
+ * Inspect their same-function controls. Duplicate owner instances in one process showed
+ * large identical-source CPU arm bias, even with shared dispatch; use that mode for
+ * equivalence/work counts, not causal timings. Keep scripts identical across revisions.
+ * --query '<no-search>' measures only that exact workload name; other names are the
+ * search text, or selection-workload names such as 'roster:viewer-0'.
+ * --goal-workload adds goals to one third of rows and includes goal/Unicode queries.
+ * Use --sessions 10800 --iterations 2000 for repeated entry-revision search work.
  * Acceptance: identical response digests and fewer target reads, lower CPU or allocation
  * without a reproducible adverse sibling-query result. Record host load for each arm.
  * The canonical Team fixture supplies owners, ancestry, archived rows and real worktrees;
  * this script adds long/group titles and model overrides before projection admission.
  * Unlike row-only test fixtures, cold archived rows reconstruct actual model/thinking
  * facts. Timing is untraced; allocation sampling separately includes collected objects.
+ * --selection-workload measures no-search roster, exclusion, archive and relationship
+ * queries for three viewers through prepareProjectedSessionList's real sharing filter.
+ * Use --iterations 2000 --pairs 5; compare filter calls and owner projections as well
+ * as CPU/allocation. --base-list and --candidate-list compare the preparation owner
+ * instead of the filter owner; serialized responses are compared after timing, excluding
+ * the per-array random rowsRevision token. Facets and selected entry bytes must match for every query/viewer.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -30,6 +47,7 @@ import { parseArgs } from "node:util";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../src/agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { generateTeamShapeStressFixture } from "./team-shape-stress-fixture.ts";
@@ -45,7 +63,14 @@ const { values } = parseArgs({
     "reuse-fixture": { type: "boolean", default: false },
     "base-filter": { type: "string" },
     "candidate-filter": { type: "string" },
+    "base-list": { type: "string" },
+    "candidate-list": { type: "string" },
+    "base-model-facts": { type: "string" },
+    "candidate-model-facts": { type: "string" },
     pairs: { type: "string", default: "5" },
+    "selection-workload": { type: "boolean", default: false },
+    "goal-workload": { type: "boolean", default: false },
+    query: { type: "string" },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -54,21 +79,40 @@ assert(
   !values["candidate-filter"] || values["base-filter"],
   "--candidate-filter requires --base-filter",
 );
+assert(!values["candidate-list"] || values["base-list"], "--candidate-list requires --base-list");
+assert(
+  !values["candidate-model-facts"] || values["base-model-facts"],
+  "--candidate-model-facts requires --base-model-facts",
+);
+assert(
+  !values["base-list"] || values["selection-workload"],
+  "--base-list requires --selection-workload",
+);
 assert(global.gc, "Run with --expose-gc");
 const integer = (name: "sessions" | "iterations" | "warmup" | "pairs", min = 1) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const sessions = integer("sessions", 100);
 const iterations = integer("iterations");
 const warmup = integer("warmup");
-const pairs = values["base-filter"] ? integer("pairs") : 1;
+const pairs =
+  values["base-filter"] || values["base-list"] || values["base-model-facts"] ? integer("pairs") : 1;
 assert(iterations >= pairs && iterations % pairs === 0, "iterations must divide into pairs");
 const root = path.resolve(values["state-dir"]);
 const anchor = Date.UTC(2026, 9, 25);
 const sourceSha256 = createHash("sha256")
   .update(
     readFileSync(
-      values["candidate-filter"] ??
-        new URL("../../src/gateway/session-list-filters.ts", import.meta.url),
+      values["candidate-list"] ??
+        values["candidate-filter"] ??
+        values["candidate-model-facts"] ??
+        new URL(
+          values["base-list"]
+            ? "../../src/gateway/session-utils-list.ts"
+            : values["base-model-facts"] && !values["base-filter"]
+              ? "../../src/gateway/session-row-model-facts.ts"
+              : "../../src/gateway/session-list-filters.ts",
+          import.meta.url,
+        ),
     ),
   )
   .digest("hex");
@@ -176,7 +220,37 @@ const queries = [
   "running",
   "idle",
   "zz-no-match",
+  ...(values["goal-workload"] ? ["goal paused", "日本語 🦞 mixed"] : []),
 ];
+const profileId = "team-shape-profile-0";
+const selectionQueries: Array<{ name: string; opts: SessionsListParams }> = [
+  { name: "roster", opts: {} },
+  { name: "roots", opts: { excludeSubagents: true, excludeCron: true, excludeSystem: true } },
+  { name: "archived", opts: { archived: true, excludeSubagents: true } },
+  { name: "recent", opts: { activeMinutes: 7 * 24 * 60 } },
+  { name: "personal", opts: { involvingMe: true } },
+  { name: "created", opts: { profileRelation: { relationship: "created", profileId } } },
+  { name: "related", opts: { profileRelation: { relationship: "involving", profileId } } },
+];
+const viewers: GatewayClient[] = [0, 1, 2].map((index) => {
+  const id = `team-shape-profile-${index}`;
+  return {
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "openclaw-control-ui", version: "bench", platform: "bench", mode: "webchat" },
+      role: "operator",
+      scopes: ["operator.read", "operator.write", ...(index === 2 ? ["operator.admin"] : [])],
+    },
+    authenticatedUserProfile: {
+      profileId: id,
+      displayName: null,
+      hasAvatar: false,
+      updatedAt: anchor,
+    },
+    preparedSessionProfile: { profileId: id, aliases: new Set([id]), role: null },
+  };
+});
 const digest = (value: unknown) =>
   createHash("sha256")
     .update(
@@ -213,6 +287,22 @@ try {
                 : {}),
               providerOverride: model.provider,
               modelOverride: model.id,
+              ...(values["goal-workload"] && ordinal % 3 === 0
+                ? {
+                    goal: {
+                      schemaVersion: 1 as const,
+                      id: `goal-${ordinal}`,
+                      objective: "Investigate 日本語 🦞 MiXeD worktree results",
+                      status: "paused" as const,
+                      createdAt: anchor,
+                      updatedAt: anchor,
+                      tokenStart: 0,
+                      tokensUsed: 1200,
+                      continuationTurns: 0,
+                      lastStatusNote: "Waiting for review",
+                    },
+                  }
+                : {}),
             });
           }
         },
@@ -262,6 +352,7 @@ try {
     parented: shapeRows.filter((row) => row.entry?.parentSessionKey).length,
     worktrees: shapeRows.filter((row) => row.entry?.worktree).length,
     groups: shapeRows.filter((row) => row.key.includes(":discord:")).length,
+    goals: shapeRows.filter((row) => row.entry?.goal).length,
     retainedRuns: memory.subagentRuns.size,
     liveRuns: liveRuns.length,
     materialized: projection.materializedCount,
@@ -270,6 +361,7 @@ try {
   assert(shape.worktrees > 100 && shape.retainedRuns > 100 && shape.groups > 0);
   const results = [];
   const golden: Record<string, string> = {};
+  const responseRequests = new Map<string, Parameters<typeof lists.listProjectedSessions>[0]>();
   const currentFilters: typeof import("../../src/gateway/session-list-filters.js") = await import(
     values["candidate-filter"]
       ? pathToFileURL(path.resolve(values["candidate-filter"])).href
@@ -278,20 +370,71 @@ try {
   const baseFilters: typeof currentFilters | undefined = values["base-filter"]
     ? await import(pathToFileURL(path.resolve(values["base-filter"])).href)
     : undefined;
+  const candidateLists: typeof lists = values["candidate-list"]
+    ? await import(pathToFileURL(path.resolve(values["candidate-list"])).href)
+    : lists;
+  const baseLists: typeof lists | undefined = values["base-list"]
+    ? await import(pathToFileURL(path.resolve(values["base-list"])).href)
+    : undefined;
+  const currentModelFacts: typeof import("../../src/gateway/session-row-model-facts.js") =
+    await import(
+      values["candidate-model-facts"]
+        ? pathToFileURL(path.resolve(values["candidate-model-facts"])).href
+        : "../../src/gateway/session-row-model-facts.js"
+    );
+  type ModelSearchInputs = Parameters<typeof currentModelFacts.prepareSessionRowModelSearch>[0];
+  type ModelSearchOwner = {
+    prepareSessionRowModelSearch?: (params: ModelSearchInputs) => (search: string) => boolean;
+    mayMatchSessionRowModelSearch?: (params: ModelSearchInputs, search: string) => boolean;
+  };
+  const baseModelFacts: ModelSearchOwner | undefined = values["base-model-facts"]
+    ? await import(pathToFileURL(path.resolve(values["base-model-facts"])).href)
+    : undefined;
   inspector.connect();
   connected = true;
-  for (const search of queries) {
-    const name = search ?? "<no-search>";
+  const workloads = values["selection-workload"]
+    ? selectionQueries.flatMap(({ name, opts }) =>
+        viewers.map((client, index) => ({
+          name: `${name}:viewer-${index}`,
+          opts,
+          client,
+        })),
+      )
+    : queries.map((search) => ({
+        name: search ?? "<no-search>",
+        opts: { search },
+        client: undefined,
+      }));
+  const selectedWorkloads =
+    values.query === undefined
+      ? workloads
+      : workloads.filter((workload) => workload.name === values.query);
+  assert(selectedWorkloads.length > 0, `Unknown workload: ${values.query}`);
+  for (const workload of selectedWorkloads) {
+    const { name, client } = workload;
+    const search = workload.opts.search;
     const opts: SessionsListParams = {
       source: search === undefined ? "agent-roster" : "sessions-page",
       rowMode: search === undefined ? "sidebar" : "compact",
       archived: "all",
       limit: 50,
       excludeDock: true,
-      search,
+      ...workload.opts,
     };
-    const prepare = () => {
+    if (baseLists) {
+      responseRequests.set(name, { projection, opts, client });
+    }
+    const prepare = (listOwner = lists) => {
       const current = projection!;
+      if (values["selection-workload"]) {
+        return listOwner.prepareProjectedSessionList({
+          projection: current,
+          opts,
+          client,
+          now: anchor,
+          metadataPrepared: true,
+        }).filters;
+      }
       const projectRun = activeRuns.createVisibleActiveSessionRunProjector(
         current.state.rowContext.projectedAgentRuns,
         undefined,
@@ -315,22 +458,47 @@ try {
       };
     };
     const window = { offset: 0, limit: 50, ownerLimit: 0 };
-    const arms = baseFilters
-      ? [
-          {
-            name: "base",
-            select: (params: ReturnType<typeof prepare>) =>
-              baseFilters.filterSessionEntries(params, window),
-          },
-          {
-            name: "candidate",
-            select: (params: ReturnType<typeof prepare>) =>
-              currentFilters.filterSessionEntries(params, window),
-          },
-        ]
-      : [{ name: "selection", select: lists.selectSessionEntries }];
+    // Keep owner dispatch call shapes identical between arms.
+    const createArm = (
+      armName: string,
+      listOwner: typeof lists,
+      filterOwner: typeof currentFilters,
+      modelOwner: ModelSearchOwner,
+    ) => ({
+      name: armName,
+      prepare: () => {
+        const prepared = prepare(listOwner);
+        if (baseModelFacts) {
+          const { cfg: modelConfig, modelCatalog, rowContext } = projection!.state;
+          prepared.modelSearchMayMatch = (query) => {
+            const inputs = { cfg: modelConfig, modelCatalog, rowContext, rows: shapeRows };
+            // Baseline copies precede the prepared-vocabulary API; keep their code unchanged.
+            if (modelOwner.prepareSessionRowModelSearch) {
+              return modelOwner.prepareSessionRowModelSearch(inputs)(query);
+            }
+            assert(modelOwner.mayMatchSessionRowModelSearch);
+            return modelOwner.mayMatchSessionRowModelSearch(inputs, query);
+          };
+        }
+        return prepared;
+      },
+      select: (params: ReturnType<typeof prepare>) =>
+        filterOwner.filterSessionEntries(params, window),
+    });
+    const arms =
+      baseFilters || baseLists || baseModelFacts
+        ? [
+            createArm(
+              "base",
+              baseLists ?? lists,
+              baseFilters ?? currentFilters,
+              baseModelFacts ?? currentModelFacts,
+            ),
+            createArm("candidate", candidateLists, currentFilters, currentModelFacts),
+          ]
+        : [{ name: "selection", prepare, select: lists.selectSessionEntries }];
     for (const arm of arms) {
-      const expected = roster.withAgentRosterFactsBatch(cfg, () => arm.select(prepare()));
+      const expected = roster.withAgentRosterFactsBatch(cfg, () => arm.select(arm.prepare()));
       if (search === "running" || search === "idle") {
         assert(expected.totalCount > 0, `${search} must exercise its real active-run branch`);
         assert(expected.totalCount < sessions, `${search} must distinguish the mixed run states`);
@@ -340,27 +508,48 @@ try {
       }
       golden[name] = digest(expected);
       for (let index = 0; index < warmup; index++) {
-        roster.withAgentRosterFactsBatch(cfg, () => arm.select(prepare()));
+        roster.withAgentRosterFactsBatch(cfg, () => arm.select(arm.prepare()));
       }
     }
     const count = iterations / pairs;
     for (let pair = 0; pair < pairs; pair++) {
       for (const arm of pair % 2 ? arms.toReversed() : arms) {
-        const read = () => roster.withAgentRosterFactsBatch(cfg, () => arm.select(prepare()));
+        const read = () => roster.withAgentRosterFactsBatch(cfg, () => arm.select(arm.prepare()));
         let targetReads = 0;
         let modelFactsReads = 0;
-        const counted = prepare();
+        let sharingChecks = 0;
+        let ownerProjections = 0;
+        const counted = arm.prepare();
         const originalTarget = counted.getTarget;
         const originalModelFacts = counted.getModelFacts;
+        const originalFilter = counted.entryFilter;
+        if (originalFilter) {
+          counted.entryFilter = (...args) => {
+            sharingChecks++;
+            return originalFilter(...args);
+          };
+        }
+        const identityProjection = counted.getRowContext().identityProjection;
+        const originalOwner = identityProjection?.owner;
+        if (identityProjection && originalOwner) {
+          identityProjection.owner = (...args) => {
+            ownerProjections++;
+            return originalOwner(...args);
+          };
+        }
         counted.getTarget = (key) => {
           targetReads++;
           return originalTarget(key);
         };
         counted.getModelFacts = (key) => {
           modelFactsReads++;
+          assert(originalModelFacts);
           return originalModelFacts(key);
         };
         const expected = roster.withAgentRosterFactsBatch(cfg, () => arm.select(counted));
+        if (identityProjection && originalOwner) {
+          identityProjection.owner = originalOwner;
+        }
         global.gc();
         await nextTurn();
         const collections: PerformanceEntry[] = [];
@@ -403,6 +592,8 @@ try {
           returned: expected.entries.length,
           filterTargetReads: targetReads,
           filterModelFactsReads: modelFactsReads,
+          sharingChecks,
+          ownerProjections,
           hostLoad,
           cpuMsPerCall: (used.user + used.system) / 1000 / count,
           wallMsPerCall: elapsedMs / count,
@@ -424,6 +615,21 @@ try {
       }
     }
   }
+  const responseGolden: Record<string, string> = {};
+  for (const [name, request] of responseRequests) {
+    assert(baseLists);
+    const baseline = await baseLists.listProjectedSessions(request);
+    const candidate = await candidateLists.listProjectedSessions(request);
+    // Each non-retained row array gets a fresh UUID, including identical-source calls.
+    assert.equal(typeof candidate.rowsRevision, typeof baseline.rowsRevision);
+    const responseDigest = digest({ ...candidate, rowsRevision: undefined });
+    assert.equal(
+      responseDigest,
+      digest({ ...baseline, rowsRevision: undefined }),
+      `response equality excluding random rowsRevision: ${name}`,
+    );
+    responseGolden[name] = responseDigest;
+  }
   if (values.golden) {
     assert.deepEqual(golden, JSON.parse(readFileSync(values.golden, "utf8")));
   }
@@ -431,9 +637,23 @@ try {
   const result = {
     node: process.version,
     sourceSha256,
-    baseSourceSha256: values["base-filter"]
-      ? createHash("sha256").update(readFileSync(values["base-filter"])).digest("hex")
+    modelFactsSourceSha256: values["base-model-facts"]
+      ? [
+          values["base-model-facts"],
+          values["candidate-model-facts"] ??
+            new URL("../../src/gateway/session-row-model-facts.ts", import.meta.url),
+        ].map((source) => createHash("sha256").update(readFileSync(source)).digest("hex"))
       : undefined,
+    baseSourceSha256:
+      values["base-list"] || values["base-filter"] || values["base-model-facts"]
+        ? createHash("sha256")
+            .update(
+              readFileSync(
+                (values["base-list"] ?? values["base-filter"] ?? values["base-model-facts"])!,
+              ),
+            )
+            .digest("hex")
+        : undefined,
     mode: values.mode,
     sessions,
     warmup,
@@ -462,6 +682,7 @@ try {
       ),
     ),
     golden,
+    responseGolden,
     scope:
       "Real resident selection/filter/model-facts owners; no WebSocket or model turn load. Allocation-pass timing is diagnostic only.",
   };

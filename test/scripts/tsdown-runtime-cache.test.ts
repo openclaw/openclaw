@@ -15,25 +15,31 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("restores unchanged package artifacts and invalidates changed compiler inputs or corrupt output", async () => {
+it("reuses packages across QA modes while rebuilding changed inputs, corrupt outputs, and copied assets", async () => {
   let root = createTempDir("tsdown-runtime-cache-");
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
   vi.spyOn(process, "cwd").mockImplementation(() => root);
   vi.stubEnv("OPENCLAW_RUN_NODE_SKIP_DTS_BUILD", "1");
+  vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "0");
   const cache = createTempDir("tsdown-runtime-cache-store-");
   vi.stubEnv("BUILD_ALL_CACHE_ROOT", cache);
+  const names = ["a", "b", "copied"];
+  const copySource = () => path.join(root, "LICENSE");
+  const copiedOutput = () => path.join(root, "packages/copied/dist/LICENSE");
   const configurations = (): UserConfig[] =>
-    ["a", "b"].map((name) => ({
+    names.map((name) => ({
       dts: false,
       name: "packages",
       entry: { index: path.join(root, `packages/${name}/src/index.ts`) },
       outDir: `packages/${name}/dist`,
+      copy: name === "copied" ? [{ from: copySource(), rename: "LICENSE" }] : undefined,
     }));
   const source = (name: string) => path.join(root, `packages/${name}/src/index.ts`);
   const output = (name: string) => path.join(root, `packages/${name}/dist/index.js`);
   const dependency = () => path.join(root, "shared.ts");
   fs.writeFileSync(dependency(), "original shared input");
-  for (const name of ["a", "b"]) {
+  fs.writeFileSync(copySource(), "original license");
+  for (const name of names) {
     fs.mkdirSync(path.dirname(source(name)), { recursive: true });
     fs.writeFileSync(source(name), `export const value = "${name}-original";`);
   }
@@ -81,6 +87,10 @@ it("restores unchanged package artifacts and invalidates changed compiler inputs
         output(name),
         watched.map((file) => fs.readFileSync(file, "utf8")).join("\n"),
       );
+      // tsdown copies assets after bundling without adding them to its chunk inventory.
+      if (name === "copied") {
+        fs.copyFileSync(copySource(), copiedOutput());
+      }
       done.forEach((callback) =>
         callback({
           chunks: [{ outDir: path.dirname(output(name)), fileName: "index.js" }],
@@ -94,24 +104,34 @@ it("restores unchanged package artifacts and invalidates changed compiler inputs
   await complete(first.configs);
   finalizeTsdownRuntimeCaches(first.pending, root);
   const originalB = fs.readFileSync(output("b"), "utf8");
-  fs.rmSync(path.join(root, "packages/a/dist"), { recursive: true });
-  fs.rmSync(path.join(root, "packages/b/dist"), { recursive: true });
+  for (const name of names) {
+    fs.rmSync(path.dirname(output(name)), { recursive: true });
+  }
   fs.rmSync(path.join(root, "dist"), { recursive: true });
   const previousRoot = root;
   root = createTempDir("tsdown-runtime-cache-next-release-");
   fs.cpSync(previousRoot, root, { recursive: true });
   fs.writeFileSync(path.join(root, "shared.ts"), "changed shared input");
+  fs.writeFileSync(copySource(), "changed license");
+  vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
   const second = select();
-  expect(second.configs.map((config) => config.outDir)).toEqual(["packages/a/dist"]);
+  expect(second.configs.map((config) => config.outDir)).toEqual([
+    "packages/a/dist",
+    "packages/copied/dist",
+  ]);
   expect(fs.readFileSync(output("b"), "utf8")).toBe(originalB);
   await complete(second.configs);
   finalizeTsdownRuntimeCaches(second.pending, root);
   expect(fs.readFileSync(output("a"), "utf8")).toContain("changed shared input");
+  expect(fs.readFileSync(copiedOutput(), "utf8")).toBe("changed license");
   const cachedB = path.join(cache, "tsdown-runtime-b/outputs/packages/b/dist/index.js");
   fs.writeFileSync(cachedB, "corrupt");
   fs.rmSync(path.join(root, "packages/b/dist"), { recursive: true });
   const third = select();
-  expect(third.configs.map((config) => config.outDir)).toEqual(["packages/b/dist"]);
+  expect(third.configs.map((config) => config.outDir)).toEqual([
+    "packages/b/dist",
+    "packages/copied/dist",
+  ]);
   expect(fs.existsSync(output("b"))).toBe(false);
 });
 

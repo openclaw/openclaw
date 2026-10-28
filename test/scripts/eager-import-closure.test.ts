@@ -439,6 +439,7 @@ it.each([
       "src/config/sessions/goals-operations.worker.ts",
       "src/agents/sessions/session-manager-metadata.worker.ts",
       "src/agents/sessions/session-manager-maintenance.worker.ts",
+      "src/gateway/worker-environments/transcript-commit.worker.ts",
     ],
     deferredOwners: [
       "src/config/sessions/session-actor-memory.ts",
