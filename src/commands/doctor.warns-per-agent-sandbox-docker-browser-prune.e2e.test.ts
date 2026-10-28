@@ -1,3 +1,4 @@
+// probe: run this e2e on unmodified main (throwaway PR, do not merge)
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
