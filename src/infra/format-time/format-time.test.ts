@@ -132,7 +132,9 @@ it("formatTimeAgo returns fallback for invalid elapsed input", () => {
 it.each([
   [0, undefined, "just now"],
   [29000, undefined, "just now"],
+  [29500, undefined, "just now"],
   [30000, undefined, "1m ago"],
+  [89500, undefined, "1m ago"],
   [47 * 3600000, undefined, "47h ago"],
   [48 * 3600000, undefined, "2d ago"],
   [0, { suffix: false }, "0s"],

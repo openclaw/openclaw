@@ -28,7 +28,7 @@ export function bucketRelativeTimeMs(durationMs: number): {
   if (seconds < 60) {
     return { value: seconds, unit: "second" };
   }
-  const minutes = Math.round(seconds / 60);
+  const minutes = Math.round(durationMs / 60_000);
   if (minutes < 60) {
     return { value: minutes, unit: "minute" };
   }
