@@ -109,7 +109,7 @@ describe("ordinary steering into automatic model fallback", () => {
       const authority = createAgentQuestionAnswerAuthority({
         sessionKey: key,
         fingerprint,
-        project: operation.projectToolAuthorityFingerprint,
+        project: (caller) => operation.projectToolAuthorityFingerprint(caller),
         prepareCaller: (caller) =>
           prepareReplyToolAuthorityCallerRead(
             operation.projectToolAuthorityFingerprintAsync,
