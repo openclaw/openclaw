@@ -420,21 +420,16 @@ const overviewContractFamilies = [
 
 function renderPluginDeclaredCapabilities(
   contracts: Readonly<Record<string, readonly string[]>> | undefined,
-  uiCapabilities?: readonly PluginUiCapability[],
 ): JSX.Element {
   return renderPluginCapabilitySection(
     t("pluginsPage.detailCapabilities"),
-    [
-      ...overviewContractFamilies
-        .filter((family) => contracts?.[family]?.length)
-        .map((family) => `capabilityFamilies.${family}`),
-      ...PLUGIN_UI_CAPABILITIES.filter((capability) => uiCapabilities?.includes(capability)).map(
-        (capability) => `uiCapabilities.${capability}`,
-      ),
-    ].map((key) => ({
-      name: t(`pluginsPage.${key}.name`),
-      description: t(`pluginsPage.${key}.description`),
-    })),
+    overviewContractFamilies
+      .filter((family) => contracts?.[family]?.length)
+      .map((family) => `capabilityFamilies.${family}`)
+      .map((key) => ({
+        name: t(`pluginsPage.${key}.name`),
+        description: t(`pluginsPage.${key}.description`),
+      })),
     () => <Icon name="layers" />,
   );
 }
@@ -451,7 +446,19 @@ export function renderPluginContentCapabilities(params: {
 }): JSX.Element {
   return (
     <>
-      {renderPluginDeclaredCapabilities(params.contracts, params.uiCapabilities)}
+      {renderPluginDeclaredCapabilities(params.contracts)}
+      {renderPluginCapabilitySection(
+        t("pluginsPage.detailExtensions"),
+        PLUGIN_UI_CAPABILITIES.filter((capability) =>
+          params.uiCapabilities?.includes(capability),
+        ).map((capability) => ({
+          name: t(`pluginsPage.uiCapabilities.${capability}.name`),
+          description: t(`pluginsPage.uiCapabilities.${capability}.description`),
+        })),
+        () => (
+          <Icon name="puzzle" />
+        ),
+      )}
       {params.skillsSection ??
         renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), params.skills, () => (
           <Icon name="bookOpenText" />

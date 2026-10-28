@@ -78,10 +78,18 @@ it("renders complete catalog content in capability order", () => {
   expect(query(".plugin-capabilities button")).toBeNull();
   expect([...all(".plugin-capabilities h2")].map((heading) => heading.textContent)).toEqual([
     "Capabilities",
+    "Extensions",
     "Skills",
     "Tools",
     "MCP Server",
   ]);
+  const extensions = all(".plugin-capabilities")[1]!;
+  expect([...extensions.querySelectorAll(".settings-row__title")].map((row) => row.textContent)).toEqual([
+    "Dashboard widgets",
+    "Link previews",
+  ]);
+  expect(extensions.textContent).toContain("session dashboards");
+  expect(extensions.textContent).toContain("reader inside the web app");
   expect(container.textContent).not.toMatch(/internal-dispatch|heygen-alias/);
 });
 
