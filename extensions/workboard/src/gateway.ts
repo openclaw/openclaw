@@ -1,7 +1,9 @@
-import type {
-  WorkboardCard,
-  WorkboardSessionsBoardRead,
-  WorkboardSessionsBoardView,
+import {
+  WORKBOARD_STATUSES,
+  type WorkboardCard,
+  type WorkboardSessionsBoardRead,
+  type WorkboardSessionsBoardView,
+  type WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { readStringParam } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -154,7 +156,28 @@ const cardsListFilterSchema = z.object({
       id: z.string().min(1),
     })
     .optional(),
+  // One status-set contract: a single status or a status set, both validated
+  // against the shipped status vocabulary.
+  status: z
+    .union([z.enum(WORKBOARD_STATUSES), z.array(z.enum(WORKBOARD_STATUSES)).min(1)])
+    .optional(),
 });
+
+/** Canonical selection: deduplicated, vocabulary order, one shape for cache and revision identity. */
+function normalizeStatusSelection(
+  status: z.infer<typeof cardsListFilterSchema>["status"],
+): readonly WorkboardStatus[] | undefined {
+  if (status === undefined) {
+    return undefined;
+  }
+  const selected = new Set(Array.isArray(status) ? status : [status]);
+  return WORKBOARD_STATUSES.filter((value) => selected.has(value));
+}
+
+/** sinceRevision echoes the selection as plain JSON, so compare it by value. */
+function statusSelectionKey(value: unknown): string | undefined {
+  return Array.isArray(value) ? value.map((entry) => String(entry)).join("\u0000") : undefined;
+}
 const CLI_OWNER_METHODS = new Set([
   "workboard.cards.list",
   "workboard.cards.create",
@@ -434,15 +457,21 @@ export function registerWorkboardGatewayMethods(params: {
   };
 
   register("workboard.cards.list", READ_SCOPE, async ({ params: input }) => {
-    const { sessionKey, after } = cardsListFilterSchema.parse(input);
-    const result = await store.listCards(input.boardId, sessionKey, after);
+    const { sessionKey, after, status } = cardsListFilterSchema.parse(input);
+    const result = await store.listCards(
+      input.boardId,
+      sessionKey,
+      after,
+      normalizeStatusSelection(status),
+    );
     const since = input.sinceRevision;
     return after === undefined &&
       isRecord(since) &&
       since.epoch === result.revision.epoch &&
       since.revision === result.revision.revision &&
       since.boardId === result.revision.boardId &&
-      since.sessionKey === result.revision.sessionKey
+      since.sessionKey === result.revision.sessionKey &&
+      statusSelectionKey(since.statuses) === statusSelectionKey(result.revision.statuses)
       ? { unchanged: true, revision: result.revision }
       : result;
   });

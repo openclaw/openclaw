@@ -48,6 +48,8 @@ Columns are id prefix, status, priority, board id, optional agent id, and title.
 
 An invalid `--status` exits with an error listing the allowed values instead of returning an empty list.
 
+The flag selects client-side: `list` traverses every Gateway page first, so `--status` narrows what you see rather than what the Gateway reads. Callers that only need a subset can pass `status` (one status or an array from the same vocabulary) to the `workboard.cards.list` RPC instead; the Gateway applies the selection in SQL before paging and card-child hydration, so continuation cursors stay valid under it, `revision.statuses` records the selection for refresh caching, and the board summaries in the reply stay population-wide.
+
 | Flag                 | Purpose                                       |
 | -------------------- | --------------------------------------------- |
 | `--board <id>`       | Limit results to one board namespace          |

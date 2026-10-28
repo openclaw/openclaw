@@ -8,6 +8,7 @@ import type {
   WorkboardSessionPlacement,
   WorkboardSessionsBoard,
   WorkboardSessionsBoardSpec,
+  WorkboardStatus,
 } from "@openclaw/workboard-contract";
 import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import { redactClaimToken } from "./card-redaction.js";
@@ -76,10 +77,15 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
     board: unknown,
     sessionKey?: string,
     after?: WorkboardCardCursor,
+    statuses?: readonly WorkboardStatus[],
   ): Promise<
     WorkboardListResult & {
       boards: WorkboardBoardSummary[];
-      revision: WorkboardChange & { boardId?: string; sessionKey?: string };
+      revision: WorkboardChange & {
+        boardId?: string;
+        sessionKey?: string;
+        statuses?: readonly WorkboardStatus[];
+      };
     }
   > {
     return this.runOperation(() => {
@@ -87,12 +93,17 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
       const writeToken = this.refreshWriteReceipt();
       const revision = this.cardsRevision;
       const cacheable = sessionKey === undefined && after === undefined;
-      const cached = cacheable ? this.cardLists.get(boardId) : undefined;
+      // Selection identity joins the cache key so a filtered and an unfiltered
+      // first page are never served from each other. Valid board ids cannot
+      // contain the NUL separator.
+      const cacheKey =
+        statuses === undefined ? boardId : `${boardId ?? ""}\u0000${statuses.join(",")}`;
+      const cached = cacheable ? this.cardLists.get(cacheKey) : undefined;
       if (cached) {
         return cached;
       }
       const pending: ReturnType<WorkboardBoardStore["listCards"]> = Promise.all([
-        this.store.entries({ kind: "page", boardId, sessionKey, after, limit: 101 }),
+        this.store.entries({ kind: "page", boardId, sessionKey, after, statuses, limit: 101 }),
         this.listBoards(),
       ])
         .then(([entries, { boards }]) => {
@@ -109,6 +120,7 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
               ...revision,
               ...(boardId === undefined ? {} : { boardId }),
               ...(sessionKey === undefined ? {} : { sessionKey }),
+              ...(statuses === undefined ? {} : { statuses }),
             },
           };
           // A concurrent update may finish this read with older facts; the writer
@@ -117,12 +129,12 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
         })
         .catch((error: unknown) => {
           if (cacheable) {
-            this.cardLists.delete(boardId);
+            this.cardLists.delete(cacheKey);
           }
           throw error;
         });
       if (writeToken !== undefined && cacheable) {
-        this.cardLists.set(boardId, pending);
+        this.cardLists.set(cacheKey, pending);
       }
       return pending;
     });

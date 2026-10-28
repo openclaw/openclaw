@@ -267,6 +267,11 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
       if (scope.boardId !== undefined) {
         query = query.where("board_id", "=", scope.boardId);
       }
+      // Selection runs before the keyset and the limit so pages and child rows
+      // only ever cover the selected statuses.
+      if (scope.statuses !== undefined) {
+        query = query.where("status", "in", sqliteStringSet(scope.statuses));
+      }
       if (scope.sessionKey !== undefined) {
         const ids = readSessionLinkedCardIds(this.db, {
           kind: "session-links",

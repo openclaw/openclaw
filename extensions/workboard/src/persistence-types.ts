@@ -7,6 +7,7 @@ import type {
   WorkboardSessionPlacement,
   WorkboardSessionsBoard,
   WorkboardSessionsBoardSpec,
+  WorkboardStatus,
 } from "@openclaw/workboard-contract";
 
 /**
@@ -99,6 +100,8 @@ export type WorkboardCardReadScope =
       boardId?: string;
       sessionKey?: string;
       after?: WorkboardCardCursor;
+      /** Normalized status selection; applied in SQL before paging and hydration. */
+      statuses?: readonly WorkboardStatus[];
       limit: number;
     }
   | { kind: "board"; boardId: string }
