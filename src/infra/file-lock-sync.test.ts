@@ -36,7 +36,7 @@ it.each(["live", "dead", "self", "legacy self", "other thread"])(
         timeoutMs: 20,
         phase: "managed-handoff:writer-admission",
       };
-      if (holder === "live" || holder === "other thread") {
+      if (holder === "live" || holder === "other thread" || holder === "legacy self") {
         expect(() => acquireFileLockSyncWithRetry(target, options)).toThrow(
           expect.objectContaining({
             code: "file_lock_timeout",

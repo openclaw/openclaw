@@ -37,12 +37,10 @@ export function acquireFileLockSyncWithRetry(
   });
   const isStale = ({ payload }: { payload: unknown }) => {
     holder = inspectFileLockHolder(payload);
-    // fs-safe never offers a registered local holder for reclamation. A different
-    // worker can share our PID, so its recorded thread must remain protected.
+    // fs-safe never offers a registered local holder for reclamation. Sibling workers
+    // share our PID, so only a sidecar recording this thread proves self-ownership.
     return (
-      (isRecord(payload) &&
-        payload.pid === process.pid &&
-        (payload.threadId === undefined || payload.threadId === threadId)) ||
+      (isRecord(payload) && payload.pid === process.pid && payload.threadId === threadId) ||
       isLockOwnerDefinitelyStale({
         payload: isRecord(payload) ? payload : null,
       })
