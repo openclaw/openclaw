@@ -57,14 +57,20 @@ export function sanitizeAssistantVisibleStreamText(
   });
 }
 
-export function createAssistantVisibleStreamText(phase?: AssistantPhase) {
+export function createAssistantVisibleStreamText(
+  phase?: AssistantPhase,
+  options?: { preserveTrailingWhitespace?: boolean },
+) {
   return createTextProjection([
     ...assistantVisibleTextFilters(
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
       true,
+      options,
     ),
     ...userFacingTextFilters(false, true),
-    trimTextFilter("both", { preserveCodeIndentation: true }),
+    trimTextFilter(options?.preserveTrailingWhitespace ? "start" : "both", {
+      preserveCodeIndentation: true,
+    }),
   ]);
 }
 

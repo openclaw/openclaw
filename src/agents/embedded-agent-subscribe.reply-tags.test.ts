@@ -326,11 +326,7 @@ function replies() {
   harness.emit({ type: "message_start", message });
   return {
     ...harness,
-    end: (text: string) =>
-      harness.emit({
-        type: "message_end",
-        message: { role: "assistant", content: [{ type: "text", text }] },
-      }),
+    end: (text: string) => harness.emit({ type: "message_end", message: textAssistant(text) }),
     message,
   };
 }
