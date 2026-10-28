@@ -80,7 +80,7 @@ function createIndicatorView(host: LifecycleTestHost) {
     return sessionRows()?.read() ?? current.readRows();
   });
   const indicators = createSessionPullRequestIndicators({
-    getConnected: () => host.isConnected,
+    getConnected: () => host.isConnected && inputs.read().gateway.snapshot.phase === "connected",
     getPresented: () => inputs.read().presented,
     getRows: rows,
     getSelectedAgentId: () => inputs.read().selectedAgentId,
@@ -535,4 +535,26 @@ it("keeps sidebar watches passive across disconnect and reconnect", async () => 
   await settle(host);
 
   expectWatch();
+});
+
+it("retains rendered PR facts on link loss without retaining subscription authority", async () => {
+  vi.useFakeTimers();
+  const { harness, row, host } = mountRow();
+  await settle(host);
+  harness.publish(row.key, { pullRequests: [{ number: 42, state: "open" }] });
+  await host.updateComplete;
+  expect(summary(host, row)).toEqual({ numbers: [42], state: "open" });
+  const requests = harness.request.mock.calls.length;
+  harness.setSnapshot({ ...harness.gateway.snapshot, phase: "reconnecting", selfUser: undefined });
+  host.setInputs({ gateway: harness.gateway });
+  await settle(host);
+  expect(summary(host, row)).toEqual({ numbers: [42], state: "open" });
+  expect(host.indicators.count(row.key)).toBe(1);
+  expect(harness.request).toHaveBeenCalledTimes(requests);
+  Object.assign(harness.gateway, { connectionRevision: 1 });
+  host.setInputs({ gateway: harness.gateway });
+  await settle(host);
+  expect(summary(host, row)).toBeUndefined();
+  expect(host.indicators.count(row.key)).toBeUndefined();
+  expect(harness.request).toHaveBeenCalledTimes(requests);
 });

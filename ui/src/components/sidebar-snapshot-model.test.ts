@@ -1,6 +1,11 @@
 import { expect, it } from "vitest";
 import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
+import {
+  RowVisibilityReason,
+  rowDemandsVisibility,
+  visibleSessionChildren,
+} from "./app-sidebar-session-types.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 import { inboxMention } from "./sidebar-inbox.test-support.ts";
 import {
@@ -30,6 +35,35 @@ function displayRow(key: string, label: string, pinned = false) {
   );
 }
 const parse = (patch: Record<string, unknown>) => parseSidebarSnapshot({ ...model, ...patch });
+
+it("loads saved rows and cards that predate the optional display expansion", () => {
+  // This is the stored shape admitted by the pre-expansion schema, without new fields.
+  const legacy = {
+    ...model,
+    pinnedSessions: [
+      {
+        key: "agent:main:older",
+        label: "Existing conversation",
+        pinned: true,
+        isChild: false,
+        children: [],
+        state: { unread: true, isRunVisuallyActive: true },
+      },
+    ],
+    cards: [{ id: "main", name: "Harbor", mainKey: "agent:main:main" }],
+  };
+  const saved = parseSidebarSnapshot(structuredClone(legacy));
+  expect(saved).not.toBeNull();
+  expect(saved?.personalGroups).toBeUndefined();
+  expect(saved?.cards).toEqual(legacy.cards);
+  expect(restoreSnapshotSession(saved!.pinnedSessions[0]!, "")).toMatchObject({
+    label: "Existing conversation",
+    unread: true,
+    isRunVisuallyActive: true,
+    hasActiveRun: false,
+    pinnable: false,
+  });
+});
 
 it("omits private session contributions from the saved Inbox count", () => {
   const incognito = "agent:main:dashboard:incognito-private";
@@ -152,11 +186,11 @@ it("keeps display data without persisting authority, executable plugins, or watc
     token: "synthetic-secret",
     footer: { ...model.footer, scopes: ["operator.admin"] },
     plugins: [{ ...plugin, mount() {} }],
-    cards: [{ ...card, activeNow: true, lastActiveAt: 99 }],
+    cards: [{ ...card, activeNow: true, assistantPreview: "Public reply", lastActiveAt: 99 }],
   });
   expect(admitted?.footer).toEqual(model.footer);
   expect(admitted?.plugins).toEqual([plugin]);
-  expect(admitted?.cards).toEqual([card]);
+  expect(admitted?.cards).toEqual([{ ...card, activeNow: true, assistantPreview: "Public reply" }]);
   expect(admitted).not.toHaveProperty("token");
   expect(
     parse({ onlineUsers: [{ id: "operator", watchedSessions: ["private-session"] }] }),
@@ -277,4 +311,115 @@ it("omits incognito-only section metadata and counts while preserving existing e
     "pinned",
   ]);
   expect(JSON.stringify(admitted)).not.toContain("private");
+});
+
+it("keeps Person-section artwork and every protocol display identity namespace", () => {
+  for (const identity of [
+    { type: "profile", id: "riley" },
+    { type: "agent", id: "main" },
+    { type: "remote", pluginId: "example", domain: "team", idKind: "user", id: "member" },
+    { type: "observation", pluginId: null, accountId: null, senderKind: "human", id: "member" },
+    { type: "legacy", actorType: "human", source: null, id: "member" },
+  ]) {
+    const owner = {
+      type: "agent",
+      id: "main",
+      label: "Field Notes",
+      avatarUrl: "/api/users/riley/avatar?v=1",
+      identity,
+    };
+    const saved = parse({
+      sections: [
+        {
+          id: "person:main",
+          personOwner: owner,
+          rows: [],
+          totalRowCount: 0,
+          visibleRowCount: 0,
+          visibleLimit: 10,
+          collapsedVisibleRowCount: 0,
+          renderHeader: true,
+        },
+      ],
+    });
+    expect(saved?.sections[0]?.personOwner).toEqual(owner);
+  }
+});
+
+it("retains row artwork and display badges without restoring mutation or run authority", () => {
+  const actor = {
+    type: "human" as const,
+    id: "riley",
+    label: "Riley",
+    avatarUrl: "/api/users/riley/avatar?v=1",
+    identity: { type: "profile" as const, id: "riley" },
+  };
+  const row = {
+    ...displayRow("agent:main:visible", "Project"),
+    owner: { actor, assignedAt: 1 },
+    participants: [{ identity: { type: "agent" as const, id: "main" }, label: "Field Notes" }],
+    participantCount: 1,
+    visibility: "draft" as const,
+    draftOwnedBySelf: true,
+    titlePending: true,
+    channelAvatarUrl: "/api/channel-avatar/example",
+    channelPresentation: { channel: "example", channelLabel: "Example" },
+    forkSource: { sessionId: "source", sessionKey: "agent:main:parent" },
+    childSessionKeys: ["agent:main:child"],
+    workspaceConflictCount: 2,
+    hasComposerDraft: true,
+    outboxAttentionCount: 1,
+    snoozedUntil: 1000,
+    hasActiveRun: true,
+  };
+  const [captured] = snapshotSessions([row]);
+  const saved = parse({ pinnedSessions: [captured] });
+  expect(saved).not.toBeNull();
+  const restored = restoreSnapshotSession(saved!.pinnedSessions[0]!, row.key);
+  for (const key of [
+    "owner",
+    "participants",
+    "participantCount",
+    "visibility",
+    "draftOwnedBySelf",
+    "titlePending",
+    "channelAvatarUrl",
+    "channelPresentation",
+    "workspaceConflictCount",
+    "hasComposerDraft",
+    "outboxAttentionCount",
+    "snoozedUntil",
+  ] as const) {
+    expect(restored[key], key).toEqual(row[key]);
+  }
+  expect(restored.forkSource).toBeUndefined();
+  expect(restored.snapshot).toMatchObject({ forked: true, childCount: 1 });
+  expect(restored).toMatchObject({
+    hasActiveRun: false,
+    pinnable: false,
+    cloudWorkerStopAction: null,
+    modelSelectionLocked: true,
+  });
+});
+
+it("keeps saved running children beyond the quiet-child cap without admitting a run", () => {
+  const parent = displayRow("agent:main:parent", "Parent");
+  const children = Array.from({ length: 6 }, (_, i) => ({
+    ...displayRow("agent:main:child-" + i, "Child " + i),
+    hasActiveRun: i === 5,
+  }));
+  const [saved] = snapshotSessions([
+    {
+      ...parent,
+      childSessionKeys: children.map((c) => c.key),
+      childLoadParentKeys: [parent.key],
+      children,
+    },
+  ]);
+  const restored = restoreSnapshotSession(saved!, "");
+  expect(
+    visibleSessionChildren({ session: restored, fullyShown: false }).map((c) => c.key),
+  ).toContain(children[5]!.key);
+  expect(rowDemandsVisibility(restored.children[5]!, RowVisibilityReason.ActiveRun)).toBe(true);
+  expect(restored.children.every((c) => !c.hasActiveRun)).toBe(true);
 });

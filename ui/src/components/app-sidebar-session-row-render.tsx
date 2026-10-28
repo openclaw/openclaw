@@ -151,7 +151,8 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const color = createMemo(() => normalizeSessionColorValue(session().color ?? ""));
   const archived = createMemo(() => session().archived === true);
   const pinnable = createMemo(() => session().pinnable);
-  const hasChildren = createMemo(() => session().childSessionKeys.length > 0);
+  const childCount = () => session().snapshot?.childCount ?? session().childSessionKeys.length;
+  const hasChildren = createMemo(() => childCount() > 0);
   const groupWriteAccess = createMemo(() =>
     host().readSessionMutationAccess({
       method: "sessions.groups.put",
@@ -177,7 +178,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
         when={JSON.stringify([
           label(),
           session().archived === true,
-          session().forkSource !== undefined,
+          session().forkSource !== undefined || session().snapshot?.forked === true,
           pullRequest(),
         ])}
         keyed
@@ -318,7 +319,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
               ? "sessionsView.hideChildSessions"
               : "sessionsView.showChildSessions",
             {
-              count: String(session().childSessionKeys.length),
+              count: String(childCount()),
               session: label(),
             },
           )}
@@ -333,9 +334,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
             <Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />
           </span>
           {team() ? undefined : (
-            <span class="sidebar-child-session-toggle__count">
-              {session().childSessionKeys.length}
-            </span>
+            <span class="sidebar-child-session-toggle__count">{childCount()}</span>
           )}
         </button>
       </Show>

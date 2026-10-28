@@ -1,31 +1,38 @@
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { projectOnlinePresenceViewers, profilePresenceViewer } from "../lib/presence-users.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { SidebarOnlineOrder } from "./sidebar-online-order.ts";
+import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 const onlineOrders = new WeakMap<
   HTMLElement,
   {
     gateway: ApplicationGateway | undefined;
-    revision: number | undefined;
+    presentationKey: number | undefined;
     viewerId: string | undefined;
     order: SidebarOnlineOrder;
   }
 >();
 
-export function sidebarOnlineOrder(host: AppSidebarRenderHost): SidebarOnlineOrder {
+export function sidebarOnlineOrder(host: {
+  hostElement: HTMLElement;
+  sessionDataContext?: { gateway: ApplicationGateway };
+  sidebarSnapshot: Pick<SidebarSnapshotModel, "footer"> | null;
+}): SidebarOnlineOrder {
   const element = host.hostElement;
   const gateway = host.sessionDataContext?.gateway;
-  const revision = gateway?.connectionRevision;
-  const viewerId = host.sidebarSnapshot?.footer?.id ?? gateway?.snapshot.selfUser?.id;
+  const presentation = gateway && gatewayPresentationScope(gateway);
+  const presentationKey = presentation?.key;
+  const viewerId = host.sidebarSnapshot?.footer?.id ?? presentation?.displayUser?.id;
   let cached = onlineOrders.get(element);
   if (
     !cached ||
     cached.gateway !== gateway ||
-    cached.revision !== revision ||
+    cached.presentationKey !== presentationKey ||
     cached.viewerId !== viewerId
   ) {
-    cached = { gateway, revision, viewerId, order: new SidebarOnlineOrder() };
+    cached = { gateway, presentationKey, viewerId, order: new SidebarOnlineOrder() };
     onlineOrders.set(element, cached);
   }
   return cached.order;

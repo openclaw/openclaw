@@ -1,3 +1,6 @@
+import { isSessionParticipantIdentity } from "../../../packages/gateway-protocol/src/compiled/sender-identity.js";
+import { SESSION_PLACEMENT_STATES } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
+import { SESSION_VISIBILITY_VALUES } from "../../../packages/gateway-protocol/src/schema/sessions-sharing-constants.js";
 import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
@@ -7,6 +10,20 @@ import * as json from "../lib/snapshot-json.ts";
 const text = json.text;
 const optionalText = json.optional(text);
 const identity = json.object({ type: json.literal("profile"), id: text });
+const participantIdentity = json.checked(isSessionParticipantIdentity);
+const actorFields = {
+  type: json.enumeration(["human", "agent", "system"]),
+  id: optionalText,
+  label: optionalText,
+  avatarUrl: optionalText,
+  identity: json.optional(participantIdentity),
+};
+const actor = json.object(actorFields);
+const participant = json.object({
+  identity: participantIdentity,
+  label: optionalText,
+  avatarUrl: optionalText,
+});
 const userFields = {
   id: text,
   name: optionalText,
@@ -29,6 +46,7 @@ const childrenState = {
   queuedChildCount: json.optional(json.number),
   unreadChildCount: json.optional(json.number),
   failedChildCount: json.optional(json.number),
+  workspaceConflictCount: json.optional(json.number),
 };
 const state = json.object({
   unread: json.optional(json.boolean),
@@ -51,12 +69,48 @@ const state = json.object({
   ),
   pullRequestCount: json.optional(json.number),
   hasApproval: json.optional(json.boolean),
+  // Disclosure and origin are display facts, not invented child or fork identities.
+  childCount: json.optional(json.number),
+  forked: json.optional(json.boolean),
 });
 const sessionFields = {
   key: sessionKey,
   label: text,
   agentId: optionalText,
+  titlePending: json.optional(json.boolean),
+  createdActor: json.optional(actor),
+  owner: json.optional(json.object({ actor, assignedAt: json.optional(json.number) })),
+  archivedBy: json.optional(actor),
+  // Match the canonical compact (4) and expanded (32) participant wire bounds.
+  participants: json.optional(json.array(participant, 4)),
+  expandedParticipants: json.optional(json.array(participant, 32)),
+  participantCount: json.optional(json.number),
+  visibility: json.optional(json.enumeration(SESSION_VISIBILITY_VALUES)),
+  draftOwnedBySelf: json.optional(json.boolean),
   subtitle: optionalText,
+  channelAvatarUrl: optionalText,
+  channelPresentation: json.optional(json.object({ channel: text, channelLabel: text })),
+  snoozedUntil: json.optional(json.number),
+  createdAt: json.optional(json.number),
+  startedAt: json.optional(json.number),
+  endedAt: json.optional(json.number),
+  runtimeMs: json.optional(json.number),
+  runtimeSampledAt: json.optional(json.number),
+  hasComposerDraft: json.optional(json.boolean),
+  outboxAttentionCount: json.optional(json.number),
+  placementState: json.optional(json.enumeration(SESSION_PLACEMENT_STATES)),
+  placementProviderId: optionalText,
+  placementProfileId: optionalText,
+  placementMachine: json.optional(
+    json.object({
+      class: optionalText,
+      os: optionalText,
+      osLabel: optionalText,
+      cpu: json.optional(json.number),
+      memoryGb: json.optional(json.number),
+    }),
+  ),
+  diskSpaceStatus: json.optional(json.enumeration(["ok", "warning", "critical"])),
   snapshotSubtitle: json.optional(
     json.object({ subtitle: optionalText, narration: optionalText, toolName: optionalText }),
   ),
@@ -101,6 +155,9 @@ export const sidebarSnapshotSchema = json.object({
   pages: json.array(session),
   pageScopeId: json.nullable(text),
   pinnedSessions: json.array(session),
+  personalGroups: json.optional(
+    json.array(json.object({ id: text, label: text, sessionKeys: json.array(sessionKey) })),
+  ),
   entries: json.array(
     json.refine(
       text,
@@ -115,10 +172,8 @@ export const sidebarSnapshotSchema = json.object({
       category: optionalText,
       personOwner: json.optional(
         json.object({
-          type: json.enumeration(["human", "agent", "system"]),
+          ...actorFields,
           id: text,
-          label: optionalText,
-          identity: json.optional(identity),
         }),
       ),
       project: json.optional(json.object({ name: text, path: text })),
@@ -137,6 +192,8 @@ export const sidebarSnapshotSchema = json.object({
       id: text,
       name: text,
       mainKey: text,
+      activeNow: json.optional(json.boolean),
+      assistantPreview: optionalText,
       avatar: json.optional(json.nullable(text)),
       textAvatar: json.optional(json.nullable(text)),
       role: optionalText,

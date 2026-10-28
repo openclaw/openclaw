@@ -62,6 +62,7 @@ function snapshotChildren(value: SidebarRecentSession["subagentSummary"]) {
     queuedChildCount: value.queuedChildCount || undefined,
     unreadChildCount: value.unreadChildCount || undefined,
     failedChildCount: value.failedChildCount || undefined,
+    workspaceConflictCount: value.workspaceConflictCount || undefined,
   };
   return Object.values(state).some((item) => item !== undefined) ? state : undefined;
 }
@@ -90,6 +91,15 @@ export function snapshotSessions(
         workSession: row.workSession || undefined,
         acpSession: row.acpSession || undefined,
         workspaceKind: row.workspaceKind,
+        workspaceConflictCount:
+          (privateChildren ? row.ownWorkspaceConflictCount : row.workspaceConflictCount) ||
+          undefined,
+        childCount: privateChildren
+          ? undefined
+          : (row.snapshot?.childCount ??
+              row.childSessionKeys.filter((key) => !isIncognitoSessionKey(key)).length) ||
+            undefined,
+        forked: (row.snapshot?.forked ?? Boolean(row.forkSource)) || undefined,
         attention: snapshotAttention(
           privateChildren ? (row.ownAttention ?? { kind: "none" }) : row.attention,
         ),
@@ -104,7 +114,34 @@ export function snapshotSessions(
         key: row.key,
         label: row.label,
         agentId: row.agentId,
+        titlePending: row.titlePending || undefined,
+        createdActor: row.createdActor,
+        owner: row.owner && { actor: row.owner.actor, assignedAt: row.owner.assignedAt },
+        archivedBy: row.archivedBy,
+        participants: row.participants,
+        expandedParticipants: row.expandedParticipants,
+        participantCount: row.participantCount,
+        visibility: row.visibility,
+        draftOwnedBySelf: row.draftOwnedBySelf,
         subtitle: row.subtitle,
+        channelAvatarUrl: row.channelAvatarUrl,
+        channelPresentation: row.channelPresentation && {
+          channel: row.channelPresentation.channel,
+          channelLabel: row.channelPresentation.channelLabel,
+        },
+        snoozedUntil: row.snoozedUntil,
+        createdAt: row.createdAt,
+        startedAt: row.startedAt,
+        endedAt: row.endedAt,
+        runtimeMs: row.runtimeMs,
+        runtimeSampledAt: row.runtimeSampledAt,
+        hasComposerDraft: row.hasComposerDraft || undefined,
+        outboxAttentionCount: row.outboxAttentionCount || undefined,
+        placementState: row.placementState,
+        placementProviderId: row.placementProviderId,
+        placementProfileId: row.placementProfileId,
+        placementMachine: row.placementMachine,
+        diskSpaceStatus: row.diskSpaceStatus,
         icon: row.icon,
         color: row.color,
         pinned: row.pinned,
@@ -161,6 +198,7 @@ export function restoreSnapshotSession(
   selected: string,
 ): SidebarRecentSession {
   const state = row.state;
+  const children = row.children.map((child) => restoreSnapshotSession(child, selected));
   return {
     ...row,
     ...state,
@@ -184,9 +222,11 @@ export function restoreSnapshotSession(
     },
     childSessionKeys: row.children.map((child) => child.key),
     childLoadParentKeys: row.childLoadParentKeys ?? [],
-    children: row.children.map((child) => restoreSnapshotSession(child, selected)),
+    children,
     loadingChildren: false,
-    containsActiveDescendant: false,
+    containsActiveDescendant: children.some(
+      (child) => child.visuallyActive || child.containsActiveDescendant,
+    ),
     runningChildCount: state?.runningChildCount ?? 0,
     failedChildCount: state?.failedChildCount ?? 0,
   };

@@ -4,6 +4,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
+import { agentRosterCards } from "../lib/agents/roster-activity.ts";
 import { presenceViewerLastActivity, profilePresenceViewer } from "../lib/presence-users.ts";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
@@ -119,6 +120,15 @@ export function captureSidebarSnapshotModel(
   for (const { key, pluginId, value } of host.pluginNavigation()) {
     plugins.push({ key, pluginId, id: value.page.id, label: value.label, icon: value.icon });
   }
+  const referenceKeys = new Set([
+    ...zone.sidebarEntries.flatMap((value) => {
+      const entry = parseSidebarEntry(value);
+      return entry?.type === "session" ? [entry.key] : [];
+    }),
+    ...(context.navigation.snapshot.personalSessionGroups ?? []).flatMap(
+      (group) => group.sessionKeys,
+    ),
+  ]);
   const presentation = (row: SidebarRecentSession) => ({
     childrenDisplayMode: host.sessionProjection.children.capture(row.key),
     snapshotSubtitle: row.snapshot
@@ -130,6 +140,14 @@ export function captureSidebarSnapshotModel(
       host.sidebarAgentsMode === "roster",
     ),
   });
+  const pinnedSessions = snapshotSessions(
+    [...referenceKeys].flatMap((key) => {
+      const row = zone.sessionRows.get(key);
+      return row ? [row] : [];
+    }),
+    presentation,
+  );
+  const savedReferences = new Set(pinnedSessions.map((row) => row.key));
   return parseSidebarSnapshot({
     routingDefaults: {
       mainKey: agents.mainKey,
@@ -146,21 +164,26 @@ export function captureSidebarSnapshotModel(
       presentation,
     ),
     pageScopeId: context.agentSelection.state.scopeId,
-    pinnedSessions: snapshotSessions(
-      zone.sidebarEntries.flatMap((value) => {
-        const entry = parseSidebarEntry(value);
-        const row = entry?.type === "session" ? zone.sessionRows.get(entry.key) : undefined;
-        return row ? [row] : [];
-      }),
-      presentation,
-    ),
+    pinnedSessions,
+    personalGroups: (context.navigation.snapshot.personalSessionGroups ?? []).map((group) => ({
+      id: group.id,
+      label: group.label,
+      sessionKeys: group.sessionKeys.filter((key) => savedReferences.has(key)),
+    })),
     entries: zone.sidebarEntries.filter((value) => {
       const entry = parseSidebarEntry(value);
       return entry?.type !== "session" || !isIncognitoSessionKey(entry.key);
     }),
     issuesCount: snapshotIssuesCount(context.sidebarAttention.entries),
     ...snapshotSections(sections, host.collapsedSessionSections, presentation),
-    cards: roster.cards,
+    // Use the shared card producer, excluding private sessions before deriving any preview or ring.
+    cards: agentRosterCards(
+      agents,
+      (roster.result?.sessions ?? []).filter(
+        (row) => !row.incognito && !isIncognitoSessionKey(row.key),
+      ),
+      (id) => context.agentIdentity.get(id),
+    ),
     collapsedAgentIds:
       loadSettings(context.gateway.connection.gatewayUrl).sidebarCollapsedAgentIds ?? [],
     plugins,

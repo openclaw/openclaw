@@ -102,7 +102,10 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
       : cardAgent()
         ? resolveAgentTextAvatar(cardAgent()!, cardIdentity())
         : null;
-  const environment = () => host.sessionDataContext?.config?.current?.environment ?? null;
+  const environment = () =>
+    host.sidebarSnapshot
+      ? host.sidebarSnapshot.brand.environment
+      : host.sessionDataContext?.config.current.environment?.label;
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   function AgentCard() {
     const avatarGateway = useAvatarGatewayContext();
@@ -200,7 +203,7 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
               </span>
               {environment() ? (
                 <span class="sidebar-agent-card__subtitle-row">
-                  <span class="control-ui-environment-pill">{environment()?.label}</span>
+                  <span class="control-ui-environment-pill">{environment()}</span>
                 </span>
               ) : null}
             </span>
@@ -325,10 +328,8 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Elem
               <Icon name="chevronsUpDown" />
             </span>
           </span>
-          {host.sessionDataContext?.config.current.environment ? (
-            <span class="control-ui-environment-pill">
-              {host.sessionDataContext.config.current.environment.label}
-            </span>
+          {brand().environment ? (
+            <span class="control-ui-environment-pill">{brand().environment}</span>
           ) : undefined}
         </span>
       </button>

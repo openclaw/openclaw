@@ -407,13 +407,11 @@ export function personalSidebarGroupRows(
   group: PersonalSessionGroup,
   zone?: SidebarPinZone,
 ): SidebarRecentSession[] {
-  if (host.sidebarSnapshot) {
-    return [];
-  }
   const rows = (zone ?? host.reconciledSidebarZone()).sessionRows;
   return group.sessionKeys.flatMap((key) => {
     const row = rows.get(key);
-    return row?.pinnable &&
+    return row &&
+      (row.pinnable || host.sidebarSnapshot) &&
       !row.archived &&
       !host.sessionDataContext?.sessions.archiveVisibility(key)
       ? [{ ...row, selectionKey: `personal:${JSON.stringify([group.id, key])}` }]

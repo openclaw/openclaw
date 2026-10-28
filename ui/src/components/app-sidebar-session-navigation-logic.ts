@@ -11,6 +11,7 @@ import {
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { i18n } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
@@ -175,7 +176,9 @@ export function buildSidebarSessionNavigationState(input: {
     const active = row.key === navigation.activeRowKey;
     const visuallyActive =
       input.highlightCurrentSession && row.key === navigation.currentSessionKey;
-    const selfUserId = context?.gateway.snapshot.selfUser?.id;
+    const selfUserId = context
+      ? gatewayPresentationScope(context.gateway).displayUser?.id
+      : undefined;
     const isRunVisuallyActive =
       row.archived !== true &&
       (context ? context.sessions.isRunVisuallyActive(row) : isSessionRunStateActive(row));

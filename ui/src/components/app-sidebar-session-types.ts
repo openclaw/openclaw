@@ -251,13 +251,14 @@ export function rowDemandsVisibility(
   row: SidebarRecentSession,
   reason: RowVisibilityReason = RowVisibilityReason.Any,
 ) {
+  const running = row.isRunVisuallyActive ?? row.hasActiveRun;
   return reason === RowVisibilityReason.ActiveRun
-    ? row.hasActiveRun
+    ? running
     : reason === RowVisibilityReason.Attention
       ? row.attention.kind !== "none"
       : row.visuallyActive ||
         row.containsActiveDescendant ||
-        row.hasActiveRun ||
+        running ||
         row.runningChildCount > 0 ||
         row.failedChildCount > 0 ||
         (row.workspaceConflictCount ?? 0) > 0 ||

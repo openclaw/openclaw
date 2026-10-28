@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { resolveControlUiAvatarAuth } from "../app/control-ui-auth.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { formatDurationCompact } from "../lib/format-duration.ts";
 import { presenceMatchesProfile, projectPresencePayload } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -76,7 +77,10 @@ export function renderSidebarSessionIndicators(
   );
   // A self filter already identifies solo ownership. Keep shared rows and
   // archive attribution visible; the participant count includes unshown faces.
-  const selfUser = createMemo(() => host().sessionDataContext?.gateway.snapshot.selfUser);
+  const selfUser = createMemo(() => {
+    const gateway = host().sessionDataContext?.gateway;
+    return gateway ? gatewayPresentationScope(gateway).displayUser : null;
+  });
   const selfProfileId = createMemo(() => selfUser()?.identity?.id ?? selfUser()?.id);
   const ownerRepeatedByFilter = createMemo(() => {
     const actor = ownerActor();
@@ -166,7 +170,7 @@ export function renderSidebarSessionIndicators(
           <Icon name="archive" />
         </span>
       ) : undefined}
-      {readSession().forkSource ? (
+      {readSession().forkSource || readSession().snapshot?.forked ? (
         <span
           class="sidebar-session-fork-indicator"
           aria-hidden={team() || readSession().isChild ? undefined : "true"}
@@ -255,7 +259,9 @@ export function renderSidebarSessionIndicators(
             <TeamSessionSlots
               rows={[readSession()]}
               includeChildren={!childrenExpanded()}
-              childCount={readSession().childSessionKeys.length}
+              childCount={
+                readSession().snapshot?.childCount ?? readSession().childSessionKeys.length
+              }
               runVisibility={sessionRunVisibility}
             />
           </Show>

@@ -35,12 +35,29 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
   const lifetime = new AbortController();
   onSettled(() => () => lifetime.abort());
   const navigation = projectOwner(context.navigation, (owner) => owner.snapshot);
-  const groups = createMemo(() => navigation.read().personalSessionGroups ?? []);
+  const groups = createMemo(() => {
+    navigation.revision();
+    return (
+      props.host.sidebarSnapshot?.personalGroups ?? navigation.read().personalSessionGroups ?? []
+    );
+  });
+  // Cached definitions are filtered display facts, never preference replacement input.
+  const authoredGroups = () => context.navigation.snapshot.personalSessionGroups ?? [];
+  const unavailable = () => showToast({ message: t("sessionsView.personalGroupUnavailable") });
   const [dropTarget, setDropTarget] = createSignal<string | null>(null);
   const write = (next: readonly PersonalSessionGroup[]): string | null => {
     // The profile preference has a byte limit. Never silently truncate an authored layout.
     if (!prefValuesEqual(normalizePersonalSessionGroups(next), next)) {
       return t("sessionsView.personalGroupCapacity");
+    }
+    const snapshot = props.host.sidebarSnapshot;
+    if (snapshot) {
+      // Keep the accepted display in the existing snapshot across view remounts.
+      snapshot.personalGroups = next.map((group) => ({
+        id: group.id,
+        label: group.label,
+        sessionKeys: props.host.personalGroupSessionRows(group).map((row) => row.key),
+      }));
     }
     context.navigation.update({ personalSessionGroups: next });
     return null;
@@ -66,8 +83,9 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
       if (!current()) {
         return;
       }
-      const group = id ? groups().find((item) => item.id === id) : undefined;
+      const group = id ? authoredGroups().find((item) => item.id === id) : undefined;
       if (id && !group) {
+        unavailable();
         return;
       }
       const candidates = [...props.host.reconciledSidebarZone().sessionRows.values()].filter(
@@ -78,7 +96,7 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
         candidates,
         signal: AbortSignal.any([controller.signal, lifetime.signal]),
         submit: (value) => {
-          const saved = id ? groups().find((item) => item.id === id) : undefined;
+          const saved = id ? authoredGroups().find((item) => item.id === id) : undefined;
           if (!current() || (id && !saved)) {
             return t("sessionsView.personalGroupUnavailable");
           }
@@ -95,7 +113,9 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
             ),
           };
           return write(
-            id ? groups().map((item) => (item.id === id ? next : item)) : [...groups(), next],
+            id
+              ? authoredGroups().map((item) => (item.id === id ? next : item))
+              : [...authoredGroups(), next],
           );
         },
       });
@@ -106,10 +126,14 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
     }
   };
   const move = (id: string, offset: number) => {
-    const next = [...groups()];
+    const next = [...authoredGroups()];
     const from = next.findIndex((group) => group.id === id);
     const to = from + offset;
-    if (from < 0 || to < 0 || to >= next.length) {
+    if (from < 0) {
+      unavailable();
+      return;
+    }
+    if (to < 0 || to >= next.length) {
       return;
     }
     const [group] = next.splice(from, 1);
@@ -122,10 +146,12 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
     setDropTarget(null);
     const sourceId = event.dataTransfer?.getData(GROUP_DRAG_TYPE);
     if (sourceId) {
-      const from = groups().findIndex((group) => group.id === sourceId);
-      const to = groups().findIndex((group) => group.id === id);
+      const from = authoredGroups().findIndex((group) => group.id === sourceId);
+      const to = authoredGroups().findIndex((group) => group.id === id);
       if (from >= 0 && to >= 0) {
         move(sourceId, to - from);
+      } else {
+        unavailable();
       }
       return;
     }
@@ -134,12 +160,14 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
     if (!key || !row?.pinnable || row.archived) {
       return;
     }
-    const group = groups().find((candidate) => candidate.id === id);
+    const group = authoredGroups().find((candidate) => candidate.id === id);
     if (!group || group.sessionKeys.includes(key)) {
       return;
     }
     const updated = { ...group, sessionKeys: [...group.sessionKeys, key] };
-    const error = write(groups().map((candidate) => (candidate.id === id ? updated : candidate)));
+    const error = write(
+      authoredGroups().map((candidate) => (candidate.id === id ? updated : candidate)),
+    );
     if (error) {
       showToast({ message: error });
     }
@@ -253,8 +281,13 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
                   if (item.id === "edit") {
                     void edit(group().id);
                   } else if (item.id === "remove") {
-                    write(groups().filter((candidate) => candidate.id !== group().id));
-                    showToast({ message: t("sessionsView.personalGroupRemoved") });
+                    const saved = authoredGroups();
+                    if (!saved.some((candidate) => candidate.id === group().id)) {
+                      unavailable();
+                      return;
+                    }
+                    const error = write(saved.filter((candidate) => candidate.id !== group().id));
+                    showToast({ message: error ?? t("sessionsView.personalGroupRemoved") });
                   } else {
                     move(group().id, item.id === "up" ? -1 : 1);
                   }

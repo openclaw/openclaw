@@ -2,6 +2,7 @@ import { createEffect, createMemo, onCleanup } from "solid-js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { operatorScopeSatisfied } from "../../../src/shared/operator-scope-compat.js";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
@@ -211,7 +212,12 @@ export function createSessionPullRequestIndicators(options: {
   });
   const presentation = createParkedProjection(
     () => ({ readable: Boolean(readable()), broad: broadRead(), entries: summaries().entries }),
-    options.getPresented,
+    // Keep the last rendered facts during link loss; live watch admission remains above.
+    () => options.getPresented() && options.getConnected(),
+    () => {
+      const gateway = options.getGateway();
+      return gateway ? gatewayPresentationScope(gateway).key : undefined;
+    },
   );
   return {
     count(sessionKey: string) {

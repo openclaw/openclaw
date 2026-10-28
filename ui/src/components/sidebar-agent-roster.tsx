@@ -47,10 +47,9 @@ function cachedRosterCards(host: RosterHost) {
     ...card,
     avatar: card.avatar ?? null,
     textAvatar: card.textAvatar ?? null,
-    activeNow: false,
+    activeNow: card.activeNow ?? false,
     lastActiveAt: 0,
     preview: undefined,
-    assistantPreview: undefined,
     target: sessionNavigationTarget({
       face: "chat",
       sessionKey: card.mainKey,

@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { serializeSidebarEntry } from "../app-navigation.ts";
+import { isSessionRouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createQuestionPromptState } from "../app/question-prompt.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
@@ -485,7 +486,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   >();
 
   private readSnapshotNavigation(model: SidebarSnapshotModel) {
-    const selectedKey = this.getRouteSessionKey();
+    const selectedKey = isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "";
     return this.snapshotNavigation.read(
       () => [model, selectedKey],
       () => restoreSnapshotNavigation(model, selectedKey),

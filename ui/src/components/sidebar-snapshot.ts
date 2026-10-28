@@ -239,13 +239,15 @@ export function createSidebarSnapshot(host: {
       !cleanup.length ||
       pending ||
       !scope ||
-      (scope.profileId !== null && gateway?.snapshot.selfUser === undefined) ||
-      host.sidebarSnapshot ||
-      !host.sidebarSnapshotSettled()
+      (!host.sidebarSnapshot &&
+        ((scope.profileId !== null && gateway?.snapshot.selfUser === undefined) ||
+          !host.sidebarSnapshotSettled()))
     ) {
       return;
     }
-    const model = host.captureSidebarSnapshot();
+    // Accepted local display edits keep the admitted cache current while offline.
+    // Live recapture still requires settled rows and resolved identity above.
+    const model = host.sidebarSnapshot ?? host.captureSidebarSnapshot();
     if (!model) {
       return;
     }

@@ -174,11 +174,11 @@ describe("sidebar snapshot lifecycle", () => {
     await vi.advanceTimersByTimeAsync(500);
   }
 
-  async function warmFixture() {
+  async function warmFixture(initial = model) {
     const store = new SessionSnapshotStore();
     store.connect();
     disposers.push(() => store.disconnect());
-    await store.writeSidebar(sidebarSnapshotScopeKey(scope), model, parseSidebarSnapshot);
+    await store.writeSidebar(sidebarSnapshotScopeKey(scope), initial, parseSidebarSnapshot);
     const test = fixture();
     disposers.push(
       admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
@@ -287,6 +287,30 @@ describe("sidebar snapshot lifecycle", () => {
       }
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.snapshotOwner.read().saved).toBe(false);
+    },
+  );
+
+  it.each(["remove", "reorder"] as const)(
+    "persists accepted cached group %s for another offline boot",
+    async (action) => {
+      const first = { id: "first", label: "Focus", sessionKeys: [] };
+      const second = { id: "second", label: "Later", sessionKeys: [] };
+      const test = await warmFixture({ ...model, personalGroups: [first, second] });
+      const personalGroups = action === "remove" ? [second] : [second, first];
+      test.host.sidebarSnapshot!.personalGroups = personalGroups;
+      await capture(test.snapshotOwner);
+      expect(
+        await test.store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot),
+      ).toMatchObject({ personalGroups });
+      const next = fixture();
+      disposers.push(
+        admitSidebarBootScope(next.gateway, { ...scope, scope: scope.gatewayScope }),
+        () => next.snapshotOwner.disconnect(),
+      );
+      next.snapshotOwner.connect();
+      await next.restored;
+      expect(next.host.sidebarSnapshot?.personalGroups).toEqual(personalGroups);
+      expect(test.capture).not.toHaveBeenCalled();
     },
   );
 

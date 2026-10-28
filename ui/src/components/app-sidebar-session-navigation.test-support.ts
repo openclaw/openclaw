@@ -14,6 +14,7 @@ export function projectSidebarSession(
     agentSelection: { state: { selectedId: "main" } },
     gateway: {
       snapshot: {
+        phase: "connected",
         assistantAgentId: "main",
         hello: null,
         selfUser: selfUserId ? { id: selfUserId } : undefined,
