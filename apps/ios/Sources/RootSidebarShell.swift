@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 private enum RootSidebarShellMetric {
     static let edgeGestureWidth: CGFloat = 44
@@ -7,6 +8,48 @@ private enum RootSidebarShellMetric {
     static let settlePredictedTranslation: CGFloat = 160
     static let topLeadingRadius: CGFloat = 8
     static let cornerRadius: CGFloat = 28
+    static let maximumDimmingOpacity: Double = 0.8
+}
+
+@MainActor
+enum RootSidebarFeedback {
+    static func settle(isDrawerLayout: Bool, reduceMotion: Bool) {
+        guard isDrawerLayout, !reduceMotion else { return }
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.prepare()
+        generator.impactOccurred()
+    }
+}
+
+struct RootSidebarCardShape: InsettableShape {
+    var offset: CGFloat
+    let cornerRadii: RectangleCornerRadii
+    private var insetAmount: CGFloat = 0
+
+    init(offset: CGFloat, cornerRadii: RectangleCornerRadii) {
+        self.offset = offset
+        self.cornerRadii = cornerRadii
+    }
+
+    /// Animate the same displacement as the card, rather than its corner radii.
+    /// Closing sets the model offset to zero before the card has reached it.
+    var animatableData: CGFloat {
+        get { self.offset }
+        set { self.offset = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let radii = self.offset == 0 ? RectangleCornerRadii() : self.cornerRadii
+        return UnevenRoundedRectangle(cornerRadii: radii, style: .continuous)
+            .inset(by: self.insetAmount)
+            .path(in: rect)
+    }
+
+    func inset(by amount: CGFloat) -> Self {
+        var shape = self
+        shape.insetAmount += amount
+        return shape
+    }
 }
 
 struct RootSidebarShell<Sidebar: View, Detail: View>: View {
@@ -16,13 +59,11 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
         case rejected
     }
 
-    private struct DragState: Equatable {
+    private struct DragState {
+        var initialPresentation: Bool?
         var disposition: DragDisposition?
-        var translationWidth: CGFloat = 0
-    }
-
-    private final class DragSession {
-        var disposition: DragDisposition?
+        var offset: CGFloat?
+        var animation: Animation?
     }
 
     @Environment(\.displayScale) private var displayScale
@@ -38,9 +79,9 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
     let sidebar: Sidebar
     let detail: Detail
 
-    @State private var dragSession = DragSession()
-    @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.35, dampingFraction: 0.86)))
-    private var dragState = DragState()
+    @State private var dragState = DragState()
+    @State private var containerCornerRadii: RectangleCornerRadii?
+    @GestureState private var isDragging = false
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -64,8 +105,46 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
             // Keep the recognizer attached while pushed content owns the edge.
             // It rejects that touch once, so the same back-swipe cannot open the drawer after popping.
             isEnabled: self.isDrawerLayout && !self.reduceMotion)
-        .background(OpenClawProBackground())
+        .background {
+            if self.isDrawerLayout {
+                OpenClawSidebarPalette.background.ignoresSafeArea()
+            } else {
+                OpenClawProBackground()
+            }
+        }
+        .background {
+            #if compiler(>=6.4)
+            // Resolve corners at the stationary, full-window bounds before
+            // translating the card. Its revealed corners retain that geometry.
+            GeometryReader { geometry in
+                if #available(iOS 27.0, *) {
+                    Color.clear
+                        .onChange(of: geometry.concentricCornerRadii, initial: true) { _, radii in
+                            self.containerCornerRadii = radii
+                        }
+                }
+            }
+            .ignoresSafeArea(.container)
+            #endif
+        }
         .animation(self.animation, value: self.isPresented)
+        .onChange(of: self.isPresented) { _, isPresented in
+            // A navigation action supersedes a live gesture. Own releases clear
+            // initialPresentation before asking the navigation owner to change.
+            if self.dragState.initialPresentation != nil { self.dragState.disposition = .rejected }
+            self.settle(to: isPresented)
+        }
+        .onChange(of: self.isDragging) { _, isDragging in
+            // Cancellation does not call onEnded. Return to the navigation owner's
+            // target without letting an automatic gesture reset move the card.
+            guard !isDragging, self.dragState.initialPresentation != nil else { return }
+            self.dragState.disposition = nil
+            self.dragState.initialPresentation = nil
+            self.settle(to: self.isPresented)
+        }
+        .onChange(of: self.sidebarWidth) { _, _ in self.resetDrag() }
+        .onChange(of: self.isDrawerLayout) { _, _ in self.resetDrag() }
+        .onChange(of: self.reduceMotion) { _, _ in self.resetDrag() }
     }
 
     private var sidebarLayer: some View {
@@ -85,25 +164,37 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
     private var contentCard: some View {
         let offset = self.contentOffset
         let progress = self.sidebarWidth > 0 ? offset / self.sidebarWidth : 0
-        let shape = Self.contentShape(progress: progress)
+        let shape = Self.contentShape(
+            isDrawerLayout: self.isDrawerLayout,
+            offset: offset,
+            containerCornerRadii: self.containerCornerRadii)
         return self.detail
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            // RootTabs always supplies its shared NavigationStack here. Expanding
-            // that stack paints destination backgrounds through the rounded safe
-            // areas while navigation chrome keeps destination content inset.
             .background(OpenClawProBackground())
-            .ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])
             .allowsHitTesting(!self.isDrawerLayout || !self.isPresented)
+            .overlay {
+                OpenClawSidebarPalette.background
+                    .opacity(self.isDrawerLayout ? RootSidebarShellMetric.maximumDimmingOpacity * Double(progress) : 0)
+                    // Color is decorative. Explicitly hiding this overlay from
+                    // accessibility can obscure native destination hit targets.
+                    .allowsHitTesting(false)
+            }
             .clipShape(shape)
             .overlay {
                 shape.strokeBorder(
                     OpenClawSidebarPalette.hairline.opacity(Double(progress)),
                     lineWidth: 1)
             }
+            // Expand outside the clip and border so both use the full-height
+            // card bounds. Native navigation chrome still keeps content inset.
+            .ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])
             .offset(x: offset)
             // Change only geometry, never the detail's structural identity, when
             // crossing the breakpoint or toggling a persistent sidebar.
             .padding(.leading, !self.isDrawerLayout && self.isPresented ? self.sidebarWidth : 0)
+            // The release spring owns this displacement. The parent's visibility
+            // animation must not replace its measured initial velocity.
+            .animation(self.dragState.animation, value: self.dragState.offset)
     }
 
     @ViewBuilder
@@ -122,74 +213,119 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
     }
 
     private var contentOffset: CGFloat {
-        guard self.isDrawerLayout else { return 0 }
-        return RootTabs.sidebarContentOffset(
+        guard self.isDrawerLayout, !self.reduceMotion else { return 0 }
+        return self.dragState.offset ?? RootTabs.sidebarContentOffset(
             sidebarWidth: self.sidebarWidth,
             isVisible: self.isPresented,
-            dragOffset: self.dragState.translationWidth,
+            dragOffset: 0,
             reduceMotion: self.reduceMotion)
     }
 
     private var drawerGesture: some Gesture {
-        let isDrawerLayout = self.isDrawerLayout
-        let sidebarWidth = self.sidebarWidth
-        let isPresented = self.isPresented
-        let canOpenFromEdge = self.canOpenFromEdge
-        let onShow = self.onShow
-        let onHide = self.onHide
-        let dragSession = self.dragSession
-        return DragGesture(minimumDistance: 8)
-            .updating(self.$dragState) { value, state, _ in
-                guard isDrawerLayout else { return }
+        DragGesture(minimumDistance: 8)
+            .updating(self.$isDragging) { _, isDragging, _ in isDragging = true }
+            .onChanged { value in
+                guard self.isDrawerLayout, !self.reduceMotion else { return }
+                var state = self.dragState
+                state.initialPresentation = state.initialPresentation ?? self.isPresented
                 let disposition = Self.dragDisposition(
                     startLocation: value.startLocation,
                     translation: value.translation,
-                    isPresented: isPresented,
-                    canOpenFromEdge: canOpenFromEdge,
+                    isPresented: self.isPresented,
+                    initialPresentation: state.initialPresentation,
+                    canOpenFromEdge: self.canOpenFromEdge,
                     latchedDisposition: state.disposition)
                 state.disposition = disposition
-                dragSession.disposition = disposition
                 switch disposition {
-                case .opening:
-                    state.translationWidth = max(0, min(sidebarWidth, value.translation.width))
-                case .closing:
-                    state.translationWidth = max(-sidebarWidth, min(0, value.translation.width))
+                case .opening, .closing:
+                    state.offset = RootTabs.sidebarContentOffset(
+                        sidebarWidth: self.sidebarWidth,
+                        isVisible: disposition == .closing,
+                        dragOffset: value.translation.width,
+                        reduceMotion: self.reduceMotion)
+                    state.animation = nil
                 case .rejected, nil:
                     break
                 }
+                // Release supplies an explicit velocity; do not accumulate a
+                // second velocity from these unanimated, interactive changes.
+                var transaction = Transaction(animation: nil)
+                transaction.tracksVelocity = false
+                withTransaction(transaction) { self.dragState = state }
             }
             .onEnded { value in
-                let disposition = dragSession.disposition
-                dragSession.disposition = nil
-                guard isDrawerLayout else { return }
+                let disposition = self.dragState.disposition
+                let initialPresentation = self.dragState.initialPresentation
+                self.dragState.disposition = nil
+                self.dragState.initialPresentation = nil
+                guard self.isDrawerLayout, !self.reduceMotion else { return }
+                // The owner's update can reach this callback before onChange.
+                guard initialPresentation == self.isPresented else {
+                    self.settle(to: self.isPresented)
+                    return
+                }
                 switch disposition {
                 case .opening:
-                    if Self.shouldSettle(
+                    let opens = Self.shouldSettle(
                         translation: value.translation.width,
                         predictedTranslation: value.predictedEndTranslation.width)
-                    {
-                        onShow()
+                    self.settle(to: opens, velocity: value.velocity.width)
+                    if opens {
+                        self.onShow()
+                    } else {
+                        RootSidebarFeedback.settle(isDrawerLayout: self.isDrawerLayout, reduceMotion: self.reduceMotion)
                     }
                 case .closing:
-                    if Self.shouldSettle(
+                    let closes = Self.shouldSettle(
                         translation: -value.translation.width,
                         predictedTranslation: -value.predictedEndTranslation.width)
-                    {
-                        onHide()
+                    self.settle(to: !closes, velocity: value.velocity.width)
+                    if closes {
+                        self.onHide()
+                    } else {
+                        RootSidebarFeedback.settle(isDrawerLayout: self.isDrawerLayout, reduceMotion: self.reduceMotion)
                     }
                 case .rejected, nil:
                     break
                 }
             }
+    }
+
+    private func settle(to isPresented: Bool, velocity: CGFloat? = nil) {
+        guard let offset = self.dragState.offset else { return }
+        let target = isPresented ? self.sidebarWidth : 0
+        guard offset != target else { return }
+        if let velocity {
+            self.dragState.animation = .interpolatingSpring(
+                duration: 0.35,
+                bounce: 0,
+                initialVelocity: Self.normalizedSpringVelocity(velocity, remainingOffset: target - offset))
+        } else {
+            self.dragState.animation = self.animation
+        }
+        self.dragState.offset = target
+    }
+
+    private func resetDrag() {
+        self.dragState = DragState()
+    }
+
+    static func normalizedSpringVelocity(_ velocity: CGFloat, remainingOffset: CGFloat) -> Double {
+        guard remainingOffset != 0 else { return 0 }
+        // Normalize against the signed remaining displacement, including a
+        // reversal before release. Bound fast flicks near the destination.
+        return Double(max(-8, min(8, velocity / remainingOffset)))
     }
 
     static func dragDisposition(
         startLocation: CGPoint,
         translation: CGSize,
         isPresented: Bool,
+        initialPresentation: Bool?,
         canOpenFromEdge: Bool,
         latchedDisposition: DragDisposition?) -> DragDisposition?
     {
+        if let initialPresentation, initialPresentation != isPresented { return .rejected }
         if let latchedDisposition { return latchedDisposition }
         if !isPresented {
             // Opening is an edge gesture; closing may start anywhere on the content card.
@@ -215,13 +351,20 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
             predictedTranslation > RootSidebarShellMetric.settlePredictedTranslation
     }
 
-    private static func contentShape(progress: CGFloat) -> UnevenRoundedRectangle {
-        UnevenRoundedRectangle(
-            topLeadingRadius: RootSidebarShellMetric.topLeadingRadius * progress,
-            bottomLeadingRadius: RootSidebarShellMetric.cornerRadius * progress,
-            bottomTrailingRadius: RootSidebarShellMetric.cornerRadius * progress,
-            topTrailingRadius: RootSidebarShellMetric.cornerRadius * progress,
-            style: .continuous)
+    private static func contentShape(
+        isDrawerLayout: Bool,
+        offset: CGFloat,
+        containerCornerRadii: RectangleCornerRadii?) -> RootSidebarCardShape
+    {
+        // Resolve full corners once; the shape clips only while displaced.
+        let radii = isDrawerLayout
+            ? containerCornerRadii ?? RectangleCornerRadii(
+                topLeading: RootSidebarShellMetric.topLeadingRadius,
+                bottomLeading: RootSidebarShellMetric.cornerRadius,
+                bottomTrailing: RootSidebarShellMetric.cornerRadius,
+                topTrailing: RootSidebarShellMetric.cornerRadius)
+            : RectangleCornerRadii()
+        return RootSidebarCardShape(offset: offset, cornerRadii: radii)
     }
 }
 
