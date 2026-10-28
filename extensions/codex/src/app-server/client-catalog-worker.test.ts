@@ -49,53 +49,39 @@ beforeEach(() => {
 });
 
 describe("Codex catalog worker transport", () => {
-  it("reuses a recurring decoder across minute-long idle gaps", async () => {
+  it.each([
+    { nextAction: "page", fails: false },
+    { nextAction: "close", fails: false },
+    { nextAction: "page", fails: true },
+    { nextAction: "close", fails: true },
+  ])("joins idle stop: $nextAction, failure=$fails", async ({ nextAction, fails }) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const harness = createHarness();
     const pool = await startWorker(harness);
-    const retired = createDeferred<void>();
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- Rebound to the intercepted worker below.
-    const terminate = Worker.prototype.terminate;
-    vi.spyOn(Worker.prototype, "terminate").mockImplementationOnce(async function (this: Worker) {
-      const code = await terminate.call(this);
-      retired.resolve();
-      return code;
-    });
-    vi.advanceTimersByTime(60_000);
-    await retired.promise;
-    for (let index = 1; index <= 3; index++) {
-      const request = harness.list();
-      harness.reply({ data: [{ id: `page-${index}` }], unused: "x".repeat(64 * 1024) }, index);
-      await expect(request).resolves.toEqual({ data: [{ id: `page-${index}`, projectId: null }] });
-      vi.advanceTimersByTime(60_000);
-    }
-    expect(pool.getSnapshot().workersCreated).toBe(2);
-  });
-
-  it.each(["page", "close"])("joins idle retirement before %s completes", async (nextAction) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const harness = createHarness();
-    const pool = await startWorker(harness);
-    const retired = createDeferred<void>();
+    const entered = createDeferred<void>();
     const release = createDeferred<void>();
     // eslint-disable-next-line @typescript-eslint/unbound-method -- Rebound to the intercepted worker below.
     const terminate = Worker.prototype.terminate;
     const termination = vi
       .spyOn(Worker.prototype, "terminate")
       .mockImplementationOnce(async function (this: Worker) {
-        const code = await terminate.call(this);
-        retired.resolve();
+        const code = fails ? 0 : await terminate.call(this);
+        entered.resolve();
         await release.promise;
         return code;
       });
     vi.advanceTimersByTime(60_000);
-    await retired.promise;
+    await entered.promise;
     expect(termination).toHaveBeenCalledOnce();
-    expect(pool.getSnapshot().workers).toBe(0);
     expect(harness.stdinDestroyed).toBe(false);
     expect(harness.client.getCloseError()).toBeUndefined();
     const page = harness.list();
-    const outcome = nextAction === "close" ? expect(page).rejects.toThrow(/closed/u) : page;
+    const outcome =
+      nextAction === "close"
+        ? expect(page).rejects.toThrow(/closed/u)
+        : fails
+          ? expect(page).rejects.toThrow("synthetic worker stop failed")
+          : expect(page).resolves.toEqual({ data: [{ id: "queued", projectId: null }] });
     harness.reply({ data: [{ id: "queued" }], unused: "x".repeat(64 * 1024) }, 1);
     let closed = false;
     const closing =
@@ -112,58 +98,30 @@ describe("Codex catalog worker transport", () => {
       expect(pool.getSnapshot().workersCreated).toBe(1);
       expect(closed).toBe(false);
     } finally {
-      release.resolve();
+      if (fails) {
+        release.reject(new Error("synthetic worker stop failed"));
+      } else {
+        release.resolve();
+      }
     }
-    if (closing) {
-      await closing;
-      await outcome;
-      expect(pool.getSnapshot().workersCreated).toBe(1);
-    } else {
-      await expect(page).resolves.toEqual({ data: [{ id: "queued", projectId: null }] });
+    await outcome;
+    if (!fails && !closing) {
+      // Recurring pages keep the replacement warm across minute-long idle gaps.
+      for (let index = 2; index <= 3; index++) {
+        vi.advanceTimersByTime(60_000);
+        const next = harness.list();
+        harness.reply({ data: [], unused: "x".repeat(64 * 1024) }, index);
+        await expect(next).resolves.toEqual({ data: [] });
+      }
       expect(pool.getSnapshot().workersCreated).toBe(2);
-      expect(pool.getSnapshot().workers).toBe(1);
     }
+    harness.emitExit();
+    await (closing ?? harness.client.closeAndWait());
+    if (fails) {
+      expect(termination).toHaveBeenCalledTimes(2);
+    }
+    expect(pool.getSnapshot().workers).toBe(0);
   });
-
-  it.each(["page", "close"])(
-    "settles failed idle retirement before %s completes",
-    async (nextAction) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const harness = createHarness();
-      const pool = await startWorker(harness);
-      const entered = createDeferred<void>();
-      const failedStop = createDeferred<number>();
-      const terminate = vi.spyOn(Worker.prototype, "terminate").mockImplementationOnce(() => {
-        entered.resolve();
-        return failedStop.promise;
-      });
-      vi.advanceTimersByTime(60_000);
-      await entered.promise;
-      const page = nextAction === "page" ? harness.list() : undefined;
-      const rejectedPage = page
-        ? expect(page).rejects.toThrow("synthetic worker stop failed")
-        : undefined;
-      if (page) {
-        harness.reply({ data: [], unused: "x".repeat(64 * 1024) }, 1);
-      }
-      const closing = page ? undefined : harness.client.closeAndWait();
-      if (closing) {
-        harness.emitExit();
-      }
-      failedStop.reject(new Error("synthetic worker stop failed"));
-      try {
-        await rejectedPage;
-        harness.emitExit();
-        await expect(closing ?? harness.client.closeAndWait()).resolves.toMatchObject({
-          exited: true,
-        });
-      } finally {
-        await pool.close();
-      }
-      expect(terminate).toHaveBeenCalledTimes(2);
-      expect(pool.getSnapshot().workers).toBe(0);
-    },
-  );
 
   it.each([
     { name: "UTF-8 at the bound", bytes: 64 * 1024, character: "猫", worker: false },
