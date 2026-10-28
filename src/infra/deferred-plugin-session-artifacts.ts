@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import {
   statMigrationPath,
   type MigrationArtifactIdentity,
@@ -6,6 +7,8 @@ import {
   filterRestoreManifestTargets,
   listSessionSqliteMigrationManifestPaths,
   readSessionSqliteMigrationManifest,
+  resolveSessionSqliteMigrationRunsDir,
+  sessionSqliteMigrationTargetKey,
   type SessionSqliteMigrationTargetInput,
 } from "./session-sqlite-migration-manifest.js";
 
@@ -14,14 +17,29 @@ export type ArchivedSessionSources = Map<
   Array<{ identity: MigrationArtifactIdentity; path: string; dependencies: readonly string[] }>
 >;
 
-/** Doctor verification and cleanup consume the same manifest source custody. */
-export function collectArchivedSources(
+type ArchiveScanCacheEntry = { signature: string; archives: ArchivedSessionSources };
+
+/** Doctor asks for the same target once per source; keep the last scans, not the manifests. */
+const ARCHIVE_SCAN_CACHE_LIMIT = 16;
+const archiveScanCache = new Map<string, ArchiveScanCacheEntry>();
+
+/** Manifests are append-only per run, so identity is the sorted path list with mtime and size. */
+function archiveScanSignature(manifestPaths: readonly string[]): string {
+  return manifestPaths
+    .map((manifestPath) => {
+      const stat = statSync(manifestPath, { throwIfNoEntry: false });
+      return stat ? `${manifestPath}\u0000${stat.mtimeMs}\u0000${stat.size}` : manifestPath;
+    })
+    .join("\u0001");
+}
+
+function scanArchivedSources(
   target: SessionSqliteMigrationTargetInput,
-  env: NodeJS.ProcessEnv,
-  retainedOnly = false,
+  manifestPaths: readonly string[],
+  retainedOnly: boolean,
 ): ArchivedSessionSources {
   const archives: ArchivedSessionSources = new Map();
-  for (const manifestPath of listSessionSqliteMigrationManifestPaths(env)) {
+  for (const manifestPath of manifestPaths) {
     const manifest = readSessionSqliteMigrationManifest(manifestPath);
     const targets = manifest ? filterRestoreManifestTargets(manifest, [target]) : [];
     for (const candidate of targets) {
@@ -40,6 +58,38 @@ export function collectArchivedSources(
   }
   return archives;
 }
+
+/** Doctor verification and cleanup consume the same manifest source custody. */
+export function collectArchivedSources(
+  target: SessionSqliteMigrationTargetInput,
+  env: NodeJS.ProcessEnv,
+  retainedOnly = false,
+): ArchivedSessionSources {
+  const manifestPaths = listSessionSqliteMigrationManifestPaths(env);
+  // Runs directory, target and filter shape decide the answer; the signature says whether
+  // the recorded manifests still describe it.
+  const cacheKey = [
+    resolveSessionSqliteMigrationRunsDir(env),
+    sessionSqliteMigrationTargetKey(target),
+    retainedOnly ? "retained" : "all",
+  ].join("\u0001");
+  const signature = archiveScanSignature(manifestPaths);
+  const cached = archiveScanCache.get(cacheKey);
+  if (cached?.signature === signature) {
+    return new Map(cached.archives);
+  }
+  const archives = scanArchivedSources(target, manifestPaths, retainedOnly);
+  archiveScanCache.delete(cacheKey);
+  archiveScanCache.set(cacheKey, { signature, archives });
+  if (archiveScanCache.size > ARCHIVE_SCAN_CACHE_LIMIT) {
+    const oldestKey = archiveScanCache.keys().next();
+    if (!oldestKey.done) {
+      archiveScanCache.delete(oldestKey.value);
+    }
+  }
+  return new Map(archives);
+}
+
 
 export function existingSessionSourcePaths(
   sourcePath: string,
