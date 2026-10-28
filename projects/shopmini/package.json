@@ -1,0 +1,13 @@
+{
+  "name": "shopmini-openclaw-ai",
+  "version": "0.2.0",
+  "private": true,
+  "description": "ShopMini frontend with a local OpenClaw Gateway integration",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
