@@ -949,14 +949,18 @@ suite.define(() => {
     ).toHaveCount(0);
   });
 
-  it.each([1200, 390])(
-    "preserves a pending Draft after creation is disabled at width %s",
-    async (width) => {
+  it.each([
+    { width: 1200, refused: false },
+    { width: 390, refused: false },
+    { width: 1200, refused: true },
+  ])(
+    "preserves a pending Draft after creation is disabled (width: $width, refused: $refused)",
+    async ({ width, refused }) => {
       const page = await newPage(width);
       const gateway = await installMockGateway(page, {
         allowedSessionVisibilities: ["shared", "draft"],
         hasMultipleSessionSharingIdentities: true,
-        featureMethods: ["sessions.create"],
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
         methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
       });
       await page.goto(`${suite.server?.baseUrl ?? ""}new`);
@@ -979,16 +983,34 @@ suite.define(() => {
         allowedSessionVisibilities: ["shared"],
         hasMultipleSessionSharingIdentities: true,
       });
+      if (refused) {
+        await gateway.deferNext("sessions.create");
+        await composer.getByRole("button", { name: "Start session", exact: true }).click();
+        expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
+          visibility: "draft",
+        });
+        await gateway.rejectDeferred("sessions.create", {
+          code: "INVALID_REQUEST",
+          message: "session visibility is disabled: draft",
+        });
+        await page.getByText("session visibility is disabled: draft", { exact: true }).waitFor();
+      }
       await replaceGatewayClient(page);
 
       const notice = page.locator(".agent-chat__composer-status-text").filter({
         hasText: "Draft creation is disabled",
       });
-      await expectBrowser(notice).toBeVisible();
+      if (!refused) {
+        await expectBrowser(notice).toBeVisible();
+      }
+      await expectBrowser(page.locator(".new-session-page__visibility--draft")).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
       await expectBrowser(message).toHaveValue("Keep this private plan");
       await expectBrowser(composer.locator(".chat-attachment-file__name")).toHaveText("plan.txt");
       await message.press("Enter");
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(refused ? 1 : 0);
       await attachmentMenu.click();
       await expectBrowser(draftToggle).toHaveAttribute("aria-checked", "true");
       await draftToggle.click();
@@ -996,7 +1018,7 @@ suite.define(() => {
       await expectBrowser(attachmentMenu).toHaveAttribute("aria-expanded", "false");
       await expectBrowser(notice).toHaveCount(0);
       await composer.getByRole("button", { name: "Start session", exact: true }).click();
-      const create = await gateway.waitForRequest("sessions.create");
+      const create = await gateway.waitForRequest("sessions.create", { after: refused ? 1 : 0 });
       expect(create.params).toMatchObject({
         message: "Keep this private plan",
         attachments: [expect.objectContaining({ fileName: "plan.txt" })],
