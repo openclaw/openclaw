@@ -215,18 +215,23 @@ describe("startGatewayMaintenanceTimers", () => {
         if (order === "health-first") {
           const stop = harness.manager.stopChannel;
           vi.spyOn(harness.manager, "stopChannel").mockImplementation((...args) => {
-            recoveryOrder.push("health-stop");
+            recoveryOrder.push(`stop:${args[1] ?? "all"}`);
             return stop(...args);
           });
           const capture = harness.manager.captureAccountRestart;
           vi.spyOn(harness.manager, "captureAccountRestart").mockImplementation((...args) => {
-            recoveryOrder.push("thaw-capture");
+            recoveryOrder.push(`${args[2]}-capture:${args[1]}`);
             return capture(...args);
           });
         }
         await harness.advance(210_000);
         if (order === "health-first") {
-          expect(recoveryOrder).toEqual(["health-stop", "thaw-capture", "thaw-capture"]);
+          expect([...recoveryOrder]).toEqual([
+            "health-monitor-capture:first",
+            "stop:first",
+            "host-thaw-capture:first",
+            "host-thaw-capture:second",
+          ]);
         } else {
           expect(harness.stops).toEqual([]);
           if (order === "same-clock") {
@@ -243,6 +248,8 @@ describe("startGatewayMaintenanceTimers", () => {
             harness.manager.getRuntimeSnapshot().channelAccounts.discord?.first?.lastStartAt,
           ).toBe(originalStart);
         }
+        expect(harness.stops).toEqual(["first"]);
+        expect(harness.starts).toEqual(["first", "second", "first"]);
         harness.state.busy = false;
         await harness.advance(TICK_INTERVAL_MS);
         expect(harness.stops).toEqual(["first", "second"]);

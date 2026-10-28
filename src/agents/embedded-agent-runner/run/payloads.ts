@@ -15,6 +15,7 @@ import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-rep
 import { applyAssistantDeliveryDirectives } from "../../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readAgentAssistantSource } from "../../../infra/agent-events.js";
+import { hasMeaningfulAutomationResult } from "../../../infra/agent-run-registry.automation.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
@@ -483,7 +484,8 @@ export function buildEmbeddedRunPayloads(params: {
       ? "Gateway restarting…"
       : buildFailureWarning({
           lastToolError: params.lastToolError,
-          hasUserFacingReply,
+          // A recorded progress/done/blocked summary already reports the scheduled run.
+          hasUserFacingReply: hasUserFacingReply || hasMeaningfulAutomationResult(params.runId),
           verboseLevel: params.verboseLevel,
           useMarkdown,
         });

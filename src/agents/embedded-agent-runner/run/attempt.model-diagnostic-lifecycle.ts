@@ -38,7 +38,10 @@ import {
   formatPropagatedDiagnosticTraceparent,
   hasDiagnosticTracePropagationConsumer,
 } from "../../../infra/diagnostic-trace-propagation.js";
-import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
+import {
+  emitDiagnosticsTimelineEvent,
+  modelUsageTimelineAttributes,
+} from "../../../infra/diagnostics-timeline.js";
 import { withModelTransportContext } from "../../../llm/model-transport-context.js";
 import type { ModelRequestHeaders } from "../../../llm/types.js";
 import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
@@ -258,6 +261,13 @@ export function createModelLifecycle(params: {
       timestamp: new Date(startedAt).toISOString(),
       runId: eventBase.runId,
       spanId: callId,
+      provider: eventBase.provider,
+      attributes: {
+        model: eventBase.model,
+        observationUnit: "logical-call",
+        ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+        traceId: trace.traceId,
+      },
     },
     { config: params.ctx.config },
   );
@@ -436,6 +446,11 @@ export function createModelLifecycle(params: {
         ok: failure === undefined,
         ...(responseStatus !== undefined ? { status: responseStatus } : {}),
         attributes: {
+          observationUnit: "logical-call",
+          ...modelUsageTimelineAttributes(observer.terminalFields().usage),
+          ...(observer.state.responseModel ? { responseModel: observer.state.responseModel } : {}),
+          ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+          traceId: trace.traceId,
           ...(model ? { model } : {}),
           ...(api ? { api } : {}),
           ...(transport ? { transport } : {}),

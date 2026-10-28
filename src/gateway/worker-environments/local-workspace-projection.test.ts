@@ -197,6 +197,13 @@ it.each([false, true])(
   },
 );
 
+it("recovers an aggregate payload of individually valid artifacts without losing edits", async () => {
+  await archiveFixture();
+  const { proveAggregateWorkspaceRecovery } =
+    await import("./local-workspace-recovery.test-support.js");
+  await proveAggregateWorkspaceRecovery({ owner, canonical, stateRoot });
+});
+
 it.each([false, true])(
   "settles old runtime-file results (source already copied: %s)",
   async (copied) => {
@@ -238,6 +245,14 @@ it.each(["operator", "gateway"] as const)(
     await proveStoppedSandboxAuthority(owner, authority);
   },
 );
+
+it("denies guest filesystem writes after role revocation and a late involvement receipt", async ({
+  signal,
+}) => {
+  const { proveStoppedSandboxAuthority } =
+    await import("./local-workspace-cancellation.test-support.js");
+  await proveStoppedSandboxAuthority(owner, "guest-involvement", signal);
+});
 
 it("reconciles during shared state reads without caller-thread store SQL", () =>
   proveWorkerOwnedIncrementalWorkspace(owner));

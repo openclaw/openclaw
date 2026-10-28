@@ -140,13 +140,24 @@ describe("canonical anonymous HTTP entry", () => {
     });
     expect(target.options.search).toContain("__openclawSessionKey=");
     expect(target.options.search).toContain("__openclawComposerFocus=1");
-    const response = await sendRequest(server(), {
+    const instance = server();
+    const response = await sendRequest(instance, {
       path: target.options.pathname + (target.options.search ?? ""),
       host: "gateway.lan:18789",
       remoteAddress: "192.168.1.25",
     });
     expect(response.res.statusCode).toBe(200);
     expect(response.getBody()).toContain("<openclaw-app>");
+    expect(resolveSession).not.toHaveBeenCalled();
+    expect(reader).not.toHaveBeenCalled();
+
+    const returnPath = target.options.pathname + (target.options.search ?? "");
+    const entry = `/control/__openclaw__/session-entry?${new URLSearchParams({ path: returnPath })}`;
+    expect((await request(instance, entry + "&probe=1")).res.statusCode).toBe(401);
+    const app = await request(instance, entry);
+    expect(app.res.statusCode).toBe(200);
+    expect(app.getBody()).toContain("<openclaw-app>");
+    expect(app.getBody()).toContain(JSON.stringify(returnPath));
     expect(resolveSession).not.toHaveBeenCalled();
     expect(reader).not.toHaveBeenCalled();
   });

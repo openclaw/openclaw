@@ -1351,6 +1351,7 @@ button.chat-reply-attribution__target:disabled {
 
   .chat-group.user.chat-group--peer .chat-group-footer {
     flex-wrap: nowrap;
+    align-items: flex-end;
     width: fit-content;
     max-width: 100%;
   }
@@ -1359,6 +1360,11 @@ button.chat-reply-attribution__target:disabled {
     flex: 0 1 auto;
     flex-wrap: wrap;
     gap: 0 8px;
+  }
+
+  /* Wrapped peer names keep their own line; time shares the actions' visual row. */
+  .chat-group.user.chat-group--peer .chat-group-timestamp {
+    line-height: var(--chat-footer-row);
   }
 
   .chat-group.user.chat-group--peer .chat-group-footer-actions {

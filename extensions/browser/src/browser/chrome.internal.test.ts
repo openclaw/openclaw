@@ -136,7 +136,7 @@ function requireSpawnCall(index = 0): unknown[] {
 
 function mockExpiredLaunchPollingClock(): void {
   let now = 1_000_000;
-  vi.spyOn(Date, "now").mockImplementation(() => {
+  vi.spyOn(performance, "now").mockImplementation(() => {
     now += 1_000;
     return now;
   });
@@ -747,7 +747,7 @@ describe("chrome.ts internal", () => {
 
       const originalFetch = globalThis.fetch;
       let now = 1_000_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.spyOn(performance, "now").mockImplementation(() => now);
       let discoveryCalls = 0;
       vi.stubGlobal(
         "fetch",

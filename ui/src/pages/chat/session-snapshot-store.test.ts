@@ -158,28 +158,6 @@ async function readRawRecord(
 }
 
 describe("persistent chat session snapshots", () => {
-  it("restores model display data with the conversation, isolated from another account", async () => {
-    const writer = new SessionSnapshotStore();
-    const remembered: NonNullable<ChatSessionSnapshot["composer"]> = {
-      id: "model",
-      provider: "openai",
-      name: "Remembered model",
-      reasoning: true,
-      speed: { active: false, currentOverride: "off", label: "Standard", supported: true },
-      thinkingLevel: "high",
-      thinkingDefault: "medium",
-      thinkingLevels: [{ id: "high", label: "High" }],
-      permissionMode: "full",
-      defaultPermissionMode: "workspace",
-    };
-    await persist(writer, sessionKey, { ...snapshot(), composer: remembered });
-    expect((await readSnapshot())?.composer).toEqual(remembered);
-    const otherKey = resolveChatSnapshotKey(
-      { ...snapshotHost, client: { recoveryScope: "account-b", recoveryScopeReady: true } },
-      { sessionKey: rawKey(sessionKey) },
-    );
-    expect(await readSnapshot(otherKey)).toBeNull();
-  });
   let writer: SessionSnapshotStore;
   const seed = async (value = snapshot(), cacheKey = sessionKey) =>
     persist(writer, cacheKey, value);
@@ -297,9 +275,22 @@ describe("persistent chat session snapshots", () => {
     },
   );
 
-  it("restores a board snapshot and its original ticket receipt with the conversation", async () => {
-    const value: ChatSessionSnapshot = {
-      ...snapshot("dashboard conversation"),
+  it.each<Partial<ChatSessionSnapshot>>([
+    {
+      composer: {
+        id: "model",
+        provider: "openai",
+        name: "Remembered model",
+        reasoning: true,
+        speed: { active: false, currentOverride: "off", label: "Standard", supported: true },
+        thinkingLevel: "high",
+        thinkingDefault: "medium",
+        thinkingLevels: [{ id: "high", label: "High" }],
+        permissionMode: "full",
+        defaultPermissionMode: "workspace",
+      },
+    },
+    {
       board: {
         receivedAtMs: 100,
         snapshot: {
@@ -309,11 +300,18 @@ describe("persistent chat session snapshots", () => {
           ],
         },
       },
-    };
+    },
+  ])("restores scoped display facts with their original receipts (%j)", async (facts) => {
+    const value = { ...snapshot(), ...facts };
     await seed(value);
-    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(value);
+    expect(await readSnapshot()).toEqual(value);
+    const otherKey = resolveChatSnapshotKey(
+      { ...snapshotHost, client: { recoveryScope: "account-b", recoveryScopeReady: true } },
+      { sessionKey: rawKey(sessionKey) },
+    );
+    expect(await readSnapshot(otherKey)).toBeNull();
     await deleteStoredChatSnapshot(sessionKey);
-    expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+    expect(await readSnapshot()).toBeNull();
   });
 
   it("does not return a cached board after its pending read is invalidated", async () => {
@@ -457,7 +455,7 @@ describe("persistent chat session snapshots", () => {
 
   it.each(["direct", "prewarmed"])("discards the previous projection (%s)", async (mode) => {
     await persist(writer, sessionKey, snapshot("current"));
-    await putRawRecord(envelope(sessionKey, snapshot("old"), 4));
+    await putRawRecord(envelope(sessionKey, snapshot("old"), 6));
     if (mode === "prewarmed") {
       void prewarmChatSnapshot(sessionKey);
     }

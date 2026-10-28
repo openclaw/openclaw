@@ -3,16 +3,12 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
 import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js";
 import { encodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
-import type {
-  UsageCostWorkerDatabase,
-  UsageCostWorkerInput,
-  UsageCostWorkerReply,
-} from "../../infra/session-cost-usage-worker.types.js";
-import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
+import type { UsageCostWorkerDatabase } from "../../infra/session-cost-usage-worker.types.js";
 import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-sizing.js";
-import { WorkerTaskError, type WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { runWithAgentDatabaseReadAdmissionTurn } from "../../state/agent-database-admission.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
   assertAgentDatabaseResourceAdmission,
@@ -52,7 +48,9 @@ import type {
 import {
   createSessionTranscriptHistoryPool,
   createUsageCostPool,
+  type SessionCostWorkerLane,
   type SessionDatabaseWorkerLane,
+  type SessionHistoryWorkerLane,
 } from "./session-transcript-read-pools.js";
 import type {
   SessionHistoryWorkerInput,
@@ -60,18 +58,12 @@ import type {
 } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
+export type { SessionHistoryWorkerLane } from "./session-transcript-read-pools.js";
+
 // Discovery uses routing settings; model and plugin config stays with host consumers.
 function sessionDiscoveryConfig({ agents, acp, session }: OpenClawConfig) {
   return { agents, acp, session };
 }
-
-export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
-  pool: WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>;
-};
-
-export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
-  pool: ReturnType<typeof createSessionTranscriptHistoryPool>;
-};
 
 export type SessionDatabaseCleanup = { run: () => Promise<void> };
 
@@ -651,12 +643,12 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
       ): Promise<SessionTranscriptWorkerValues[Input["kind"]]> => {
         // An admitted empty catalog can still belong to the agent's first schema birth.
         for (const physicalPath of admissionPaths) {
-          const preparation = getPendingOpenClawAgentDatabasePreparation(physicalPath);
+          const preparation = getPendingOpenClawAgentDatabasePreparation(physicalPath, "read");
           if (preparation) {
             await racePromiseWithAbortSignal(preparation, signal, (aborted) => aborted.reason);
           }
         }
-        const reply = await runWithSqliteDatabaseAdmissionTurn(
+        const reply = await runWithAgentDatabaseReadAdmissionTurn(
           admissionPaths,
           () =>
             lane.pool.run(
@@ -670,6 +662,12 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             ),
           admissionFamilies,
           signal,
+          {
+            env:
+              input.kind === "combined-store-topology"
+                ? input.request.options.discovery.env
+                : input.request.env,
+          },
         );
         const result = unwrapSessionTranscriptWorkerReply(reply);
         // SAFETY: The pool pairs this reply with the exact request dispatched above.

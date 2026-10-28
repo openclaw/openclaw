@@ -122,7 +122,7 @@ describe("openclaw tool", () => {
     const result = await withSystemAgentOverviewSources(snapshot, async () => {
       const out = await tool.execute("t-overview", { action: "overview" });
       const text = toolText(out);
-      expect(text).toContain("OpenClaw online. Little claws, typed tools.");
+      expect(text).toContain("OpenClaw online. Little templates, typed tools.");
       expect(text).toContain("Config: valid");
       expect(text).toContain("Default agent: main");
       expect(text).toContain("Default model: openai/gpt-5.2");

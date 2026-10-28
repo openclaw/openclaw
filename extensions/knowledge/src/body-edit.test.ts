@@ -22,7 +22,7 @@ const tempDirs = useTestTempDirs();
 // The open envelope schema does not model the body_change record that body edits add.
 type BodyChanged = Envelope & { body_change: { reason: string } };
 
-/** Fresh complete fences for one synthetic active-page edit. */
+/** Fresh complete fences for one synthetic same-size edit; the large fixtures are over the page budget. */
 async function input(f: any, overrides = {}) {
   const current = await f.record(),
     data = await f.scan();
@@ -34,14 +34,14 @@ async function input(f: any, overrides = {}) {
     expectedHash: current.hash,
     expectedOntologyFingerprint: data.ontology.fingerprint,
     start: 0,
-    end: 0,
+    end: 17,
     replacement: "Added paragraph.\n",
     reason: "Fixture body edit",
     ...overrides,
   };
 }
 
-it("bounded edits grow a page beyond input size, preserve metadata/evidence and replay exactly", async () => {
+it("bounded edits of a large page preserve metadata/evidence and replay exactly", async () => {
   const f = await capacityFixture(tempDirs),
     before = await f.record();
   // Unknown YAML/comments and existing evidence remain intact through the normal writer.
@@ -50,11 +50,11 @@ it("bounded edits grow a page beyond input size, preserve metadata/evidence and 
     before!.raw.replace("revision:", "# authored comment\ncustom: preserve-me\nrevision:"),
   );
   const baseline = await f.record(),
-    request = await input(f, { replacement: "b".repeat(48000) });
+    request = await input(f, { end: 48000, replacement: "b".repeat(48000) });
   const saved = await f.storage.editBody(request, f.access);
   expect(saved.state).toBe("published");
   const after = await f.record();
-  expect(after!.body).toBe(request.replacement + baseline!.body);
+  expect(after!.body).toBe(request.replacement + baseline!.body.slice(48000));
   expect(after!.revision).toBe(baseline!.revision + 1);
   expect(after!.raw).toMatch(/# authored comment/);
   expect(after!.raw).toMatch(/custom: preserve-me/);
@@ -65,15 +65,16 @@ it("bounded edits grow a page beyond input size, preserve metadata/evidence and 
     f.storage.editBody({ ...request, replacement: "different" }, f.access),
   ).rejects.toThrow(/request|payload|intent/i);
   const tail = await input(f, {
-    start: after!.body.length,
+    start: after!.body.length - 4,
     end: after!.body.length,
     replacement: "tail",
   });
   await f.storage.editBody(tail, f.access);
-  expect((await f.record())!.body).toBe(after!.body + "tail");
+  const tailed = after!.body.slice(0, -4) + "tail";
+  expect((await f.record())!.body).toBe(tailed);
   const deletion = await input(f, { start: 0, end: 48000, replacement: "" });
   await f.storage.editBody(deletion, f.access);
-  expect((await f.record())!.body).toBe(baseline!.body + "tail");
+  expect((await f.record())!.body).toBe(tailed.slice(48000));
 });
 
 it("all fences, range, request budget, authority and byte overflow fail before acceptance", async () => {
@@ -128,7 +129,7 @@ it("interrupted large edits replay once; external changes before acceptance are 
   const resumed = await new KnowledgeStorage(f.config, f.db).editBody(request, f.access);
   expect(resumed.revision).toBe(before!.revision + 1);
   expect(resumed.state).toBe("published");
-  expect((await f.record())!.body).toBe(request.replacement + before!.body);
+  expect((await f.record())!.body).toBe(request.replacement + before!.body.slice(17));
   const next = await input(f),
     raw = await readFile(f.file, "utf8");
   const concurrent = new KnowledgeStorage(f.config, f.db, (stage) => {

@@ -1,3 +1,4 @@
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { CLI_NAME } from "../cli/cli-name.js";
 import {
   findOptionalCompletionInstallFailure,
@@ -28,14 +29,14 @@ export async function setupWizardShellCompletion(params: {
       if (!failure) {
         throw error;
       }
-      const command = formatCompletionReloadCommand(
+      const command = terminalText`${formatCompletionReloadCommand(
         completionStatus.shell,
         completionStatus.cachePath,
-      );
+      )}`;
       if (failure.kind === "write") {
         await params.prompter.note(
           t("wizard.completion.profileNotWritable", {
-            profile: failure.error.path ?? resolveCompletionProfilePath(completionStatus.shell),
+            profile: terminalText`${failure.error.path ?? resolveCompletionProfilePath(completionStatus.shell)}`,
             shell: completionStatus.shell,
             command,
           }),
@@ -44,7 +45,7 @@ export async function setupWizardShellCompletion(params: {
       } else {
         await params.prompter.note(
           [
-            `Automatic shell completion installation failed (profile is not valid UTF-8 at ${failure.profilePath}).`,
+            terminalText`Automatic shell completion installation failed (profile is not valid UTF-8 at ${failure.profilePath}).`,
             "The file was left untouched.",
             `For this ${completionStatus.shell} session only, run:`,
             command,
@@ -101,7 +102,7 @@ export async function setupWizardShellCompletion(params: {
     }
 
     const shell = completionStatus.shell;
-    const command = formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell));
+    const command = terminalText`${formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell))}`;
     const reloadHint =
       shell === "powershell"
         ? t("wizard.completion.reloadPowerShell", { command })

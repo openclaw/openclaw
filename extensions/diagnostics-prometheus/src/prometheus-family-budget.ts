@@ -49,6 +49,8 @@ export const PROMETHEUS_FAMILY_RESERVES = {
   openclaw_heap_old_generation_after_gc_ratio: 128,
   openclaw_heap_size_limit_bytes: 128,
   openclaw_heap_space_bytes: 256,
+  openclaw_heap_used_after_major_gc_bytes: 64,
+  openclaw_heap_used_after_major_gc_timestamp_seconds: 64,
   openclaw_heap_used_ratio: 128,
   openclaw_liveness_cpu_core_ratio: 4,
   openclaw_liveness_event_loop_delay_max_seconds: 4,

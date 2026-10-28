@@ -489,7 +489,7 @@ class CompletionCacheMissingError extends Error {
   }
 }
 
-export function findCompletionProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
+function findCompletionProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
   if (isErrno(err) && PROFILE_WRITE_ERROR_CODES.has(err.code ?? "")) {
     return err;
   }

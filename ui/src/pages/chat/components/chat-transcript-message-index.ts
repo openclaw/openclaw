@@ -8,6 +8,7 @@ import {
   coalesceAgentRunFrames,
 } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import { isHandoffBoundaryItem } from "../chat-sessions-yield.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
@@ -188,7 +189,7 @@ export function projectTranscriptChain(
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {
     // A handoff boundary only shapes the grouping above; it has no row of its own.
-    if (item.kind === "notice" && item.handoffBoundary) {
+    if (isHandoffBoundaryItem(item)) {
       return false;
     }
     const previous = collapsedItems[index - 1];

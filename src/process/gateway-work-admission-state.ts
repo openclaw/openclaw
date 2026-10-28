@@ -21,6 +21,8 @@ export type GatewayRootWorkAdmission = {
   origin: string;
   references: number;
   released: boolean;
+  /** A long-lived subscription that its owner retires when restart drain begins. */
+  subscription?: true;
   retiredByReset?: true;
   releaseObservers?: Set<(reason: "settled" | "reset") => void>;
 };
@@ -31,6 +33,7 @@ export const currentRootWork = new AsyncContext<GatewayRootWorkAdmission>(
 export const reloadWaitingRoots = new AsyncContext<ReadonlySet<GatewayRootWorkAdmission>>(
   Symbol("gatewayReloadWaitingRoots"),
 );
+export const subscriptionRootWork = new AsyncContext<true>(Symbol("gatewaySubscriptionRootWork"));
 
 export function createShutdownCleanupController(): AbortController {
   const controller = new AbortController();
@@ -67,29 +70,36 @@ export const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
   }),
 );
 
+function isActiveRootWork(
+  admission: GatewayRootWorkAdmission,
+  opts: { excludeCurrent?: boolean } | undefined,
+): boolean {
+  // An open subscription is not pending work until drain retires it; its close then is.
+  if (admission.subscription && GATEWAY_WORK_ADMISSION_STATE.restartDrainReason === undefined) {
+    return false;
+  }
+  return (
+    opts?.excludeCurrent !== true ||
+    (admission !== currentRootWork.getStore() && !reloadWaitingRoots.getStore()?.has(admission))
+  );
+}
+
 /** Active root requests/ticks, optionally excluding the caller running prepare. */
 export function getActiveGatewayRootWorkCount(opts?: { excludeCurrent?: boolean }): number {
-  const active = GATEWAY_WORK_ADMISSION_STATE.activeRootWork;
-  if (!opts?.excludeCurrent) {
-    return active.size;
+  let count = 0;
+  for (const admission of GATEWAY_WORK_ADMISSION_STATE.activeRootWork) {
+    if (isActiveRootWork(admission, opts)) {
+      count += 1;
+    }
   }
-  const excluded = new Set(reloadWaitingRoots.getStore());
-  const current = currentRootWork.getStore();
-  if (current) {
-    excluded.add(current);
-  }
-  return active.size - [...excluded].filter((root) => active.has(root)).length;
+  return count;
 }
 
 /** Bounded, deterministic root-owner inventory for shutdown diagnostics. */
 export function getActiveGatewayRootWorkHolders(opts?: { excludeCurrent?: boolean }): string[] {
-  const current = currentRootWork.getStore();
   const counts = new Map<string, number>();
   for (const admission of GATEWAY_WORK_ADMISSION_STATE.activeRootWork) {
-    if (
-      opts?.excludeCurrent === true &&
-      (admission === current || reloadWaitingRoots.getStore()?.has(admission))
-    ) {
+    if (!isActiveRootWork(admission, opts)) {
       continue;
     }
     counts.set(admission.origin, (counts.get(admission.origin) ?? 0) + 1);

@@ -88,23 +88,6 @@ function createRuntime() {
 }
 
 describe("runtime-guard", () => {
-  it.each(["24.22.0", "26.12.0"])(
-    "refuses Node %s with compromised-key trust even when SQLite is healthy",
-    async (version) => {
-      state.version = version;
-      state.lossless = true;
-      const runtime = createExitingRuntime();
-      await expect(assertSupportedRuntime(runtime)).rejects.toThrow("exit");
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Upgrade Node"));
-    },
-  );
-  it("validates ordinary CLI runtimes without initializing SQLite worker policy", async () => {
-    state.initializeSqlite.mockClear();
-    state.version = "24.22.1";
-    state.lossless = true;
-    await assertSupportedRuntime(createExitingRuntime());
-    expect(state.initializeSqlite).not.toHaveBeenCalled();
-  });
   it("warns once while admitting capable Node 22 diagnostics", async () => {
     const runtime = createRuntime();
     const details = runtimeDetails("node", { version: "22.23.2", sqliteVersion: null });
@@ -247,9 +230,13 @@ describe("runtime-guard", () => {
     ["22.23.2", false],
     ["23.11.0", false],
     ["24.15.0", false],
+    ["24.16.0", true],
+    ["24.22.0", true],
     ["24.22.1", true],
     ["25.9.0", false],
     ["26.0.0", false],
+    ["26.1.0", true],
+    ["26.12.0", true],
     ["26.12.1", true],
     ["27.0.0", true],
     ["v27.0.0-head", true],
@@ -318,7 +305,7 @@ describe("runtime-guard", () => {
     expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw requires Node >=24.22.1 <25, or >=26.12.1.",
+        "openclaw requires Node >=24.16.0 <25, or >=26.1.0.",
         `Detected: ${detected}.`,
         `PATH searched: ${path}`,
         "Install Node: https://nodejs.org/en/download",
@@ -329,14 +316,21 @@ describe("runtime-guard", () => {
   });
 
   it.each([
-    runtimeDetails("node", {
-      sqliteVersion: "3.53.3",
-      sqliteProbe: { available: true, version: "3.53.3", text: true, blob: true, json: true },
-    }),
+    ...["24.16.0", "24.22.0", "24.22.1", "26.1.0", "26.12.0"].map((version) =>
+      runtimeDetails("node", {
+        version,
+        sqliteVersion: "3.53.3",
+        sqliteProbe: { available: true, version: "3.53.3", text: true, blob: true, json: true },
+      }),
+    ),
     runtimeDetails("bun"),
   ])("returns silently when $kind runtime meets requirements", async (details) => {
+    state.initializeSqlite.mockClear();
     const runtime = createRuntime();
     await expect(assertSupportedRuntime(runtime, details)).resolves.toBeUndefined();
+    if (details.kind === "node") {
+      expect(state.initializeSqlite).not.toHaveBeenCalled();
+    }
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(runtime.error).not.toHaveBeenCalled();
   });
@@ -455,7 +449,9 @@ describe("sealed worker runtime", () => {
   it.each([
     { version: "22.23.2", supported: false },
     { version: "26.0.0", supported: false },
+    { version: "24.16.0", supported: true },
     { version: "24.22.1", supported: true },
+    { version: "26.1.0", supported: true },
     { version: "26.12.1", supported: true },
   ])("handles worker runtime $version", async ({ version, supported }) => {
     state.version = version;

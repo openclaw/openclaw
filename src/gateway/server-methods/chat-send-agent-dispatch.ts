@@ -328,6 +328,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
             replyDispatchRun = options;
             if (activeRunAbort.markExecutionStarted()) {
               admission.armOperatorRunCancellation();
+              params.onExecutionStarted?.();
             }
             // A bound runtime can start on a different transcript than the source chat.
             agentRunStarted = true;
@@ -371,6 +372,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   providerReviewAcknowledgment: request.providerReviewAcknowledgment,
                   forceRestartSafeTools: request.restartResume?.forceRestartSafeTools,
                   forceCodeModeTools: request.restartResume?.forceCodeModeTools,
+                  ...params.continuationPolicy,
                   dashboardReadAdmission,
                   skillLibraryAuthoring,
                   ...(cronCreatorAuthority

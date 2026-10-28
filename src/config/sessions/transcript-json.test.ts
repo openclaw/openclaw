@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import {
   prepareCodeModeCheckpoint,
@@ -128,6 +128,24 @@ it("retains ordinary shared JSON and unchanged frozen containers", () => {
   expect(nested.content[1]).toBe(block);
   const frozen = Object.freeze({ nested: Object.freeze({ value: 7 }) });
   expect(normalizeTranscriptJsonValue(frozen, "data")).toBe(frozen);
+});
+
+it("normalizes array slots without allocating an unused property-name list", () => {
+  const values = [undefined, -0, Number.NaN, "🦞\ud800"];
+  values.length++;
+  const value = { content: values };
+  const expected = JSON.stringify(value);
+  const keys = vi.spyOn(Object, "keys");
+  let enumerated: boolean;
+  try {
+    normalizeTranscriptJsonValue(value, "");
+    enumerated = keys.mock.calls.some(([source]) => source === values);
+  } finally {
+    keys.mockRestore();
+  }
+  expect(JSON.stringify(value)).toBe(expected);
+  expect(Object.isFrozen(values)).toBe(true);
+  expect(enumerated).toBe(false);
 });
 
 it("copies changed frozen containers without changing the source", () => {

@@ -66,6 +66,8 @@ export function activateGatewayAgentDatabaseStartup(params: {
   params.admission?.activate({
     isCurrent: params.isCurrent,
     preparationReady: params.preparationReady,
+    captureReadAdmission: ({ agentId, paths, env, signal, assertCurrent }) =>
+      createPreparationGuard(agentId, paths, env, signal, assertCurrent),
     openAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
         const { captureOpenClawAgentDatabaseExecution, prepareOpenClawAgentDatabaseExecution } =

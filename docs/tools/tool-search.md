@@ -64,6 +64,11 @@ one selected tool when it needs the exact schema, and calls that tool through
 OpenClaw. Direct-only tools remain model-visible and are not added to the
 catalog.
 
+Claude CLI runs use Claude's native `ToolSearch` for deferred MCP definitions.
+OpenClaw keeps the same authorized tools and maps the enabled/disabled setting to
+native deferral. The native tool does not use OpenClaw's search modes, limits, or
+include/exclude selectors. See [CLI backends](/gateway/cli-backends#keeping-claude-code-orchestration-tools-on-managed-turns).
+
 Codex harness runs do not receive these experimental OpenClaw Tool Search
 controls. OpenClaw passes product capabilities to Codex as dynamic tools, and
 Codex owns the stable native code mode, native tool search, deferred dynamic

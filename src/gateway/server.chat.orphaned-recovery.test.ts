@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { observeRecoveryRoots } from "../agents/main-session-recovery/main-session-recovery-runtime.test-support.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -27,7 +29,9 @@ it("preserves interrupted recovery custody when reusing a failed session", () =>
   expect(recoverTerminalSessionEntryForVisibleTurn(entry)).toEqual(entry);
 });
 
-it("chat.send recovers failed and statusless work for new messages and retained retries exactly once", async () => {
+it("chat.send recovers failed and statusless work for new messages and retained retries exactly once", async ({
+  signal,
+}) => {
   const priorMessage = "Finish the interrupted recovery task.";
   const nextMessage = "Then verify the new request.";
   let cfg: OpenClawConfig = {};
@@ -49,7 +53,14 @@ it("chat.send recovers failed and statusless work for new messages and retained 
   });
   await runQaGatewayFixture(
     async () => {
-      await fixture.start();
+      const startup = observeRecoveryRoots("main-session:startup-recovery", 1);
+      try {
+        await fixture.start();
+        // Seed request-owned orphans only after the startup recovery attempt settles.
+        await withinTest(startup.completed, signal);
+      } finally {
+        startup.restore();
+      }
       const client = fixture.client;
       const workspace = cfg.agents?.defaults?.workspace;
       assert(workspace, "Expected fixture workspace");

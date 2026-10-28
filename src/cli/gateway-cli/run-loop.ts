@@ -6,6 +6,7 @@ import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayInstallationReplacement } from "../../gateway/stale-install.js";
 import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
+import { startDiagnosticsTimeline } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
@@ -21,7 +22,7 @@ import { registerSignalExitOwner } from "../signal-exit-barrier.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
 import { installGatewayHostLifeline } from "./host-lifeline.js";
-import { createGatewayRunCleanup } from "./run-loop-cleanup.js";
+import { createGatewayRunCleanup, finishGatewayRunCleanup } from "./run-loop-cleanup.js";
 import { drainGatewayActiveWork } from "./run-loop-drain.js";
 import * as loopExit from "./run-loop-exit.js";
 import {
@@ -75,6 +76,7 @@ export async function runGatewayLoop(params: {
   onProcessResourcesSettled?: (outcome: "drained" | "retained") => void;
   onRestartStartupFailure?: GatewayRestartStartupFailureHandler;
 }): Promise<number> {
+  startDiagnosticsTimeline(params.ownsProcessLifecycle === true);
   // macOS/BSD process inspection reports process.title instead of the original
   // argv. Give the long-running Gateway a verifiable identity for lock readers.
   if (process.title === "openclaw") {
@@ -1341,20 +1343,14 @@ export async function runGatewayLoop(params: {
     cleanupSignals,
     onSettled: params.onProcessResourcesSettled,
   });
-  if (loopFailure) {
-    failures.unshift(loopFailure.error);
-  }
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Gateway loop and final resource cleanup failed", {
-      cause: failures[0],
-    });
-  }
-  const code = hostExitRequested && terminalExitCode === 0 ? hostExitCode : (terminalExitCode ?? 0);
-  // Cleanup failure promotes success, but cannot replace a supervisor-owned
-  // failure status that already selects its terminal recovery behavior.
-  return cleanup.failed && code === 0 ? 1 : code;
+  return finishGatewayRunCleanup({
+    cleanup,
+    failures,
+    loopFailure,
+    hostExitRequested,
+    hostExitCode,
+    terminalExitCode,
+    ownsProcessLifecycle: params.ownsProcessLifecycle,
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -26,6 +26,9 @@ history provide database-focused alternatives.
 Archive creation, verification, and restore reports strip terminal escape sequences
 and display embedded newlines, tabs, and carriage returns as `\n`, `\t`, and `\r`.
 Archive paths, restored data, and `--json` output retain their original values.
+Quoted archive paths and restore targets preserve leading and trailing whitespace in file and
+directory names. Required paths must not be blank; `~/` expands from the effective
+OpenClaw home.
 
 ```bash
 openclaw backup create

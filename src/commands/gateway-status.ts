@@ -23,6 +23,7 @@ import { pickBestEffortPrimaryTailnetIPv4 } from "../infra/network-discovery-dis
 import type { SshTunnel } from "../infra/ssh-tunnel.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import {
   extractConfigSummary,
@@ -133,10 +134,14 @@ export async function gatewayStatusCommand(
   const deadlineMs = performance.now() + overallTimeoutMs;
   const remainingMs = () => Math.max(0, Math.ceil(deadlineMs - performance.now()));
   let timedOut = false;
-  const deadlineTimer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, overallTimeoutMs);
+  const cancelDeadline = scheduleAbsoluteDeadline(
+    deadlineMs,
+    () => {
+      timedOut = true;
+      controller.abort();
+    },
+    () => performance.now(),
+  );
   let abortSignal: "SIGINT" | "SIGTERM" | undefined;
   const onSignal = (signal: "SIGINT" | "SIGTERM") => {
     if (!abortSignal) {
@@ -359,7 +364,7 @@ export async function gatewayStatusCommand(
         },
       );
     } finally {
-      clearTimeout(deadlineTimer);
+      cancelDeadline();
       process.off("SIGINT", onSigInt);
       process.off("SIGTERM", onSigTerm);
     }

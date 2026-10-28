@@ -24,6 +24,10 @@ and enrichment and `knowledge-meeting-ingest` for meeting transcripts.
 - Raw sources are preserved for provenance with `knowledge_attach`.
 - State sections are rewritten with current best understanding, never appended
   to. Preserve unrelated content, user assessments and contradictory evidence.
+- Page bodies have a size budget, smaller for hub pages
+  ([page budgets](references/publish.md#page-budgets)). A rejected page write
+  saves nothing: extract a section that has its own subject with
+  `knowledge_extract_section`, keep the facts as claims, and never truncate.
 - File by PRIMARY SUBJECT, not by format. Inspect `knowledge_ontology`; the
   backend assigns the record ID/path. Do not copy gbrain slugs or directories.
 

@@ -16,7 +16,7 @@ the Xcode requirements below.
 
 - **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
-- **Node.js 24.22.1+ or 26.12.1+ & pnpm** for the gateway, CLI, and packaging scripts.
+- **Patched Node.js 24.22.1+ or 26.12.1+ & pnpm** is recommended for development and packaging. Gateway/CLI runtime compatibility starts at Node 24.16.0 on 24.x or 26.1.0, subject to SQLite checks.
   SwiftPM and Xcode generate the Gateway protocol models with the first
   supported Node on `PATH`, then `/opt/homebrew/bin/node` or
   `/usr/local/bin/node`. Version-manager shims such as mise, asdf, or Volta

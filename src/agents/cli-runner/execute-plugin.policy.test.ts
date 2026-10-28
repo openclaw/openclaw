@@ -10,6 +10,7 @@ import {
   transferMcpLoopbackClientGrant,
 } from "../../gateway/mcp-grant-store.js";
 import type {
+  CliBackendExecuteContext,
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
 } from "../../plugins/cli-backend.types.js";
@@ -679,4 +680,32 @@ describe("plugin-owned CLI same-turn input", () => {
     }
     expect(captureCurrentReplyMessageInjectionTarget(operation.key)).toBeUndefined();
   });
+});
+
+it("permits admitted schema discovery with exec denied, without enabling execution tools", async () => {
+  const { context } = await createExecution({
+    config: { tools: { exec: { security: "deny", ask: "off" } } },
+    nativeTools: [],
+  });
+  context.params.cliToolAvailability = {
+    native: [],
+    discovery: ["ToolSearch"],
+    openClaw: ["read"],
+  };
+  const decisions: CliBackendToolPermissionResult[] = [];
+  let retained: CliBackendExecuteContext["requestToolPermission"] | undefined;
+  await runPlugin(context, async function* (execution) {
+    retained = execution.requestToolPermission;
+    for (const toolName of ["ToolSearch", "Bash", "Agent"]) {
+      decisions.push(
+        await execution.requestToolPermission({ toolName, toolInput: { query: "read" } }),
+      );
+    }
+    yield SUCCESS_RESULT;
+  });
+  expect(decisions.map((decision) => decision.behavior)).toEqual(["allow", "deny", "deny"]);
+  expect(await retained?.({ toolName: "ToolSearch", toolInput: { query: "read" } })).toMatchObject({
+    behavior: "deny",
+  });
+  expect(mockCallGatewayTool).not.toHaveBeenCalled();
 });

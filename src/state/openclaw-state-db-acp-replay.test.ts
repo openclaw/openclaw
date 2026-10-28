@@ -65,7 +65,7 @@ const dropAccounting = `ALTER TABLE acp_replay_events DROP COLUMN estimated_byte
   ALTER TABLE acp_replay_sessions DROP COLUMN estimated_bytes;`;
 const schemaChanges = {
   current: "",
-  "missing-column": "ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path",
+  "missing-column": "ALTER TABLE template_installs DROP COLUMN bootstrap_source_path",
   "ordered-column": "ALTER TABLE worktrees DROP COLUMN provisioned_paths_json",
   "sandbox-column": "ALTER TABLE sandbox_registry_entries DROP COLUMN image",
   "cron-description": "ALTER TABLE cron_jobs DROP COLUMN description",
