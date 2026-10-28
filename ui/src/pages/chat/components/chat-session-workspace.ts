@@ -471,7 +471,41 @@ export function createSessionWorkspaceProps(
 export function resolveSessionDiffSidebarContent(
   state: SessionWorkspaceHost,
 ): SidebarContent | null {
-  return resolveSessionWorkspaceDiff(state, (path) =>
-    openFile(state, getSessionWorkspace(state), path),
+  const workspace = getSessionWorkspace(state);
+  return resolveSessionWorkspaceDiff(
+    state,
+    (path) => openFile(state, getSessionWorkspace(state), path),
+    async (path) => {
+      const client = state.client;
+      if (!client || !state.connected || !isCurrentSessionWorkspace(state, workspace)) {
+        return false;
+      }
+      try {
+        // Inspect the actual reader capability without selecting a tab or touching its draft.
+        const loaded = await readWorkspaceContent(state, workspace, (runtime) =>
+          runtime.loadSessionWorkspaceFileContent(
+            state,
+            workspace,
+            {
+              requestPath: path,
+              sessionKey: workspace.sessionKey,
+              agentId: workspace.agentId,
+              gatewayUrl: state.settings?.gatewayUrl ?? "",
+            },
+            () => refreshSessionWorkspace(state, true),
+          ),
+        );
+        return (
+          state.connected &&
+          state.client === client &&
+          isCurrentSessionWorkspace(state, workspace) &&
+          loaded?.content?.kind === "file" &&
+          Boolean(loaded.content.edit)
+        );
+      } catch {
+        // Reading actions remain available; the ordinary open owns errors and revalidation.
+        return false;
+      }
+    },
   );
 }

@@ -411,6 +411,10 @@ Opening a file collapses the file tree to make room for its preview. Use **Toggl
 file tree** to browse another file, or **Show in Files** to reveal the current file
 in its folder with the **All** filter.
 
+The **Review** file menu offers **Edit file** when the file reader confirms editing
+is available. Readable files keep **Open File** and their supported Markdown and
+source views when editing is unavailable; downloads remain available from the preview.
+
 If the **Files** panel shows a listing error, select **Retry** to load the current
 folder or search again. This keeps the session and query in place; access checks
 still apply, and a failed retry displays its error.

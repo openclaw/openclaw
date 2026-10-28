@@ -40,7 +40,7 @@ export type SessionDiffMenuDraft =
       desktop?: boolean;
       mobile?: boolean;
       canReadMarkdown?: boolean;
-      canEdit?: boolean;
+      canEdit?: boolean | Promise<boolean>;
       canViewSource?: boolean;
     }
   | {
@@ -231,6 +231,7 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
   function rawItems(
     menu: SessionDiffMenuData,
     onCopyButtonRef: (button: HTMLButtonElement) => void,
+    canEdit: boolean,
   ): MenuEntry[] {
     if (menu.kind === "jump") {
       const query = jumpQuery().trim().toLocaleLowerCase();
@@ -321,7 +322,7 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
             ]
           : []),
       ];
-      const editActions = menu.canEdit ? [menuItem("edit", t("chat.sessionDiff.editFile"))] : [];
+      const editActions = canEdit ? [menuItem("edit", t("chat.sessionDiff.editFile"))] : [];
       const codeActions = [
         menuItem("collapse-code", t("chat.sessionDiff.collapseCode")),
         menuItem("collapse-functions", t("chat.sessionDiff.collapseFunctions")),
@@ -556,11 +557,17 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
           let releaseAnchor: (() => void) | undefined;
           onSettled(() => () => releaseAnchor?.());
           const placement = menu.kind === "scope" ? (menu.placement ?? "top-start") : "bottom-end";
+          const canEdit = createMemo(
+            () => (menu.kind === "file" ? (menu.canEdit ?? false) : false),
+            {
+              loadingValue: false,
+            },
+          );
           const entries = createMemo((): MenuEntry[] => {
             const onCopyButtonRef: (button: HTMLButtonElement) => void = (button) => {
               copyPathButton = button;
             };
-            const rawEntries = rawItems(menu, onCopyButtonRef);
+            const rawEntries = rawItems(menu, onCopyButtonRef, canEdit());
             const desktop = "desktop" in menu && menu.desktop;
             if (!desktop && (!("mobile" in menu) || !menu.mobile)) {
               return rawEntries;
