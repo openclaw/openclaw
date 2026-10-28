@@ -736,11 +736,11 @@ describe("policy commands", () => {
     await writeExplicitFleetConfig();
     vi.stubEnv("OPENCLAW_PROFILE", "testprof");
     vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
-
-    const { exitCode, stderr } = await runPolicyCli(["check", "--agent", "ghost", "--json"]);
+    const id = "ghost\u0007\u0085\u202e\nFORGED";
+    const { exitCode, stderr } = await runPolicyCli(["check", "--agent", id, "--json"]);
     expect(exitCode).toBe(2);
     expect(stderr).toContain(
-      'Unknown agent id "ghost". Run openclaw --profile testprof agents list to see configured agents.',
+      'Unknown agent id "ghost\\nFORGED". Run openclaw --profile testprof agents list to see configured agents.',
     );
   });
 });

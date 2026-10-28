@@ -17,6 +17,7 @@ import {
   GitHubPublicationKnownFailure,
   GitHubPublicationRequesterUnavailableError,
   GitHubPublicationWorkspaceChangedError,
+  gitHubPublicationPushFailure,
   resolveGitHubPublicationFailure,
 } from "./github-publication-failure.js";
 import {
@@ -592,9 +593,11 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       };
       remoteHead = await step(observeRemoteHead);
       if (remoteHead !== headCommit) {
-        throw new Error(
-          pushed.code === 0 ? "GitHub push verification failed." : "GitHub push was rejected.",
-        );
+        const login = identity.account.login;
+        throw gitHubPublicationPushFailure(pushed, remoteHead === expectedRemoteHead, {
+          login,
+          pushRepository,
+        });
       }
       await params.recordEffect?.("push", { headCommit });
     }

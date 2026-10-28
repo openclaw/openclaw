@@ -153,7 +153,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
     - Advanced edit controls include delete-after-run, clear agent override, cron exact/stagger options, agent model/thinking overrides, and best-effort delivery toggles.
     - Model suggestions update when the Gateway publishes catalog or configuration changes. A failed read shows an error and keeps the last suggestions for the same agent and connection; the next successful read replaces them without changing your draft.
     - Saved interval labels retain millisecond precision: a 90-second interval displays as `Every 1m 30s`. Repeat and stagger inputs accept decimal amounts that resolve to whole milliseconds; editing a cron expression preserves its stagger window.
-    - Form validation is inline with field-level errors; invalid values disable the save button until fixed.
+    - Form validation is inline with field-level errors, including invalid cron expressions and IANA timezones; invalid values disable the save button until fixed. Leave the timezone blank to use the Gateway host timezone.
     - Background automation refreshes preserve unsaved settings. If saving or pausing/resuming an open automation conflicts with a newer Gateway definition, the editor loads that definition for review. Review it before retrying; the rejected action is never retried automatically.
     - Set `cron.webhookToken` to send a dedicated bearer token; if omitted, the webhook is sent without an auth header.
     - `cron.webhook` is a retired legacy fallback rejected by current config validation. Run `openclaw doctor --fix` to migrate stored jobs that still use `notify: true` to explicit per-job webhook or completion delivery and remove the old key.

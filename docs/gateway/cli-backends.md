@@ -18,6 +18,8 @@ With Claude CLI, a successful `sessions_yield` closes the current subprocess aft
 its tool result is consumed and suppresses later reply text. The next child-completion
 turn resumes the same saved Claude session in a new subprocess. This avoids recording
 the yield as a user interruption; it adds process startup time after a yield.
+An intentional yield is not a failed completion and does not trigger model fallback,
+even when it has no final answer. Genuine CLI failures remain eligible for fallback.
 
 A CLI backend can be an agent's primary runtime or a fallback. Choosing **Claude CLI** during onboarding keeps `anthropic/*` model refs and runs them through Claude Code. For ACP session controls, background tasks, thread/conversation binding, and persistent external coding sessions, use [ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
 

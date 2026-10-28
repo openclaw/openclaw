@@ -615,10 +615,12 @@ type AgentsWaitResult = {
 };
 ```
 
-`not_found` means no collector run with that ID is visible to the caller. Waiting on your own
-announcing child (started without `collect=true`) is rejected as an input error
+`not_found` means no collector run with that ID is visible to the caller. When
+every requested ID is your own announcing child (started without `collect=true`
+and with completion messages enabled), the call is rejected as an input error
 instead: its result arrives as a completion message to your session, so continue
-other work or end the turn.
+other work or end the turn. Mixed batches keep their other results and report
+those children as `not_found`.
 
 A completed item can contain partial `structured` data and still have
 `status: "failed"` when the provider or runtime fails afterward. In that case,

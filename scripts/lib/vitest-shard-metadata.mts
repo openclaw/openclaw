@@ -238,7 +238,7 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/cli/mcp-cli.import-boundary.test.ts", 4],
   ["src/cli/plugins-authoring.process.test.ts", 10],
   // Body sums from run 33492093127, rounded up with startup/import allowance.
-  ["src/cli/claws-authoring-state.process.test.ts", 6],
+  ["src/cli/templates-authoring-state.process.test.ts", 6],
   ["src/cli/cold-command-plugin-imports.process.test.ts", 20],
   ["src/cli/doctor-output.process.test.ts", 90],
   ["src/cli/mcp-cli.probe-exit.process.test.ts", 7],

@@ -2,19 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { runQaCoverageReportCommand } from "../reporting-api.js";
-import { makeRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
+import { makeSingleRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
-
-const { runQaFlowSuiteFromRuntime, runQaSuite } = vi.hoisted(() => ({
-  runQaFlowSuiteFromRuntime: vi.fn(),
-  runQaSuite: vi.fn(),
-}));
-
-vi.mock("./suite-launch.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./suite-launch.runtime.js")>()),
-  runQaFlowSuiteFromRuntime,
-  runQaSuite,
-}));
 
 const tempDirs = createTempDirHarness();
 
@@ -38,12 +27,13 @@ describe("qa coverage command", () => {
     evidence: "qa-evidence.json",
     output,
   });
-  async function runSummary(summary: unknown, json = false) {
+  async function runSummary(summary: unknown, json = false, output?: string) {
     return runQaCoverageReportCommand({
       repoRoot: await writeInput("runtime-summary.json", JSON.stringify(summary)),
       tools: true,
       summary: "runtime-summary.json",
       json,
+      output,
     });
   }
 
@@ -56,38 +46,55 @@ describe("qa coverage command", () => {
   afterEach(async () => {
     process.exitCode = priorExitCode ?? 0;
     vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    vi.clearAllMocks();
     await tempDirs.cleanup();
   });
 
-  it("writes UNKNOWN gap facts from legacy evidence without running QA or changing its input", async () => {
-    const repoRoot = await tempDirs.makeTempDir("qa-gap-report-");
-    await fs.copyFile(path.resolve("taxonomy.yaml"), path.join(repoRoot, "taxonomy.yaml"));
-    const raw = JSON.stringify({
-      kind: "openclaw.qa.evidence-summary",
-      schemaVersion: 2,
-      generatedAt: "2026-10-01T00:00:00Z",
-      evidenceMode: "slim",
-      entries: [],
-    });
-    const evidencePath = path.join(repoRoot, "qa-evidence.json");
-    await fs.writeFile(evidencePath, raw);
-    await runQaCoverageReportCommand({ ...evidenceOptions(repoRoot), json: true });
-    const report = JSON.parse(await fs.readFile(path.join(repoRoot, "gaps.json"), "utf8")) as {
-      coverage: Array<{ qualification: string }>;
-    };
-    expect(report.coverage.length).toBeGreaterThan(0);
-    expect(report.coverage.every((row) => row.qualification === "unknown")).toBe(true);
-    expect(await fs.readFile(evidencePath, "utf8")).toBe(raw);
-    expect(process.exitCode).toBe(0);
-    expect(runQaSuite).not.toHaveBeenCalled();
-    expect(runQaFlowSuiteFromRuntime).not.toHaveBeenCalled();
-    await expect(
-      runQaCoverageReportCommand(evidenceOptions(repoRoot, "qa-evidence.json")),
-    ).rejects.toThrow("must not overwrite");
-    expect(await fs.readFile(evidencePath, "utf8")).toBe(raw);
-  });
+  it.each(["evidence", "summary"] as const)(
+    "preserves %s inputs when writing coverage",
+    async (kind) => {
+      const repoRoot = await tempDirs.makeTempDir("qa-coverage-input-");
+      await fs.copyFile(path.resolve("taxonomy.yaml"), path.join(repoRoot, "taxonomy.yaml"));
+      const legacyEvidence = {
+        kind: "openclaw.qa.evidence-summary",
+        schemaVersion: 2,
+        generatedAt: "2026-10-01T00:00:00Z",
+        evidenceMode: "slim",
+        entries: [],
+      };
+      const raw = JSON.stringify(
+        kind === "evidence" ? legacyEvidence : makeSingleRuntimeParitySummary(0),
+      );
+      const input = path.join(repoRoot, "input.json");
+      await fs.writeFile(input, raw);
+      const options = { repoRoot, [kind]: input, tools: kind === "summary" };
+      await runQaCoverageReportCommand({ ...options, json: true, output: "report.json" });
+      const report = JSON.parse(await fs.readFile(path.join(repoRoot, "report.json"), "utf8"));
+      const rows = kind === "evidence" ? report.coverage : report.rows;
+      expect(rows.length).toBeGreaterThan(0);
+      if (kind === "evidence") {
+        expect(
+          rows.every((row: { qualification: string }) => row.qualification === "unknown"),
+        ).toBe(true);
+        expect(process.exitCode).toBe(0);
+      }
+      expect(await fs.readFile(input, "utf8")).toBe(raw);
+      const aliases = [
+        input,
+        path.join(repoRoot, "hardlink.json"),
+        path.join(repoRoot, "symlink.json"),
+      ] as const;
+      await fs.link(input, aliases[1]);
+      await fs.symlink(input, aliases[2]);
+      for (const output of aliases) {
+        for (const json of [false, true]) {
+          await expect(runQaCoverageReportCommand({ ...options, output, json })).rejects.toThrow(
+            "must not overwrite",
+          );
+          expect(await fs.readFile(input, "utf8")).toBe(raw);
+        }
+      }
+    },
+  );
 
   it.each([{ tools: true }, { summary: "summary.json" }, { match: ["query"] }])(
     "rejects incompatible evidence options %j before reading input",
@@ -126,22 +133,15 @@ describe("qa coverage command", () => {
   });
 
   it("rejects null tool coverage summary JSON", async () => {
-    await expect(runSummary(null, true)).rejects.toMatchObject({ code: "summary_not_completed" });
+    await expect(runSummary(null, true, "report.json")).rejects.toMatchObject({
+      code: "summary_not_completed",
+    });
     expect(process.exitCode).toBe(0);
   });
 
   it("exits nonzero when tool coverage summary is missing a required runtime tool call", async () => {
-    const baseSummary = makeRuntimeParitySummary();
-    const summary = { ...baseSummary, run: { ...baseSummary.run, status: "completed" } };
+    const summary = makeSingleRuntimeParitySummary(0, "runtime-tool-web-search");
     const scenario = summary.scenarios[0];
-    if (!scenario?.runtimeParity) {
-      throw new Error("runtime parity fixture missing");
-    }
-    summary.scenarios = [scenario];
-    scenario.name = "runtime-tool-web-search";
-    scenario.runtimeParity.scenarioId = "runtime-tool-web-search";
-    scenario.status = "fail";
-    summary.counts = { total: 1, passed: 0, failed: 1 };
     scenario.runtimeParity.drift = "tool-call-shape";
     scenario.runtimeParity.driftDetails = "Codex emitted no web_search call";
     scenario.runtimeParity.cells.openclaw.toolCalls = [

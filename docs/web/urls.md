@@ -578,7 +578,7 @@ no route-specific URL parameters.
 | Apps                | `/apps`                                        | -                         | -                                                                                 |
 | Portals             | `/portals`                                     | -                         | -                                                                                 |
 | Agents              | `/settings/agents`                             | -                         | `/settings/agents/<agentId>[/<panel>]`                                            |
-| Claws               | `/claws`                                       | -                         | `/claws/<official-package-slug>`; requires the Claws Labs toggle                  |
+| Templates           | `/templates`                                   | -                         | `/templates/packages/<encoded-package>`; requires the Templates Labs toggle       |
 | Channels            | `/settings/channels`                           | `/channels`               | Shared settings parameters below                                                  |
 | Connection          | `/settings/connection`                         | -                         | Shared settings parameters below                                                  |
 | Legacy General      | `/settings/general`                            | `/config`                 | Redirects to Appearance → Language                                                |

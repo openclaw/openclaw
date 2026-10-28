@@ -69,7 +69,6 @@ import {
 } from "./openclaw-state-schema-preflight.js";
 
 export type {
-  DeferredStateSchemaPublication,
   IncompatibleOpenClawDatabase,
   IndeterminateOpenClawDatabase,
   OpenClawDatabaseSchemaPreflight,

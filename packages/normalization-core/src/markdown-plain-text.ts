@@ -221,7 +221,13 @@ export function stripInlineLinks(
     if (labelEnd === undefined || destinationEnd === undefined) {
       continue;
     }
-    const isImage = index > cursor && text[index - 1] === "!";
+    let isImage = index > cursor && text[index - 1] === "!";
+    // An odd backslash run escapes the bang, leaving an ordinary link.
+    if (isImage) {
+      for (let backslash = index - 2; backslash >= 0 && text[backslash] === "\\"; backslash -= 1) {
+        isImage = !isImage;
+      }
+    }
     if (!isImage && labelEnd === index + 1) {
       continue;
     }
