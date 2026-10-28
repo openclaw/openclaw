@@ -58,6 +58,14 @@ is named only after recorded recovery verifies it. Maintenance refusals
 remove the known database path before public diagnostic projection so recorded
 holder details survive redaction and truncation. Claim formats are unchanged.
 
+If an agent database's state lock was removed or replaced, shutdown still releases
+its native worker and records the lost lock and current holder in a warning.
+It leaves the replacement lock and unowned lease records alone for recovery;
+shutdown never treats lost ownership as a clean checkpoint. Failed plugin cleanup
+keeps the Gateway's process-exit deadline active so a managed update can reach its
+existing stop-failure recovery instead of waiting indefinitely. These repairs must
+be present in the old Gateway being stopped, not only in the update candidate.
+
 When artifact-preserving SQLite inspection exhausts its stabilization attempts,
 update failures retain the final consistency reason code and attempt count in
 `openclaw update status` and the prepared failure report. The candidate worker
