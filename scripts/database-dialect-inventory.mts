@@ -307,8 +307,26 @@ export function inventory(
       true,
       SQLITE_PHYSICAL_LAYOUT_OWNERS.includes(file),
     ).map((match) => {
+      // These exact canonical checks are ported by the generated PostgreSQL table fragment.
+      // Other JSON expressions, columns, and tables remain design debt.
+      const tableStart = text.indexOf(
+        "CREATE TABLE IF NOT EXISTS gitlab_personal_publication_requests (",
+      );
+      const tableEnd = tableStart < 0 ? -1 : text.indexOf(") STRICT;", tableStart);
+      const lineStart = text.lastIndexOf("\n", match.index) + 1;
+      const lineEnd = text.indexOf("\n", match.index);
+      const lineText = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd).trim();
+      const portedGitLabCheck =
+        file === "src/state/openclaw-state-schema.sql" &&
+        match.construct === "json-projection" &&
+        tableStart >= 0 &&
+        match.index > tableStart &&
+        match.index < tableEnd &&
+        (lineText === "receipt_json TEXT NOT NULL CHECK (json_valid(receipt_json))," ||
+          lineText === "result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),");
       const prefix = text.slice(0, match.index);
       return Object.assign(match, {
+        ...(portedGitLabCheck ? { group: "engine-maintenance" as const, owner: true } : {}),
         line: prefix.split("\n").length,
         column: match.index - prefix.lastIndexOf("\n"),
       });

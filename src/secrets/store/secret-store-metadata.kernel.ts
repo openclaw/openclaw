@@ -9,6 +9,7 @@ import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import { classifyHiddenGitHubStoreName } from "./secret-store-github-names.js";
+import { isHiddenGitLabStoreName } from "./secret-store-gitlab-names.js";
 import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 import { SECRET_STORE_VALUE_MAX_BYTES } from "./secret-store-validation-error.js";
 import { assertSecretStoreEnvName } from "./secret-store-validation.js";
@@ -39,7 +40,11 @@ function readExecEnvironmentRows(
       .where("deleted_at_ms", "is", null)
       .orderBy("name", "asc");
     for (const row of iterateSqliteQuerySync(sqlite, query)) {
-      if (classifyHiddenGitHubStoreName(row.name) !== undefined || excluded.has(row.name)) {
+      if (
+        classifyHiddenGitHubStoreName(row.name) !== undefined ||
+        isHiddenGitLabStoreName(row.name) ||
+        excluded.has(row.name)
+      ) {
         continue;
       }
       bytes +=
@@ -135,6 +140,7 @@ function listSecretStoreRows(
     return executeSqliteQuerySync(sqlite, query).rows.filter(
       (row) =>
         classifyHiddenGitHubStoreName(row.name) === undefined &&
+        !isHiddenGitLabStoreName(row.name) &&
         (!params.redactedOnly || isRedactedSecretValue(row.value)),
     );
   }, []);

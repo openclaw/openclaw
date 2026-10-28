@@ -13,6 +13,9 @@ export type ProcessGatewayAllowlistParams = ExecHostCommandParams & {
   workdir: string;
   secretEgressBindings?: readonly SecretEgressSentinelBinding[];
   githubProfileDir?: string;
+  prepareGitLabCredential?: () => Promise<
+    import("./bash-tools.exec-runtime.js").PreparedGitLabExecCredential
+  >;
   pathPrepend?: string[];
   pty: boolean;
   safeBins: Set<string>;

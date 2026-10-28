@@ -445,3 +445,33 @@ it("excludes owned physical layouts while retaining runtime rowid and non-owner 
     { construct: "rowid", group: "design", owner: false },
   ]);
 });
+
+it("recognizes only the two ported canonical GitLab JSON checks as engine-owned", () => {
+  const { root, write, git } = fixture();
+  write(
+    "src/state/openclaw-state-schema.sql",
+    `
+CREATE TABLE IF NOT EXISTS gitlab_personal_publication_requests (
+  receipt_json TEXT NOT NULL CHECK (json_valid(receipt_json)),
+  result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+  other_json TEXT CHECK (json_valid(other_json))
+) STRICT;
+CREATE TABLE other (
+  receipt_json TEXT NOT NULL CHECK (json_valid(receipt_json)),
+  result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+  extra TEXT
+) STRICT;
+`,
+  );
+  git("add", ".");
+  const checks = inventory(root)
+    .flatMap(({ matches }) => matches)
+    .filter(({ construct }) => construct === "json-projection");
+  expect(checks.map(({ group, owner }) => ({ group, owner }))).toEqual([
+    { group: "engine-maintenance", owner: true },
+    { group: "engine-maintenance", owner: true },
+    { group: "design", owner: false },
+    { group: "design", owner: false },
+    { group: "design", owner: false },
+  ]);
+});

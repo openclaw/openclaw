@@ -4,6 +4,10 @@ import {
   getInternalToolExecutionPreparer,
 } from "../../packages/agent-core/src/internal-hooks.js";
 import { createAbortError } from "../infra/abort-signal.js";
+import {
+  createPluginGatewayHandoffInvocation,
+  isPluginGatewayHandoffTool,
+} from "../plugins/tool-handoff-result.js";
 /**
  * Combines per-call cancellation with run-level aborts while preserving
  * identity-backed metadata on wrapped tools.
@@ -30,6 +34,7 @@ export function raceWithAbortSignal<T>(
   promise: Promise<T>,
   signal: AbortSignal,
   yieldRunSignal?: AbortSignal,
+  isAcceptedHandoff?: () => boolean,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
@@ -43,7 +48,8 @@ export function raceWithAbortSignal<T>(
         yieldRunSignal?.aborted &&
         signal.reason === reason &&
         reason?.code === "sessions_yield" &&
-        reason.turnHandoff === true
+        reason.turnHandoff === true &&
+        (!isAcceptedHandoff || isAcceptedHandoff())
       ) {
         return;
       }
@@ -72,6 +78,7 @@ function isTurnYieldCall(tool: AnyAgentTool, args: unknown): boolean {
   const input = asOptionalObjectRecord(args);
   return (
     tool.name === "sessions_yield" ||
+    isPluginGatewayHandoffTool(tool) ||
     (tool.name === "plugins" && input?.action === "reloadAndResume") ||
     (tool.name === "github_publish" &&
       (input?.action === "prepare_pr" ||
@@ -98,7 +105,12 @@ export function wrapToolWithAbortSignal(
       if (combinedSignal.aborted) {
         throwAbortError();
       }
-      const execution = execute(toolCallId, params, combinedSignal, onUpdate);
+      const handoffInvocation = isPluginGatewayHandoffTool(tool)
+        ? createPluginGatewayHandoffInvocation()
+        : undefined;
+      const execution = handoffInvocation
+        ? handoffInvocation.run(() => execute(toolCallId, params, combinedSignal, onUpdate))
+        : execute(toolCallId, params, combinedSignal, onUpdate);
       // Code Mode cancels its worker and bridges itself. Racing that owner loses
       // completed output and turns an intentional permission change into unknown dispatch.
       return ownsCancellationOutcome
@@ -107,6 +119,7 @@ export function wrapToolWithAbortSignal(
             execution,
             combinedSignal,
             isTurnYieldCall(tool, params) ? abortSignal : undefined,
+            handoffInvocation?.isAccepted,
           );
     },
   };
@@ -144,13 +157,19 @@ export function wrapToolWithAbortSignal(
           if (combinedSignal.aborted) {
             throwAbortError();
           }
-          const execution = prepared.execute(onImplementationStart);
+          const handoffInvocation = isPluginGatewayHandoffTool(tool)
+            ? createPluginGatewayHandoffInvocation()
+            : undefined;
+          const execution = handoffInvocation
+            ? handoffInvocation.run(() => prepared.execute(onImplementationStart))
+            : prepared.execute(onImplementationStart);
           return ownsCancellationOutcome
             ? execution
             : raceWithAbortSignal(
                 execution,
                 combinedSignal,
                 isTurnYieldCall(tool, prepared.args) ? abortSignal : undefined,
+                handoffInvocation?.isAccepted,
               );
         },
         dispose: prepared.dispose,

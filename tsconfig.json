@@ -110,6 +110,8 @@
       "@openclaw/gateway-protocol/frame-guards": [
         "./packages/gateway-protocol/src/frame-guards.ts"
       ],
+      "@openclaw/gateway-protocol/gitlab-issues": ["./packages/gateway-protocol/src/gitlab-issues.ts"],
+      "@openclaw/gateway-protocol/gitlab-publication": ["./packages/gateway-protocol/src/gitlab-publication.ts"],
       "@openclaw/gateway-protocol/schema": ["./packages/gateway-protocol/src/schema.ts"],
       "@openclaw/gateway-protocol/session-row-deltas": ["./packages/gateway-protocol/src/session-row-deltas.ts"],
       "@openclaw/gateway-protocol/restart-unavailable": [

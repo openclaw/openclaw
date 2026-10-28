@@ -6,8 +6,6 @@ import type {
   SessionGitHubStatusResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { preparePersonalGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
-import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
-import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -15,15 +13,17 @@ import {
   prepareUserGitHubConnection,
   UserGitHubConnectionAuthorityChangedError,
 } from "../state/user-github-connections.js";
+import {
+  preparePersonalForgePublicationSource,
+  withPersonalForgePublicationWorkspace,
+  type PersonalForgePublicationWorkspace,
+} from "./forge-personal-publication-custody.js";
 import { requestCurrentPersonalGitHubRefresh } from "./github-oauth-lifecycle.js";
 import type { PersonalGitHubAction } from "./github-personal-oauth.js";
 import { presentPersonalGitHubPublicationStatusAsync } from "./github-personal-publication-status.js";
 import { personalGitHubRequestDigest } from "./github-personal-publication-store.js";
 import type { PersonalGitHubPublicationRow } from "./github-personal-publication-store.worker.js";
-import {
-  readGitHubPublicationWorktreeOwner,
-  type PublicationSessionIdentity as SessionIdentity,
-} from "./github-publication-availability.js";
+import type { PublicationSessionIdentity as SessionIdentity } from "./github-publication-availability.js";
 import { executeGitHubPublication } from "./github-publication-executor.js";
 import {
   GitHubPublicationRequesterUnavailableError,
@@ -34,7 +34,6 @@ import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-
 import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
 import { insertPersonalGitHubPublicationAsync } from "./github-publication-request-async.js";
 import type { GitHubPublicationRequesterV2 } from "./github-publication-requester.js";
-import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import {
   claimPersonalGitHubPublicationAsync,
   readPersonalGitHubPublicationAsync,
@@ -53,11 +52,6 @@ export type PersonalGitHubSessionAction = PersonalGitHubAction & {
 export type PersonalGitHubSessionActionV2 = PersonalGitHubSessionAction &
   Pick<GitHubPublicationRequesterV2, "version" | "signal" | "prepareSource">;
 type Selection = { generation: string; account: { accountId: number; login: string } };
-type PersonalPublicationWorkspace = {
-  assertCurrent: () => void;
-  assertCustody: () => void;
-  worktree: Awaited<ReturnType<typeof readGitHubPublicationWorktreeOwner>>["worktree"];
-};
 
 export {
   preparePersonalRepositoryPublicationStatus,
@@ -174,16 +168,7 @@ export function createPersonalGitHubPublicationCoordinator(
   const prepareSource = async (
     action: PersonalGitHubSessionActionV2,
     selector: Parameters<GitHubPublicationRequesterV2["prepareSource"]>[0],
-  ) => {
-    const source = await action.prepareSource(selector);
-    try {
-      assertRuntimeCurrent();
-      return runtimeSignal ? bindGitHubPublicationSourceLifetime(source, runtimeSignal) : source;
-    } catch (error) {
-      await source.release();
-      throw error;
-    }
-  };
+  ) => preparePersonalForgePublicationSource(action, selector, assertRuntimeCurrent, runtimeSignal);
   const instanceId = placements.workspaceResultInstanceId();
   const active = new Map<string, string>();
   const status = async (
@@ -201,45 +186,12 @@ export function createPersonalGitHubPublicationCoordinator(
     );
   const withWorkspace = async <T>(
     action: PersonalGitHubSessionAction,
-    run: (workspace: PersonalPublicationWorkspace) => Promise<T>,
-  ): Promise<T> => {
-    action.assertCurrent();
-    return await placements.withLocalWorkspaceReservation(action, async (assertReservation) => {
-      const worktreeOwner = await readGitHubPublicationWorktreeOwner(action);
-      using _ = { [Symbol.dispose]: () => worktreeOwner.release() };
-
-      const { worktree } = worktreeOwner;
-      action.assertCurrent();
-      assertReservation();
-      const lease = await acquireWorktreeRunLease(worktree.id, { exclusive: true });
-      const assertCustody = () => {
-        assertReservation();
-        const current = worktreeOwner.assertCurrent();
-        const workStartError = resolveSessionWorkStartError(
-          action.sessionKey,
-          current.loaded.entry,
-          { expectedSessionId: action.sessionId },
-        );
-        if (workStartError) {
-          throw new Error(workStartError);
-        }
-      };
-      const assertCurrent = () => {
-        action.assertCurrent();
-        assertCustody();
-      };
-      try {
-        assertCurrent();
-        return await run({ assertCurrent, assertCustody, worktree });
-      } finally {
-        await lease.release();
-      }
-    });
-  };
+    run: (workspace: PersonalForgePublicationWorkspace) => Promise<T>,
+  ): Promise<T> => withPersonalForgePublicationWorkspace(placements, action, run);
   const execute = async (
     action: PersonalGitHubSessionActionV2,
     row: PersonalGitHubPublicationRow,
-    workspace: PersonalPublicationWorkspace,
+    workspace: PersonalForgePublicationWorkspace,
   ): Promise<SessionGitHubPublicationResult> => {
     const selected = {
       generation: row.connection_generation,
@@ -288,7 +240,7 @@ export function createPersonalGitHubPublicationCoordinator(
         assertWorkflowChangesAllowed: assertCurrent,
         identity: {
           prepare: async () =>
-            await preparePersonalGitHubPublicationSelection(bound, workspace.assertCurrent),
+            await preparePersonalGitHubPublicationSelection(bound, () => workspace.assertCurrent()),
           isCurrent: (identity) => {
             assertCurrent();
             return (
@@ -362,9 +314,8 @@ export function createPersonalGitHubPublicationCoordinator(
         };
         const { worktree } = workspace;
         assertCurrent();
-        const identity = await preparePersonalGitHubPublicationSelection(
-          bound,
-          workspace.assertCurrent,
+        const identity = await preparePersonalGitHubPublicationSelection(bound, () =>
+          workspace.assertCurrent(),
         );
         const target = await prepareGitHubPublicationTarget({ worktree, identity, assertCurrent });
         const snapshot = await captureGitHubPublicationWorkspaceSnapshot({

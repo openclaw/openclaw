@@ -97,6 +97,8 @@ export type SandboxBrowserContext = {
 };
 
 export type SandboxContext = {
+  /** Host-only path for a selected, explicitly allowed managed GitLab profile. */
+  gitlabProfileDir?: string;
   /** Creators release retained authority after last use; supplied contexts remain caller-owned. */
   [Symbol.dispose]?: () => void;
   enabled: boolean;

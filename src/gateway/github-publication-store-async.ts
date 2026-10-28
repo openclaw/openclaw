@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { SessionGitLabPublicationResult } from "../../packages/gateway-protocol/src/schema/gitlab.js";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type {
@@ -22,6 +23,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { PersonalGitHubPublicationRow } from "./github-personal-publication-store.js";
 import type { GitHubPublicationEffectTransition } from "./github-publication-execution-effects.js";
 import type { GitHubPublicationSourceCapability } from "./github-publication-source.js";
+import type { PersonalGitLabPublicationRow } from "./gitlab-personal-publication-store.js";
 
 /** Native callers retain live memory authority; durable execution predicates stay in the worker. */
 export type GitHubPublicationTransitionAuthority = {
@@ -33,6 +35,15 @@ export type GitHubPublicationTransitionAuthority = {
 function publish(receipt: PublicationMutationReceipt) {
   for (const change of receipt.changes) {
     emitSessionLifecycleEvent({ ...change, reason: "github-publication" });
+  }
+  if (receipt.kind === "gitlab-personal") {
+    for (const row of receipt.rows) {
+      emitSessionLifecycleEvent({
+        sessionKey: row.session_key,
+        agentId: row.agent_id,
+        reason: "gitlab-publication",
+      });
+    }
   }
 }
 
@@ -52,6 +63,22 @@ async function personalMutation(
   );
   if (receipt.kind !== "personal") {
     throw new Error("Invalid personal publication receipt.");
+  }
+  return receipt.rows;
+}
+
+async function gitLabPersonalMutation(
+  scope: ReturnType<typeof mutationScope>,
+  input: import("../state/github-publication-worker.types.js").GitLabPersonalPublicationMutation,
+  authority: (() => void) | GitHubPublicationTransitionAuthority,
+) {
+  const receipt = await withMutationAuthority(
+    scope,
+    { type: "githubPublications.gitlabPersonal", input: { ...input, operationId: randomUUID() } },
+    authority,
+  );
+  if (receipt.kind !== "gitlab-personal") {
+    throw new Error("Invalid personal GitLab publication receipt.");
   }
   return receipt.rows;
 }
@@ -150,6 +177,49 @@ export async function claimPersonalGitHubPublicationAsync(
         ),
       );
     }),
+  };
+}
+
+export async function claimPersonalGitLabPublicationAsync(
+  row: PersonalGitLabPublicationRow,
+  instanceId: string,
+  authority: GitHubPublicationTransitionAuthority,
+) {
+  const scope = mutationScope();
+  const executionId = randomUUID();
+  const identity = { row, instanceId, executionId };
+  const claimed = requireRow(
+    await gitLabPersonalMutation(scope, { operation: "claim", ...identity }, authority),
+  );
+  const apply = async (
+    transition: (
+      | Exclude<GitHubPublicationEffectTransition, { operation: "complete" }>
+      | { operation: "complete"; result: SessionGitLabPublicationResult }
+    ) & {
+      resultJson?: string;
+      pushObservation?: "applied" | "unchanged";
+    },
+  ) =>
+    requireRow(
+      await gitLabPersonalMutation(scope, { ...identity, ...transition }, () =>
+        authority.assertCustody(),
+      ),
+    );
+  return {
+    row: claimed,
+    ownsExecution() {
+      scope.assertCurrent();
+      return true;
+    },
+    updateHead: (headCommit: string) => apply({ operation: "updateHead", headCommit }),
+    recordEffect: (
+      effect: "push" | "pull_request",
+      observed?: { headCommit?: string; url?: string },
+      pushObservation?: "applied" | "unchanged",
+    ) => apply({ operation: "recordEffect", effect, observed, pushObservation }),
+    complete: (result: SessionGitLabPublicationResult, resultJson?: string) =>
+      apply({ operation: "complete", result, resultJson }),
+    interrupt: () => apply({ operation: "interrupt" }),
   };
 }
 
@@ -297,6 +367,27 @@ export async function requirePersonalGitHubPublicationConfirmationAsync(
   );
 }
 
+export async function requirePersonalGitLabPublicationConfirmationAsync(
+  instanceId: string,
+  assertCurrent?: () => void,
+) {
+  const scope = mutationScope();
+  await gitLabPersonalMutation(
+    scope,
+    { operation: "restart", instanceId },
+    assertCurrent ?? scope.assertCurrent,
+  );
+}
+
+export async function markPersonalGitLabPublicationReportedAsync(requestId: string) {
+  const scope = mutationScope();
+  return await gitLabPersonalMutation(
+    scope,
+    { operation: "report", requestId },
+    scope.assertCurrent,
+  );
+}
+
 export async function runGitHubPublicationMaintenanceAsync(
   input: PublicationMaintenanceMutation,
   assertCurrent?: () => void,
@@ -315,6 +406,33 @@ export async function readPersonalGitHubPublicationAsync(
 ) {
   const result = await read({ type: "githubPublications.personalRead", input: { owner, request } });
   return result?.type === "githubPublications.personalRead" ? result.row : undefined;
+}
+
+export async function readPersonalGitLabPublicationAsync(
+  owner: string,
+  issuer: string,
+  request: PublicationReadOperations["githubPublications.gitlabPersonalRead"]["input"]["request"],
+) {
+  const result = await read({
+    type: "githubPublications.gitlabPersonalRead",
+    input: { owner, issuer, request },
+  });
+  return result?.type === "githubPublications.gitlabPersonalRead" ? result.row : undefined;
+}
+
+export async function readSharedGitLabPublicationAsync(
+  input: PublicationReadOperations["githubPublications.gitlabSharedRead"]["input"],
+) {
+  const result = await read({ type: "githubPublications.gitlabSharedRead", input });
+  return result?.type === "githubPublications.gitlabSharedRead" ? result.row : undefined;
+}
+
+export async function listUnreportedPersonalGitLabPublicationsAsync() {
+  const result = await read({
+    type: "githubPublications.gitlabPersonalUnreported",
+    input: undefined,
+  });
+  return result?.type === "githubPublications.gitlabPersonalUnreported" ? result.rows : [];
 }
 
 export async function listRepositoryGitHubPublicationsAsync(

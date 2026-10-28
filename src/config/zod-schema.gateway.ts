@@ -188,6 +188,37 @@ export const GatewayConfigSchema = z
       })
       .optional(),
     github: GatewayGitHubEndpointSchema.optional(),
+    /** Personal forge authorization; credentials remain in the native hidden store. */
+    gitlab: z
+      .strictObject({
+        issuer: z.url().refine((value) => {
+          const url = new URL(value);
+          return (
+            url.protocol === "https:" &&
+            url.pathname === "/" &&
+            !url.username &&
+            !url.password &&
+            !url.search &&
+            !url.hash
+          );
+        }, "GitLab issuer must be an HTTPS origin"),
+        clientId: z.string().regex(/^[A-Za-z0-9_-]{1,256}$/u),
+        redirectUri: z
+          .url()
+          .max(2048)
+          .refine((value) => {
+            const url = new URL(value);
+            return (
+              url.protocol === "https:" &&
+              !url.username &&
+              !url.password &&
+              !url.search &&
+              !url.hash
+            );
+          }, "GitLab redirect URI must be HTTPS without credentials, query or fragment"),
+        projects: z.array(z.number().int().positive()).min(1).max(100).optional(),
+      })
+      .optional(),
     projects: z
       .strictObject({
         defaultRepository: z

@@ -26,6 +26,7 @@ import {
   SettingsLoadingSkeleton,
 } from "../../components/solid/settings-ui.tsx";
 import { GitHubIdentity } from "../../features/github-connections/github-identity-view.tsx";
+import { GitLabManagedIdentity } from "../../features/gitlab-connections/gitlab-managed-identity-view.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
 import {
@@ -622,6 +623,14 @@ export function AgentTools(
         identity={params.githubIdentity}
         onOpenConnections={params.onOpenGitHubConnections}
       />
+      <SettingsSection title={t("agentTools.gitlabIdentityTitle")}>
+        <GitLabManagedIdentity
+          identity={params.gitlabIdentity}
+          scope="agent"
+          title={t("agentTools.gitlabAgentTitle")}
+          description={t("agentTools.gitlabIdentityDescription")}
+        />
+      </SettingsSection>
       <Show when={params.catalogRequest ?? params.agentId} keyed>
         <Errored fallback={(_error) => <Catalog catalog={null} />}>
           <Loading

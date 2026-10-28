@@ -242,6 +242,8 @@ function MobileHostContent(
     Boolean(
       props.details.githubPublication &&
       (!props.details.pullRequestsBranchDismissed ||
+        (props.details.githubPublication.provider === "gitlab" &&
+          props.details.githubPublication.target) ||
         retainedPublication(props.details.githubPublication)),
     );
   const peoplePreview = createMemo(() => {
@@ -428,7 +430,7 @@ function MobileHostContent(
     const details = owner.details;
     const publication = details.githubPublication;
     if (publication && publicationVisible()) {
-      const branch = details.pullRequestsBranch;
+      const branch = publication.provider === "gitlab" ? undefined : details.pullRequestsBranch;
       const canDismissBranch = () =>
         branch !== undefined &&
         details.pullRequestsBranch === branch &&

@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionGitLabPublicationResult } from "../../packages/gateway-protocol/src/schema/gitlab.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -20,7 +21,10 @@ import {
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { reportGitHubPublicationTranscript } from "./github-publication-transcript.js";
+import {
+  reportGitHubPublicationTranscript,
+  reportGitLabPublicationTranscript,
+} from "./github-publication-transcript.js";
 
 const reportFault = useSqliteWorkerFault([
   {
@@ -35,6 +39,83 @@ const reportFault = useSqliteWorkerFault([
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+describe("GitLab publication transcript reporting", () => {
+  const publisher = { source: "personal" as const, accountId: 42, login: "alice" };
+  const gitLabMessages = (events: unknown[], requestId: string) =>
+    events.filter(
+      (event) =>
+        isRecord(event) &&
+        event.type === "message" &&
+        isRecord(event.message) &&
+        event.message.responseId === `gitlab-publication:${requestId}`,
+    );
+
+  it("appends one GitLab report before marking its terminal row", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const identity = await createSession("gitlab-transcript");
+      const result = {
+        requestId: "gitlab-report-one",
+        status: "published",
+        repository: "example/repository",
+        branch: "publication",
+        url: "https://gitlab.example.test/example/repository/-/merge_requests/1",
+        headCommit: "a".repeat(40),
+        publisher,
+      } satisfies SessionGitLabPublicationResult;
+      const markReportedAsync = vi.fn(async () => {
+        expect(gitLabMessages(await loadTranscriptEvents(identity), result.requestId)).toHaveLength(
+          1,
+        );
+      });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await reportGitLabPublicationTranscript(
+          () => import("./session-utils.js"),
+          { markReportedAsync },
+          { ...identity, result },
+        );
+      }
+      const reports = gitLabMessages(await loadTranscriptEvents(identity), result.requestId);
+      expect(reports).toHaveLength(1);
+      expect(JSON.stringify(reports[0])).toContain("My GitLab");
+      expect(JSON.stringify(reports[0])).toContain(result.url);
+      expect(markReportedAsync).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("keeps a failed GitLab result distinct and refuses a changed transcript owner", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const identity = await createSession("gitlab-transcript-failed");
+      const result = {
+        requestId: "gitlab-report-failed",
+        status: "failed",
+        code: "push_rejected",
+        message: "The remote rejected the push.",
+        nextAction: "Check the project permission.",
+        publisher,
+      } satisfies SessionGitLabPublicationResult;
+      const markReportedAsync = vi.fn().mockResolvedValue(undefined);
+      await expect(
+        reportGitLabPublicationTranscript(
+          () => import("./session-utils.js"),
+          { markReportedAsync },
+          { ...identity, sessionId: "different-session", result },
+        ),
+      ).rejects.toThrow("GitLab publication transcript owner changed");
+      expect(markReportedAsync).not.toHaveBeenCalled();
+      await reportGitLabPublicationTranscript(
+        () => import("./session-utils.js"),
+        { markReportedAsync },
+        { ...identity, result },
+      );
+      const reports = gitLabMessages(await loadTranscriptEvents(identity), result.requestId);
+      expect(reports).toHaveLength(1);
+      expect(JSON.stringify(reports[0])).toContain("GitLab publication failed");
+      expect(JSON.stringify(reports[0])).not.toContain("github-publication:");
+      expect(markReportedAsync).toHaveBeenCalledOnce();
+    });
+  });
 });
 
 async function createSession(sessionId: string) {

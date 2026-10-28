@@ -598,6 +598,9 @@ const enSettings = {
     },
   },
   agentTools: {
+    gitlabIdentityTitle: "GitLab identity",
+    gitlabAgentTitle: "Agent GitLab",
+    gitlabIdentityDescription: "Use an explicit agent account or inherit System GitLab.",
     pluginSource: "Plugin",
     channelSource: "Channel: {id}",
     channel: "Channel",

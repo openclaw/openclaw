@@ -386,6 +386,9 @@ function* resolveOpenClawPluginToolSteps(
       agentId: pluginToolInputs.context.agentId,
       sessionKey: pluginToolInputs.context.sessionKey,
       sessionId: pluginToolInputs.context.sessionId,
+      runId: params.options?.runId,
+      onYield: params.options?.onYield,
+      senderIsOwner: params.options?.senderIsOwner,
     }),
     context: {
       ...pluginToolInputs.context,

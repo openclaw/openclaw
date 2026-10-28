@@ -1,6 +1,7 @@
 import type { CronJob } from "../../api/types.ts";
 import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
+import { GitLabManagedIdentityState } from "../../features/gitlab-connections/gitlab-managed-identity.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import type { AgentFiles } from "./panels-files.tsx";
@@ -134,6 +135,7 @@ export function createAgentViewTestProps(
       onRetryCatalog: () => undefined,
       onOpenGitHubConnections: () => undefined,
       githubIdentity: githubIdentityViewFixture(),
+      gitlabIdentity: new GitLabManagedIdentityState(),
       runtimeSessionKey: "main",
       runtimeSessionMatchesSelectedAgent: false,
       onProfileChange: () => undefined,

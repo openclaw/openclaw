@@ -66,6 +66,10 @@ type Host = {
     ReturnType<typeof createSessionGitHubPublication>,
     "observeRows" | "observeEvent"
   >;
+  gitlabPublication: Pick<
+    ReturnType<typeof createSessionGitHubPublication>,
+    "observeRows" | "observeEvent"
+  >;
   roster: Pick<
     ReturnType<typeof createSessionRosterRefresh>,
     "captureReconciliation" | "invalidateManagedLists" | "observations"
@@ -271,6 +275,7 @@ export function createSessionReconciliation(host: Host) {
     const notify = observed ? observation?.stage(observed, historyAgentId) : undefined;
     if (observed) {
       host.githubPublication.observeRows([observed], historyAgentId);
+      host.gitlabPublication.observeRows([observed], historyAgentId);
     }
     const agentId = options?.resultAgentId?.trim()
       ? normalizeAgentId(options.resultAgentId)
@@ -379,6 +384,7 @@ export function createSessionReconciliation(host: Host) {
                 owned.agentId,
               );
               host.githubPublication.observeRows([accepted], owned.agentId);
+              host.gitlabPublication.observeRows([accepted], owned.agentId);
               if (result !== state.result) {
                 host.publish({ ...state, result: host.decorate(result) });
               }
@@ -411,6 +417,7 @@ export function createSessionReconciliation(host: Host) {
       connection,
       deletions,
       githubPublication,
+      gitlabPublication,
       permissions,
       mutations,
       thinkingClaims,
@@ -441,6 +448,7 @@ export function createSessionReconciliation(host: Host) {
     const previous = state.result;
     const invalidationReason = normalizeOptionalString(asNullableRecord(payload)?.reason);
     githubPublication.observeEvent(payload);
+    gitlabPublication.observeEvent(payload);
     const selectedSessionKey = host.snapshot().sessionKey?.trim();
     const archivesSelectedSession =
       eventInfo?.archived === true &&

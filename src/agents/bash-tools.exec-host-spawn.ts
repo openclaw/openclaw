@@ -3,6 +3,7 @@ import { omitGatewayCredentialEnv } from "../infra/host-env-security.js";
 import { prependShellPath } from "../infra/login-shell-path-carrier.js";
 import { findPathKey, removePathPrepend } from "../infra/path-prepend.js";
 import { buildGitHubExecLaunchArgv } from "./github-exec-launch.js";
+import { buildGitLabExecLaunchArgv } from "./gitlab-exec-launch.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { getShellConfig } from "./shell-utils.js";
 
@@ -13,6 +14,8 @@ export async function prepareHostExecSpawn(params: {
   env: Record<string, string>;
   pathPrepend?: string[];
   githubProfileDir?: string;
+  gitlabProfileDir?: string;
+  gitlabIssuer?: string;
   usePty: boolean;
 }) {
   const { shell, args: shellArgs } = getShellConfig();
@@ -46,13 +49,20 @@ export async function prepareHostExecSpawn(params: {
     env,
   });
   const shellArgv = [shell, ...shellArgs, commandWithShellSnapshot];
+  const githubArgv = params.githubProfileDir
+    ? buildGitHubExecLaunchArgv(shellArgv, params.githubProfileDir, {
+        githubHost: env.GH_HOST,
+      })
+    : shellArgv;
+  const argv =
+    params.gitlabProfileDir && params.gitlabIssuer
+      ? buildGitLabExecLaunchArgv(githubArgv, params.gitlabProfileDir, {
+          issuer: params.gitlabIssuer,
+        })
+      : githubArgv;
   return {
     mode: params.usePty ? ("pty" as const) : ("child" as const),
-    argv: params.githubProfileDir
-      ? buildGitHubExecLaunchArgv(shellArgv, params.githubProfileDir, {
-          githubHost: env.GH_HOST,
-        })
-      : shellArgv,
+    argv,
     env,
     cwd: params.workdir,
     stdinMode: params.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),

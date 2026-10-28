@@ -5,6 +5,7 @@ import {
 } from "../../packages/agent-core/src/internal-hooks.js";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { PluginHostObject } from "../plugins/plugin-instance-owned-values.js";
+import { copyPluginGatewayHandoffTool } from "../plugins/tool-handoff-result.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { copyAgentToolAvailability } from "./agent-tool-availability.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
@@ -115,6 +116,7 @@ export function copyBeforeToolCallWrapperMetadata(
   target: AnyAgentTool,
 ): void {
   copyPluginToolMeta(source, target);
+  copyPluginGatewayHandoffTool(source, target);
   // SAFETY: both metadata owners attach to the same runtime tool object shape.
   copyChannelAgentToolMeta(source as never, target as never);
   copyToolTerminalPresentation(source, target);

@@ -3,6 +3,7 @@ import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeli
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import type { PreparedGitHubToolEnvironment } from "../github-tool-identity.types.js";
+import type { prepareGitLabToolEnvironment } from "../gitlab-tool-identity.js";
 import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import type {
@@ -161,15 +162,20 @@ export async function createSandboxBackend(
   operatorAuthority?: AdmittedRunOperatorAuthority,
   githubIdentity?: PreparedGitHubToolEnvironment,
   guard?: WorkspaceStateGuard,
+  gitlabIdentity?: ReturnType<typeof prepareGitLabToolEnvironment>,
 ): Promise<SandboxBackendHandle> {
   params.assertRuntimeCurrent?.();
   let factory = requireSandboxBackendFactory(params.cfg.backend);
   if (
-    githubIdentity &&
+    (githubIdentity || gitlabIdentity) &&
     factory !== createDockerSandboxBackend &&
     factory !== createPodmanSandboxBackend
   ) {
-    throw new Error("Sandbox GitHub identity requires the built-in Docker or Podman backend.");
+    throw new Error(
+      gitlabIdentity
+        ? "Sandbox GitLab identity requires the built-in Docker or Podman backend."
+        : "Sandbox GitHub identity requires the built-in Docker or Podman backend.",
+    );
   }
   let preparedParams = params;
   if (
@@ -191,10 +197,20 @@ export async function createSandboxBackend(
   }
   // Built-in containers publish their complete allocation under the lifecycle lock.
   if (factory === createDockerSandboxBackend) {
-    return await createDockerSandboxBackend(preparedParams, operatorAuthority, githubIdentity);
+    return await createDockerSandboxBackend(
+      preparedParams,
+      operatorAuthority,
+      githubIdentity,
+      gitlabIdentity,
+    );
   }
   if (factory === createPodmanSandboxBackend) {
-    return await createPodmanSandboxBackend(preparedParams, operatorAuthority, githubIdentity);
+    return await createPodmanSandboxBackend(
+      preparedParams,
+      operatorAuthority,
+      githubIdentity,
+      gitlabIdentity,
+    );
   }
   const reserveRuntimeId = resolveSandboxBackendRegistration(params.cfg.backend)?.reserveRuntimeId;
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.factory");

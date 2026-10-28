@@ -6,6 +6,7 @@ import {
   mixedAgentConnection,
   useMixedAgentPair,
 } from "../infra/database-engine/mixed-agent.conformance.test-support.js";
+import { publicationRowDefaults } from "../state/github-publication-fixtures.test-support.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { repositoryRow } from "../state/github-publication.worker.test-support.js";
 import {
@@ -286,6 +287,64 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
       { pending: true },
       { pending: false, unreported: true },
     ]);
+  });
+
+  it("wakes GitLab reporting on its terminal receipt without waking GitHub recovery", async () => {
+    let notify: Parameters<typeof githubPublicationReceipts.subscribeFacts>[0] = () => {
+      throw new Error("runtime did not subscribe");
+    };
+    const subscribe = githubPublicationReceipts.subscribeFacts;
+    vi.spyOn(githubPublicationReceipts, "subscribeFacts").mockImplementation((listener) => {
+      notify = listener;
+      return subscribe(listener);
+    });
+    const scanGitLab = vi
+      .spyOn(publicationStore, "listUnreportedPersonalGitLabPublicationsAsync")
+      .mockResolvedValue([]);
+    const { runtime, recovery } = createRuntime();
+    await runtime.reconcilePublications();
+    await runtime.reconcilePublications();
+    expect(scanGitLab).toHaveBeenCalledTimes(1);
+    expect(recovery).toHaveBeenCalledTimes(1);
+
+    notify(
+      {
+        kind: "committed",
+        receipt: {
+          version: 1,
+          operationId: "gitlab-terminal-test",
+          source: {
+            identity: captureOpenClawStateWorkerContext().admission.identity.key,
+            incarnation: "gitlab-terminal-test",
+          },
+          domain: "github-publication",
+          facts: new Map([
+            [
+              JSON.stringify(["gitlab-personal", "gitlab-terminal-test"]),
+              {
+                kind: "postimage",
+                value: {
+                  ...publicationRowDefaults("gitlab-terminal-test"),
+                  status: "failed",
+                  connection_generation: "fixture-generation",
+                  issuer: "https://gitlab.example.test",
+                  owner_profile_id: "alice",
+                  push_observation: null,
+                  repository_fingerprint: "fixture-repository",
+                  session_lifecycle_revision: null,
+                  worktree_id: "fixture-worktree",
+                  receipt_json: "{}",
+                },
+              },
+            ],
+          ]),
+        },
+      },
+      false,
+    );
+    await runtime.reconcilePublications();
+    expect(scanGitLab).toHaveBeenCalledTimes(2);
+    expect(recovery).toHaveBeenCalledTimes(1);
   });
 
   it.each(

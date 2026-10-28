@@ -10,6 +10,7 @@ import {
   deferGitHubPublicationRequestsInDatabase,
 } from "../gateway/github-publication-store.worker.js";
 import * as repository from "../gateway/github-repository-publication-store.worker.js";
+import * as gitlabPersonal from "../gateway/gitlab-personal-publication-store.worker.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import { captureGitHubPublicationWorkerReceipt } from "./github-publication-receipts.js";
@@ -26,6 +27,7 @@ import {
 } from "./github-publication-source.worker.js";
 import type {
   PersonalPublicationMutation,
+  GitLabPersonalPublicationMutation,
   SharedPublicationMutation,
   RepositoryPublicationMutation,
   PublicationMutationResult,
@@ -50,7 +52,7 @@ function mutate(
   write: () => PublicationMutationResult,
 ) {
   const requiresSource =
-    (input.operation === "claim" && kind === "personal") ||
+    (input.operation === "claim" && (kind === "personal" || kind === "gitlab-personal")) ||
     input.operation === "bindWorkspaceSnapshot" ||
     input.operation === "checkpoint";
   if (requiresSource && !input.source) {
@@ -134,6 +136,24 @@ function assertMutationSource(
     }
     return;
   }
+  if (result.kind === "gitlab-personal") {
+    for (const row of result.rows) {
+      if (
+        source.selector.personalOwnerProfileId !== undefined ||
+        source.selector.profileId !== row.owner_profile_id ||
+        source.expected.profile?.profileId !== row.owner_profile_id ||
+        row.session_lifecycle_revision !== selector.lifecycleRevision
+      ) {
+        throw new Error("GitLab publication transition owner changed.");
+      }
+      assertGitHubPublicationWorktreeSource(source, {
+        id: row.worktree_id,
+        repoFingerprint: row.repository_fingerprint,
+        branch: row.branch,
+      });
+    }
+    return;
+  }
   for (const row of result.rows) {
     const lifecycle = readGitHubPublicationSessionLifecycle(
       { publicationKind: result.kind, requestId: row.request_id },
@@ -201,6 +221,68 @@ function personalMutation(database: OpenClawStateDatabase, input: PersonalPublic
     }
   }
   throw new Error("Unknown personal GitHub publication mutation.");
+}
+
+function gitLabPersonalMutation(
+  database: OpenClawStateDatabase,
+  input: GitLabPersonalPublicationMutation,
+) {
+  const admitted = () => assertGitHubPublicationWorkerSourceCurrent(database.db);
+  switch (input.operation) {
+    case "claim":
+      return [
+        gitlabPersonal.claimPersonalGitLabPublicationInDatabase(
+          database,
+          input.row,
+          input.instanceId,
+          input.executionId,
+          admitted,
+        ),
+      ];
+    case "updateHead":
+    case "complete":
+    case "recordEffect":
+    case "interrupt": {
+      const values = githubPublicationEffectFacts(input, "needs_confirmation");
+      if (input.operation === "complete") {
+        const resultJson = input.resultJson ?? JSON.stringify(input.result);
+        if (resultJson.length > 65536) {
+          throw new Error("Personal GitLab publication result is too large.");
+        }
+        JSON.parse(resultJson);
+        values.result_json = resultJson;
+      }
+      if (input.operation === "recordEffect" && input.pushObservation) {
+        if (input.effect !== "push") {
+          throw new Error("GitLab push observation has the wrong effect.");
+        }
+        values.effect_state = "observed";
+        values.push_observation = input.pushObservation;
+      }
+      return [
+        gitlabPersonal.writePersonalGitLabPublicationInDatabase(
+          database,
+          input.row,
+          input.instanceId,
+          input.executionId,
+          values,
+        ),
+      ];
+    }
+    case "restart":
+      return gitlabPersonal.requirePersonalGitLabPublicationConfirmationInDatabase(
+        database,
+        input.instanceId,
+      );
+    case "report": {
+      const row = gitlabPersonal.markPersonalGitLabPublicationReportedInDatabase(
+        database,
+        input.requestId,
+      );
+      return row ? [row] : [];
+    }
+  }
+  throw new Error("Unknown personal GitLab publication mutation.");
 }
 
 function repositoryMutation(database: OpenClawStateDatabase, input: RepositoryPublicationMutation) {
@@ -332,6 +414,7 @@ export const publicationOperations = {
     return mutate(database, input, "maintenance", () => {
       if (input.operation === "report") {
         personalMutation(database, input);
+        gitLabPersonalMutation(database, input);
         sharedMutation(database, input);
         repositoryMutation(database, input);
       } else {
@@ -372,6 +455,18 @@ export const publicationOperations = {
       operation: input.operation,
       kind: "personal",
       rows: personalMutation(database, input),
+    }));
+  },
+  "githubPublications.gitlabPersonal": (
+    input: PublicationWorkerOperations["githubPublications.gitlabPersonal"]["input"],
+    { open },
+  ) => {
+    const database = open();
+    return mutate(database, input, "gitlab-personal", () => ({
+      operationId: input.operationId,
+      operation: input.operation,
+      kind: "gitlab-personal",
+      rows: gitLabPersonalMutation(database, input),
     }));
   },
   "githubPublications.repository": (

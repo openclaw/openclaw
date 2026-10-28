@@ -24,6 +24,7 @@ import {
   type GitHubPublicationView,
 } from "../../../lib/sessions/github-publication-owner.ts";
 import { GitHubPublicationAvatar, GitHubPublicationMenu } from "./chat-github-publication-menu.tsx";
+import { publicationButtonSelection, sourceLabel } from "./chat-publication-copy.ts";
 
 registerGitHubEnglish();
 
@@ -97,23 +98,6 @@ function createPublicationAction(publication: () => GitHubPublicationView) {
   };
 }
 
-function sourceLabel(source: string): string {
-  return t(
-    source === "personal"
-      ? "githubPublication.personal"
-      : source === "agent-override"
-        ? "githubPublication.agent"
-        : "githubPublication.system",
-  );
-}
-
-function publicationButtonSelection(publication: GitHubPublicationView) {
-  return (
-    publication.selection ??
-    (!publication.options?.shared ? personalGitHubPublicationSelection(publication.options) : null)
-  );
-}
-
 /** One eligible-choice projection serves every publication presentation. */
 export function githubPublicationAccountChoices(publication: GitHubPublicationView) {
   const personal = personalGitHubPublicationSelection(publication.options);
@@ -127,11 +111,15 @@ export function githubPublicationAccountChoices(publication: GitHubPublicationVi
     ? undefined
     : {
         accounts: [
-          { source: "shared" as const, login: shared.login, label: sourceLabel(shared.source) },
+          {
+            source: "shared" as const,
+            login: shared.login,
+            label: sourceLabel(shared.source, publication.provider),
+          },
           {
             source: "personal" as const,
             login: personal.account.login,
-            label: sourceLabel("personal"),
+            label: sourceLabel("personal", publication.provider),
           },
         ],
         duplicateLogin: shared.login === personal.account.login,
@@ -259,7 +247,11 @@ export function GitHubPublicationAction(props: {
               target="_blank"
               rel="noopener noreferrer"
             >
-              {t("chat.pullRequests.openPublishedPr")}
+              {t(
+                props.publication.provider === "gitlab"
+                  ? "githubPublication.gitlabOpen"
+                  : "chat.pullRequests.openPublishedPr",
+              )}
             </a>
             <Show when={props.publication.onNewAction}>
               <button
@@ -338,7 +330,12 @@ function PublicationButton(props: {
           ? t("chat.pullRequests.retryPublication")
           : !publication.selection && selection?.source === "personal"
             ? t("githubPublication.publishAs", { account: selection.account.login })
-            : (props.publishLabel ?? t("chat.pullRequests.publishPr")),
+            : (props.publishLabel ??
+              t(
+                publication.provider === "gitlab"
+                  ? "githubPublication.gitlabPublish"
+                  : "chat.pullRequests.publishPr",
+              )),
     };
   });
   // Accepted shared requests retain their status button even without a replay callback.
@@ -385,7 +382,7 @@ function PublicationAccount(props: { publication: GitHubPublicationView }) {
       {(value) => (
         <span data-publication-account>
           {t("githubPublication.publishAs", { account: value().login })} ·{" "}
-          {sourceLabel(value().source)}
+          {sourceLabel(value().source, props.publication.provider)}
         </span>
       )}
     </Show>
@@ -435,6 +432,7 @@ function PublicationRefresh(props: {
 
 function PublicationEffect(props: {
   effect: NonNullable<GitHubPublicationView["result"]>["effect"];
+  provider?: GitHubPublicationView["provider"];
   controls?: MenuControls;
 }) {
   const linkRef = props.controls?.ref();
@@ -443,14 +441,20 @@ function PublicationEffect(props: {
       {(effect) => (
         <span>
           {t(
-            effect().status === "dispatched"
-              ? "githubPublication.dispatched"
-              : "githubPublication.observed",
+            props.provider === "gitlab"
+              ? effect().status === "dispatched"
+                ? "githubPublication.gitlabDispatched"
+                : "githubPublication.gitlabObserved"
+              : effect().status === "dispatched"
+                ? "githubPublication.dispatched"
+                : "githubPublication.observed",
             {
               kind: t(
                 effect().kind === "push"
                   ? "githubPublication.effectPush"
-                  : "githubPublication.effectPullRequest",
+                  : props.provider === "gitlab"
+                    ? "githubPublication.gitlabEffectMergeRequest"
+                    : "githubPublication.effectPullRequest",
               ),
             },
           )}
@@ -463,7 +467,11 @@ function PublicationEffect(props: {
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                {t("githubPublication.effectLink")}
+                {t(
+                  props.provider === "gitlab"
+                    ? "githubPublication.gitlabEffectLink"
+                    : "githubPublication.effectLink",
+                )}
               </a>
             )}
           </Show>
@@ -614,10 +622,12 @@ export function GitHubPublicationDetails(props: {
         </Show>
         <Show when={noAccount()}>
           <span class="chat-pr__publication-note">
-            {t(
-              `githubPublication.sharedUnavailable.${props.publication.options?.sharedUnavailableReason ?? "unknown"}`,
-            )}
-            {props.publication.options?.personal === null
+            {props.publication.provider === "gitlab"
+              ? t("githubPublication.gitlabNoAccount")
+              : t(
+                  `githubPublication.sharedUnavailable.${props.publication.options?.sharedUnavailableReason ?? "unknown"}`,
+                )}
+            {props.publication.options?.personal === null && props.publication.provider !== "gitlab"
               ? `${props.mobile ? " " : ""}${t("githubPublication.unidentified")}`
               : null}
           </span>
@@ -626,10 +636,15 @@ export function GitHubPublicationDetails(props: {
           {(confirmation) => (
             <div class="chat-pr__publication-note">
               <div>
-                {t("githubPublication.target", {
-                  repository: confirmation().repository,
-                  base: confirmation().baseBranch,
-                })}
+                {t(
+                  props.publication.provider === "gitlab"
+                    ? "githubPublication.gitlabTarget"
+                    : "githubPublication.target",
+                  {
+                    repository: confirmation().repository,
+                    base: confirmation().baseBranch,
+                  },
+                )}
               </div>
               <div>
                 {t("githubPublication.pushTarget", {
@@ -658,7 +673,13 @@ export function GitHubPublicationDetails(props: {
           )}
         </Show>
         <Show when={personalUnavailable()}>
-          <span class="chat-pr__publication-note">{t("githubPublication.personalWorkspace")}</span>
+          <span class="chat-pr__publication-note">
+            {t(
+              props.publication.provider === "gitlab"
+                ? "githubPublication.gitlabPersonalWorkspace"
+                : "githubPublication.personalWorkspace",
+            )}
+          </span>
         </Show>
       </div>
     </Show>
@@ -687,7 +708,11 @@ function PublicationMore(props: {
         <Show when={props.publication.locked && !props.publication.result && !props.busy}>
           <span>{t("githubPublication.unknown")}</span>
         </Show>
-        <PublicationEffect effect={props.publication.result?.effect} controls={props.controls} />
+        <PublicationEffect
+          effect={props.publication.result?.effect}
+          provider={props.publication.provider}
+          controls={props.controls}
+        />
       </div>
     </Show>
   );

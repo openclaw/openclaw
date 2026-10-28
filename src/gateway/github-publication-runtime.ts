@@ -5,12 +5,20 @@ import { createGitHubPublicationWorkerScope } from "../state/github-publication-
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createGitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import {
+  listUnreportedPersonalGitLabPublicationsAsync,
   listRepositoryGitHubPublicationsAsync,
   listSharedGitHubPublicationsAsync,
+  markPersonalGitLabPublicationReportedAsync,
+  requirePersonalGitLabPublicationConfirmationAsync,
   requirePersonalGitHubPublicationConfirmationAsync,
 } from "./github-publication-store-async.js";
-import { reportGitHubPublicationTranscript } from "./github-publication-transcript.js";
+import {
+  reportGitHubPublicationTranscript,
+  reportGitLabPublicationTranscript,
+} from "./github-publication-transcript.js";
 import { createGitHubPublicationCoordinator } from "./github-publication.js";
+import { projectPersonalGitLabTerminalResult } from "./gitlab-personal-publication-row.js";
+import type { PersonalGitLabPublicationRow } from "./gitlab-personal-publication-store.js";
 import type {
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
@@ -31,6 +39,7 @@ export function createGitHubPublicationRuntime(params: {
   const pendingRequests = new Set<string>();
   let pendingKnown = false;
   let reconcileNeeded = true;
+  let gitLabReportsNeeded = true;
   let loadingUpdates: Map<string, boolean> | undefined;
   const updatePending = (key: string, pending: boolean) => {
     if (pending) {
@@ -44,6 +53,7 @@ export function createGitHubPublicationRuntime(params: {
     if (change.kind === "unknown" && change.identity === context.admission.identity.key) {
       pendingKnown = false;
       reconcileNeeded = true;
+      gitLabReportsNeeded = true;
     }
     if (
       change.kind !== "committed" ||
@@ -52,12 +62,29 @@ export function createGitHubPublicationRuntime(params: {
       return;
     }
     for (const [key, fact] of change.receipt.facts) {
+      if (key.startsWith('["gitlab-personal",')) {
+        if (
+          fact.kind === "unknown" ||
+          (fact.kind === "postimage" &&
+            "status" in fact.value &&
+            (fact.value.status === "published" || fact.value.status === "failed") &&
+            "reported_at_ms" in fact.value &&
+            fact.value.reported_at_ms === null)
+        ) {
+          gitLabReportsNeeded = true;
+        }
+        continue;
+      }
       if (fact.kind === "unknown") {
         pendingKnown = false;
         reconcileNeeded = true;
       } else if (fact.kind === "absent") {
         updatePending(key, false);
-      } else if (fact.kind === "postimage" && "status" in fact.value) {
+      } else if (
+        fact.kind === "postimage" &&
+        "status" in fact.value &&
+        "identity_source" in fact.value
+      ) {
         const row = fact.value;
         updatePending(
           key,
@@ -106,10 +133,11 @@ export function createGitHubPublicationRuntime(params: {
     assertCurrent: scope.assertCurrent,
     signal: scope.signal,
   });
-  const ready = requirePersonalGitHubPublicationConfirmationAsync(
-    params.placements.workspaceResultInstanceId(),
-    scope.assertCurrent,
-  );
+  const instanceId = params.placements.workspaceResultInstanceId();
+  const ready = Promise.all([
+    requirePersonalGitHubPublicationConfirmationAsync(instanceId, scope.assertCurrent),
+    requirePersonalGitLabPublicationConfirmationAsync(instanceId, scope.assertCurrent),
+  ]).then(() => {});
   // Startup and every runtime operation join the same failure; avoid an unhandled early rejection.
   void ready.catch(() => {});
   const reportDeferred = async (
@@ -121,6 +149,33 @@ export function createGitHubPublicationRuntime(params: {
     } catch (error) {
       params.warn(
         `GitHub publication result reporting deferred for ${publication.sessionId}: ${formatErrorMessage(error)}`,
+      );
+      return false;
+    }
+  };
+  const reportDeferredGitLab = async (row: PersonalGitLabPublicationRow) => {
+    try {
+      scope.assertCurrent();
+      const result = projectPersonalGitLabTerminalResult(row);
+      await reportGitLabPublicationTranscript(
+        params.loadSessionRuntime,
+        {
+          markReportedAsync: async (requestId) => {
+            scope.assertCurrent();
+            await markPersonalGitLabPublicationReportedAsync(requestId);
+          },
+        },
+        {
+          sessionId: row.session_id,
+          sessionKey: row.session_key,
+          agentId: row.agent_id,
+          result,
+        },
+      );
+      return true;
+    } catch (error) {
+      params.warn(
+        `GitLab publication result reporting deferred for ${row.session_id}: ${formatErrorMessage(error)}`,
       );
       return false;
     }
@@ -166,6 +221,29 @@ export function createGitHubPublicationRuntime(params: {
       return;
     }
     await ready;
+    if (isStopping?.()) {
+      return;
+    }
+    if (gitLabReportsNeeded) {
+      // Set this before the read so a concurrent receipt can schedule another sweep.
+      gitLabReportsNeeded = false;
+      try {
+        const rows = await listUnreportedPersonalGitLabPublicationsAsync();
+        scope.assertCurrent();
+        for (const row of rows) {
+          if (isStopping?.()) {
+            gitLabReportsNeeded = true;
+            break;
+          }
+          if (!(await reportDeferredGitLab(row))) {
+            gitLabReportsNeeded = true;
+          }
+        }
+      } catch (error) {
+        gitLabReportsNeeded = true;
+        params.warn(`GitLab publication reporting recovery deferred: ${formatErrorMessage(error)}`);
+      }
+    }
     if (isStopping?.()) {
       return;
     }

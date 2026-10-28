@@ -121,6 +121,8 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
         ? {
             eligible: Boolean(
               (!chatProps.pullRequestsBranchDismissed && chatProps.pullRequestsBranch) ||
+              (chatProps.githubPublication.provider === "gitlab" &&
+                chatProps.githubPublication.target) ||
               retainedPublication(chatProps.githubPublication),
             ),
             onOpen: (source) =>

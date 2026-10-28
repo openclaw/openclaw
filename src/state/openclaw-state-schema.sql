@@ -2560,6 +2560,47 @@ CREATE INDEX IF NOT EXISTS idx_github_personal_publication_owner_session
 CREATE INDEX IF NOT EXISTS idx_github_personal_publication_pending
   ON github_personal_publication_requests(status, updated_at_ms, request_id);
 
+-- GitLab uses the native publication owner without changing shipped GitHub rows.
+CREATE TABLE IF NOT EXISTS gitlab_personal_publication_requests (
+  request_id TEXT NOT NULL PRIMARY KEY CHECK (length(request_id) = 36),
+  owner_profile_id TEXT NOT NULL,
+  issuer TEXT NOT NULL,
+  connection_generation TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  request_digest TEXT NOT NULL CHECK (length(request_digest) = 64),
+  session_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  session_lifecycle_revision TEXT,
+  worktree_id TEXT NOT NULL,
+  repository_fingerprint TEXT NOT NULL,
+  identity_account_id INTEGER NOT NULL CHECK (identity_account_id > 0),
+  identity_login TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  receipt_json TEXT NOT NULL CHECK (json_valid(receipt_json)),
+  status TEXT NOT NULL CHECK (status IN ('requested', 'publishing', 'needs_confirmation', 'published', 'failed')),
+  gateway_instance_id TEXT,
+  execution_id TEXT,
+  head_commit TEXT,
+  pull_request_url TEXT,
+  error_code TEXT,
+  next_action TEXT,
+  last_effect TEXT CHECK (last_effect IS NULL OR last_effect IN ('push', 'pull_request')),
+  effect_state TEXT CHECK (effect_state IS NULL OR effect_state IN ('dispatched', 'observed')),
+  push_observation TEXT CHECK (push_observation IS NULL OR push_observation IN ('applied', 'unchanged')),
+  result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  reported_at_ms INTEGER,
+  UNIQUE (owner_profile_id, issuer, session_id, idempotency_key),
+  CHECK ((status = 'publishing' AND gateway_instance_id IS NOT NULL AND execution_id IS NOT NULL) OR status <> 'publishing'),
+  CHECK ((last_effect IS NULL AND effect_state IS NULL) OR (last_effect IS NOT NULL AND effect_state IS NOT NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_gitlab_personal_publication_pending
+  ON gitlab_personal_publication_requests(status, updated_at_ms, request_id);
+CREATE INDEX IF NOT EXISTS idx_gitlab_personal_publication_session
+  ON gitlab_personal_publication_requests(owner_profile_id, issuer, session_id, created_at_ms);
+
 -- Older readers validate both local receipt tables exactly. Their immutable
 -- lifecycle binding stays in a first-use companion so those schemas remain readable.
 CREATE TABLE IF NOT EXISTS github_publication_session_lifecycles (

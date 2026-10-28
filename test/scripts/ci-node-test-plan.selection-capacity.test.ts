@@ -30,6 +30,7 @@ it("retains canonical capacity and exact scope for a compact selection", () => {
   ).toEqual(targets.toSorted());
   // Selection preserves parallel capacity unless only one group remains.
   // A singleton has no sibling to overlap and is normalized to a serial job.
+  // Mixed-config groups retain the larger runner even when the job is serial.
   for (const job of selected) {
     expect(job.requiresDist).toBe(false);
     expect([1, 2]).toContain(job.planConcurrency);
@@ -42,7 +43,7 @@ it("retains canonical capacity and exact scope for a compact selection", () => {
         original.planConcurrency === 2 && job.groups.length === 1 ? 1 : original.planConcurrency;
       expect(job).toMatchObject({
         runner:
-          expectedConcurrency === 1
+          expectedConcurrency === 1 && job.groups.every((entry) => entry.configs.length === 1)
             ? "blacksmith-16vcpu-ubuntu-2404"
             : "blacksmith-32vcpu-ubuntu-2404",
         planConcurrency: expectedConcurrency,

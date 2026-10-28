@@ -131,6 +131,10 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
       "idx_github_repository_publication_shared_request",
     ],
   ],
+  [
+    "gitlab_personal_publication_requests",
+    ["idx_gitlab_personal_publication_pending", "idx_gitlab_personal_publication_session"],
+  ],
   ["local_workspace_manifest_nodes", []],
   ["local_workspace_projections", []],
   ["local_workspace_source_path_sets", []],
@@ -318,6 +322,7 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
   ["update_runs", []],
   ["github_repository_publication_requests", []],
   ["github_personal_publication_requests", []],
+  ["gitlab_personal_publication_requests", []],
   ["execution_identity_contexts", []],
   ["node_worker_launches", []],
   ["node_worker_turns", []],
@@ -347,72 +352,72 @@ const tableNames: readonly (readonly [string, readonly string[]])[] = [
 ];
 const fingerprints: Readonly<Record<string, CatalogReference>> = {
   // state
-  d436399d596dabc437f6a66024912269ba78d4cebcdb8603202b041185ba4d2d: [
+  "51bb52cfd4050729690307d2ea6916d87ac3ecc07e4863a74c0b43072871f92d": [
     "state",
-    "5c2559369839679bb534edddc847180532b37bd1b0ae419a715a860d0be92972",
+    "94c558d632a21979e0bd17fc85ace78956a67c8a9ad55af9491909e6d7172b67",
     [
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
       26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
       49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71,
       72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94,
       95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114,
-      115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131,
+      115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132,
     ],
     [],
   ],
   // state-before-v35
-  "9a869616f3471fe3b5f06a7c5d026a1940080a5df0e58a4b6c2088ab5ca745ff": [
+  c76a8fae76b32e0ade965f5bc908c0b1927e352d4cc9c76155c5f957844e236f: [
     "state-before-v35",
-    "9f90b9db5bceba7fba5559f518caea2b58e6fc363d6ddf160e4793ab4a08aa33",
+    "176062b85e5ef2f3aa10e61cc453269bb83414a601aaaaf05702292e79dc17c2",
     [
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
       26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
-      49, 50, 51, 52, 53, 132, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
+      49, 50, 51, 52, 53, 54, 133, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
       74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96,
       97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
-      116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131,
+      116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132,
     ],
     [],
   ],
   // state-before-v31
-  "36936a3edd8896ac1f8a0f73b6c8334385f9262f8eb7f1ddb1e83298554e2656": [
+  "69ef15c46ac30c669344082d5b48f6b8d4ed92a635bb6c43faa9ec80c66679a7": [
     "state-before-v31",
-    "587dd22498db1b171f12a7838200384e50360089996b15307855845552be952d",
+    "eefa6e37ba1371f2627f5e52203ad08e71ef76af693b2b144fd243c50f724d5f",
     [
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
       26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
-      49, 50, 51, 52, 133, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
+      49, 50, 51, 52, 53, 134, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74,
       75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97,
       98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116,
-      117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131,
+      117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132,
     ],
     [],
   ],
   // state-before-v27
-  "0fd39f9f198388f809574b23fd5532e4c762071e830d1da5c26a0ff7629c8032": [
+  "3bcfaf9785a85a358812e182e817c4c89e6892fb5276c50b3b6a57b5d36670b7": [
     "state-before-v27",
-    "7c96f5aeee1c1410ac0dd23b2a9534ab346f6528f34ab00fb9d724b74d6a3f59",
+    "5fef5f3586247d70f38066ab67af366c1d255e18a75f78e619121abe2efc805e",
     [
-      134, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+      135, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
       25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-      48, 49, 50, 51, 52, 133, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
+      48, 49, 50, 51, 52, 53, 134, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
       74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96,
-      97, 98, 99, 100, 101, 135, 103, 136, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
-      116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131,
+      97, 98, 99, 100, 101, 102, 136, 104, 137, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
+      116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132,
     ],
     [],
   ],
   // state-before-v26
-  "79517c2d72c03b744524b3dd9d78389ec065e25ff619698a3b10e8cb252f5255": [
+  "84769c193ce70e06e93e95f3d2bd97760d2c14017bfacbffcea44f51f6a0b855": [
     "state-before-v26",
-    "13c4baab95b591ab2bb07e7e06557f456b0b2207741bb7554e0f08e5d247b12e",
+    "f1711e13d5ec8e77bfa24e39fbd08d20f8bbc89f98638804815e60e34d563184",
     [
-      134, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+      135, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
       25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-      48, 49, 50, 51, 52, 133, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
-      74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 137, 94, 95, 96,
-      97, 98, 99, 100, 101, 135, 103, 136, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
-      116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131,
+      48, 49, 50, 51, 52, 53, 134, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73,
+      74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 138, 95, 96,
+      97, 98, 99, 100, 101, 102, 136, 104, 137, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
+      116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132,
     ],
     [],
   ],
@@ -420,168 +425,168 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "54911300fd4efbb44a652d781badc61c60be05619fba7bd6a64b1d1bc2121a81": [
     "fragment-local_workspace_projections",
     "39ab9e54cafe71df0cfcd6b83585693118657dd954cce42b24093e1c4779b497",
-    [53, 54, 55, 56],
+    [54, 55, 56, 57],
     [],
   ],
   // state-feature-local_workspace_projections
   f0e11a6fff0a4b79b69a28a0f2ec4694fa1ee88672cac3b7338bc0a3bb9f8d19: [
     "state-feature-local_workspace_projections",
     "39ab9e54cafe71df0cfcd6b83585693118657dd954cce42b24093e1c4779b497",
-    [53, 54, 55, 56],
+    [54, 55, 56, 57],
     [],
   ],
   // state-feature-local_workspace_manifest_nodes
   e119e5203e18e9fba13d43368408775eca1d809807579a697482ab2b7011e840: [
     "state-feature-local_workspace_manifest_nodes",
     "8db5abfb2c2f4c380c80647305b1e4bb5e6af7ac2fec71205a52a97d86835291",
-    [53],
+    [54],
     [],
   ],
   // state-feature-local_workspace_tree_packs
   "3142caa54d9bd7d285b37ed3338ed9f4307ad3b32469bd88deecb8725301861e": [
     "state-feature-local_workspace_tree_packs",
     "a63984593fd118417812466c9ee0c189fd7d819401af1943a6f9c11730c47d87",
-    [56],
+    [57],
     [],
   ],
   // state-feature-local_workspace_source_path_sets
   e95059f2306c8231ee92ef3d76dfcb434a80885f08cbf39380f88a287f98bade: [
     "state-feature-local_workspace_source_path_sets",
     "ead9623df4d41d649f8e4af2351694db5bc8c4e70edb7d2322ba76c11d0dfddb",
-    [55],
+    [56],
     [],
   ],
   // fragment-user_profiles
   bc86e378ea153c42527b6106b01ba4cb8285cca40378ffa0142656577309723e: [
     "fragment-user_profiles",
     "268e6f3b53eb2048a3edf527da424f8df229a01166befc8137ea94dbb560227e",
-    [138, 111, 139],
+    [139, 112, 140],
     [],
   ],
   // state-feature-user_profiles
   f5b54f0fedd88d94c24add8a1fd987ac8592b05d4615424bab9dbc0d19c9cd4a: [
     "state-feature-user_profiles",
     "2c2611b7d0c64f467494ae3922f763dee7fc023a5ee6b92d5821639b18e825aa",
-    [138, 140, 139],
+    [139, 141, 140],
     [],
   ],
   // state-feature-user_profile_emails
   "9eaae0feb245733106045a2c6766d2a2a729a9bdb22b98ec4434c09d76663264": [
     "state-feature-user_profile_emails",
     "202fadb0df4fc5da385edddbda27e96126d0d7a2db6a63375fa506221163a4fb",
-    [141],
+    [142],
     [],
   ],
   // state-feature-user_profile_identities
   "45451969c6ea5bebf37bbfba310467e482af74731a7cb0f2affb316059e21528": [
     "state-feature-user_profile_identities",
     "3a24e89bd446dffbef50b7bd4b87288abc6eb470c290eaabcb1761fbe5244c06",
-    [140],
+    [141],
     [],
   ],
   // fragment-skill_library_entries
   "561e14603e294368a12a2b5f6ecb0cc509d0b8847a93817286bd5a14d076ad0f": [
     "fragment-skill_library_entries",
     "c04324d292a056ed135e3b5fad5ddf61bd7fa1bfc44ec905aa32cc220956bf8d",
-    [96, 97, 98, 99],
+    [97, 98, 99, 100],
     [],
   ],
   // state-feature-skill_library_entries
   "6b07280274e87ca0fa5bbc1887818497375298fa700b24852dc981f3da1da555": [
     "state-feature-skill_library_entries",
     "c04324d292a056ed135e3b5fad5ddf61bd7fa1bfc44ec905aa32cc220956bf8d",
-    [96, 97, 98, 99],
+    [97, 98, 99, 100],
     [],
   ],
   // state-feature-skill_library_revisions
   "43645abd05379894c2982bcd88b8dff0cd6c9802e5bf2ab6cc54af87a7e6a37d": [
     "state-feature-skill_library_revisions",
     "533218405c3e483d687da824cf15f9ebcb76ba69675946e95c134702dc199890",
-    [98],
+    [99],
     [],
   ],
   // state-feature-skill_library_events
   ea1b1fb7d6d8256ec58bc7c28541312c1a543e88bf9ed7e4366791ea243d8ec0: [
     "state-feature-skill_library_events",
     "e5269a0f2846007c0b3eef62963979fa7a2cdd01ced20906ec4ac407ace66c03",
-    [97],
+    [98],
     [],
   ],
   // state-feature-skill_library_uploads
   "31318a62bdb75dccad514a02adde07df11d26b756f51d1d50d0e6b19d399b26e": [
     "state-feature-skill_library_uploads",
     "ba066e91b42e768b5f705703783cce87eb90fac71a37cad9dfdf308a19ccceb6",
-    [99],
+    [100],
     [],
   ],
   // fragment-operator_approval_standing_grants
   ed3d9e7b13809b3a9b91d48d63816b26354681d727b96e39496d02c775343e1f: [
     "fragment-operator_approval_standing_grants",
     "9d40e9ae6add075aa675521e2664951448cb3c7f360694614c0e39db256ed7fa",
-    [76, 77],
+    [77, 78],
     [],
   ],
   // state-feature-operator_approval_standing_grants
   be37db3a4634164c401b2d8e5ac3c2d712cd9eb973e3f2b39daa578adedff0ae: [
     "state-feature-operator_approval_standing_grants",
     "9d40e9ae6add075aa675521e2664951448cb3c7f360694614c0e39db256ed7fa",
-    [76, 77],
+    [77, 78],
     [],
   ],
   // state-feature-operator_approval_standing_grant_generations
   e23a5880a289da464471db5cfff10b9a6962b4d52c99260a3e366746c023de76: [
     "state-feature-operator_approval_standing_grant_generations",
     "0d525f0400a30f0582698e91e78f63063c08a8c06b3bcfe624dbd2f2fbe7834c",
-    [76],
+    [77],
     [],
   ],
   // fragment-worker_environment_session_attachments, state-feature-worker_environment_session_attachments
   "7b8bf2fd3ae786c589bf138b32270450c1a2582bcb9a825c1eaf7fb3a7bcea06": [
     "fragment-worker_environment_session_attachments",
     "b95d7054311f0f2d1e0885104c66ff243dfe4f68b84ed2d814ae68e748574417",
-    [142],
+    [143],
     [],
   ],
   // fragment-sandbox_persistent_execs
   "6496f80e29da252472af802873996fc3cd761f245f4dcf6fefb1c7aee38e720b": [
     "fragment-sandbox_persistent_execs",
     "f885f117e199277aa5c23a9095f55e742797249d13e2f4e4df8fbef1daba399d",
-    [86],
+    [87],
     [],
   ],
   // state-feature-sandbox_persistent_execs
   "156673e9396f27223073abdbbd2e13269bd7f45f577ed6aff00e017ab232d940": [
     "state-feature-sandbox_persistent_execs",
     "026ac7355b83187c8f7eef5cbd48ab36ba7de1b4fe40413ee1168ebff6c2d67a",
-    [143],
+    [144],
     [],
   ],
   // fragment-user_background_images, state-feature-user_background_images
   "61e308c5a715e5ee5ff29b65a31d2e7ccd039498494d9afe120129f62f86b764": [
     "fragment-user_background_images",
     "1da03995969350f59b3f8a64d9144b781d467e6ea75f70d5abcd6e18734678e1",
-    [109],
+    [110],
     [],
   ],
   // fragment-update_runs
   b36f4fc0be0d53e48e207f50a3cba34df76c4028a2d85201f7b262b1c7a4c2ab: [
     "fragment-update_runs",
     "7a03cbf22978be3aa41cb030aadff21440667a0035fd3a9795492c10f89b1a55",
-    [108],
+    [109],
     [],
   ],
   // state-feature-update_runs
   c3db4ffcf4092146e5d923b60516a00a8db41825f8bffb138b848195576b987b: [
     "state-feature-update_runs",
     "4caad814f837565106a1a17b982bf4ff004bbdba00a6ff05a3b9c5ef2e5a5945",
-    [144],
+    [145],
     [],
   ],
   // fragment-session_repository_workspaces, state-feature-session_repository_workspaces
   "7d47dc1ae79e1c40ab11a56da183af8e8e5dd1435e044ac4e44be2c6595783e0": [
     "fragment-session_repository_workspaces",
     "7f1a1b36d06c7c4cb5e84d6a16ca23de89dbac6b68c97c31897d1d1825a17d01",
-    [91],
+    [92],
     [],
   ],
   // fragment-github_repository_publication_requests, state-indexed-github_repository_publication_requests
@@ -595,7 +600,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "6d205ed705fcf89e34e2679f192b2dd50e4cbcb9b06b473c3e81dd48c8811102": [
     "state-feature-github_repository_publication_requests",
     "bc5c46f3cc22c0572b25d10344108465509d7189e1d51b0f6fa335b1d86497cf",
-    [145],
+    [146],
     [],
   ],
   // fragment-github_publication_session_lifecycles, state-feature-github_publication_session_lifecycles
@@ -616,7 +621,21 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "8a4a42e9e8549a0f2e73b33b4031673e2e939624d95586693bc2ac43742bf30f": [
     "state-feature-github_personal_publication_requests",
     "aeb05b8ff41f64e5bab165feac6f1abcdb6dfefc2a5bfbbe88e34861cc40922e",
-    [146],
+    [147],
+    [],
+  ],
+  // fragment-gitlab_personal_publication_requests, state-indexed-gitlab_personal_publication_requests
+  c5ce6e110c6fdb3d2c77032b793787fd4f5c331fce06fd2102aa00ddb3b92e15: [
+    "fragment-gitlab_personal_publication_requests",
+    "75c70454810c5794d2ce870d77ba26ceed0cffdd474fd840b5e2b4e784407741",
+    [53],
+    [],
+  ],
+  // state-feature-gitlab_personal_publication_requests
+  "97c7650290a6c1c8c38298a95e1c11c2a254b83ead11bf4bb7bf650935999082": [
+    "state-feature-gitlab_personal_publication_requests",
+    "38828bfcc733f32036b0b534dac54e44a7a2792e3161f136f52fe9d08d3e7497",
+    [148],
     [],
   ],
   // fragment-cron_job_runtime_authorities, state-feature-cron_job_runtime_authorities
@@ -644,98 +663,98 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "7683ab1fd0bccb8e29499c3b6df0070d9cc7cd6249c8c103d654b015ce309417": [
     "state-feature-execution_identity_contexts",
     "2dc283d04b315fd0199a9e13653edb03c8614d12be2ca6f005c7e110aab62d2a",
-    [147],
+    [149],
     [],
   ],
   // fragment-mcp_oauth_pending_authorizations, state-feature-mcp_oauth_pending_authorizations
   b796607c50ccb0e85abdec5d76b88b8076596077afe71e238b7831edd061f9e8: [
     "fragment-mcp_oauth_pending_authorizations",
     "39eae7dacb98a3cc36bd7598c4e416fc3f180c95aa78b7fd5a1f11afecf2d5b9",
-    [59],
+    [60],
     [],
   ],
   // fragment-node_worker_launch_containers, state-feature-node_worker_launch_containers
   "15f660904a6ff5b2e08b57e7e1979ae85d7476426da0e6aa8fc35a013d557501": [
     "fragment-node_worker_launch_containers",
     "bae513184057ef120b3b7ff1f08fc0affa1293461353ac060f1c0148346225f5",
-    [69],
+    [70],
     [],
   ],
   // fragment-node_worker_launch_boots, state-feature-node_worker_launch_boots
   "2703e870e99174d91597e44b5619574373f3da7030c4cd9907a8ac341f00802f": [
     "fragment-node_worker_launch_boots",
     "ce110d8dd52daad838b24137dc43979dafe784dd08348e09482093f47dd5d98b",
-    [67],
+    [68],
     [],
   ],
   // fragment-node_worker_launch_cleanup, state-feature-node_worker_launch_cleanup
   "7c1c6d4fbba2f48e6ad4003bbc7d22b3b543034a8c2456fc542d2dac90c46aad": [
     "fragment-node_worker_launch_cleanup",
     "d45196104873c5924d0fddabdce7a4f08b8fab2c68880492de968c978ef031c8",
-    [68],
+    [69],
     [],
   ],
   // fragment-node_worker_launch_process_scopes, state-feature-node_worker_launch_process_scopes
   "16bb8bbf8eb97d4a3895c031f758ca37106c072cd78e18b99e4f68463679c153": [
     "fragment-node_worker_launch_process_scopes",
     "d9ce1d80156505cb99854d410b48f37b0cf82d0259417bd3c64e1ff91d5b05b2",
-    [70],
+    [71],
     [],
   ],
   // fragment-node_worker_launches
   b6d0283d081e77179a54f4e54847168156095e3ec4a487d17feea8dfe26a1626: [
     "fragment-node_worker_launches",
     "cac88014114f03cee09470505617bc58f893efc072306d0b4c6fb48e259fb17c",
-    [71],
+    [72],
     [],
   ],
   // state-feature-node_worker_launches
   "5dc1cf9bb59834e9497e191514c7bfb850e062f7744047c7a4289516b4b0e214": [
     "state-feature-node_worker_launches",
     "f07514c3996f79e89f46d771b58859826342f72a12f024b29726a82f6481d6f9",
-    [148],
+    [150],
     [],
   ],
   // fragment-node_worker_prepared_workspaces, state-feature-node_worker_prepared_workspaces
   "5e238c5c57f8e1bfc2d5fc91ad2a4ad3ae421ca1f36a84f973a8299f99ee7015": [
     "fragment-node_worker_prepared_workspaces",
     "1ab2c378547ad29580b84dcebbc4ed9c99008c8a242446cdad0553a24bf06eec",
-    [72],
+    [73],
     [],
   ],
   // fragment-node_worker_turns
   "865397a51b0e47eda5349293c3fc590226718cdad61afe420c578ab3ec786732": [
     "fragment-node_worker_turns",
     "cb3eaac1dc2492905a55c037ba7c09748bbdbc9c6a13cbb92e3cbec80c94f5d6",
-    [73],
+    [74],
     [],
   ],
   // state-feature-node_worker_turns
   "64cf0d044c7dede24d58a370a2f52cf19616efc9523343a698f7127c4d187f1d": [
     "state-feature-node_worker_turns",
     "d1d9be01c96d9dd47e4e23d0099074f561aedb976de062622daffd173443c17d",
-    [149],
+    [151],
     [],
   ],
   // fragment-operator_approval_execution_identities, state-feature-operator_approval_execution_identities
   eee176fa30fb315a218b50f12be8d9e4e5561441d59250cf7029aac4edd9eb38: [
     "fragment-operator_approval_execution_identities",
     "0f2bc5e4d656eda1ad36b778905e7e55f8685c0b41a68883f6e9fb1b838a874c",
-    [75],
+    [76],
     [],
   ],
   // fragment-web_push_approval_deliveries
   "57562a3e6f834f876e5c03711f50dc514c8bdd432a87f1f54cbac2901642d5d4": [
     "fragment-web_push_approval_deliveries",
     "f11526f4044590884acc313f8a8fb921ce93fb2372e2e64a635989af93d3012e",
-    [112],
+    [113],
     [],
   ],
   // state-feature-web_push_approval_deliveries
   "74b05c720f6b4a8ff88824c9843816992d5233b93ccd85bea66c2fbd2a3480c5": [
     "state-feature-web_push_approval_deliveries",
     "92bd2e9265be63167980a22960aa201502864ec59e283821ad3eab6e765744ce",
-    [150],
+    [152],
     [],
   ],
   // fragment-execution_decision_facts
@@ -749,7 +768,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "9cd9f63b1002094a7e0538c52b75f2c8d26664937ff5559f64a004feabe47816": [
     "state-feature-execution_decision_facts",
     "8235ed3d9eb951894768fa49670db7390f7950e96618daded2851a55c2e827ed",
-    [151],
+    [153],
     [],
   ],
   // fragment-execution_owner_lifecycle_bindings, state-feature-execution_owner_lifecycle_bindings
@@ -763,28 +782,28 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   c222191b2157eb84fae227b67417210870ff546ce38b799805cd32e63e198bcd: [
     "fragment-outbound_message_execution_bindings",
     "90715ffad8419a713baa7a63aa0d15038b16391bba0c3739bdae7c3196cc5fe5",
-    [80],
+    [81],
     [],
   ],
   // state-feature-outbound_message_execution_bindings
   f782e56e1dca81426ff88a94a9702580d0c6bdd1a420e8c1741fef3aa7c18b81: [
     "state-feature-outbound_message_execution_bindings",
     "c29af535c3d6cf16bb31a085c7b68d150c132921b51f560495e75dd1f5451f2d",
-    [152],
+    [154],
     [],
   ],
   // fragment-outbound_message_progress
   "733bbcfcce8373ce968a993fc1f4d3f911d0011c8a60833f613f9cdb7de22d9e": [
     "fragment-outbound_message_progress",
     "07938ecb7fa35203a80bf93cb28900b5eb0c35dcf47bfa476b436fd39d881135",
-    [81],
+    [82],
     [],
   ],
   // state-feature-outbound_message_progress
   "6e2c6c197a77c179716d6ddead9a7226c49db5e8b69c1775ea8808e5e24cf271": [
     "state-feature-outbound_message_progress",
     "b1fdd16f1d29ceeed6d32e873b0ef54831ad693b4e910c1fe55bc59aa60c4709",
-    [153],
+    [155],
     [],
   ],
   // fragment-agent_provenance, state-feature-agent_provenance
@@ -805,7 +824,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "41824738e9d17ef8abfa9bda96824ab259ca9e81d3ad647b16b407a6bc4dc28f": [
     "state-feature-cron_run_receipts",
     "1c1c9f4b60d18e51e0db6940a6813c5a7a1a14dffbe38921318e61c295597112",
-    [154],
+    [156],
     [],
   ],
   // fragment-config_revision_keys, state-feature-config_revision_keys
@@ -819,35 +838,35 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "443ee39ca023c21d0234f2897e3790e8e9757daf427989b731f97074c5bf28fe": [
     "fragment-secret_store_entries",
     "45f2e66f10baf9470316cb216a91ef6ffa865a2c2f25b181e37f20171348576b",
-    [89],
+    [90],
     [],
   ],
   // state-feature-secret_store_entries
   "10e3ba9552ac35206e3f3d467a44f71602f4b1d3404204836f72106155b5fe6d": [
     "state-feature-secret_store_entries",
     "1eefc2ba0eecf91c8fd96442e750b4e555fb97485569f3bd2bf7205c02466cee",
-    [155],
+    [157],
     [],
   ],
   // fragment-projects, state-feature-projects
   ecb98cd64bfc2fc0828eaaac59c122a4a9381d752dfdc4166d1fe287e9f1cecb: [
     "fragment-projects",
     "9ac5c2cc1d8a72b975287fe40d1f9cf5929671ee033dd68538315e9770df9f36",
-    [85],
+    [86],
     [],
   ],
   // fragment-worktree_templates, state-feature-worktree_templates
   "7b5e9bd4ec7f91f71f2fcea1deaa9058d06f907e460e2d1a2a8fa333bf6942c0": [
     "fragment-worktree_templates",
     "a9481ceaf044b2db824f5df1823d0619c7b9e53310b83a32c4399421cc6a7e18",
-    [130],
+    [131],
     [],
   ],
   // fragment-user_preferences, state-feature-user_preferences
   "85b0f3fbf9815fa0125a5a823eacebc68306ac4864d89047bb2699611b0044c5": [
     "fragment-user_preferences",
     "24c5cd67b1014eb8ca50a492d93a9b9ec5e5a3b936722c35c7b0768a8b1823e2",
-    [110],
+    [111],
     [],
   ],
   // fragment-device_pair_setup_completions, state-feature-device_pair_setup_completions
@@ -868,7 +887,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   "4c1eb061476b0ecbfc022fb1bd4c927c7c4b3868f40702507c9911ccd3504b2f": [
     "state-feature-github_publication_requests",
     "0375d1a5a88363e5cd216f3addbf170f8be1098ea8626e0e0f95ebb91768588d",
-    [156],
+    [158],
     [],
   ],
   // fragment-device_pairing_join_codes, state-feature-device_pairing_join_codes
@@ -882,77 +901,77 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   ddfc4231357afb56d903eca77fbfebf817ffafa47d491193e6948b5032ccfefe: [
     "fragment-skill_workshop_changes",
     "993cb9d62f11305ca322f0c76e895a37604132572f2f651c635d0d72eb416b85",
-    [103],
+    [104],
     [],
   ],
   // state-feature-skill_workshop_changes
   d3bf805006eb83550c1d4a662610e8897cd41ce52de6e370424d3f3ed26e3d80: [
     "state-feature-skill_workshop_changes",
     "01b83680a33b4f2e7d46a70f3e122ebe40044b44ff733891a29a340bdcbba3fb",
-    [157],
+    [159],
     [],
   ],
   // fragment-worker_environment_ssh_fallback_ports, state-feature-worker_environment_ssh_fallback_ports
   "59c7fa24ee5aa93144f936173f6efde68e9d2af33d074d5e208f971d500ac5d3": [
     "fragment-worker_environment_ssh_fallback_ports",
     "18ead5da9eec5f58b75326fdaf9ed55a3d0433facc14dad465add6bd80dff080",
-    [115],
+    [116],
     [],
   ],
   // fragment-worker_session_placement_moves, state-feature-worker_session_placement_moves
   "62bf1862f7ce3c0abcaaf4cc070834c5f402e1696b78d22e7ca7bd23b0fec36d": [
     "fragment-worker_session_placement_moves",
     "8188e7a581a51d08faad38cdf6b07041e2b2e760d17bcfa109df49ec0c83c430",
-    [118],
+    [119],
     [],
   ],
   // state-runtime-0-0
-  ece9b07ad7a12548e996ce598ee2f5479514466c898314ecca4dbe5a775be5de: [
+  f53881df6ae0f6ed4be95c1b140880b7e8c7f64f521bce1309273444c16157fd: [
     "state-runtime-0-0",
     "2fc16073d1dbd5e14508c5589b238c496c511d420606c2c14f0b3f7de179a7b0",
     [
       0, 1, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28,
-      29, 32, 33, 34, 37, 38, 39, 40, 44, 45, 46, 47, 48, 57, 58, 60, 61, 62, 63, 64, 65, 66, 74,
-      78, 79, 82, 83, 84, 87, 88, 90, 92, 93, 94, 95, 100, 101, 102, 104, 105, 106, 107, 113, 114,
-      116, 117, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 131,
+      29, 32, 33, 34, 37, 38, 39, 40, 44, 45, 46, 47, 48, 58, 59, 61, 62, 63, 64, 65, 66, 67, 75,
+      79, 80, 83, 84, 85, 88, 89, 91, 93, 94, 95, 96, 101, 102, 103, 105, 106, 107, 108, 114, 115,
+      117, 118, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 132,
     ],
     [],
   ],
   // state-runtime-0-1
-  "2855b2a9ade6e95851cdae795c6d2424aab08540b930f779e9f7967af94d581a": [
+  "240856e0910a79c025b813114a7bf74f67ab6e9c1b054df60c554b5eac2bbe0a": [
     "state-runtime-0-1",
     "ce2d6f0447febc966212cc6891905d2c3463a32447a8cc6961ec4d53a9a5e998",
     [
       0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 28,
-      29, 32, 33, 34, 37, 38, 39, 40, 44, 45, 46, 47, 48, 57, 58, 60, 61, 62, 63, 64, 65, 66, 74,
-      78, 79, 82, 83, 84, 87, 88, 90, 92, 93, 94, 95, 100, 101, 102, 104, 105, 106, 107, 113, 114,
-      116, 117, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 131,
+      29, 32, 33, 34, 37, 38, 39, 40, 44, 45, 46, 47, 48, 58, 59, 61, 62, 63, 64, 65, 66, 67, 75,
+      79, 80, 83, 84, 85, 88, 89, 91, 93, 94, 95, 96, 101, 102, 103, 105, 106, 107, 108, 114, 115,
+      117, 118, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 132,
     ],
     [],
   ],
   // state-runtime-1-0
-  "2ea558743ea797fdaf7a1420e10b2d53a74799d8bc6591388a180497f3782b85": [
+  "6e7ead710ec3b35ef42fb34eb75f354879b037b80b4446e7acfe613d88496634": [
     "state-runtime-1-0",
     "f001a3be86701cfea0434c8a13b8afb3214f47285dacb3ea20e417eda0b2e485",
     [
       0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-      28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 44, 45, 46, 47, 48, 50, 57, 58, 60, 61, 62,
-      63, 64, 65, 66, 74, 78, 79, 82, 83, 84, 85, 87, 88, 89, 90, 92, 93, 94, 95, 100, 101, 102,
-      103, 104, 105, 106, 107, 110, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125,
-      126, 127, 128, 129, 130, 131,
+      28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 44, 45, 46, 47, 48, 50, 58, 59, 61, 62, 63,
+      64, 65, 66, 67, 75, 79, 80, 83, 84, 85, 86, 88, 89, 90, 91, 93, 94, 95, 96, 101, 102, 103,
+      104, 105, 106, 107, 108, 111, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126,
+      127, 128, 129, 130, 131, 132,
     ],
     [],
   ],
   // state-runtime-1-1
-  "8c1670628cae1e050c5a37d5df1e7da552826f428ac68ebcf80011d50deb25af": [
+  dc41973ac3484e1b2e35bb8306ef06e1ac7f5a311d09e82cd5f9ca762d599b68: [
     "state-runtime-1-1",
     "33d7b0a655b753aa5e1fe0b16b8cedd812c219f999716d2687c2366bdd0971d0",
     [
       0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-      26, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 44, 45, 46, 47, 48, 50, 57, 58, 60, 61,
-      62, 63, 64, 65, 66, 74, 78, 79, 82, 83, 84, 85, 87, 88, 89, 90, 92, 93, 94, 95, 100, 101, 102,
-      103, 104, 105, 106, 107, 110, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125,
-      126, 127, 128, 129, 130, 131,
+      26, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 44, 45, 46, 47, 48, 50, 58, 59, 61, 62,
+      63, 64, 65, 66, 67, 75, 79, 80, 83, 84, 85, 86, 88, 89, 90, 91, 93, 94, 95, 96, 101, 102, 103,
+      104, 105, 106, 107, 108, 111, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126,
+      127, 128, 129, 130, 131, 132,
     ],
     [],
   ],
@@ -988,28 +1007,28 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   df93d6687254de2f31ff263b2dafdd67656caa6ac10180f95801bde2dce8f7f0: [
     "state-table-schema_meta",
     "df4efc2e7d50f8bde377f55f5a020ae5ba98cfda938879054cf02d9b4905b793",
-    [88],
+    [89],
     [],
   ],
   // state-table-state_leases
   cb1f3279e7e3b90290d5ab10856edf532f9c69f278116dd1a8002a4b050f2c1c: [
     "state-table-state_leases",
     "6117e088b6b48fe1007de8ef29868981f820404cc3be99040c2bcd899902b7cc",
-    [158],
+    [160],
     [],
   ],
   // state-table-worker_session_tool_operations
   a503e610cfb224030ab2473b374631cefa4972377d9d04e07b5d5efb07cee14c: [
     "state-table-worker_session_tool_operations",
     "a146f78ad23ec99bfcb50819c65478b5e94c4a8e4159086ef5073fc76e26cc2d",
-    [120],
+    [121],
     [],
   ],
   // state-table-worker_turn_tool_authorities
   "4f45746754bef21a88b4fdfc0932df58b22bf31590a961e4a53957cce7ccd873": [
     "state-table-worker_turn_tool_authorities",
     "fef54ec7cc72bf3869c78b67f31ce96ed842a1ba872f7090e52feff5f547560c",
-    [123],
+    [124],
     [],
   ],
   // state-indexed-github_publication_requests
@@ -1023,49 +1042,49 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
   c7c1408a52e8649cf030b636ee3d984e969c5fdb96f6834634e7cb4807e624f2: [
     "state-indexed-update_runs",
     "7a03cbf22978be3aa41cb030aadff21440667a0035fd3a9795492c10f89b1a55",
-    [108],
+    [109],
     [],
   ],
   // state-existing-state_leases
   d40fd26bedb861443248d33289dc8d89a1750f3631730dfde2ae285f2c7988ca: [
     "state-existing-state_leases",
     "4289076cebb114b14ac96672941b2be0679f1033e23fe059eedce8dc2b1eea57",
-    [88, 158],
+    [89, 160],
     [],
   ],
   // state-existing-agent_database_leases
   "13150d745ef24ab5e6aafe0b365af15d6c5d471a659e5eb2a1c38e359984a47f": [
     "state-existing-agent_database_leases",
     "9fe50268db674b01265b7e77701aedcfffe36567086fc763de8b89f87f4cb67d",
-    [3, 88, 158],
+    [3, 89, 160],
     [],
   ],
   // state-node-worker-lineage
   "789bdcc904f4b35b57f9cb829909f2c9cda541c86179beb6904977146665c0c9": [
     "state-node-worker-lineage",
     "f235501e3f5767c362c7aebce3e678d33cdb45e3b776391980019cdf7cc0f37d",
-    [68, 148],
+    [69, 150],
     [],
   ],
   // state-node-worker-descendants
   "7c5c2640b3ec45cbac611c07c67f478f0ddc85a4bbfceb9c3576f0d7aa3bd14a": [
     "state-node-worker-descendants",
     "0991532bbc3ca042fc5c1c2026b8aa8d50b24a5bccf26e53675340a4853a665e",
-    [68, 70, 148],
+    [69, 71, 150],
     [],
   ],
   // state-retired-commitments
   "72c354791974ce88794c96c16135a89f07b48b9b03542f968beadf05b76aae1e": [
     "state-retired-commitments",
     "19bef9367d336bb367e75740610741cb67deeef86a7f54065758609d67ae8a38",
-    [159],
+    [161],
     [],
   ],
   // state-retired-commitments-shipped
   "2309aff06f4bac77072697764926a0042e6b6069c9504d5bb8c6a0601e9d1314": [
     "state-retired-commitments-shipped",
     "f4d088664f133eea8b1e83fd342d1effaa86d836f8593e02778531468372a303",
-    [160],
+    [162],
     [],
   ],
 };

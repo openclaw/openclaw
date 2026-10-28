@@ -1,6 +1,7 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { parseControlUiFocusLocation } from "@openclaw/session-url-contract";
 import { sameRouteLocation } from "../app-route-paths.ts";
+import { captureGitLabOAuthCallback } from "../features/gitlab-connections/gitlab-oauth-callback.ts";
 import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
 import { createBrowserHistory, resolveControlUiPaths } from "./browser.ts";
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
@@ -18,10 +19,18 @@ import {
 /** Resolve the document's connection once, before either transport or rendering starts. */
 export function prepareApplicationStartup() {
   const history = createBrowserHistory();
-  const startupLocation = history.location();
+  const originalLocation = history.location();
   const [basePath, resourceBasePath] = resolveControlUiPaths(
-    startupLocation.pathname || globalThis.location?.pathname || "/",
+    originalLocation.pathname || globalThis.location?.pathname || "/",
   );
+  const startupLocation = captureGitLabOAuthCallback(
+    originalLocation,
+    basePath,
+    globalThis.location.origin,
+  );
+  if (startupLocation !== originalLocation) {
+    history.replace(startupLocation);
+  }
   const documentMode = resolveControlUiDocumentMode(startupLocation.pathname, basePath);
   const persistedSettings = loadSettings();
   const initialSettings = documentMode

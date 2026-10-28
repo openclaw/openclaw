@@ -155,6 +155,20 @@ export function createVitestResolveConfig(repoRoot: string) {
         ),
       },
       {
+        find: "@openclaw/gateway-protocol/gitlab-issues",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "gitlab-issues.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol/gitlab-publication",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "gitlab-publication.ts",
+        ),
+      },
+      {
         find: "@openclaw/gateway-protocol/restart-unavailable",
         replacement: path.join(
           repoRoot,

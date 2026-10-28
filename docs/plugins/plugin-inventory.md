@@ -52,7 +52,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-75 plugins
+76 plugins
 
 - **[a2a](/plugins/reference/a2a)** (`@openclaw/a2a`) - included in OpenClaw. A2A v1.0 Agent-to-Agent protocol channel plugin.
 
@@ -115,6 +115,8 @@ Each entry lists the package, distribution route, and description.
 - **[github](/plugins/reference/github)** (`@openclaw/github`) - included in OpenClaw. Public GitHub link previews and document reader.
 
 - **[github-copilot](/plugins/reference/github-copilot)** (`@openclaw/github-copilot-provider`) - included in OpenClaw. Adds GitHub Copilot model provider support to OpenClaw.
+
+- **[gitlab](/plugins/reference/gitlab)** (`@openclaw/gitlab`) - included in OpenClaw. Requester-attributed GitLab publication, issues, comments and discussions.
 
 - **[google](/plugins/reference/google)** (`@openclaw/google-plugin`) - included in OpenClaw. Adds Google, Google Gemini CLI, Google Vertex model provider support to OpenClaw.
 

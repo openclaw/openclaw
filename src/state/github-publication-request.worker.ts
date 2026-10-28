@@ -5,6 +5,7 @@ import {
   insertGitHubPublicationRequest,
 } from "../gateway/github-publication-store.worker.js";
 import { insertRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication-store.worker.js";
+import { insertPersonalGitLabPublicationInDatabase } from "../gateway/gitlab-personal-publication-store.worker.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import type { RepositoryGitHubPublicationRow } from "./github-publication-read.types.js";
@@ -96,10 +97,25 @@ function assertRequestedSource(
     assertGitHubPublicationWorktreeSource(source, {
       id: input.row.worktree_id,
       repoFingerprint: input.row.repository_fingerprint,
-      branch: row.branch,
+      branch: input.row.branch,
     });
     // Record the verified account before execution rejects a changed login.
     assertGitHubPublicationConnectionAdmissionSource(source, input.row);
+    return;
+  }
+  if (input.kind === "gitlab-personal") {
+    if (
+      selector.personalOwnerProfileId !== undefined ||
+      selector.profileId !== row.owner_profile_id ||
+      source.expected.profile?.profileId !== row.owner_profile_id
+    ) {
+      throw new Error("GitLab publication requested owner changed.");
+    }
+    assertGitHubPublicationWorktreeSource(source, {
+      id: input.row.worktree_id,
+      repoFingerprint: input.row.repository_fingerprint,
+      branch: input.row.branch,
+    });
     return;
   }
   const workspace = source.expected.repositoryWorkspace;
@@ -190,6 +206,12 @@ export const publicationRequestOperations = {
                   assertCurrent,
                 ),
               ],
+            };
+          case "gitlab-personal":
+            return {
+              ...identity,
+              kind: "gitlab-personal",
+              rows: [insertPersonalGitLabPublicationInDatabase(database, input.row, assertCurrent)],
             };
           case "repository":
             return {

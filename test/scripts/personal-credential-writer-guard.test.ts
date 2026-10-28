@@ -427,6 +427,7 @@ it("permits publication inserts only through the reviewed request and lifecycle 
 it.each([
   "github_publication_requests",
   "github_personal_publication_requests",
+  "gitlab_personal_publication_requests",
   "github_repository_publication_requests",
   "github_publication_session_lifecycles",
 ])("rejects unowned native and raw publication writes to %s", (table) => {

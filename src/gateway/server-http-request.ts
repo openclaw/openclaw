@@ -13,6 +13,7 @@ import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { readTailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { parseDevicePairingJoinRequestPath } from "../pairing/join-code.js";
 import { getWebhookLegacyListener } from "../plugins/http-legacy-listener.js";
+import { GITLAB_OAUTH_CALLBACK_PATH } from "../shared/gitlab-oauth-callback.js";
 import { NODE_WORKER_BUNDLE_TRANSFER_PATH } from "../worker/node-bundle-install-protocol.js";
 import { resolveAssistantAgentId } from "./assistant-identity.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
@@ -450,6 +451,13 @@ export function createGatewayHttpRequestHandler(
           scopedRequestPath === "/oauth/mcp/callback" &&
           Boolean(opts.handleMcpOAuthCallbackRequest),
         () => opts.handleMcpOAuthCallbackRequest?.(req, res) ?? false,
+      );
+      addAdmittedStage(
+        controlUiEnabled &&
+          Boolean(configSnapshot.gateway?.gitlab) &&
+          req.method === "GET" &&
+          scopedRequestPath === `${controlUiRouteBasePath}${GITLAB_OAUTH_CALLBACK_PATH}`,
+        handleStandaloneControlUiRequest,
       );
       // The hook owner claims only its configured base path before entering HTTP admission;
       // this unconditional dispatcher must stay plain so unrelated routes can fall through.

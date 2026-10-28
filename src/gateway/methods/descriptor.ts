@@ -53,6 +53,8 @@ export type GatewayMethodDescriptor = Partial<GatewayReadSharing> & {
   owner: GatewayMethodOwner;
   profileAccess: GatewayMethodProfileAccess;
   sessionAccess?: GatewayMethodSessionAccess;
+  /** Exact plugin tool allowed to transfer this method through a host-owned session handoff. */
+  handoff?: { pluginId: string; toolName: string };
   since?: string;
   startup?: GatewayMethodStartupAvailability;
   /** Observes another owner's result; cancelled on requester disconnect and restart drain. */

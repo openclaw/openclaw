@@ -1,3 +1,4 @@
+import type { SessionGitLabPublicationResult } from "../../packages/gateway-protocol/src/schema/gitlab.js";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.types.js";
 import type { GitHubPublicationChange } from "../gateway/github-publication-events.js";
@@ -31,6 +32,7 @@ export type SharedGitHubPublicationInsert = {
 export type GitHubPublicationInsert =
   | { kind: "shared"; input: SharedGitHubPublicationInsert }
   | { kind: "personal"; row: PersonalPublicationRow; lifecycleRevision: string | null }
+  | { kind: "gitlab-personal"; row: GitLabPersonalPublicationRow }
   | { kind: "repository"; row: RepositoryPublicationRow };
 export type GitHubPublicationDeferral =
   | { kind: "claim"; claim: WorkerSessionTurnClaim }
@@ -71,6 +73,7 @@ export type PublicationReadOperations = import("./worker-operation-registry.js")
 >;
 
 type PersonalPublicationRow = DB["github_personal_publication_requests"];
+type GitLabPersonalPublicationRow = DB["gitlab_personal_publication_requests"];
 type RepositoryPublicationRow = DB["github_repository_publication_requests"];
 type Execution<Row> = { row: Row; instanceId: string; executionId: string };
 type Mutation<Row> =
@@ -79,6 +82,20 @@ type Mutation<Row> =
   | { operation: "report"; requestId: string };
 export type PersonalPublicationMutation =
   | Mutation<PersonalPublicationRow>
+  | { operation: "restart"; instanceId: string };
+export type GitLabPersonalPublicationMutation =
+  | ((
+      | ({ operation: "claim" } & Execution<GitLabPersonalPublicationRow>)
+      | ((
+          | Exclude<GitHubPublicationEffectTransition, { operation: "complete" }>
+          | { operation: "complete"; result: SessionGitLabPublicationResult }
+        ) &
+          Execution<GitLabPersonalPublicationRow>)
+      | { operation: "report"; requestId: string }
+    ) & {
+      resultJson?: string;
+      pushObservation?: "applied" | "unchanged";
+    })
   | { operation: "restart"; instanceId: string };
 export type RepositoryPublicationMutation =
   | Mutation<RepositoryPublicationRow>
@@ -131,6 +148,7 @@ export type PublicationMutationResult = {
 } & (
   | { kind: "shared"; rows: GitHubPublicationRow[] }
   | { kind: "personal"; rows: PersonalPublicationRow[] }
+  | { kind: "gitlab-personal"; rows: GitLabPersonalPublicationRow[] }
   | { kind: "repository"; rows: RepositoryPublicationRow[] }
   | { kind: "maintenance"; rows: [] }
 );

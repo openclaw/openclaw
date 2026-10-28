@@ -91,6 +91,16 @@
       "types": "./dist/version.d.mts",
       "import": "./dist/version.mjs",
       "default": "./dist/version.mjs"
+    },
+    "./gitlab-publication": {
+      "types": "./dist/gitlab-publication.d.mts",
+      "import": "./dist/gitlab-publication.mjs",
+      "default": "./dist/gitlab-publication.mjs"
+    },
+    "./gitlab-issues": {
+      "types": "./dist/gitlab-issues.d.mts",
+      "import": "./dist/gitlab-issues.mjs",
+      "default": "./dist/gitlab-issues.mjs"
     }
   },
   "scripts": {

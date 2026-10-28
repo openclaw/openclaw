@@ -19,6 +19,11 @@ import {
   readRepositoryGitHubPublicationBranchInDatabase,
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.worker.js";
+import {
+  readPersonalGitLabPublicationInDatabase,
+  readSharedGitLabPublicationInDatabase,
+  listUnreportedPersonalGitLabPublicationsInDatabase,
+} from "../gateway/gitlab-personal-publication-store.worker.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { SharedGitHubPublicationReadInput } from "./github-publication-read.types.js";
 import {
@@ -79,6 +84,28 @@ export const publicationReadOperations = {
   ) => ({
     type: "githubPublications.personalRead" as const,
     row: readPersonalGitHubPublicationInDatabase(db, input.owner, input.request),
+  }),
+  "githubPublications.gitlabPersonalRead": (
+    input: {
+      owner: string;
+      issuer: string;
+      request: Parameters<typeof readPersonalGitLabPublicationInDatabase>[3];
+    },
+    db,
+  ) => ({
+    type: "githubPublications.gitlabPersonalRead" as const,
+    row: readPersonalGitLabPublicationInDatabase(db, input.owner, input.issuer, input.request),
+  }),
+  "githubPublications.gitlabSharedRead": (
+    input: Parameters<typeof readSharedGitLabPublicationInDatabase>[1],
+    db,
+  ) => ({
+    type: "githubPublications.gitlabSharedRead" as const,
+    row: readSharedGitLabPublicationInDatabase(db, input),
+  }),
+  "githubPublications.gitlabPersonalUnreported": (_input: undefined, db) => ({
+    type: "githubPublications.gitlabPersonalUnreported" as const,
+    rows: listUnreportedPersonalGitLabPublicationsInDatabase(db),
   }),
   "githubPublications.unreported": (_input: undefined, db) => ({
     type: "githubPublications.unreported" as const,

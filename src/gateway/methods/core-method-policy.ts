@@ -78,6 +78,11 @@ export function isCoreGatewayMethodClassified(method: string): boolean {
   return CORE_GATEWAY_METHOD_SPEC_BY_NAME.has(method);
 }
 
+/** Static admission metadata for a core method intentionally callable after a plugin tool yields. */
+export function resolveCoreGatewayHandoffMetadata(method: string) {
+  return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.handoff;
+}
+
 export function createCoreGatewayMethodDescriptors(
   handlers: Record<string, GatewayMethodHandler>,
 ): GatewayMethodDescriptorInput[] {
@@ -111,6 +116,7 @@ export function createCoreGatewayMethodDescriptors(
       ...(spec.controlPlaneWrite === true ? { controlPlaneWrite: true } : {}),
       ...(spec.description ? { description: spec.description } : {}),
       ...(spec.sessionAccess ? { sessionAccess: spec.sessionAccess } : {}),
+      ...(spec.handoff ? { handoff: spec.handoff } : {}),
     });
   }
   for (const name of Object.keys(handlers)) {

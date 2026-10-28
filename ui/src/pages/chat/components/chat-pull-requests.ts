@@ -33,6 +33,11 @@ export function retainedPublication(publication: GitHubPublicationView | undefin
 export function showWorkRow(props: ChatPullRequestsProps): boolean {
   return Boolean(
     (!props.branchDismissed && props.branch) ||
+    (props.publication?.provider === "gitlab" &&
+      props.publication.target &&
+      (props.publication.canPublishPersonal ||
+        props.publication.canPublishShared ||
+        retainedPublication(props.publication))) ||
     (!props.pullRequests.length &&
       (retainedPublication(props.publication) ||
         (!props.branchDismissed &&

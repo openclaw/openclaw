@@ -32,6 +32,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -213,6 +214,7 @@ type WorkerSessionToolTestOptions = {
   admissionSource?: AdmittedRunContext["admissionSource"];
   collectExecutionIdentity?: boolean;
   operatorProfileId?: string;
+  operatorProfileEmail?: string;
   operatorScopes?: readonly string[];
   inheritedToolPolicySource?: "sender";
   delegatedToolPolicyActive?: boolean;
@@ -228,7 +230,13 @@ export async function createWorkerSessionToolTestFixture(
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-tools-"),
   );
+  if (options.operatorProfileEmail) {
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  }
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+  const operatorProfileId = options.operatorProfileEmail
+    ? ensureProfileForEmail(options.operatorProfileEmail).id
+    : options.operatorProfileId;
   const cfg = {};
   setRuntimeConfigSnapshot(cfg);
   const placements = createWorkerSessionPlacementStore({ database });
@@ -309,9 +317,9 @@ export async function createWorkerSessionToolTestFixture(
       sessionTarget,
       assertSourceCurrent,
       undefined,
-      options.operatorProfileId
+      operatorProfileId
         ? createAdmittedRunOperatorAuthority({
-            profileId: options.operatorProfileId,
+            profileId: operatorProfileId,
             scopes: options.operatorScopes ?? ["operator.write"],
             assertCurrent: () =>
               assert(operatorAuthorityActive, "source operator authority revoked"),
@@ -404,10 +412,11 @@ export async function createWorkerSessionToolTestFixture(
     runtimeOptions: Pick<
       Parameters<typeof createWorkerGatewayTools>[0],
       "prepareTools" | "skillWorkshop"
-    > & {
-      identity?: WorkerConnectionIdentity;
-      additionalInheritedToolNamesRef?: string[];
-    } = {},
+    > &
+      Partial<Pick<Parameters<typeof createWorkerGatewayTools>[0], "resolveGatewayContext">> & {
+        identity?: WorkerConnectionIdentity;
+        additionalInheritedToolNamesRef?: string[];
+      } = {},
   ) {
     const workerIdentity = runtimeOptions.identity ?? identity;
     const claim = workerIdentity.turnClaim;

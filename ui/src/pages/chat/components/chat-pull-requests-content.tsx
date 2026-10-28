@@ -109,7 +109,9 @@ export function ChatPullRequestsContent(props: ChatPullRequestsProps) {
     props.publication?.result?.status === "published" ? props.publication.result : undefined;
   const retained = () => retainedPublication(props.publication);
   const visibleBranch = () =>
-    props.publishedOnly || props.branchDismissed ? undefined : props.branch;
+    props.publishedOnly || props.branchDismissed || props.publication?.provider === "gitlab"
+      ? undefined
+      : props.branch;
   const workRow = () => !props.publishedOnly && showWorkRow(props);
   const visible = createMemo(() => chatPullRequestRows(props));
   const recovery = () =>
@@ -133,11 +135,18 @@ export function ChatPullRequestsContent(props: ChatPullRequestsProps) {
           <span class="chat-pr__identity">
             <span class="chat-pr__repo">
               {workPublished()?.repository ??
+                props.publication?.target?.repository ??
                 childProps.branch?.repo ??
-                t("chat.pullRequests.publishPr")}
+                t(
+                  props.publication?.provider === "gitlab"
+                    ? "githubPublication.title"
+                    : "chat.pullRequests.publishPr",
+                )}
             </span>
             <span class="chat-pr__branch">
-              {workPublished()?.branch ?? childProps.branch?.branch}
+              {workPublished()?.branch ??
+                props.publication?.target?.branch ??
+                childProps.branch?.branch}
             </span>
           </span>
         </span>
@@ -151,7 +160,9 @@ export function ChatPullRequestsContent(props: ChatPullRequestsProps) {
               />
             )}
           </Show>
-          <StatusWarning status={props.status} />
+          <Show when={props.publication?.provider !== "gitlab"}>
+            <StatusWarning status={props.status} />
+          </Show>
           <Show
             when={props.publication}
             fallback={

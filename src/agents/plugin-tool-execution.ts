@@ -1,9 +1,19 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveCoreGatewayHandoffMetadata,
+  resolveCoreOperatorGatewayMethodScope,
+} from "../gateway/methods/core-method-policy.js";
+import { withAcceptedPluginGatewayHandoffClaim } from "../gateway/plugin-tool-handoff-claim.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
 import { createPluginRequesterModels } from "../plugins/requester-models.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  acceptCurrentPluginGatewayHandoffInvocation,
+  markAcceptedPluginToolHandoffResult,
+} from "../plugins/tool-handoff-result.js";
 import type { OpenClawPluginToolContext } from "../plugins/tool-types.js";
 import { runOutsideCommandProcessScope } from "../process/exec-spawn.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -19,11 +29,12 @@ import { prepareSandboxProcessCleanup } from "./sandbox/process-cleanup.js";
 import { shellEscape } from "./sandbox/remote-shell-command.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result-limits.js";
+import type { SessionsYieldCallback } from "./tools/sessions-yield-tool.js";
 import { canonicalizePath } from "./utils/paths.js";
 
 export type PluginToolExecutionCapabilities = Pick<
   OpenClawPluginToolContext<2>,
-  "sandbox" | "modelExecution" | "assertCompleteResult" | "runtimeContext"
+  "sandbox" | "modelExecution" | "assertCompleteResult" | "runtimeContext" | "gatewayHandoff"
 >;
 
 /** Capture once at assembly; a retained plugin never resolves a later run's sandbox or identity. */
@@ -37,8 +48,20 @@ export function preparePluginToolExecutionCapabilities(params: {
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
+  runId?: string;
+  onYield?: SessionsYieldCallback;
+  senderIsOwner?: boolean;
   modelContextWindowTokens?: number;
-}): (assertInvocationCurrent: () => void, signal?: AbortSignal) => PluginToolExecutionCapabilities {
+}): (
+  assertInvocationCurrent: () => void,
+  signal?: AbortSignal,
+  handoff?: {
+    pluginId: string;
+    toolName: string;
+    methods: readonly string[];
+    assertPluginCurrent(): void;
+  },
+) => PluginToolExecutionCapabilities {
   const sandbox = params.sandbox;
   const backend = sandbox?.backend;
   const workspaceDir = sandbox?.workspaceCwd
@@ -89,7 +112,133 @@ export function preparePluginToolExecutionCapabilities(params: {
     }
   }
   const resultBudget = resolveToolResultBudget(params.modelContextWindowTokens);
-  return (assertInvocationCurrent, pluginSignal) => ({
+  return (assertInvocationCurrent, pluginSignal, handoff) => ({
+    ...(handoff && params.sessionId && params.sessionKey && params.onYield
+      ? {
+          gatewayHandoff: async (request: {
+            method: string;
+            params: Record<string, unknown>;
+            signal?: AbortSignal;
+          }) => {
+            const handoffSessionId = params.sessionId!;
+            assertInvocationCurrent();
+            handoff.assertPluginCurrent();
+            pluginSignal?.throwIfAborted();
+            const { getGatewayToolCallerIdentity } =
+              await import("./tools/gateway-caller-context.js");
+            const caller = getGatewayToolCallerIdentity();
+            if (
+              !caller ||
+              caller.sessionKey !== params.sessionKey ||
+              caller.agentId !== params.agentId ||
+              !caller.operatorAuthority ||
+              !caller.assertToolAllowed
+            ) {
+              throw new Error("Gateway handoff requires the current admitted tool requester.");
+            }
+            caller.assertToolAllowed(handoff.toolName);
+            const callerAgentId = caller.agentId;
+            const callerSessionKey = caller.sessionKey;
+            const acceptedMethod = request.method;
+            const descriptor = resolveCoreGatewayHandoffMetadata(request.method);
+            const scope = resolveCoreOperatorGatewayMethodScope(request.method);
+            if (
+              !handoff.methods.includes(request.method) ||
+              descriptor?.pluginId !== handoff.pluginId ||
+              descriptor.toolName !== handoff.toolName ||
+              (scope !== "operator.sessions.read" && scope !== "operator.sessions.write")
+            ) {
+              throw new Error(
+                "This plugin tool is not admitted for the requested Gateway handoff.",
+              );
+            }
+            // The request is copied before the turn yields; later plugin mutations cannot retarget it.
+            const acceptedParams = structuredClone(request.params);
+            const { captureExecRequestOwners } = await import("../infra/exec-request-context.js");
+            const { findSessionControllerOperationByRunId } =
+              await import("../sessions/session-controller.queries.js");
+            const { resolveReplyRunForCurrentSessionId } =
+              await import("../sessions/session-controller.identity.js");
+            const { handoffSessionTool } = await import("./tools/session-tool-handoff.js");
+            const { dispatchGatewayMethodInProcess } =
+              await import("../gateway/server-plugin-in-process-dispatch.js");
+            assertInvocationCurrent();
+            caller.assertToolAllowed(handoff.toolName);
+            const current = params.runId
+              ? undefined
+              : resolveReplyRunForCurrentSessionId(handoffSessionId);
+            const operation = params.runId
+              ? findSessionControllerOperationByRunId(params.runId)
+              : current?.kind === "one"
+                ? current.operation
+                : undefined;
+            const result = await handoffSessionTool({
+              name: handoff.toolName,
+              sessionId: handoffSessionId,
+              runId: params.runId,
+              operation,
+              requestOwners: captureExecRequestOwners({
+                runId: params.runId,
+                sessionId: handoffSessionId,
+              }),
+              onYield: (message) => {
+                acceptCurrentPluginGatewayHandoffInvocation();
+                return params.onYield!(message);
+              },
+              signal: request.signal,
+              senderIsOwner: params.senderIsOwner,
+              fenceSuccessors: true,
+              run: ({ assertCurrent, assertSourceCurrent, signal, operatorAuthority }) => {
+                if (!operatorAuthority) {
+                  throw new Error("Gateway handoff lost its admitted operator source.");
+                }
+                const resolveGatewayContext =
+                  getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+                if (!resolveGatewayContext) {
+                  throw new Error("Gateway handoff lost its admitted Gateway.");
+                }
+                const assertAcceptedCurrent = () => {
+                  assertCurrent();
+                  assertSourceCurrent();
+                  pluginSignal?.throwIfAborted();
+                  handoff.assertPluginCurrent();
+                  operatorAuthority.assertCurrent();
+                };
+                return withAcceptedPluginGatewayHandoffClaim(
+                  {
+                    pluginId: handoff.pluginId,
+                    toolName: handoff.toolName,
+                    method: acceptedMethod,
+                    params: acceptedParams,
+                    agentId: callerAgentId,
+                    sessionKey: callerSessionKey,
+                    sessionId: handoffSessionId,
+                    operatorAuthority,
+                    signal,
+                    assertCurrent: assertAcceptedCurrent,
+                  },
+                  () =>
+                    dispatchGatewayMethodInProcess<Record<string, unknown>>(
+                      acceptedMethod,
+                      acceptedParams,
+                      {
+                        forceSyntheticClient: true,
+                        pluginRuntimeOwnerId: handoff.pluginId,
+                        resolveGatewayContext,
+                        syntheticScopes: [scope],
+                        syntheticScopeMode: "exact",
+                        signal,
+                        sessionMutationCommitGuard: assertAcceptedCurrent,
+                      },
+                    ),
+                );
+              },
+              formatResult: (handoffResult) => JSON.stringify(handoffResult),
+            });
+            return markAcceptedPluginToolHandoffResult(result);
+          },
+        }
+      : {}),
     runtimeContext: {
       models: authority
         ? createPluginRequesterModels({

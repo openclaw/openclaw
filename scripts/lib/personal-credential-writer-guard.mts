@@ -8,11 +8,17 @@ const profileWrites = "src/state/user-profile-writes.worker.ts";
 const profileWorker = "src/state/user-profiles.worker.ts";
 const authWorker = "src/agents/auth-profiles/store.worker.ts";
 const selectionSdk = "src/gateway/model-account-connect.ts";
+const gitlabSecrets = "src/secrets/store/secret-store-hidden-gitlab.kernel.ts";
+const managedGitlabSecrets = "src/secrets/store/secret-store-hidden-managed-gitlab.kernel.ts";
+const gitlabConnections = "src/state/user-gitlab-connections.kernel.ts";
+const gitlabConnectionWorker = "src/state/user-gitlab-connections.worker.ts";
+const managedGitlabWorker = "src/secrets/store/secret-store-gitlab-managed.worker.ts";
 const githubSecrets = "src/secrets/store/secret-store-hidden-github.kernel.ts";
 const key = (file: string, name: string) => `${file}:${name}`;
 const publicationWorker = "src/state/github-publication.worker.ts";
 const publicationRequestWorker = "src/state/github-publication-request.worker.ts";
 const sharedPublication = "src/gateway/github-publication-store.worker.ts";
+const gitlabPublication = "src/gateway/gitlab-personal-publication-store.worker.ts";
 const personalPublication = "src/gateway/github-personal-publication-store.worker.ts";
 const repositoryPublication = "src/gateway/github-repository-publication-store.worker.ts";
 const publicationLifecycle = "src/state/github-publication-session-lifecycles.worker.ts";
@@ -46,6 +52,7 @@ const guardedTables = new Set([
   "config_machine_state",
   "github_publication_requests",
   "github_personal_publication_requests",
+  "gitlab_personal_publication_requests",
   "github_repository_publication_requests",
   "github_publication_session_lifecycles",
   "session_members",
@@ -54,6 +61,19 @@ const guardedTables = new Set([
 // Offline benchmark roots are synthetic and owned before any Gateway runs.
 // Historical startup receipts lack requester authority and can only reconcile reads.
 const publicationWriters = new Map<string, readonly string[]>([
+  [
+    key(gitlabPublication, "insertPersonalGitLabPublicationInDatabase"),
+    [key(publicationRequestWorker, "githubPublications.insert/write")],
+  ],
+  ...[
+    "claimPersonalGitLabPublicationInDatabase",
+    "writePersonalGitLabPublicationInDatabase",
+    "requirePersonalGitLabPublicationConfirmationInDatabase",
+    "markPersonalGitLabPublicationReportedInDatabase",
+  ].map((name): [string, string[]] => [
+    key(gitlabPublication, name),
+    [key(publicationWorker, "gitLabPersonalMutation")],
+  ]),
   [
     key(publicationLifecycle, "insertGitHubPublicationSessionLifecycle"),
     [
@@ -523,6 +543,33 @@ const nativeSdkExports = new Map<string, readonly string[]>([
 
 // Exact edges, not worker-file exemptions: every new entry needs an owner audit.
 const callers = new Map<string, readonly string[]>([
+  // GitLab credential mutations enter only exact registered state-worker operations.
+  [
+    key(gitlabSecrets, "writePersonalGitLabSecret"),
+    [key(gitlabConnections, "writeUserGitLabConnectionInDatabase")],
+  ],
+  [key(gitlabSecrets, "retirePersonalGitLabSecrets"), [key(profileMerge, "mergeUserProfiles")]],
+  [
+    key(managedGitlabSecrets, "upsertHiddenGitLabSecret"),
+    [key(managedGitlabSecrets, "writeHiddenGitLabSecretInDatabase")],
+  ],
+  [
+    key(managedGitlabSecrets, "writeHiddenGitLabSecretInDatabase"),
+    [key(managedGitlabWorker, "gitlabManagedSecrets.write")],
+  ],
+  [
+    key(managedGitlabSecrets, "deleteHiddenGitLabSecretInDatabase"),
+    [
+      key(managedGitlabWorker, "gitlabManagedSecrets.delete"),
+      key(managedGitlabWorker, "gitlabManagedSetup.consume"),
+    ],
+  ],
+  [
+    key(gitlabConnections, "writeUserGitLabConnectionInDatabase"),
+    ["replace", "claimPending", "beginRefresh", "settleRefresh", "disconnect"].map((name) =>
+      key(gitlabConnectionWorker, `userGitLabConnections.${name}`),
+    ),
+  ],
   ...publicationWriters,
   ...["addSessionMember", "removeSessionMember"].map((name): [string, string[]] => [
     key(sessionMembers, name),
@@ -590,6 +637,13 @@ const callers = new Map<string, readonly string[]>([
       "deleteConfigMachineState",
       "importConfigMachineState",
     ].map((name) => key(machineState, name)),
+  ],
+  [
+    key(publicationWorker, "gitLabPersonalMutation"),
+    [
+      key(publicationWorker, "githubPublications.gitlabPersonal"),
+      key(publicationWorker, "githubPublications.maintenance"),
+    ],
   ],
   ...["shared", "personal", "repository"].map((kind): [string, string[]] => [
     key(publicationWorker, `${kind}Mutation`),
@@ -693,6 +747,10 @@ const exclusiveMaintenanceCallers = new Map([
 
 // Counts shrink freely. An additional sink, even in an existing function, needs review.
 const sinks = new Map<string, number>([
+  [key(gitlabSecrets, "writePersonalGitLabSecret"), 1],
+  [key(gitlabSecrets, "retirePersonalGitLabSecrets"), 1],
+  [key(managedGitlabSecrets, "upsertHiddenGitLabSecret"), 1],
+  [key(managedGitlabSecrets, "deleteHiddenGitLabSecretInDatabase"), 1],
   ...["addSessionMember", "removeSessionMember"].map((name): [string, number] => [
     key(sessionMembers, name),
     1,
@@ -1309,7 +1367,7 @@ export function inspectPersonalCredentialWriters(
       }
       if (ts.isStringLiteralLikeNode(node) || ts.isTemplateHead(node)) {
         const writes = node.text.matchAll(
-          /\b(?:(?:insert\s+(?:or\s+\w+\s+)?|replace\s+)into|update(?:\s+or\s+\w+)?|delete\s+from)\s+["`[]?(session_members|secret_store_entries|auth_profile_store|config_machine_state|github_(?:(?:personal_|repository_)?publication_requests|publication_session_lifecycles))\b/gi,
+          /\b(?:(?:insert\s+(?:or\s+\w+\s+)?|replace\s+)into|update(?:\s+or\s+\w+)?|delete\s+from)\s+["`[]?(session_members|secret_store_entries|auth_profile_store|config_machine_state|gitlab_personal_publication_requests|github_(?:(?:personal_|repository_)?publication_requests|publication_session_lifecycles))\b/gi,
         );
         for (const write of writes) {
           const id = key(file, operation(node));

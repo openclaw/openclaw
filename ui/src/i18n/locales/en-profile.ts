@@ -5,6 +5,25 @@ const identity = en.profilePage.identity;
 
 const enProfile = {
   profilePage: {
+    gitConnections: {
+      title: "Git connections",
+      description: "Connect your accounts for Git repository workflows.",
+      addProvider: "Add provider",
+      addProviderLabel: "Add Git provider",
+      chooseProvider: "Choose a Git provider to connect your account.",
+      github: "GitHub",
+      gitlab: "GitLab",
+      gitlabServer: "GitLab server",
+      gitlabServerUrl: "GitLab server URL",
+      gitlabServerSetup:
+        "Enter your GitLab server URL. One server is supported; its OAuth application must be configured by an administrator.",
+      gitlabContinue: "Continue with GitLab",
+      githubDescription: "Connect your personal GitHub account.",
+      gitlabDescription: "Connect your GitLab account for publishing, issues, and comments.",
+      connectGithub: "Connect GitHub",
+      connectGitlab: "Connect GitLab",
+      cancel: "Cancel",
+    },
     access: {
       title: "Your access",
       admin: "You have permission to manage this server.",
@@ -78,6 +97,7 @@ export const registerProfileEnglish = Object.assign(
   () => {
     // Shared menu/search labels stay eager; editor copy loads with its consumers.
     en.profilePage.access = enProfile.profilePage.access;
+    en.profilePage.gitConnections = enProfile.profilePage.gitConnections;
     Object.assign(en.profilePage.identity, enProfile.profilePage.identity);
   },
   { catalog: enProfile },

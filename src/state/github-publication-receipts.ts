@@ -20,10 +20,11 @@ import {
   type StateDomainChange,
 } from "./state-domain-publication.js";
 
-type PresentationColumn = "title" | "body" | "next_action";
+type PresentationColumn = "title" | "body" | "next_action" | "receipt_json" | "result_json";
 type Rows = {
   shared: Omit<DB["github_publication_requests"], PresentationColumn>;
   personal: Omit<DB["github_personal_publication_requests"], PresentationColumn>;
+  "gitlab-personal": Omit<DB["gitlab_personal_publication_requests"], PresentationColumn>;
   repository: Omit<DB["github_repository_publication_requests"], PresentationColumn>;
   "shared-lifecycle": DB["github_publication_session_lifecycles"];
   "personal-lifecycle": DB["github_publication_session_lifecycles"];
@@ -40,8 +41,15 @@ function isPublicationFact(key: string, fact: SqliteCommittedFact<unknown>, muta
     Array.isArray(decoded) &&
     decoded.length === 2 &&
     (mutation
-      ? ["shared", "personal", "repository", "shared-lifecycle", "personal-lifecycle"]
-      : ["personal", "repository", "personal-lifecycle"]
+      ? [
+          "shared",
+          "personal",
+          "gitlab-personal",
+          "repository",
+          "shared-lifecycle",
+          "personal-lifecycle",
+        ]
+      : ["personal", "gitlab-personal", "repository", "personal-lifecycle"]
     ).includes(decoded[0]) &&
     typeof decoded[1] === "string" &&
     (fact.kind === "absent" ||
@@ -218,6 +226,8 @@ function stageGitHubPublicationRow<Kind extends keyof Rows>(
   delete value.title;
   delete value.body;
   delete value.next_action;
+  delete value.receipt_json;
+  delete value.result_json;
   publication.stagePostimages(sqlPublicationAnchor(db), [
     [JSON.stringify([kind, row.request_id]), value],
   ]);

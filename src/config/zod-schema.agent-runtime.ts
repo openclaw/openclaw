@@ -27,6 +27,10 @@ import {
   AgentGitHubToolIdentitySchema,
   GitHubToolIdentitySchema,
 } from "./zod-schema.github-identity.js";
+import {
+  AgentGitLabToolIdentitySchema,
+  GitLabToolIdentitySchema,
+} from "./zod-schema.gitlab-identity.js";
 import { MemorySearchSchema } from "./zod-schema.memory-search.js";
 import {
   SandboxBrowserSchema,
@@ -560,6 +564,7 @@ const AgentToolsSchema = z
     exec: ToolExecSchema,
     /** Complete per-agent GitHub CLI identity and Git author override. */
     github: AgentGitHubToolIdentitySchema,
+    gitlab: AgentGitLabToolIdentitySchema,
     /** Filesystem tool path guards. */
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
@@ -627,6 +632,7 @@ export const ToolsSchema = z
     web: ToolsWebSchema,
     /** Managed local GitHub CLI identity and Git author; never overrides Git transport. */
     github: GitHubToolIdentitySchema,
+    gitlab: GitLabToolIdentitySchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,
     /**

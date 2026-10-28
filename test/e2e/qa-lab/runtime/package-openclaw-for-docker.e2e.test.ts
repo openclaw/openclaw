@@ -899,6 +899,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/windows-taskkill.mjs",
       "src/infra/npm-command.ts",
       "src/infra/runtime-process-dependency-url.ts",
+      "src/infra/runtime-process-helper-manifest.ts",
       "src/infra/runtime-process-manifest.ts",
       "src/shared/non-packaged-plugin-dirs.ts",
     ];

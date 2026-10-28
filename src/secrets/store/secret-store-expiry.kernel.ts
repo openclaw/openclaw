@@ -15,6 +15,10 @@ import {
   GITHUB_DEVICE_STORE_MAX_AGE_MS,
   GITHUB_SETUP_HANDOFF_MAX_AGE_MS,
 } from "./secret-store-github-names.js";
+import {
+  classifyHiddenGitLabStoreName,
+  GITLAB_SETUP_STORE_MAX_AGE_MS,
+} from "./secret-store-managed-gitlab-names.js";
 import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 
 type SecretStoreDatabase = Pick<DB, "secret_store_entries">;
@@ -68,24 +72,31 @@ export function purgeExpiredSecretStoreEntriesInDatabase(
               eb.or([
                 eb("name", ">=", "github-device-").and("name", "<", "github-device."),
                 eb("name", ">=", "github-setup-").and("name", "<", "github-setup."),
+                eb("name", ">=", "gitlab-setup-").and("name", "<", "gitlab-setup."),
               ]),
             )
             .where("deleted_at_ms", "is", null),
         ).rows;
         const expiredHidden = hidden.filter((row) => {
           const kind = classifyHiddenGitHubStoreName(row.name);
+          const managedGitLabSetup = classifyHiddenGitLabStoreName(row.name) === "setup";
           const createdAtMs = normalizeSqliteNumber(row.created_at_ms);
-          if (createdAtMs === undefined || (kind !== "setup" && kind !== "device")) {
+          if (
+            createdAtMs === undefined ||
+            (kind !== "setup" && kind !== "device" && !managedGitLabSetup)
+          ) {
             return false;
           }
           const expiry =
             createdAtMs +
-            (kind === "setup"
-              ? GITHUB_SETUP_HANDOFF_MAX_AGE_MS + 1
-              : GITHUB_DEVICE_STORE_MAX_AGE_MS);
+            (managedGitLabSetup
+              ? GITLAB_SETUP_STORE_MAX_AGE_MS + 1
+              : kind === "setup"
+                ? GITHUB_SETUP_HANDOFF_MAX_AGE_MS + 1
+                : GITHUB_DEVICE_STORE_MAX_AGE_MS);
           nextExpiryAtMs = Math.min(nextExpiryAtMs ?? expiry, expiry);
           return (
-            (kind === "setup" && createdAtMs < handoffThreshold) ||
+            ((kind === "setup" || managedGitLabSetup) && createdAtMs < handoffThreshold) ||
             (kind === "device" && createdAtMs <= deviceThreshold)
           );
         });

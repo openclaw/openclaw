@@ -1,6 +1,7 @@
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
+import { retirePersonalGitLabSecrets } from "../secrets/store/secret-store-hidden-gitlab.kernel.js";
 import { mergeUserBackgroundImages } from "./user-background.store.js";
 import { mergeUserGitHubConnection } from "./user-github-connections.kernel.js";
 import { mergeUserModelAccounts } from "./user-model-accounts.js";
@@ -62,6 +63,7 @@ export function mergeUserProfiles(
     targetProfileId,
     mutation?.publishGitHubConnections?.bind(mutation),
   );
+  retirePersonalGitLabSecrets(db, sourceProfileIds);
   for (const mergedProfileId of sourceProfileIds) {
     mergeUserBackgroundImages(db, mergedProfileId, targetProfileId);
     mergeUserPreferences(db, mergedProfileId, targetProfileId);

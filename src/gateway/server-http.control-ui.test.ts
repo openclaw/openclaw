@@ -1,5 +1,6 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import nodePath from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
@@ -233,3 +234,43 @@ it("serves marketplace documents without claiming plugin HTTP routes", () =>
       isStartupPluginRuntimeReady: () => true,
     }),
   ));
+
+it.each(["", "/claw"])(
+  "serves the configured GitLab callback before an overlapping hook at %s",
+  async (basePath) => {
+    const hooks = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 405;
+      res.end("hook");
+      return true;
+    });
+    await withUiRoot(
+      async (check) => {
+        const callback = await check(
+          `${basePath}/oauth/gitlab/callback?code=synthetic&state=synthetic`,
+          200,
+          {
+            headers: { accept: "text/html" },
+          },
+        );
+        expect(callback.getBody()).toContain("spa fallback");
+        expect(callback.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
+        expect(hooks).not.toHaveBeenCalled();
+        await check(`${basePath}/oauth/unrelated`, 405);
+        expect(hooks).toHaveBeenCalledOnce();
+      },
+      () => ({
+        controlUiBasePath: basePath,
+        handleHooksRequest: hooks,
+        getRuntimeConfig: () => ({
+          gateway: {
+            gitlab: {
+              issuer: "https://gitlab.example.test",
+              clientId: "public-fixture",
+              redirectUri: `https://gateway.example.test${basePath}/oauth/gitlab/callback`,
+            },
+          },
+        }),
+      }),
+    );
+  },
+);

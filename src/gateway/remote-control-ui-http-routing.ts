@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { ARTIFACT_DOWNLOAD_PATH } from "../../packages/gateway-protocol/src/artifact-download.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+import { GITLAB_OAUTH_CALLBACK_PATH } from "../shared/gitlab-oauth-callback.js";
 import { matchesControlUiBootstrapConfigPath } from "./control-ui-bootstrap-contract.js";
 import { controlUiPluginAssetRoot } from "./control-ui-plugin-assets-contract.js";
 import { listControlUiPluginTabAuthGrants } from "./control-ui-plugin-tabs.js";
@@ -133,6 +134,10 @@ export function resolveRemoteControlUiHttpRoute(
     return "document";
   }
   if (matchesControlUiBootstrapConfigPath(pathname, basePath)) {
+    return "document";
+  }
+  // This exact document completes through authenticated RPC, never a plugin or hook.
+  if (req.method === "GET" && pathname === `${basePath}${GITLAB_OAUTH_CALLBACK_PATH}`) {
     return "document";
   }
   const registry = getPluginRegistryForContext();

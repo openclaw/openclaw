@@ -2,6 +2,7 @@ import { flush } from "solid-js";
 import { vi } from "vitest";
 import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../api/types.ts";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
+import { GitLabManagedIdentityState } from "../../features/gitlab-connections/gitlab-managed-identity.ts";
 import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
 import type { AgentTools } from "./panels-tools-skills.tsx";
 
@@ -53,6 +54,7 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: true,
     githubIdentity,
+    gitlabIdentity: new GitLabManagedIdentityState(),
     onOpenGitHubConnections: vi.fn(),
     onProfileChange: () => undefined,
     onOverridesChange: () => undefined,

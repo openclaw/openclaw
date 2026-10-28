@@ -795,6 +795,71 @@ export function isTranscriptsStatusParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").TranscriptsStatusParamsSchema
 >;
+export function isUsersGitLabStatusParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").UsersGitLabStatusParamsSchema
+>;
+export function isUsersGitLabAuthorizeStartParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").UsersGitLabAuthorizeStartParamsSchema
+>;
+export function isUsersGitLabAuthorizeCompleteParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").UsersGitLabAuthorizeCompleteParamsSchema
+>;
+export function isUsersGitLabDisconnectParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").UsersGitLabDisconnectParamsSchema
+>;
+export function isSessionGitLabOptionsParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionGitLabOptionsParamsSchema
+>;
+export function isSessionGitLabStatusParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionGitLabStatusParamsSchema
+>;
+export function isSessionGitLabConfirmParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionGitLabConfirmParamsSchema
+>;
+export function isSessionGitLabPublishParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionGitLabPublishParamsSchema
+>;
+export function isToolsGitLabStatusParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolsGitLabStatusParamsSchema
+>;
+export function isToolsGitLabConfigureParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolsGitLabConfigureParamsSchema
+>;
+export function isToolsGitLabAuthorizeStartParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolsGitLabAuthorizeStartParamsSchema
+>;
+export function isToolsGitLabAuthorizeCompleteParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolsGitLabAuthorizeCompleteParamsSchema
+>;
+export function isToolsGitLabAuthorizeCancelParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolsGitLabAuthorizeCancelParamsSchema
+>;
 export function isMessageActionParams(
   value: unknown,
 ): value is import("typebox").Static<

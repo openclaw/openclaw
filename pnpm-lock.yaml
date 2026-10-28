@@ -1368,6 +1368,16 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/gitlab:
+    dependencies:
+      '@openclaw/gateway-protocol':
+        specifier: workspace:*
+        version: link:../../packages/gateway-protocol
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/gmi:
     devDependencies:
       '@openclaw/plugin-sdk':

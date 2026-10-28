@@ -78,6 +78,7 @@ export type PluginToolRegistration = PluginRegistrationOwner & {
   declaredNames?: ReadonlySet<string>;
   optional: boolean;
   workspaceAccess?: boolean | "execute";
+  gatewayHandoffMethods?: readonly string[];
   /** Loader-owned provenance. Missing values are conservative legacy registrations. */
   origin?: PluginOrigin;
 };

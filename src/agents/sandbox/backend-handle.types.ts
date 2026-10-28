@@ -77,6 +77,8 @@ export type SandboxBackendHandle = {
     command: string;
     workdir?: string;
     env: Record<string, string>;
+    /** Actor checked against the selected managed profile immediately before launch. */
+    selectedGitLabAuthor?: { name: string; commitEmail: string };
     usePty: boolean;
     /** Request piped input without a PTY; callers must honor the returned stdinMode. */
     stdin?: boolean;

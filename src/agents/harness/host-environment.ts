@@ -8,7 +8,7 @@ import {
 import { applyPathPrepend, findPathKey, normalizePathPrepend } from "../../infra/path-prepend.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { resolveSessionAgentIdStrict } from "../agent-scope.js";
-import { prepareGitHubToolEnvironment } from "../github-tool-identity.js";
+import { prepareExecIdentityEnvironment } from "../exec-identity-environment.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
 
 const MAX_NATIVE_OPERATION_CWD_BYTES = 4096;
@@ -58,7 +58,7 @@ export function prepareAgentHarnessEnvironment(params: {
     applyPathPrepend(localToolEnv, [...localToolPathPrepend]);
     Object.freeze(localToolEnv);
   }
-  const identity = prepareGitHubToolEnvironment({
+  const identity = prepareExecIdentityEnvironment({
     config: params.config ?? {},
     sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
     agentId: resolveSessionAgentIdStrict(params),

@@ -3,6 +3,7 @@ import { isRedactedSecretValue } from "../../config/redact-sentinel.js";
 import { ENV_SECRET_REF_ID_RE } from "../../config/types.secrets.js";
 import { normalizeExactAllowedHost } from "../exact-hostname.js";
 import { classifyHiddenGitHubStoreName } from "./secret-store-github-names.js";
+import { isHiddenGitLabStoreName } from "./secret-store-gitlab-names.js";
 import {
   SECRET_STORE_ALLOWED_HOSTS_MAX,
   SecretStoreValidationError,
@@ -13,7 +14,7 @@ import type { SecretStoreKind } from "./secret-store.types.js";
 export type { SecretStoreKind, SecretStoreScope } from "./secret-store.types.js";
 
 export function assertSecretStoreEnvName(name: string): void {
-  if (!ENV_SECRET_REF_ID_RE.test(name)) {
+  if (!ENV_SECRET_REF_ID_RE.test(name) || isHiddenGitLabStoreName(name)) {
     throw new SecretStoreValidationError(
       "SECRET_STORE_INVALID_NAME",
       `Secret store name must match ${String(ENV_SECRET_REF_ID_RE)}.`,
@@ -22,7 +23,10 @@ export function assertSecretStoreEnvName(name: string): void {
 }
 
 export function assertSecretStoreMutationName(name: string): void {
-  if (!ENV_SECRET_REF_ID_RE.test(name) && classifyHiddenGitHubStoreName(name) !== "setup") {
+  if (
+    (isHiddenGitLabStoreName(name) || !ENV_SECRET_REF_ID_RE.test(name)) &&
+    classifyHiddenGitHubStoreName(name) !== "setup"
+  ) {
     throw new SecretStoreValidationError(
       "SECRET_STORE_INVALID_NAME",
       `Secret store name must match ${String(ENV_SECRET_REF_ID_RE)} or github-setup-<32 lowercase hex characters>.`,

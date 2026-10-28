@@ -78,6 +78,8 @@ const loaders = {
     ),
   userGitHubConnections: () =>
     import("./user-github-connections.worker.js").then((m) => m.userGitHubConnectionOperations),
+  userGitLabConnections: () =>
+    import("./user-gitlab-connections.worker.js").then((m) => m.userGitLabConnectionOperations),
   githubPublications: () =>
     import("./github-publication.worker.js").then((m) => m.publicationOperations),
   userBackground: async () =>
@@ -90,6 +92,14 @@ const loaders = {
   githubSetup: () =>
     import("../secrets/store/secret-store-github-handoff.worker.js").then(
       (m) => m.githubSetupOperations,
+    ),
+  gitlabManagedSecrets: () =>
+    import("../secrets/store/secret-store-gitlab-managed.worker.js").then(
+      (m) => m.gitlabManagedOperations,
+    ),
+  gitlabManagedSetup: () =>
+    import("../secrets/store/secret-store-gitlab-managed.worker.js").then(
+      (m) => m.gitlabManagedOperations,
     ),
   agentDatabaseRegistry: () =>
     import("./openclaw-agent-db-registry.worker.js").then((m) => m.agentDatabaseRegistryOperations),

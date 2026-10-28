@@ -172,6 +172,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       const binding = runtime.publication.binding;
       return binding ? projectOwner(binding, (owner) => owner.view()) : undefined;
     });
+    const gitlabPublication = createMemo(() => {
+      const binding = runtime.gitlabPublication.binding;
+      return binding ? projectOwner(binding, (owner) => owner.view()) : undefined;
+    });
     const gateway = projectGateway(context.gateway);
     const theme = projectTheme(context.theme);
     // Startup attaches one host for this mounted pane's lifetime.
@@ -291,6 +295,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         relativeTime();
         gateway.read();
         publication()?.read();
+        gitlabPublication()?.read();
         repository()?.read();
         parentSession.read();
         transcriptPosition.read();

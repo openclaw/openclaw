@@ -7,6 +7,7 @@ import type { ReadOnlyWorkspaceSkillMount } from "./sandbox/workspace-mounts.js"
 const CHUNK_LIMIT = 8 * 1024;
 
 export type BashSandboxConfig = {
+  gitlabProfileDir?: string;
   containerName: string;
   workspaceDir: string;
   containerWorkdir: string;

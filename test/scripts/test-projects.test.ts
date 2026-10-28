@@ -2755,6 +2755,7 @@ describe("test selector native source facts", () => {
           "scripts/lib/test-source-term-matcher.mts",
           "src/infra/node-runtime-executable.ts",
           "src/infra/runtime-process-manifest.ts",
+          "src/infra/runtime-process-helper-manifest.ts",
         ]) {
           const target = path.join(cwd, file);
           fs.mkdirSync(path.dirname(target), { recursive: true });

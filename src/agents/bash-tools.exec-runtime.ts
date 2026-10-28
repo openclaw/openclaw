@@ -195,6 +195,15 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 }
 
 /** Starts a host or sandbox exec process and registers it for polling/backgrounding. */
+export type PreparedGitLabExecCredential = Readonly<{
+  profileDir: string;
+  issuer: string;
+  assertCurrent: () => Promise<void>;
+  assertCurrentSync: () => void;
+  close: () => void;
+  author?: { name: string; commitEmail: string };
+}>;
+
 export async function runExecProcess({
   startupSignal: initialStartupSignal,
   onUpdate: initialOnUpdate,
@@ -215,6 +224,8 @@ export async function runExecProcess({
   secretEgressBindings?: readonly SecretEgressSentinelBinding[];
   /** Host-selected managed profile; never inferred from the requested environment. */
   githubProfileDir?: string;
+  /** Resolved only inside the launch path, after approval and before final spawn. */
+  prepareGitLabCredential?: () => Promise<PreparedGitLabExecCredential>;
   pathPrepend?: string[];
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
@@ -372,6 +383,7 @@ export async function runExecProcess({
     };
 
   const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
+  let gitlabCredential: PreparedGitLabExecCredential | undefined;
   let sandboxFinalizeToken: unknown;
   let assertSandboxCurrent: (() => void) | undefined;
   let sandboxPrepared = false;
@@ -486,6 +498,7 @@ export async function runExecProcess({
         command: execCommand,
         workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
         env: cleanup?.env ?? shellRuntimeEnv,
+        selectedGitLabAuthor: gitlabCredential?.author,
         usePty: opts.usePty,
       });
       sandboxFinalizeToken = backendExecSpec.finalizeToken;
@@ -501,7 +514,12 @@ export async function runExecProcess({
         stdinMode: backendExecSpec.stdinMode,
       };
     }
-    return prepareHostExecSpawn({ ...opts, env: shellRuntimeEnv });
+    return prepareHostExecSpawn({
+      ...opts,
+      env: shellRuntimeEnv,
+      gitlabProfileDir: gitlabCredential?.profileDir,
+      gitlabIssuer: gitlabCredential?.issuer,
+    });
   };
 
   let managedRun: ManagedRun | null = null;
@@ -539,7 +557,11 @@ export async function runExecProcess({
       sessionKey: opts.sessionKey,
       target: diagnosticTarget,
     });
-  const assertPreSpawnAuthorized = () => launchLifecycle.prepare(assertSourceActive, beforeSpawn);
+  const assertPreSpawnAuthorized = async () => {
+    const result = await launchLifecycle.prepare(assertSourceActive, beforeSpawn);
+    await gitlabCredential?.assertCurrent();
+    return result;
+  };
   const spawn = (input: SpawnInput) =>
     runWithAgentToolSourceExecutionScope(assertSourceActive, async () => {
       const assertSourceCurrent = assertSourceActive;
@@ -550,6 +572,7 @@ export async function runExecProcess({
         assertSourceCurrent?.();
         assertOperatorCurrent?.();
         assertRuntimeCurrent?.();
+        gitlabCredential?.assertCurrentSync();
       };
       // Source authority covers construction; approval policy ends at native launch.
       assertCurrent();
@@ -584,6 +607,7 @@ export async function runExecProcess({
     assertSourceActive?.();
     operatorAuthority?.assertCurrent();
     releaseOperatorAuthority = operatorAuthority?.retain?.();
+    gitlabCredential = await opts.prepareGitLabCredential?.();
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
     const spawnBase = {
@@ -644,6 +668,7 @@ export async function runExecProcess({
     emitCompleted(outcome);
     throw error;
   } finally {
+    gitlabCredential?.close();
     launchLifecycle.dispose();
     beforeSpawn = undefined;
     assertPolicyCurrent = undefined;

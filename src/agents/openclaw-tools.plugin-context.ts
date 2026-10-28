@@ -15,6 +15,7 @@ export type OpenClawPluginToolOptions = Pick<
   | "agentSessionKey"
   | "runSessionKey"
   | "runId"
+  | "onYield"
   | "inputProvenance"
   | "assertInvocationCurrent"
   | "assertInputCommitAllowed"

@@ -27,6 +27,8 @@ type AgentHarnessPreparedEnvironment = Readonly<{
   localToolPathPrepend?: readonly string[];
   /** Non-secret fact used to select the local GitHub identity overlay. */
   managedLocalIdentity: boolean;
+  /** Selected managed GitLab CLI profile; separate from GitHub's native fallback rule. */
+  managedGitLabIdentity?: boolean;
   /** Use this host's tool surface when the runtime cannot bind credentials at process launch. */
   hostExecutionRequired?: true;
 }>;

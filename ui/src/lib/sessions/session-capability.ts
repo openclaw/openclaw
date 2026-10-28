@@ -79,6 +79,7 @@ export type SessionCapability = Pick<
     [K in SessionGroupMethod as `groups${Capitalize<K>}`]: SessionGroups[K];
   } & {
     readonly githubPublication: Pick<ReturnType<typeof createSessionGitHubPublication>, "attach">;
+    readonly gitlabPublication: Pick<ReturnType<typeof createSessionGitHubPublication>, "attach">;
     readonly state: SessionState;
     /** Broad observer outage, independent of query and operation errors. */
     readonly eventSubscriptionError: string | null;

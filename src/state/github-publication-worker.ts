@@ -28,6 +28,7 @@ type MutationCommand = SqliteWorkerCommand<
   Pick<
     PublicationWorkerOperations,
     | "githubPublications.personal"
+    | "githubPublications.gitlabPersonal"
     | "githubPublications.repository"
     | "githubPublications.shared"
     | "githubPublications.insert"
@@ -86,7 +87,9 @@ export function createGitHubPublicationWorkerScope(context: OpenClawStateWorkerC
       const expectedKind =
         commandSnapshot.type === "githubPublications.insert"
           ? commandSnapshot.input.kind
-          : commandSnapshot.type.slice("githubPublications.".length);
+          : commandSnapshot.type === "githubPublications.gitlabPersonal"
+            ? "gitlab-personal"
+            : commandSnapshot.type.slice("githubPublications.".length);
       const readReceipt = (facts: unknown): PublicationMutationReceipt => {
         if (
           !isRecord(facts) ||

@@ -36,7 +36,7 @@ import {
 import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
-import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
+import { SANDBOX_GITHUB_CONFIG_DIR, SANDBOX_GITLAB_CONFIG_DIR } from "./constants.js";
 import { retainSandboxContainerUsage } from "./container-usage.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
@@ -378,6 +378,20 @@ async function resolveSandboxContextWithAuthority(
                 agentId: runtime.agentId,
               })
             : undefined;
+          const preparedGitLab =
+            config &&
+            resolveAgentConfig(config, runtime.agentId)?.tools?.gitlab?.allowInSandbox === true
+              ? await (
+                  await import("./gitlab-identity.js")
+                ).prepareGitLabSandboxIdentity({
+                  config,
+                  agentId: runtime.agentId,
+                  scope: cfg.scope,
+                })
+              : undefined;
+          const gitlabIdentity = preparedGitLab?.identity;
+          const gitlabProfileDir = preparedGitLab?.profileDir;
+          const gitlabMount = preparedGitLab?.mount;
           const githubMount = githubIdentity
             ? await (async () => {
                 const hostPath = githubIdentity.localIdentityEnv.GH_CONFIG_DIR;
@@ -416,20 +430,24 @@ async function resolveSandboxContextWithAuthority(
             workspaceDir,
           });
           const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
-          const executionCfg = githubIdentity
-            ? {
-                ...resolvedCfg,
-                docker: {
-                  ...docker,
-                  env: {
-                    ...docker.env,
-                    ...githubIdentity.credentialScrubEnv,
-                    ...githubIdentity.localIdentityEnv,
-                    GH_CONFIG_DIR: SANDBOX_GITHUB_CONFIG_DIR,
+          const executionCfg =
+            githubIdentity || gitlabIdentity
+              ? {
+                  ...resolvedCfg,
+                  docker: {
+                    ...docker,
+                    env: {
+                      ...docker.env,
+                      ...githubIdentity?.credentialScrubEnv,
+                      ...githubIdentity?.localIdentityEnv,
+                      ...gitlabIdentity?.credentialScrubEnv,
+                      ...gitlabIdentity?.localIdentityEnv,
+                      ...(githubIdentity ? { GH_CONFIG_DIR: SANDBOX_GITHUB_CONFIG_DIR } : {}),
+                      ...(gitlabProfileDir ? { GLAB_CONFIG_DIR: SANDBOX_GITLAB_CONFIG_DIR } : {}),
+                    },
                   },
-                },
-              }
-            : resolvedCfg;
+                }
+              : resolvedCfg;
           let readOnlyResourceMounts =
             resolvedCfg.scope === "shared"
               ? undefined
@@ -454,6 +472,9 @@ async function resolveSandboxContextWithAuthority(
                 })();
           if (githubMount) {
             (readOnlyResourceMounts ??= []).push(githubMount);
+          }
+          if (gitlabMount) {
+            (readOnlyResourceMounts ??= []).push(gitlabMount);
           }
 
           const provisionBackend = () => {
@@ -483,6 +504,7 @@ async function resolveSandboxContextWithAuthority(
               operatorAuthority,
               githubIdentity,
               guard,
+              gitlabIdentity,
             );
           };
 
@@ -542,6 +564,7 @@ async function resolveSandboxContextWithAuthority(
 
           phases.mark("attempt.setup.sandbox.finalize");
           const sandboxContext: SandboxContext & { backend: typeof backend } = {
+            ...(gitlabProfileDir ? { gitlabProfileDir } : {}),
             [Symbol.dispose]: () => lifetime.dispose(),
             enabled: true,
             ...(runtime.sandboxRequired ? { required: true } : {}),

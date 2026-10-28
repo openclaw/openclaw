@@ -22,7 +22,11 @@ import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-go
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
 import { ChatPaneLayoutRender } from "./chat-pane-layout-render.ts";
-import { synchronizeChatPanePublication } from "./chat-pane-publication.ts";
+import {
+  readChatPanePublicationRow,
+  selectChatPanePublication,
+  synchronizeChatPanePublications,
+} from "./chat-pane-publication.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import { chatPaneResourceProps } from "./chat-pane-resource-presentation.ts";
 import {
@@ -242,19 +246,14 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         });
     const messages = catalog ? this.history.catalogMessages : state.chatMessages;
     const publicationScope = this.captureConnectionScope();
-    const readPublicationRow = () => {
-      const row = selectedChatSessionRow(state);
-      return (
-        row && {
-          ...row,
-          agentId: row.agentId ?? resolveChatAgentId(state) ?? undefined,
-          archived: this.isCurrentSessionArchived(state),
-        }
-      );
-    };
-    synchronizeChatPanePublication({
-      holder: this.publication,
-      publications: this.context.sessions.githubPublication,
+    const readPublicationRow = () =>
+      readChatPanePublicationRow(state, this.isCurrentSessionArchived(state));
+    synchronizeChatPanePublications({
+      github: { holder: this.publication, publications: this.context.sessions.githubPublication },
+      gitlab: {
+        holder: this.gitlabPublication,
+        publications: this.context.sessions.gitlabPublication,
+      },
       gatewaySnapshot,
       readRow: readPublicationRow,
       isScopeCurrent: publicationScope
@@ -569,7 +568,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onDismissPullRequestsBranch: this.dismissSessionPullRequestsBranch,
 
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
-      githubPublication: this.publication.binding?.view(),
+      githubPublication: selectChatPanePublication(
+        this.publication.binding?.view(),
+        this.gitlabPublication.binding?.view(),
+      ),
       onOpenWorkspaceFile: (target) => void openSessionWorkspaceFile(state, target),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),
       onNavigate: (routeId, options) => this.context.navigate(routeId, options),

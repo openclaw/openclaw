@@ -54,7 +54,7 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
     context,
     (scope) => scope.execute({ type: "githubPublication.prepareSessionReceiptDeletion", input }),
     { assertCurrent: params.assertCurrent, existingOnly: true },
-  )) ?? { personal: [], repository: [] };
+  )) ?? { personal: [], "gitlab-personal": [], repository: [] };
   params.assertCurrent?.();
   return async (options = {}) => {
     const { assertCurrent, sessionEntryCurrent, retainedSessionKeys } = options;
@@ -79,6 +79,9 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
             ),
             receipts: {
               personal: receipts.personal.filter((receipt) =>
+                selectedKeys.has(receipt.session_key),
+              ),
+              "gitlab-personal": receipts["gitlab-personal"].filter((receipt) =>
                 selectedKeys.has(receipt.session_key),
               ),
               repository: receipts.repository.filter((receipt) =>
@@ -111,7 +114,10 @@ export function readSessionReceiptDeletionIdentitiesInDatabase(
   params: { agentId: string; sessionKeys: readonly string[] },
 ): GitHubSessionReceiptIdentities {
   const read = (
-    table: "github_personal_publication_requests" | "github_repository_publication_requests",
+    table:
+      | "github_personal_publication_requests"
+      | "gitlab_personal_publication_requests"
+      | "github_repository_publication_requests",
   ) =>
     params.sessionKeys.length && tableExists(database.db, table)
       ? executeSqliteQuerySync(
@@ -125,6 +131,7 @@ export function readSessionReceiptDeletionIdentitiesInDatabase(
       : [];
   return {
     personal: read("github_personal_publication_requests"),
+    "gitlab-personal": read("gitlab_personal_publication_requests"),
     repository: read("github_repository_publication_requests"),
   };
 }
@@ -142,6 +149,7 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
 ): void {
   const tables = [
     "github_personal_publication_requests",
+    "gitlab_personal_publication_requests",
     "github_repository_publication_requests",
   ] as const;
   const existing = tables.filter((table) => tableExists(database.db, table));
@@ -172,10 +180,16 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
         const historical =
           table === "github_personal_publication_requests"
             ? params.receipts.personal
-            : params.receipts.repository;
+            : table === "gitlab_personal_publication_requests"
+              ? params.receipts["gitlab-personal"]
+              : params.receipts.repository;
         const captured = new Map(historical.map((receipt) => [receipt.request_id, receipt]));
         const selected = (
-          table === "github_personal_publication_requests" ? current.personal : current.repository
+          table === "github_personal_publication_requests"
+            ? current.personal
+            : table === "gitlab_personal_publication_requests"
+              ? current["gitlab-personal"]
+              : current.repository
         )
           .filter((receipt) => {
             const previous = captured.get(receipt.request_id);
@@ -209,7 +223,7 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
                 : executeSqliteQueryTakeFirstSync(
                     db,
                     query
-                      .selectFrom("github_repository_publication_requests")
+                      .selectFrom(table)
                       .select("session_lifecycle_revision as lifecycle_revision")
                       .where("request_id", "=", receipt.request_id),
                   );
@@ -258,7 +272,11 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
           for (const row of deleted) {
             tombstones.set(
               JSON.stringify([
-                table === "github_personal_publication_requests" ? "personal" : "repository",
+                table === "github_personal_publication_requests"
+                  ? "personal"
+                  : table === "gitlab_personal_publication_requests"
+                    ? "gitlab-personal"
+                    : "repository",
                 row.request_id,
               ]),
               { kind: "absent" },

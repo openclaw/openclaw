@@ -474,6 +474,10 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       names.push(tool.name);
     }
     const normalized = normalizePluginToolNames(names);
+    if (opts?.gatewayHandoffMethods && (!versioned || normalized.length !== 1)) {
+      reportRegistrationError(record, "gateway handoff requires exactly one version-2 tool name");
+      return;
+    }
     const undeclared = normalized.filter((name) => !declaredNames.has(name));
     if (undeclared.length > 0) {
       reportRegistrationError(
@@ -520,6 +524,9 @@ export function createPluginRegistrars(state: PluginRegistryState) {
         factory: inspectedFactory,
         ...(versioned ? { contextVersion: 2 as const } : {}),
         names: normalized,
+        ...(opts?.gatewayHandoffMethods
+          ? { gatewayHandoffMethods: Object.freeze([...opts.gatewayHandoffMethods]) }
+          : {}),
         optional,
         workspaceAccess:
           opts?.workspaceAccess ?? (typeof tool !== "function" && !versioned ? "execute" : true),

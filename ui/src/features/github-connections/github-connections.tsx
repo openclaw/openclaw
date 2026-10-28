@@ -40,7 +40,9 @@ function access(snapshot: ApplicationGatewaySnapshot) {
 }
 
 /** Profile credentials have their own read-scoped lifecycle, independent of users.self edits. */
-export function GitHubConnections() {
+export function GitHubConnections(
+  props: { onConnectReady?: (connect: (() => void) | null) => void } = {},
+) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const agents = projectAgents(context.agents);
@@ -145,7 +147,11 @@ export function GitHubConnections() {
       context.runtimeConfig.subscribe(syncIdentities),
     ];
     applySnapshot(context.gateway.snapshot);
-    return () => subscriptions.forEach((unsubscribe) => unsubscribe());
+    props.onConnectReady?.(() => openSetup("personal"));
+    return () => {
+      props.onConnectReady?.(null);
+      subscriptions.forEach((unsubscribe) => unsubscribe());
+    };
   });
 
   const view = createMemo(() => {
@@ -194,10 +200,10 @@ export function GitHubConnections() {
   const personalView = personal.read;
   const systemView = system.read;
   const active = () => (purpose() === "personal" ? personal : system);
-  const openSetup = (next: "personal" | "system") => {
+  const openSetupWithView = (next: "personal" | "system", currentView: ReturnType<typeof view>) => {
     const currentAccess = access(context.gateway.snapshot);
     if (
-      view().locked ||
+      currentView.locked ||
       (next === "personal"
         ? !currentAccess.profileId || !currentAccess.canRead
         : !currentAccess.canAdmin)
@@ -207,6 +213,7 @@ export function GitHubConnections() {
     setPurpose(next);
     setSetupOpen(true);
   };
+  const openSetup = (next: "personal" | "system") => openSetupWithView(next, view());
   const verify = () => {
     void personal.verify();
     void system.verify();

@@ -22,6 +22,7 @@ const PROFILE_DEPENDENT_CORE_PREFIXES = [
   "users.background.",
   "themes.",
   "users.github.",
+  "users.gitlab.",
   "skills.library.",
 ] as const;
 

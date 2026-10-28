@@ -265,6 +265,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     this.previousRepository = null;
     this.publication.binding?.detach();
     this.publication.binding = null;
+    this.gitlabPublication.binding?.detach();
+    this.gitlabPublication.binding = null;
     this.repository.dismissedIds = new Set();
   }
 

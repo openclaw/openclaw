@@ -606,6 +606,7 @@ src/config/gateway-env-selection.ts
 src/config/gateway-portal-ingress.ts
 src/config/gateway-public-origin.ts
 src/config/github-identity-profile-id.ts
+src/config/gitlab-identity-profile-id.ts
 src/config/implicit-agent-roster.ts
 src/config/include-write-boundary.ts
 src/config/includes.ts
@@ -818,6 +819,7 @@ src/config/zod-schema.agent-entry-base.ts
 src/config/zod-schema.agent-model.ts
 src/config/zod-schema.agent-runtime.ts
 src/config/zod-schema.github-identity.ts
+src/config/zod-schema.gitlab-identity.ts
 src/config/zod-schema.agents.ts
 src/config/zod-schema.allowdeny.ts
 src/config/zod-schema.approvals.ts
@@ -1146,6 +1148,7 @@ src/infra/runtime-dependency-ownership.ts
 src/infra/runtime-process-dependency-url.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
+src/infra/runtime-process-helper-manifest.ts
 src/infra/runtime-process-script-file.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-profile.ts

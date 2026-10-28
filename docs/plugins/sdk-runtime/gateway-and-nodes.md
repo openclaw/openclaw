@@ -129,6 +129,21 @@ or trusted official plugins can also use `api.runtime.gateway.request(...)`,
 These runtime capabilities retain their existing trust restriction. A projection
 or run ID is an observation, not permission to mutate or cancel work.
 
+A version-2 agent tool that must yield its current conversation before a Gateway
+request can run may declare `gatewayHandoffMethods` with exactly one registered
+tool name. The host then supplies `context.gatewayHandoff({ method, params,
+signal? })` only on an admitted, yield-capable turn. Return its tool result
+directly and mark the tool `async: false` and `catalogMode: "direct-only"`.
+Each method must have host-owned descriptor `handoff` metadata naming that exact
+plugin and tool; a plugin declaration alone grants nothing. The host checks the
+current tool policy and requester before yielding, copies the request, and runs
+one fixed Gateway call under an independent operator source after turn cleanup.
+The method handler must consume the one-use host claim and recheck its source,
+session, plugin generation, and target before side effects. A plugin callback,
+caller-bound Gateway handle, or copied profile field cannot be retained across
+the yield. The result resumes the same conversation; an uncertain write must be
+reconciled using its accepted request ID before retrying.
+
 Consumers of `context.createAgentTurnFacade` receive a captured start owner
 through `onStartOwner`. Its observation uses optional nullable
 `startDeadlineAtMs`, replacing `expiresAtMs` without an alias. A finite value is

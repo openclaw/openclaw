@@ -30,6 +30,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { jsonResult, ToolInputError } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
@@ -37,7 +38,12 @@ import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
 const log = createSubsystemLogger("agent/tool-handoff");
 const pending = new WeakSet<object>();
 
-type HandoffScope = { assertCurrent: () => void; signal: AbortSignal };
+type HandoffScope = {
+  assertCurrent: () => void;
+  assertSourceCurrent: () => void;
+  signal: AbortSignal;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+};
 type HandoffWork =
   | { run: (scope: HandoffScope) => Promise<Record<string, unknown>>; request?: never }
   | { request: { method: "plugins.reload"; params: Record<string, unknown> }; run?: never };
@@ -110,7 +116,16 @@ export async function handoffSessionTool(
       const captured = await captureOperatorToolGatewayContinuationContext(gatewayTarget);
       const run = params.run;
       continuation = captured;
-      runDeferred = captured ? (scope) => captured.run(() => run(scope)) : undefined;
+      runDeferred = captured
+        ? (scope) =>
+            captured.run(() =>
+              run({
+                ...scope,
+                assertSourceCurrent: captured.assertCurrent,
+                operatorAuthority: captured.operatorAuthority,
+              }),
+            )
+        : undefined;
       enqueueDeferred = captured
         ? (text, options) =>
             captured.run(() =>
@@ -178,6 +193,8 @@ export async function handoffSessionTool(
                 try {
                   result = await deferred({
                     assertCurrent: destination.assertCurrent,
+                    assertSourceCurrent: retained.assertCurrent,
+                    operatorAuthority: retained.operatorAuthority,
                     signal: AbortSignal.any([retained.signal, signal]),
                   });
                 } finally {

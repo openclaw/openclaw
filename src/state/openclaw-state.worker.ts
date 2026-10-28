@@ -235,7 +235,8 @@ function createSharedStateWorkerBackend(
         command.type === "githubPublications.shared" ||
         command.type === "githubPublications.insert" ||
         command.type === "githubPublications.personal" ||
-        command.type === "githubPublications.repository"
+        command.type === "githubPublications.repository" ||
+        command.type === "githubPublications.gitlabPersonal"
           ? command.input.source
           : undefined;
       if (source) {
@@ -251,7 +252,8 @@ function createSharedStateWorkerBackend(
         command.type === "githubPublications.shared" ||
         command.type === "githubPublications.insert" ||
         command.type === "githubPublications.personal" ||
-        command.type === "githubPublications.repository"
+        command.type === "githubPublications.repository" ||
+        command.type === "githubPublications.gitlabPersonal"
       ) {
         if (command.input.source) {
           if (!publicationSourceReader) {

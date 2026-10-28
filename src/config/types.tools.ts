@@ -116,6 +116,7 @@ export type ExecToolConfig = Omit<NonNullable<SchemaToolsConfig["exec"]>, "safeB
 };
 
 export type GitHubToolIdentityConfig = NonNullable<SchemaToolsConfig["github"]>;
+export type GitLabToolIdentityConfig = NonNullable<SchemaToolsConfig["gitlab"]>;
 
 export type AgentToolsConfig = Omit<
   NonNullable<z.input<typeof AgentEntrySchema>["tools"]>,

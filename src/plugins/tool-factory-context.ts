@@ -1,8 +1,9 @@
 import type { PluginToolExecutionCapabilities } from "../agents/plugin-tool-execution.js";
+import { getActiveRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { assertMemoryAudienceSession } from "./memory-audience.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
-import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
+import { capturePluginLifecycleAuthority, getPluginRecordRegistry } from "./registry-lifecycle.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
 import type { OpenClawPluginToolContext } from "./tool-types.js";
 
@@ -25,6 +26,12 @@ export function createPluginToolFactoryContext(params: {
   bindExecutionCapabilities?: (
     assertCurrent: () => void,
     signal?: AbortSignal,
+    handoff?: {
+      pluginId: string;
+      toolName: string;
+      methods: readonly string[];
+      assertPluginCurrent(): void;
+    },
   ) => PluginToolExecutionCapabilities;
 }): OpenClawPluginToolContext {
   const { entry, registry, context } = params;
@@ -33,6 +40,15 @@ export function createPluginToolFactoryContext(params: {
   }
   const record = registry.plugins.find((candidate) => candidate.id === entry.pluginId);
   const authority = capturePluginLifecycleAuthority(registry, record, { scopedRuntime: true });
+  // A prepared turn may borrow a live plugin record. Its registry retires when the
+  // turn yields, while the exact Gateway-owned instance remains in service.
+  const serviceRegistry = getActiveRuntimePluginRegistry();
+  const serviceAuthority =
+    record &&
+    serviceRegistry?.plugins.includes(record) &&
+    getPluginRecordRegistry(registry, record) === serviceRegistry
+      ? capturePluginLifecycleAuthority(serviceRegistry, record, { scopedRuntime: true })
+      : undefined;
   const continuation = entry.contextVersion === 2 ? params.ownerContinuation : undefined;
   // Audience currency guards memory effects: the memory slot owner's own tools. Other
   // plugins reach memory through the provider guard, so a stale audience never fails them.
@@ -59,6 +75,18 @@ export function createPluginToolFactoryContext(params: {
       ? params.bindExecutionCapabilities?.(
           assertInvocationCurrent,
           record && getPluginInstance(record)?.lifecycle.signal,
+          entry.gatewayHandoffMethods && entry.names.length === 1 && serviceAuthority
+            ? {
+                pluginId: entry.pluginId,
+                toolName: entry.names[0]!,
+                methods: entry.gatewayHandoffMethods,
+                assertPluginCurrent: () => {
+                  if (getActiveRuntimePluginRegistry() !== serviceRegistry || !serviceAuthority()) {
+                    throw new Error(`Plugin "${entry.pluginId}" tool runtime is no longer active.`);
+                  }
+                },
+              }
+            : undefined,
         )
       : {}),
     ...(continuation

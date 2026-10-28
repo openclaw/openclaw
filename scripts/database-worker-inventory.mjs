@@ -434,6 +434,54 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/secrets/store/secret-store-hidden-gitlab.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "readPersonalGitLabSecret",
+          "writePersonalGitLabSecret",
+          "retirePersonalGitLabSecrets",
+        ],
+        evidence:
+          "Connection reads/writes enter user-gitlab-connections.worker.ts; profile retirement enters user-profile-writes.worker.ts through mergeUserProfiles. Pure name hashing is not classified.",
+      },
+    ],
+  ],
+  [
+    "src/secrets/store/secret-store-hidden-managed-gitlab.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "upsertHiddenGitLabSecret",
+          "selectHiddenGitLabSecretRecords",
+          "writeHiddenGitLabSecretInDatabase",
+          "readHiddenGitLabSecretInDatabase",
+          "listHiddenGitLabSecretsInDatabase",
+          "deleteHiddenGitLabSecretInDatabase",
+        ],
+        evidence:
+          "Exact gitlabManagedSecrets read/list/write/delete and gitlabManagedSetup.consume operations in secret-store-gitlab-managed.worker.ts own these SQL kernels; publication worker reads use the same admitted database.",
+      },
+    ],
+  ],
+  [
+    "src/state/user-gitlab-connections.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "isPersonalGitLabOwnerInDatabase",
+          "readUserGitLabConnectionInDatabase",
+          "writeUserGitLabConnectionInDatabase",
+        ],
+        evidence:
+          "Registered connection read/mutation operations and native GitLab publication worker operations own SQL. Host-used issuer validation and redaction helpers are pure and remain unclassified.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-read.ts",
     [
       {

@@ -16,6 +16,7 @@ import {
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/index.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ScopeUpgradeOwner } from "../../app/device-scope-upgrade-owner.runtime.ts";
+import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { ScopeUpgradeActions, scopeUpgradeText } from "../../components/scope-upgrade-actions.tsx";
 import {
@@ -32,7 +33,12 @@ import {
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import {
+  GitProviderChooser,
+  type GitProvider,
+} from "../../features/git-connections/git-provider-chooser.tsx";
 import { GitHubConnections } from "../../features/github-connections/github-connections.tsx";
+import { GitLabConnections } from "../../features/gitlab-connections/gitlab-connections.tsx";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
@@ -88,6 +94,9 @@ export function ProfilePage() {
   const agents = projectOwner(context.agents, (source) => source.state.agentsList);
   const identities = projectOwner(context.agentIdentity, (source) => source);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  let connectGitHub: (() => void) | null = null;
+  let connectGitLab: (() => void) | null = null;
+  const [gitlabAvailable, setGitlabAvailable] = createSignal(false);
   const state = new ProfileState(context, () => setRevision((value) => value + 1));
   const view = () => {
     revision();
@@ -609,7 +618,32 @@ export function ProfilePage() {
                   : null
               }
             />
-            <GitHubConnections />
+            <GitProviderChooser
+              githubAvailable={
+                Boolean(view().ownProfile) &&
+                hasOperatorReadAccess(context.gateway.snapshot.hello?.auth ?? null)
+              }
+              gitlabAvailable={gitlabAvailable()}
+              onSelect={(provider: GitProvider) => {
+                if (provider === "github") {
+                  connectGitHub?.();
+                } else {
+                  connectGitLab?.();
+                }
+              }}
+            >
+              <GitHubConnections
+                onConnectReady={(connect) => {
+                  connectGitHub = connect;
+                }}
+              />
+              <GitLabConnections
+                onConnectReady={(connect) => {
+                  connectGitLab = connect;
+                }}
+                onAvailable={setGitlabAvailable}
+              />
+            </GitProviderChooser>
             <SettingsGroup>
               <SettingsNavRow
                 title={t("profilePage.usageStatistics")}

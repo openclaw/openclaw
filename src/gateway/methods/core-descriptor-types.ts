@@ -16,6 +16,7 @@ export type CoreGatewayMethodSpec = Partial<GatewayReadSharing> & {
   compatibilityRestored?: true;
   description?: string;
   sessionAccess?: GatewayMethodSessionAccess;
+  handoff?: GatewayMethodDescriptor["handoff"];
   profileAccess?: "required";
 };
 
@@ -31,6 +32,7 @@ type CoreGatewayMethodPolicy = Pick<
   | "compatibilityRestored"
   | "description"
   | "sessionAccess"
+  | "handoff"
   | "profileAccess"
 >;
 export type CoreGatewayMethodSpecRow = readonly [

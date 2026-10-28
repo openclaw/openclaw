@@ -431,6 +431,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         cwd: options.codingRoot,
         sandbox: sandbox
           ? {
+              gitlabProfileDir: sandbox.gitlabProfileDir,
               containerName: sandbox.containerName,
               workspaceDir: sandbox.workspaceDir,
               containerWorkdir: sandbox.containerWorkdir,

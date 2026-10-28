@@ -154,6 +154,19 @@
       "file": "fragment-github_personal_publication_requests.postgres.sql"
     },
     {
+      "id": "gitlab_personal_publication_requests",
+      "tables": [
+        "gitlab_personal_publication_requests"
+      ],
+      "indexes": [
+        "idx_gitlab_personal_publication_pending",
+        "idx_gitlab_personal_publication_session"
+      ],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-gitlab_personal_publication_requests.postgres.sql"
+    },
+    {
       "id": "cron_job_runtime_authorities",
       "tables": [
         "cron_job_runtime_authorities"

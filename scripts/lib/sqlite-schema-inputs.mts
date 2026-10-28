@@ -182,6 +182,10 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
       "ON github_personal_publication_requests(status, updated_at_ms, request_id);",
     ],
     [
+      "gitlab_personal_publication_requests",
+      "ON gitlab_personal_publication_requests(owner_profile_id, issuer, session_id, created_at_ms);",
+    ],
+    [
       "secret_store_entries",
       "ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;",
     ],

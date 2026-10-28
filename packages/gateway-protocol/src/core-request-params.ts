@@ -15,6 +15,7 @@ import type {
   EnvironmentsSessionExecParams,
   EnvironmentsAdoptSuggestedProfileParams,
 } from "./schema/environments.js";
+import type * as GitLabSchema from "./schema/gitlab.js";
 import type * as HumanMentionsSchema from "./schema/human-mentions.js";
 import type { LogsTailParams } from "./schema/logs-chat.js";
 import type * as PortalSchema from "./schema/portals.js";
@@ -33,6 +34,26 @@ import type * as UsersSchema from "./schema/users.js";
 
 /** Schema-derived payload ownership for statically validated core Gateway methods. */
 export type GatewayCoreRequestParams = {
+  "tools.gitlab.status": Static<typeof GitLabSchema.ToolsGitLabStatusParamsSchema>;
+  "tools.gitlab.configure": Static<typeof GitLabSchema.ToolsGitLabConfigureParamsSchema>;
+  "tools.gitlab.authorize.start": Static<typeof GitLabSchema.ToolsGitLabAuthorizeStartParamsSchema>;
+  "tools.gitlab.authorize.complete": Static<
+    typeof GitLabSchema.ToolsGitLabAuthorizeCompleteParamsSchema
+  >;
+  "tools.gitlab.authorize.cancel": Static<
+    typeof GitLabSchema.ToolsGitLabAuthorizeCancelParamsSchema
+  >;
+  "users.gitlab.status": Static<typeof GitLabSchema.UsersGitLabStatusParamsSchema>;
+  "users.gitlab.authorize.start": Static<typeof GitLabSchema.UsersGitLabAuthorizeStartParamsSchema>;
+  "users.gitlab.authorize.complete": Static<
+    typeof GitLabSchema.UsersGitLabAuthorizeCompleteParamsSchema
+  >;
+  "users.gitlab.disconnect": Static<typeof GitLabSchema.UsersGitLabDisconnectParamsSchema>;
+  "sessions.gitlab.options": Static<typeof GitLabSchema.SessionGitLabOptionsParamsSchema>;
+  "sessions.gitlab.status": Static<typeof GitLabSchema.SessionGitLabStatusParamsSchema>;
+  "sessions.gitlab.confirm": Static<typeof GitLabSchema.SessionGitLabConfirmParamsSchema>;
+  "sessions.gitlab.publish": Static<typeof GitLabSchema.SessionGitLabPublishParamsSchema>;
+
   "agents.avatar.generate": AgentsAvatarGenerateParams;
   "claws.drafts.create": ClawDraftSchema.ClawsDraftsCreateParams;
   "claws.drafts.read": ClawDraftSchema.ClawsDraftsReadParams;

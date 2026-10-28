@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+} from "../agents/admitted-run-context.js";
 import {
   withGatewayPersonalToolUser,
   withGatewayToolCallerIdentity,
@@ -13,7 +16,10 @@ import {
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  withPluginRuntimeGatewayRequestScope,
+  withPluginRuntimePluginScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -26,6 +32,10 @@ import {
 import * as operatorCapture from "./operator-run-authority.js";
 import { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
+import {
+  consumeAcceptedPluginGatewayHandoffClaim,
+  withAcceptedPluginGatewayHandoffClaim,
+} from "./plugin-tool-handoff-claim.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
@@ -33,6 +43,7 @@ import type {
 import {
   captureOperatorToolGatewayContinuationContext,
   captureOperatorToolGatewayRequestContinuationContext,
+  dispatchGatewayMethodInProcess,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
 import {
@@ -85,6 +96,120 @@ describe("typed in-process agent continuation authorization", () => {
     startTurn.mockReset();
     waitForTurn.mockReset();
   });
+
+  it("dispatches an accepted plugin handoff with the retained requester source", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const method = "tools.example.publication.publish";
+      const params = { sessionKey: "agent:main:handoff", title: "Draft" };
+      const observed: unknown[] = [];
+      const handler: GatewayRequestHandler = (options) => {
+        observed.push({
+          pluginRuntimeOwnerId: options.client?.internal?.pluginRuntimeOwnerId,
+          claim: consumeAcceptedPluginGatewayHandoffClaim(options, {
+            pluginId: "example",
+            toolName: "example_publish",
+          }),
+        });
+        options.respond(true, { accepted: true });
+      };
+      const owner = createOperatorClient({
+        profileName: "handoff-owner",
+        scopes: ["operator.sessions.write"],
+      });
+      const config = {};
+      const context = createContext(
+        [[method, "operator.sessions.write", "sessions", handler]],
+        () => config,
+      );
+      const resolveGatewayContext = () => context;
+      context.resolveGatewayContext = resolveGatewayContext;
+      let sourceHolds = 1;
+      const source = createAdmittedRunOperatorAuthority({
+        profileId: owner.authenticatedUserProfile!.profileId,
+        scopes: ["operator.sessions.write"],
+        assertCurrent: () => assert(sourceHolds > 0, "operator source retired"),
+        retain: () => {
+          sourceHolds += 1;
+          let released = false;
+          return () => {
+            if (!released) {
+              released = true;
+              sourceHolds -= 1;
+            }
+          };
+        },
+      });
+      const original = await operatorCapture.captureGatewayOperatorRunAuthority({
+        client: {
+          ...owner,
+          internal: { ...owner.internal, operatorRunAuthority: source },
+        },
+        context,
+      });
+      assert(original, "Expected original operator source");
+      const client = {
+        ...owner,
+        internal: { ...owner.internal, operatorRunAuthority: original.authority },
+      };
+      let receiptCurrent = true;
+      const captured = await inScope({ client, context, resolveGatewayContext }, () =>
+        withPluginRuntimePluginScope({ pluginId: "example", pluginSource: "fixture" }, () =>
+          withGatewayToolCallerIdentity(
+            {
+              agentId: "main",
+              sessionKey: params.sessionKey,
+              operatorAuthority: original.authority,
+              receiptAuthority: () => receiptCurrent,
+            },
+            () => captureOperatorToolGatewayContinuationContext(),
+          ),
+        ),
+      );
+      assert(captured?.operatorAuthority, "Expected independent retained source");
+      try {
+        receiptCurrent = false;
+        original.release();
+        captured.assertCurrent();
+        const result = await captured.run(() =>
+          withAcceptedPluginGatewayHandoffClaim(
+            {
+              pluginId: "example",
+              toolName: "example_publish",
+              method,
+              params,
+              agentId: "main",
+              sessionKey: params.sessionKey,
+              sessionId: "session-handoff",
+              operatorAuthority: captured.operatorAuthority!,
+              signal: captured.signal,
+              assertCurrent: captured.assertCurrent,
+            },
+            () =>
+              dispatchGatewayMethodInProcess(method, params, {
+                forceSyntheticClient: true,
+                pluginRuntimeOwnerId: "example",
+                resolveGatewayContext,
+                syntheticScopes: ["operator.sessions.write"],
+                syntheticScopeMode: "exact",
+              }),
+          ),
+        );
+        expect(result).toEqual({ accepted: true });
+        expect(observed).toHaveLength(1);
+        expect(observed[0]).toMatchObject({
+          pluginRuntimeOwnerId: "example",
+          claim: {
+            pluginId: "example",
+            toolName: "example_publish",
+            operatorAuthority: captured.operatorAuthority,
+          },
+        });
+      } finally {
+        captured.release();
+        original.release();
+      }
+    }));
 
   it("dispatches only the captured plugin reload once", () =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {

@@ -34,7 +34,10 @@ import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { type ExecWorkdirResolution, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
-import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
+import {
+  assertManagedGitLabExecHost,
+  prepareExecIdentityEnvironment,
+} from "./exec-identity-environment.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
 import { isSubagentEnvelopeSession } from "./subagents/spawn/subagent-capabilities.js";
 import { ToolInputError } from "./tools/common.js";
@@ -186,13 +189,16 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
 }
 
 export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
+  const prepared = defaults?.preparedRunEnvironment;
   return {
-    ...(defaults?.preparedRunEnvironment ??
-      prepareGitHubToolEnvironment({
-        config: defaults?.config ?? {},
-        sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
-        agentId: defaults?.executionAgentId ?? defaults?.agentId ?? "main",
-      })),
+    ...(prepared?.managedGitLabIdentity !== undefined
+      ? prepared
+      : prepareExecIdentityEnvironment({
+          config: defaults?.config ?? {},
+          sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
+          agentId: defaults?.executionAgentId ?? defaults?.agentId ?? "main",
+          preparedGitHub: prepared,
+        })),
     localProcessEnv: installationTargetEnv(getInstallationTarget()),
   };
 }
@@ -397,6 +403,7 @@ export function resolvePreparedExecEnvironment(params: {
   localIdentityEnv?: Readonly<Record<string, string>>;
   localGitConfigParameters?: string;
   managedLocalIdentity?: boolean;
+  managedGitLabIdentity?: boolean;
   localProcessEnv?: Readonly<Record<string, string>>;
   warnings: string[];
 }): {
@@ -573,6 +580,12 @@ export function resolvePreparedExecEnvironment(params: {
   const executionEnv = mergeProcessEnv([env, preparedEnv, routingEnv, gitPolicyEnv]);
   const forwardedEnv =
     params.host === "node" || !routingEnv ? requestedEnv : { ...requestedEnv, ...routingEnv };
+
+  assertManagedGitLabExecHost({
+    selected: params.managedGitLabIdentity === true,
+    host: params.host,
+    sandboxProfileDir: params.sandbox?.gitlabProfileDir,
+  });
 
   return {
     env: executionEnv,

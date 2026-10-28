@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { GitLabManagedIdentityState } from "../../features/gitlab-connections/gitlab-managed-identity.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { buildToolsEffectiveRequestKey, type AgentsState } from "../../lib/agents/index.ts";
 import { setDefaultAgent } from "../../lib/agents/mutations.ts";
@@ -190,6 +191,7 @@ export function createAgentsPageState(
     getReport: () => state.agentSkillsReport,
     onPrimaryChanged: () => effectiveTools.ensure(true),
   });
+  const gitlabIdentity = new GitLabManagedIdentityState();
   const githubIdentity = createGitHubIdentityView({
     runExternalMutation: (task, options) =>
       context.runtimeConfig.runExternalMutation(task, options),
@@ -430,6 +432,7 @@ export function createAgentsPageState(
 
   function syncGitHubIdentity(agentId: string | null) {
     const snapshot = context.gateway.snapshot;
+    gitlabIdentity.sync(snapshot, agentId ? { scope: "agent", agentId } : null);
     const profileId = snapshot.selfUser?.id ?? null;
     const hasScope = (method: string, scope: GatewayMethodOperatorScope) =>
       canCallGatewayMethod(snapshot, method, scope, { requireAdvertisement: false });
@@ -595,6 +598,7 @@ export function createAgentsPageState(
           }
         },
         githubIdentity,
+        gitlabIdentity,
         onOpenGitHubConnections: () =>
           context.navigate("profile", { hash: "#settings-profile-github-connections" }),
         runtimeSessionKey: state.sessionKey,
@@ -625,6 +629,7 @@ export function createAgentsPageState(
     subscribe: observation.subscribe,
   };
   onSettled(() => {
+    const unsubscribeGitLab = gitlabIdentity.subscribe(publish);
     gateway.connect();
     syncAgentState();
     ensureAgentIdentities();
@@ -698,6 +703,8 @@ export function createAgentsPageState(
         stop();
       }
       modelCatalog.reset();
+      unsubscribeGitLab();
+      gitlabIdentity.dispose();
       gateway.dispose();
     };
   });

@@ -75,3 +75,5 @@ export * from "./schema/tools-catalog.js";
 export * from "./schema/transcripts.js";
 
 export * from "./schema/catalog.js";
+
+export * from "./schema/gitlab.js";

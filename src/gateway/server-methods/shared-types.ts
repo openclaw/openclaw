@@ -423,7 +423,10 @@ type GatewayResidentBridgeContext = {
   workerSessionPlacementService?: WorkerSessionPlacementReader &
     Partial<WorkerSessionPlacementRetirementService> &
     Partial<
-      Pick<WorkerSessionPlacementStore, "withWorkspaceExclusion" | "withLocalWorkspaceReservation">
+      Pick<
+        WorkerSessionPlacementStore,
+        "withWorkspaceExclusion" | "withLocalWorkspaceReservation" | "workspaceResultInstanceId"
+      >
     >;
   /** Process-local health samples fenced to the exact active placement owner. */
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
@@ -439,6 +442,12 @@ type GatewayResidentBridgeContext = {
     typeof import("../worker-environments/repository-workspace-mutation.js").createRepositoryWorkspaceMutationService
   >;
   githubPublicationService?: import("../github-publication.js").GitHubPublicationCoordinator;
+  gitlabManagedOAuthService?: ReturnType<
+    typeof import("../gitlab-managed-oauth.js").createManagedGitLabOAuthLifecycle
+  >;
+  gitlabOAuthService?: ReturnType<
+    typeof import("../gitlab-personal-oauth.js").createPersonalGitLabOAuthLifecycle
+  >;
   githubOAuthService?: ReturnType<
     typeof import("../github-oauth-lifecycle.js").createGitHubOAuthLifecycle
   >;

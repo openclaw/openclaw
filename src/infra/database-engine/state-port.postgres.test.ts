@@ -93,7 +93,8 @@ describe.skipIf(!connection)("shared-state database port", () => {
     expect((await client.query(`SELECT sequence FROM "${namespace}".audit_events`)).rows).toEqual([
       { sequence: "9007199254740993" },
     ]);
-    expect(Object.keys(staged.tables)).toHaveLength(135);
+    expect(Object.keys(staged.tables)).toHaveLength(136);
+    expect(staged.tables).toHaveProperty("gitlab_personal_publication_requests");
     expect(
       (await client.query(`SELECT display_name, avatar FROM "${namespace}".user_profiles`)).rows,
     ).toEqual([{ display_name: "Café 🦞", avatar: Buffer.from([0, 255, 128]) }]);

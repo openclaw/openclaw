@@ -11,6 +11,8 @@ import {
   installActiveGitHubOAuthLifecycle,
 } from "./github-oauth-lifecycle.js";
 import { startGitHubPublicationDiscovery } from "./github-publication-discovery.js";
+import { createManagedGitLabOAuthLifecycle } from "./gitlab-managed-oauth.js";
+import { createPersonalGitLabOAuthLifecycle } from "./gitlab-personal-oauth.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
 import {
   broadcastChatMetadataChanged,
@@ -66,6 +68,31 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
       await modelAccountConnect.stop();
       if (params.gatewayRequestContext.modelAccountConnectService === modelAccountConnect) {
         delete params.gatewayRequestContext.modelAccountConnectService;
+      }
+    },
+  });
+  const gitlabOAuth = createPersonalGitLabOAuthLifecycle(
+    params.gatewayRequestContext.getRuntimeConfig,
+  );
+  params.gatewayRequestContext.gitlabOAuthService = gitlabOAuth;
+  params.publishSidecars({
+    stop: async () => {
+      await gitlabOAuth.stop();
+      if (params.gatewayRequestContext.gitlabOAuthService === gitlabOAuth) {
+        delete params.gatewayRequestContext.gitlabOAuthService;
+      }
+    },
+  });
+  const gitlabManagedOAuth = createManagedGitLabOAuthLifecycle({
+    getConfig: params.gatewayRequestContext.getRuntimeConfig,
+    getPersistedConfig: () => createConfigIO().loadConfigAsync(),
+  });
+  params.gatewayRequestContext.gitlabManagedOAuthService = gitlabManagedOAuth;
+  params.publishSidecars({
+    stop: async () => {
+      await gitlabManagedOAuth.stop();
+      if (params.gatewayRequestContext.gitlabManagedOAuthService === gitlabManagedOAuth) {
+        delete params.gatewayRequestContext.gitlabManagedOAuthService;
       }
     },
   });

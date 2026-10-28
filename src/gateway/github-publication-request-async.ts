@@ -14,6 +14,7 @@ import {
   bindGitHubPublicationSource,
   type GitHubPublicationSourceCapability,
 } from "./github-publication-source.js";
+import type { PersonalGitLabPublicationRow } from "./gitlab-personal-publication-store.js";
 
 async function insert(input: GitHubPublicationInsert, source: GitHubPublicationSourceCapability) {
   const binding = bindGitHubPublicationSource(source);
@@ -33,6 +34,15 @@ async function insert(input: GitHubPublicationInsert, source: GitHubPublicationS
       (receipt) => {
         for (const change of receipt.changes) {
           emitSessionLifecycleEvent({ ...change, reason: "github-publication" });
+        }
+        if (receipt.kind === "gitlab-personal") {
+          for (const row of receipt.rows) {
+            emitSessionLifecycleEvent({
+              sessionKey: row.session_key,
+              agentId: row.agent_id,
+              reason: "gitlab-publication",
+            });
+          }
         }
       },
       source,
@@ -63,6 +73,17 @@ export async function insertPersonalGitHubPublicationAsync(
   const receipt = await insert({ kind: "personal", row, lifecycleRevision }, source);
   if (receipt.kind !== "personal" || !receipt.rows[0]) {
     throw new Error("Personal GitHub publication request receipt is unavailable.");
+  }
+  return receipt.rows[0];
+}
+
+export async function insertPersonalGitLabPublicationAsync(
+  row: PersonalGitLabPublicationRow,
+  source: GitHubPublicationSourceCapability,
+): Promise<PersonalGitLabPublicationRow> {
+  const receipt = await insert({ kind: "gitlab-personal", row }, source);
+  if (receipt.kind !== "gitlab-personal" || !receipt.rows[0]) {
+    throw new Error("Personal GitLab publication request receipt is unavailable.");
   }
   return receipt.rows[0];
 }

@@ -2,8 +2,13 @@ import { normalizeDatabasePath } from "../../infra/sqlite-worker-identity.js";
 import { resolveGlobalSet } from "../../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { classifyHiddenGitHubStoreName } from "./secret-store-github-names.js";
+import { classifyHiddenGitLabStoreName } from "./secret-store-managed-gitlab-names.js";
 
-type SecretStoreChange = { databasePath: string; githubOAuth: boolean };
+type SecretStoreChange = {
+  databasePath: string;
+  githubOAuth: boolean;
+  gitlabManagedOAuth: boolean;
+};
 const listeners = resolveGlobalSet<(change: SecretStoreChange) => void>(
   Symbol.for("openclaw.secretStoreChanges"),
   "close-and-restart",
@@ -22,6 +27,8 @@ export function publishSecretStoreChange(databasePath: string, names?: readonly 
         const kind = classifyHiddenGitHubStoreName(name);
         return kind === "device" || kind === "oauth";
       }),
+    gitlabManagedOAuth:
+      names === undefined || names.some((name) => classifyHiddenGitLabStoreName(name) === "oauth"),
   });
 }
 

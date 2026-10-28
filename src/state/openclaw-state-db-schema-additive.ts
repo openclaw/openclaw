@@ -194,6 +194,15 @@ export function ensurePersonalGitHubPublicationSchema(db: EngineConnection): voi
   });
 }
 
+/** GitLab's personal managed-worktree rows share the native publication worker. */
+export function ensurePersonalGitLabPublicationSchema(db: EngineConnection): void {
+  ensureTable(db, "gitlab_personal_publication_requests", {
+    endMarker:
+      "ON gitlab_personal_publication_requests(owner_profile_id, issuer, session_id, created_at_ms);",
+    errorMessage: "Personal GitLab publication schema marker is missing.",
+  });
+}
+
 /**
  * Complete first-use columns before a STRICT rebuild or in a private port copy.
  * Both require canonical layouts; ordinary admission leaves these columns lazy.

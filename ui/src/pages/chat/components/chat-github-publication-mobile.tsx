@@ -50,6 +50,9 @@ export function GitHubPublicationMobile(props: GitHubPublicationMobileProps) {
     if (locked || result) {
       return undefined;
     }
+    if (props.publication.provider === "gitlab" && props.publication.target) {
+      return props.publication.target;
+    }
     const branch = props.branch;
     const repository = branch ?? props.repository;
     return repository

@@ -1077,7 +1077,7 @@ const configs: UserConfig[] = [
       { ["worker/" + name]: entry.source },
       entry.sealed ? { WORKER_DEPLOY_BUILD: "true", SEALED_RUNTIME_BUILD: "true" } : undefined,
     );
-    if (name === "github-exec-launcher") {
+    if (name === "github-exec-launcher" || name === "gitlab-exec-launcher") {
       // Credential reads need fs-safe's relocated metadata/helper, but no runtime state schemas.
       helperConfig.plugins = [
         createFsSafeWindowsHelperAssetPlugin(

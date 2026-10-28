@@ -48,7 +48,7 @@ export type GitHubSessionReceiptGeneration = {
 };
 
 export type GitHubSessionReceiptIdentities = Record<
-  "personal" | "repository",
+  "personal" | "gitlab-personal" | "repository",
   {
     request_id: string;
     session_id: string;

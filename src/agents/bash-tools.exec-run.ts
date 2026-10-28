@@ -26,13 +26,11 @@ import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
+import { prepareGitLabExecLaunch } from "./bash-tools.exec-gitlab.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import { ExecProcessPreflightError } from "./bash-tools.exec-launch.js";
-import {
-  buildExecRuntimeErrorOutcome,
-  EXEC_MANUAL_COLLECTION_FOLLOW_UP,
-} from "./bash-tools.exec-output.js";
+import { EXEC_MANUAL_COLLECTION_FOLLOW_UP } from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
   createExecRequestPreparation,
@@ -56,6 +54,7 @@ import {
 import {
   attachExecApprovalReview,
   buildExecForegroundResult,
+  buildUnavailableWorkdirResult,
   resolveExecReviewerDefaults,
 } from "./bash-tools.exec-support.js";
 import { resolveExecElevatedMode, resolveExecHost } from "./bash-tools.exec-target.js";
@@ -64,7 +63,7 @@ import type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
-import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
+import { resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import {
@@ -167,20 +166,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
-  const buildUnavailableWorkdirResult = (params: {
-    cwd: string;
-    startedAt?: number;
-    warningText?: string;
-  }) =>
-    buildExecForegroundResult({
-      outcome: buildExecRuntimeErrorOutcome({
-        error: formatUnavailableWorkdirFailure(params.cwd),
-        aggregated: "",
-        durationMs: params.startedAt ? Date.now() - params.startedAt : 0,
-      }),
-      cwd: params.cwd,
-      warningText: params.warningText,
-    });
   const requestPreparation = createExecRequestPreparation({
     defaults,
     agentId,
@@ -499,6 +484,15 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           host === "gateway" && preparedRunEnvironment.managedLocalIdentity
             ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
             : undefined;
+        const prepareGitLabCredential = await prepareGitLabExecLaunch({
+          selected: preparedRunEnvironment.managedGitLabIdentity === true,
+          host,
+          sandbox,
+          workdir,
+          config: defaults?.config,
+          agentId: defaults?.executionAgentId ?? defaults?.agentId ?? "main",
+          env,
+        });
 
         if (host === "gateway" && !bypassApprovals) {
           gatewayApproval = await processGatewayAllowlist({
@@ -506,6 +500,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             workdir,
             secretEgressBindings,
             githubProfileDir,
+            prepareGitLabCredential,
             pathPrepend: defaultPathPrepend,
             pty: params.pty === true && !sandbox,
             safeBins,
@@ -562,6 +557,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           env,
           secretEgressBindings,
           githubProfileDir,
+          prepareGitLabCredential,
           pathPrepend: defaultPathPrepend,
           sandbox,
           containerWorkdir,

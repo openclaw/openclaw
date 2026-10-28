@@ -20,7 +20,7 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
-import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types.js";
+import type { PreparedExecIdentityEnvironment } from "./exec-identity-environment.js";
 
 export type ExecToolDefaults = ExecToolRoutingDefaults & {
   hasCronTool?: boolean;
@@ -36,7 +36,7 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   reviewer?: ExecReviewerConfig;
   config?: OpenClawConfig;
   /** Host-prepared non-secret environment and store projection exclusions. */
-  preparedRunEnvironment?: PreparedGitHubToolEnvironment;
+  preparedRunEnvironment?: PreparedExecIdentityEnvironment;
   /** An explicit snapshot, including an empty one, replaces local store access. */
   preparedStoreEnvironment?: Readonly<SecretStoreExecEnvironment>;
   /** Host-prepared routing hint; remote workers have no Gateway session database. */

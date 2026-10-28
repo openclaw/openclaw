@@ -4,6 +4,7 @@ import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import * as applicationRoutes from "../app-routes.ts";
+import { takeGitLabOAuthCallback } from "../features/gitlab-connections/gitlab-oauth-callback.ts";
 import * as channelCapabilities from "../lib/channels/index.ts";
 import {
   isDefaultChatLanding,
@@ -54,6 +55,22 @@ describe("bootstrapApplication", () => {
     window.history.replaceState({}, "", pathname);
     return bootstrapApplication();
   }
+
+  it.each(["", "/control"])(
+    "captures GitLab callbacks before saved-session routing under %s",
+    async (basePath) => {
+      document.documentElement.setAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE, basePath);
+      const suffix = "/oauth/gitlab/callback?code=synthetic-secret&state=synthetic-state";
+      saveSession("agent:main:main");
+      const runtime = openAt(`${basePath}${suffix}`);
+      expect(window.location.pathname).toBe(`${basePath}/settings/profile`);
+      expect(window.location.search).toBe("");
+      expect(takeGitLabOAuthCallback()).toBe(`${window.location.origin}${basePath}${suffix}`);
+      expect(takeGitLabOAuthCallback()).toBeNull();
+      expect(runtime.router.getState().location.pathname).not.toContain("chat");
+      document.documentElement.removeAttribute(CONTROL_UI_BASE_PATH_ATTRIBUTE);
+    },
+  );
 
   it("owns one Channels capability only after first use and rejects acquisition after stop", async () => {
     const createChannels = vi.spyOn(channelCapabilities, "createChannelCapability");

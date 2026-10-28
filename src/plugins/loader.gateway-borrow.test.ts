@@ -12,6 +12,7 @@ import {
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { clearActivePluginRegistry, disposePluginRegistryInstances } from "./runtime.js";
+import { createPluginToolFactoryContext } from "./tool-factory-context.js";
 import { bindPluginToolCallbacks } from "./tool-factory-runtime.js";
 
 const lenderId = "borrow-lender";
@@ -140,6 +141,32 @@ it("stops borrowed callbacks when the lending Gateway retires the instance", asy
   await expect(bound.execute("before", {})).resolves.toMatchObject(firstGeneration);
   await disposePluginRegistryInstances(gateway);
   await expect(bound.execute("after", {})).rejects.toThrow(/no longer active/);
+});
+
+it("keeps an accepted handoff bound to the service instance after its tool borrower retires", async () => {
+  const { gateway, borrowOptions } = setupLender();
+  const prepared = loadOpenClawPlugins(borrowOptions);
+  registries.push(prepared);
+  const entry = prepared.tools.find((tool) => tool.pluginId === lenderId);
+  if (!entry) {
+    throw new Error("Expected borrowed tool registration");
+  }
+  let assertServiceCurrent: (() => void) | undefined;
+  createPluginToolFactoryContext({
+    entry: { ...entry, contextVersion: 2, gatewayHandoffMethods: ["tools.example.publish"] },
+    registry: prepared,
+    context: {},
+    assertInvocationCurrent: () => {},
+    bindExecutionCapabilities: (_assertInvocationCurrent, _signal, handoff) => {
+      assertServiceCurrent = handoff?.assertPluginCurrent;
+      return {};
+    },
+  });
+  expect(assertServiceCurrent).toBeTypeOf("function");
+  await disposePluginRegistryInstances(prepared);
+  expect(assertServiceCurrent).not.toThrow();
+  await disposePluginRegistryInstances(gateway);
+  expect(assertServiceCurrent).toThrow(/no longer active/);
 });
 
 it.each([true, false])("never adopts a predecessor's loan (lender supplied: %s)", async (lend) => {

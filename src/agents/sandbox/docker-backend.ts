@@ -4,6 +4,8 @@ import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildGitHubExecLaunchArgv } from "../github-exec-launch.js";
 import { CLEARED_GITHUB_CREDENTIALS } from "../github-host.js";
 import type { PreparedGitHubToolEnvironment } from "../github-tool-identity.types.js";
+import { buildGitLabExecLaunchArgv } from "../gitlab-exec-launch.js";
+import type { prepareGitLabToolEnvironment } from "../gitlab-tool-identity.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
@@ -11,7 +13,7 @@ import type {
   SandboxBackendManager,
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
-import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
+import { SANDBOX_GITHUB_CONFIG_DIR, SANDBOX_GITLAB_CONFIG_DIR } from "./constants.js";
 import { containerHasTerminated } from "./container-inspect.js";
 import {
   captureSandboxContainerTermination,
@@ -53,6 +55,7 @@ async function createContainerSandboxBackend(
   params: CreateSandboxBackendParams,
   operatorAuthority?: AdmittedRunOperatorAuthority,
   githubIdentity?: PreparedGitHubToolEnvironment,
+  gitlabIdentity?: ReturnType<typeof prepareGitLabToolEnvironment>,
 ): Promise<SandboxBackendHandle> {
   using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.target");
   const assertCurrent = () => {
@@ -124,23 +127,43 @@ async function createContainerSandboxBackend(
       browser: boundEngine.id === "docker",
       readOnlyResourceMounts: true,
     },
-    async buildExecSpec({ command, workdir, env: requestedEnv, usePty, stdin }) {
+    async buildExecSpec({
+      command,
+      workdir,
+      env: requestedEnv,
+      usePty,
+      stdin,
+      selectedGitLabAuthor,
+    }) {
       await validateSandboxContainerEngineTarget(boundEngine, engineTarget);
       const identity = githubIdentity;
       const githubProfileDir = identity?.localIdentityEnv.GH_CONFIG_DIR;
+      const gitlabProfileDir = gitlabIdentity?.localIdentityEnv.GLAB_CONFIG_DIR;
       const externalCommandShell =
-        githubProfileDir && process.platform === "win32"
+        (githubProfileDir || gitlabProfileDir) && process.platform === "win32"
           ? (await import("../shell-utils.js")).getShellConfig()
           : undefined;
       assertCurrent();
-      const env = identity
-        ? {
-            ...requestedEnv,
-            ...identity.credentialScrubEnv,
-            ...identity.localIdentityEnv,
-            GH_CONFIG_DIR: SANDBOX_GITHUB_CONFIG_DIR,
-          }
-        : requestedEnv;
+      const env: Record<string, string> =
+        identity || gitlabIdentity
+          ? {
+              ...requestedEnv,
+              ...identity?.credentialScrubEnv,
+              ...identity?.localIdentityEnv,
+              ...gitlabIdentity?.credentialScrubEnv,
+              ...gitlabIdentity?.localIdentityEnv,
+              ...(githubProfileDir ? { GH_CONFIG_DIR: SANDBOX_GITHUB_CONFIG_DIR } : {}),
+              ...(gitlabProfileDir ? { GLAB_CONFIG_DIR: SANDBOX_GITLAB_CONFIG_DIR } : {}),
+              ...(gitlabProfileDir && selectedGitLabAuthor
+                ? {
+                    GIT_AUTHOR_NAME: selectedGitLabAuthor.name,
+                    GIT_COMMITTER_NAME: selectedGitLabAuthor.name,
+                    GIT_AUTHOR_EMAIL: selectedGitLabAuthor.commitEmail,
+                    GIT_COMMITTER_EMAIL: selectedGitLabAuthor.commitEmail,
+                  }
+                : {}),
+            }
+          : requestedEnv;
       const { PATH: requestedPath, ...containerEnv } = env;
       if (requestedPath) {
         containerEnv.OPENCLAW_PREPEND_PATH = requestedPath;
@@ -161,6 +184,9 @@ async function createContainerSandboxBackend(
           // The host launcher supplies values privately; the engine reads them by name.
           argv.push(...Object.keys(CLEARED_GITHUB_CREDENTIALS).flatMap((name) => ["--env", name]));
         }
+        if (gitlabProfileDir) {
+          argv.push("--env", "GITLAB_TOKEN");
+        }
         // Apply the staged prepend only after login profile sourcing; direct PATH
         // injection can break the container engine's initial executable lookup.
         const pathExport = env.PATH
@@ -168,13 +194,19 @@ async function createContainerSandboxBackend(
           : "";
         // Use absolute path for sh to avoid dependency on PATH resolution during exec.
         argv.push(containerId, "/bin/sh", "-lc", `${pathExport}${command}`);
+        const githubArgv = githubProfileDir
+          ? buildGitHubExecLaunchArgv(argv, githubProfileDir, {
+              githubHost: identity?.localIdentityEnv.GH_HOST,
+              externalCommandShell,
+            })
+          : argv;
         return {
-          argv: githubProfileDir
-            ? buildGitHubExecLaunchArgv(argv, githubProfileDir, {
-                githubHost: identity?.localIdentityEnv.GH_HOST,
-                externalCommandShell,
+          argv: gitlabProfileDir
+            ? buildGitLabExecLaunchArgv(githubArgv, gitlabProfileDir, {
+                issuer: `https://${gitlabIdentity?.localIdentityEnv.GITLAB_HOST}`,
+                externalCommandShell: githubProfileDir ? undefined : externalCommandShell,
               })
-            : argv,
+            : githubArgv,
           env: boundEngine.baseEnv ?? process.env,
           stdinMode: usePty || stdin ? "pipe-open" : "pipe-closed",
           finalizeToken: envFile.cleanup satisfies ContainerExecFinalizeToken,
@@ -342,12 +374,14 @@ export async function createDockerSandboxBackend(
   params: CreateSandboxBackendParams,
   operatorAuthority?: AdmittedRunOperatorAuthority,
   githubIdentity?: PreparedGitHubToolEnvironment,
+  gitlabIdentity?: ReturnType<typeof prepareGitLabToolEnvironment>,
 ): Promise<SandboxBackendHandle> {
   return await createContainerSandboxBackend(
     DOCKER_SANDBOX_ENGINE,
     params,
     operatorAuthority,
     githubIdentity,
+    gitlabIdentity,
   );
 }
 
@@ -355,12 +389,14 @@ export async function createPodmanSandboxBackend(
   params: CreateSandboxBackendParams,
   operatorAuthority?: AdmittedRunOperatorAuthority,
   githubIdentity?: PreparedGitHubToolEnvironment,
+  gitlabIdentity?: ReturnType<typeof prepareGitLabToolEnvironment>,
 ): Promise<SandboxBackendHandle> {
   return await createContainerSandboxBackend(
     PODMAN_SANDBOX_ENGINE,
     params,
     operatorAuthority,
     githubIdentity,
+    gitlabIdentity,
   );
 }
 

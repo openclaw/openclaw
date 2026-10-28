@@ -133,6 +133,12 @@ type OpenClawPluginToolContextBase = {
   sandboxed?: boolean;
   /** Refuses a complete result that the current direct/full-value route cannot deliver. */
   assertCompleteResult?: (text: string) => void;
+  /** Fixed Gateway request transferred to a host-owned continuation after this turn yields. */
+  gatewayHandoff?: (request: {
+    method: string;
+    params: Record<string, unknown>;
+    signal?: AbortSignal;
+  }) => Promise<import("../agents/runtime/index.js").AgentToolResult<unknown>>;
   /** Invocation-bound execution, present only for an actual prepared sandbox. */
   sandbox?: OpenClawPluginToolSandbox;
   /** Model authorization scope; does not execute inference or grant tool permissions. */
@@ -167,6 +173,8 @@ export type OpenClawPluginToolOptions = {
   optional?: boolean;
   /** False: independent; execute: pure factory with workspace use; true/omitted: factory may use it. */
   workspaceAccess?: boolean | "execute";
+  /** Explicit methods this one version-2 tool may transfer to the Gateway after yielding. */
+  gatewayHandoffMethods?: readonly string[];
 };
 
 export type OpenClawPluginHookOptions = {

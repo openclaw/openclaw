@@ -2,7 +2,10 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
-import type { GitHubPublicationOwner } from "./github-publication-owner.ts";
+import type {
+  GitHubPublicationOwner,
+  RepositoryPublicationProvider,
+} from "./github-publication-owner.ts";
 import {
   readSessionChangedEvent,
   reconcileSessionChanged,
@@ -58,17 +61,23 @@ function authority(row: GatewaySessionRow): string {
     ...workspace,
   ]);
 }
-function identity(snapshot: SessionGateway["snapshot"]): string {
+function identity(
+  snapshot: SessionGateway["snapshot"],
+  provider: RepositoryPublicationProvider,
+): string {
   return JSON.stringify([
     snapshot.selfUser?.identity ?? null,
     snapshot.hello?.auth?.role,
     snapshot.hello?.auth?.scopes,
-    isGatewayMethodAdvertised(snapshot, "sessions.github.publish"),
+    isGatewayMethodAdvertised(snapshot, `sessions.${provider}.publish`),
   ]);
 }
 
 /** Admitted operations outlive panes; acknowledgement, rejection or authority retirement releases them. */
-export function createSessionGitHubPublication(host: Host) {
+export function createSessionGitHubPublication(
+  host: Host,
+  provider: RepositoryPublicationProvider = "github",
+) {
   const entries = new Map<string, Entry>();
   type Entry = {
     row: GatewaySessionRow;
@@ -119,7 +128,7 @@ export function createSessionGitHubPublication(host: Host) {
       }
       const route = resolveUiConversationIdentity(host.snapshot(), row.key, row.agentId);
       const key = `${route.agentId ?? ""}\0${route.sessionKey}`;
-      const owner = identity(host.snapshot());
+      const owner = identity(host.snapshot(), provider);
       let entry = entries.get(key);
       if (entry && (!entry.current() || authority(entry.row) !== authority(row))) {
         retire(key, entry);
@@ -135,32 +144,37 @@ export function createSessionGitHubPublication(host: Host) {
           current: () =>
             entries.get(key) === candidate &&
             host.connection.isCurrent(connection) &&
-            identity(host.snapshot()) === owner &&
+            identity(host.snapshot(), provider) === owner &&
             host.deletionState(candidate.row) !== "confirmed",
-          publication: new Owner({
-            client: connection.client,
-            target: route,
-            isCurrent: () => candidate.current(),
-            reserve: () => {
-              if (candidate.retained) {
-                return;
-              }
-              if (
-                [...entries.values()].filter((operation) => operation.retained).length >=
-                MAX_RETAINED_PUBLICATIONS
-              ) {
-                throw new Error(
-                  t("githubPublication.capacity", { newAction: t("githubPublication.newAction") }),
-                );
-              }
-              candidate.retained = true;
+          publication: new Owner(
+            {
+              client: connection.client,
+              target: route,
+              isCurrent: () => candidate.current(),
+              reserve: () => {
+                if (candidate.retained) {
+                  return;
+                }
+                if (
+                  [...entries.values()].filter((operation) => operation.retained).length >=
+                  MAX_RETAINED_PUBLICATIONS
+                ) {
+                  throw new Error(
+                    t("githubPublication.capacity", {
+                      newAction: t("githubPublication.newAction"),
+                    }),
+                  );
+                }
+                candidate.retained = true;
+              },
+              release: () => {
+                candidate.retained = false;
+                releaseIdle(key, candidate);
+              },
+              unbound: () => releaseIdle(key, candidate),
             },
-            release: () => {
-              candidate.retained = false;
-              releaseIdle(key, candidate);
-            },
-            unbound: () => releaseIdle(key, candidate),
-          }),
+            provider,
+          ),
         };
         entry = candidate;
         // Split panes share idle state too; only admitted operations survive the last detach.
@@ -210,7 +224,7 @@ export function createSessionGitHubPublication(host: Host) {
             }).result?.sessions[0]
           : row,
       );
-      if (asNullableRecord(payload)?.reason === "github-publication") {
+      if (asNullableRecord(payload)?.reason === `${provider}-publication`) {
         const entry = entries.get(key);
         if (entry?.current()) {
           entry.publication.invalidate();
@@ -248,6 +262,32 @@ export function createSessionGitHubPublication(host: Host) {
       for (const [key, entry] of entries) {
         retire(key, entry);
       }
+    },
+  };
+}
+
+/** The two native repository publishers share session evidence, but retain separate operations. */
+export function createSessionRepositoryPublications(
+  connection: Host["connection"],
+  snapshot: Host["snapshot"],
+  deletionState: Host["deletionState"],
+) {
+  const host = { connection, snapshot, deletionState };
+  const githubPublication = createSessionGitHubPublication(host);
+  const gitlabPublication = createSessionGitHubPublication(host, "gitlab");
+  return {
+    owners: { githubPublication, gitlabPublication },
+    observeRows(rows: readonly GatewaySessionRow[], agentId?: string | null) {
+      githubPublication.observeRows(rows, agentId);
+      gitlabPublication.observeRows(rows, agentId);
+    },
+    invalidate() {
+      githubPublication.invalidate();
+      gitlabPublication.invalidate();
+    },
+    clear() {
+      githubPublication.clear();
+      gitlabPublication.clear();
     },
   };
 }

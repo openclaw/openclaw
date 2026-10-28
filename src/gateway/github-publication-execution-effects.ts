@@ -1,3 +1,4 @@
+import type { SessionGitLabPublicationResult } from "../../packages/gateway-protocol/src/schema/gitlab.js";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 
 type GitHubPublicationMutableFacts = {
@@ -8,6 +9,8 @@ type GitHubPublicationMutableFacts = {
   next_action?: string | null;
   last_effect?: string | null;
   effect_state?: string | null;
+  push_observation?: string | null;
+  result_json?: string | null;
 };
 
 export type GitHubPublicationEffectTransition =
@@ -22,7 +25,9 @@ export type GitHubPublicationEffectTransition =
 
 /** Effect observations retain custody but never restore permission for another action. */
 export function githubPublicationEffectFacts(
-  transition: GitHubPublicationEffectTransition,
+  transition:
+    | GitHubPublicationEffectTransition
+    | { operation: "complete"; result: SessionGitLabPublicationResult },
   interruptedStatus: "requested" | "needs_confirmation",
 ): GitHubPublicationMutableFacts {
   switch (transition.operation) {

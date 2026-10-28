@@ -1041,6 +1041,7 @@ jobs:
             /packages/normalization-core/src/stable-stringify.ts
             /src/infra/node-runtime-executable.ts
             /src/infra/runtime-process-manifest.ts
+            /src/infra/runtime-process-helper-manifest.ts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 

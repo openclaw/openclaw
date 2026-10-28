@@ -647,6 +647,7 @@ export abstract class ChatPaneStateOwner {
   protected readonly typingActors = new Map<string, ChatTypingActorState>();
   protected readonly typingTimers = new Map<string, number>();
   readonly publication: { binding: GitHubPublicationBinding | null } = { binding: null };
+  readonly gitlabPublication: { binding: GitHubPublicationBinding | null } = { binding: null };
   readonly workspaceConflicts = { dismissedRefs: new Map<string, string>() };
   readonly history = projectChatFields<{
     catalogMessages: unknown[];

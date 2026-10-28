@@ -1,0 +1,51 @@
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
+
+CREATE TABLE "gitlab_personal_publication_requests" (
+  "request_id" text COLLATE "C" NOT NULL,
+  "owner_profile_id" text COLLATE "C" NOT NULL,
+  "issuer" text COLLATE "C" NOT NULL,
+  "connection_generation" text COLLATE "C" NOT NULL,
+  "idempotency_key" text COLLATE "C" NOT NULL,
+  "request_digest" text COLLATE "C" NOT NULL,
+  "session_id" text COLLATE "C" NOT NULL,
+  "session_key" text COLLATE "C" NOT NULL,
+  "agent_id" text COLLATE "C" NOT NULL,
+  "session_lifecycle_revision" text COLLATE "C",
+  "worktree_id" text COLLATE "C" NOT NULL,
+  "repository_fingerprint" text COLLATE "C" NOT NULL,
+  "identity_account_id" bigint NOT NULL,
+  "identity_login" text COLLATE "C" NOT NULL,
+  "branch" text COLLATE "C" NOT NULL,
+  "receipt_json" text COLLATE "C" NOT NULL,
+  "status" text COLLATE "C" NOT NULL,
+  "gateway_instance_id" text COLLATE "C",
+  "execution_id" text COLLATE "C",
+  "head_commit" text COLLATE "C",
+  "pull_request_url" text COLLATE "C",
+  "error_code" text COLLATE "C",
+  "next_action" text COLLATE "C",
+  "last_effect" text COLLATE "C",
+  "effect_state" text COLLATE "C",
+  "push_observation" text COLLATE "C",
+  "result_json" text COLLATE "C",
+  "created_at_ms" bigint NOT NULL,
+  "updated_at_ms" bigint NOT NULL,
+  "reported_at_ms" bigint,
+  PRIMARY KEY ("request_id"),
+  CHECK ((char_length("request_id") = 36)),
+  CHECK ((char_length("request_digest") = 64)),
+  CHECK (("identity_account_id" > 0)),
+  CHECK (("receipt_json" IS JSON)),
+  CHECK (("status" IN ('requested', 'publishing', 'needs_confirmation', 'published', 'failed'))),
+  CHECK ("last_effect" IS NULL OR ("last_effect" IN ('push', 'pull_request'))),
+  CHECK ("effect_state" IS NULL OR ("effect_state" IN ('dispatched', 'observed'))),
+  CHECK ("push_observation" IS NULL OR ("push_observation" IN ('applied', 'unchanged'))),
+  CHECK ("result_json" IS NULL OR ("result_json" IS JSON)),
+  CHECK ((("status" = 'publishing') AND "gateway_instance_id" IS NOT NULL AND "execution_id" IS NOT NULL) OR ("status" <> 'publishing')),
+  CHECK (("last_effect" IS NULL AND "effect_state" IS NULL) OR ("last_effect" IS NOT NULL AND "effect_state" IS NOT NULL)),
+  UNIQUE ("owner_profile_id", "issuer", "session_id", "idempotency_key")
+);
+
+CREATE INDEX "idx_gitlab_personal_publication_pending" ON "gitlab_personal_publication_requests" (("status") ASC, ("updated_at_ms") ASC, ("request_id") ASC);
+
+CREATE INDEX "idx_gitlab_personal_publication_session" ON "gitlab_personal_publication_requests" (("owner_profile_id") ASC, ("issuer") ASC, ("session_id") ASC, ("created_at_ms") ASC);
