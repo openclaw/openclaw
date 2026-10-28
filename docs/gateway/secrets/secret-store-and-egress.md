@@ -111,6 +111,10 @@ When enabled, OpenClaw adds these values to Gateway-hosted exec environments:
 - `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, and `GIT_SSL_CAINFO`, pointing at the Gateway's trusted certificate bundle
 - each team-store `secret` entry as an `oc-sent-v2...end` sentinel; `env` entries keep their existing behavior and precedence
 
+<Note>
+Those CA variables only reach clients that read them, and macOS is where Go's handling of them changed. Through Go 1.26, `crypto/x509` verifies certificates through the platform trust API there and ignores `SSL_CERT_FILE` and `SSL_CERT_DIR`, so a proxied request from such a build fails with `x509: certificate signed by unknown authority` even though the bundle above is injected. Go 1.27 and later read both variables on macOS by default and load those roots instead of the platform store; `GODEBUG=x509sslcertoverrideplatform=0` opts back into platform-only verification. When the client authenticates with its own credentials, list its host in [`bypassHosts`](#traffic-allowlist) so TLS stays end to end.
+</Note>
+
 Proxy authentication uses standard Basic proxy auth with username `openclaw` and a random password for each managed exec process. OpenClaw creates the grant after approval and launch checks. A background command retains its grant when the originating agent turn ends; its process supervisor owns both execution and proxy access. Base64 is not treated as encryption: the listener binds only to loopback, and a process that can read the proxy token from the agent environment can already read the sentinels in that environment. Missing, wrong, or revoked credentials receive `407 Proxy Authentication Required` and are never forwarded.
 
 Origin HTTP Basic authentication is supported too: a client can encode a sentinel
