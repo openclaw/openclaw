@@ -299,7 +299,8 @@ suite.define(() => {
       .locator(".chat-group.assistant")
       .getByText(reply.content, { exact: true });
     await replyBody.waitFor();
-    const operationLabel = page.locator(".chat-work-group .chat-activity-group__label");
+    const recap = page.locator(".chat-turn-recap");
+    const completedSummary = /^42 output tokens\s*·\s*Done in 13 seconds$/;
     const refreshedSession = await evaluateControlUiContext(
       page,
       async (application, key) => {
@@ -310,8 +311,8 @@ suite.define(() => {
       sessionKey,
     );
     expect(refreshedSession).toMatchObject({ lastRunId: runId, runtimeMs: 13_000 });
-    await operationLabel.waitFor();
-    await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13 seconds");
+    await recap.waitFor();
+    await expect.poll(() => recap.textContent()).toMatch(completedSummary);
     expect(await stopButton(page).count()).toBe(0);
 
     const successorSession = {
@@ -332,25 +333,21 @@ suite.define(() => {
     const screenshot = await takeControlUiScreenshotFrame(
       page,
       page.locator(".chat-thread"),
-      [operationLabel, replyBody],
+      [recap, replyBody],
       { animations: "disabled" },
     );
     await writeFile(join(suite.artifactDir, "worked-duration.png"), screenshot.png);
     console.log("WORKED_DURATION_PROOF", suite.artifactDir);
-    await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13 seconds");
-    expect(await page.locator(".chat-turn-recap").allTextContents()).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("Done in")]),
-    );
-    expect(await page.locator(".chat-turn-recap").textContent()).toBe("42 output tokens");
+    await expect.poll(() => recap.textContent()).toMatch(completedSummary);
     await gateway.setSessionsListResponse({ sessions: [completedSession] });
 
     await page.reload();
     await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
     await replyBody.waitFor();
-    await operationLabel.waitFor();
-    expect(await operationLabel.textContent()).toBe("Worked for 13 seconds");
+    await recap.waitFor();
+    expect(await recap.textContent()).toBe("Done in 13 seconds");
     expect(await page.locator(".chat-group.user").count()).toBe(2);
-    await operationLabel.click();
+    await page.locator(".chat-work-group > button").click();
     await expect
       .poll(() => page.locator(".chat-work-group > button").getAttribute("aria-expanded"))
       .toBe("true");
@@ -371,9 +368,10 @@ suite.define(() => {
 
     expect(await assistantGroup.count()).toBe(1);
     expect(await page.locator(".chat-reading-indicator").count()).toBe(0);
+    await assistantGroup.getByText("Working…", { exact: true }).waitFor();
     expect(
       await assistantGroup.getByText("Waiting for turn to start", { exact: true }).count(),
-    ).toBe(1);
+    ).toBe(0);
   });
 
   it("keeps a different active run in its own status row", async () => {
@@ -660,10 +658,11 @@ suite.define(() => {
       .poll(() => page.locator(".chat-working-indicator__elapsed").textContent())
       .toBe("2m 57s");
     const workingLabel = page.locator(".chat-working-indicator__status > span:first-child");
-    expect(await workingLabel.textContent()).toBe("Waiting for turn to start");
+    expect(await workingLabel.textContent()).toBe("Working…");
+    expect(await workingLabel.getAttribute("class")).toContain("sr-only");
     expect(
       await page.locator(".chat-working-indicator__status > span:not(.sr-only)").allTextContents(),
-    ).toEqual(["Waiting for turn to start", "·"]);
+    ).toEqual([]);
   });
 
   it.each(["final", "error"] as const)(

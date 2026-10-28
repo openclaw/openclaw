@@ -8,6 +8,11 @@
  * local-workspace-publication.ts at their original repository-relative paths.
  * Add --reconcile --iterations 10 for real Git projection checkpoints; --files
  * creates that many files and --edits (default 1000) changes files each cycle.
+ * Add --quiesce --iterations 1000 to measure real projection custody with no
+ * runtime, or --quiesce --sandbox-image openclaw-sandbox:bookworm-slim
+ * --iterations 20 for a private Docker runtime's actual pause/resume lifecycle.
+ * Quiescence source overrides also include local-workspace-quiescence.ts. Its
+ * row revision delta counts durable pause receipts; rerun --allocation separately.
  *
  * Uses synthetic inventory strings (or a synthetic Git checkout with --reconcile)
  * in isolated .local state; no operator state, Gateway listener or provider.
@@ -55,6 +60,8 @@ const { values } = parseArgs({
     scope: { type: "string", default: "single" },
     "source-dir": { type: "string" },
     reconcile: { type: "boolean", default: false },
+    quiesce: { type: "boolean", default: false },
+    "sandbox-image": { type: "string" },
     edits: { type: "string", default: "1000" },
     failure: { type: "string" },
     "retain-admissions": { type: "boolean", default: false },
@@ -65,6 +72,9 @@ const files = Number(values.files);
 const batch = Number(values.batch);
 assert([iterations, files, batch].every((value) => Number.isSafeInteger(value) && value > 0));
 assert(values.scope === "single" || values.scope === "per-write");
+assert(!(values.reconcile && values.quiesce), "Choose reconciliation or quiescence");
+assert(!(values.failure && values.quiesce), "Choose failure or quiescence");
+assert(!values["sandbox-image"] || values.quiesce, "--sandbox-image requires --quiesce");
 assert(
   values.failure === undefined ||
     ["error", "abort", "supersede", "timeout", "abandon", "lost-reply", "oversized"].includes(
@@ -84,6 +94,7 @@ const ownerFiles = [
   "src/gateway/worker-environments/local-workspace-store.ts",
   "src/gateway/worker-environments/local-workspace-publication.ts",
   "src/infra/sqlite-worker-operation-admission.ts",
+  ...(values.quiesce ? ["src/agents/sandbox/local-workspace-quiescence.ts"] : []),
 ];
 const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
 const preparedSources = new Map<string, string>();
@@ -239,6 +250,9 @@ Object.assign(globalThis, {
 });
 fs.mkdirSync(".local", { recursive: true });
 const root = fs.mkdtempSync(path.resolve(".local/local-workspace-retention-"));
+if (values["sandbox-image"] && !process.env.DOCKER_CONFIG) {
+  process.env.DOCKER_CONFIG = path.join(process.env.HOME!, ".docker");
+}
 Object.assign(process.env, {
   OPENCLAW_STATE_DIR: root,
   HOME: root,
@@ -286,6 +300,9 @@ const measuredGc = () => {
 };
 let cpuUs = 0;
 let writeMs = 0;
+let sandboxContainer: string | undefined;
+const docker = (...args: string[]) =>
+  execFileSync("docker", args, { encoding: "utf8", timeout: 30_000 }).trim();
 const sample = async (completed: number, phase: string) => {
   // WeakRef.deref and construction pin targets until the current JS job ends.
   await immediate();
@@ -471,6 +488,12 @@ try {
       }),
     );
   } else {
+    const projectionPath = values.quiesce
+      ? path.join(fs.realpathSync(root), "worktree-projections", id, "workspace")
+      : path.join(root, id, "workspace");
+    if (values.quiesce) {
+      fs.mkdirSync(projectionPath, { recursive: true });
+    }
     await withLocalWorkspaceStore({ worktreeId: id }, (store) =>
       store.create({
         worktree_id: id,
@@ -478,11 +501,15 @@ try {
         session_key: "agent:main:synthetic-retention",
         session_id: "synthetic",
         lifecycle_revision: null,
-        projection_path: path.join(root, id, "workspace"),
+        projection_path: projectionPath,
         base_commit: "a".repeat(40),
         source_paths_json: sourcePaths,
         baseline_json: null,
         baseline_ref: null,
+        tree_root_digest: null,
+        source_paths_digest: null,
+        canonical_fingerprints: null,
+        projection_fingerprints: null,
         checkpoint_json: null,
         pending_ref: null,
         pending_target: null,
@@ -492,8 +519,8 @@ try {
         created_at_ms: 1,
       }),
     );
-    const warm = await sample(0, "warm");
     if (values.failure) {
+      const warm = await sample(0, "warm");
       for (let index = 1; index <= iterations; index++) {
         const current: Fault = {
           controller: new AbortController(),
@@ -589,13 +616,51 @@ try {
         "Finished handles retain workspace mutation payloads",
       );
     } else {
-      if (values.allocation) {
-        inspector.connect();
-        await inspector.post("HeapProfiler.startSampling", {
-          samplingInterval: 32768,
-          includeObjectsCollectedByMajorGC: true,
-          includeObjectsCollectedByMinorGC: true,
+      if (values["sandbox-image"]) {
+        const { updateRegistry } = await import("../../src/agents/sandbox/registry.ts");
+        const containerName = `openclaw-perf-quiesce-${id}`;
+        sandboxContainer = docker(
+          "create",
+          "--name",
+          containerName,
+          "--network",
+          "none",
+          "--read-only",
+          "--cap-drop",
+          "ALL",
+          "--mount",
+          `type=bind,src=${projectionPath},dst=/workspace`,
+          values["sandbox-image"],
+          "sleep",
+          "infinity",
+        );
+        docker("start", sandboxContainer);
+        await updateRegistry({
+          containerName,
+          backendId: "docker",
+          sessionKey: "agent:main:synthetic-retention",
+          workspaceDir: projectionPath,
+          workspaceSource: "managed-worktree",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: values["sandbox-image"],
         });
+      }
+      if (!values.quiesce) {
+        await sample(0, "warm");
+      }
+      const startAllocation = async () => {
+        if (values.allocation) {
+          inspector.connect();
+          await inspector.post("HeapProfiler.startSampling", {
+            samplingInterval: 32768,
+            includeObjectsCollectedByMajorGC: true,
+            includeObjectsCollectedByMinorGC: true,
+          });
+        }
+      };
+      if (!values.quiesce) {
+        await startAllocation();
       }
       const update = async (
         store: Parameters<Parameters<typeof withLocalWorkspaceStore>[1]>[0],
@@ -612,7 +677,84 @@ try {
         writeMs += performance.now() - start;
         rows.push(new WeakRef(row));
       };
-      if (values.scope === "single") {
+      let receiptWrites: number | undefined;
+      const phaseMs: Record<string, number> = {};
+      if (values.quiesce) {
+        const { withLocalWorkspaceProjection } =
+          await import("../../src/gateway/worker-environments/local-workspace-projection.ts");
+        const { withWorktreePreparationTiming } =
+          await import("../../src/agents/worktrees/preparation-timing.ts");
+        const { withDiagnosticsTimelineObserver } =
+          await import("../../src/infra/diagnostics-timeline.ts");
+        const workspaceOwner = {
+          agentId: "main",
+          sessionKey: "agent:main:synthetic-retention",
+          sessionId: "synthetic",
+          lifecycleRevision: null,
+          assertCurrent: owner.assertCurrent,
+          worktree: {
+            id,
+            name: "synthetic",
+            repoFingerprint: "synthetic",
+            repoRoot: root,
+            path: root,
+            branch: "synthetic",
+            baseRef: "HEAD",
+            ownerKind: "session" as const,
+            ownerId: "agent:main:synthetic-retention",
+            createdAt: 1,
+            lastActiveAt: 1,
+          },
+        };
+        const quiesce = () =>
+          withLocalWorkspaceProjection(workspaceOwner, async (state) => {
+            rows.push(new WeakRef(state.current()));
+          });
+        // Warm imports, state readers and Docker before the measured lifecycle.
+        await quiesce();
+        await sample(0, "warm");
+        const before = await withLocalWorkspaceStore(
+          { worktreeId: id },
+          async (store) => store.get()!.revision,
+        );
+        await startAllocation();
+        await withDiagnosticsTimelineObserver(
+          (name, _attributes, durationMs) => {
+            if (durationMs !== undefined && name.startsWith("worktree.managed.")) {
+              phaseMs[name] = durationMs;
+            }
+            return undefined;
+          },
+          () =>
+            withWorktreePreparationTiming("managed", async () => {
+              for (let i = 1; i <= iterations; i++) {
+                const cpu = process.threadCpuUsage();
+                const start = performance.now();
+                await quiesce();
+                const end = performance.now();
+                const used = process.threadCpuUsage(cpu);
+                writeWindows.push({ start, end });
+                cpuUs += used.user + used.system;
+                writeMs += end - start;
+                if (i % batch === 0) {
+                  await sample(i, "quiesced");
+                }
+              }
+            }),
+        );
+        receiptWrites = await withLocalWorkspaceStore({ worktreeId: id }, async (store) => {
+          const row = store.get()!;
+          assert.equal(row.paused_runtimes_json, null);
+          return row.revision - before;
+        });
+        if (sandboxContainer) {
+          assert.equal(
+            docker("inspect", "-f", "{{.State.Running}} {{.State.Paused}}", sandboxContainer),
+            "true false",
+            "Measured sandbox did not resume",
+          );
+        }
+      } else if (values.scope === "single") {
         await withLocalWorkspaceStore({ worktreeId: id }, async (store) => {
           for (let i = 1; i <= iterations; i++) {
             await update(store, i);
@@ -653,6 +795,10 @@ try {
           sources,
           files,
           scope: values.scope,
+          quiesce: values.quiesce,
+          sandboxImage: values["sandbox-image"],
+          receiptWrites,
+          phaseMs,
           cpuUs,
           writeMs,
           sampledBytes,
@@ -663,12 +809,18 @@ try {
     }
   }
 } finally {
-  inspector.disconnect();
-  gcObserver.disconnect();
-  await closeOpenClawStateDatabaseAsync();
-  owner.release();
-  hooks.deregister();
-  workerThreads.MessageChannel = NativeMessageChannel;
-  syncBuiltinESMExports();
-  fs.rmSync(root, { recursive: true, force: true });
+  try {
+    if (sandboxContainer) {
+      docker("rm", "--force", sandboxContainer);
+    }
+  } finally {
+    inspector.disconnect();
+    gcObserver.disconnect();
+    await closeOpenClawStateDatabaseAsync();
+    owner.release();
+    hooks.deregister();
+    workerThreads.MessageChannel = NativeMessageChannel;
+    syncBuiltinESMExports();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }

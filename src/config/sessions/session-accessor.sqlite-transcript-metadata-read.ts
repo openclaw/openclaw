@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -162,16 +163,19 @@ export function readLatestAssistantTextFromDatabase(
 function parseLatestAssistantMessageEvent(
   raw: string,
 ): LatestTranscriptAssistantMessage | undefined {
-  let parsed: {
-    id?: unknown;
-    message?: { model?: unknown; provider?: unknown; role?: unknown; timestamp?: unknown };
-  };
   try {
-    parsed = JSON.parse(raw);
+    return readLatestAssistantMessageEvent(JSON.parse(raw));
   } catch {
     return undefined;
   }
-  const message = parsed.message;
+}
+
+/** The same event projection serves hot SQL and verified cold archive records. */
+export function readLatestAssistantMessageEvent(
+  event: unknown,
+): LatestTranscriptAssistantMessage | undefined {
+  const parsed = asOptionalRecord(event);
+  const message = asOptionalRecord(parsed?.message);
   if (!message || message.role !== "assistant") {
     return undefined;
   }
@@ -179,7 +183,7 @@ function parseLatestAssistantMessageEvent(
     return undefined;
   }
   return {
-    ...(typeof parsed.id === "string" && parsed.id.trim() ? { id: parsed.id } : {}),
+    ...(typeof parsed?.id === "string" && parsed.id.trim() ? { id: parsed.id } : {}),
     message,
   };
 }

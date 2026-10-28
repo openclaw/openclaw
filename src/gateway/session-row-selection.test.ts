@@ -26,7 +26,7 @@ import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.t
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { create as createSessionRow } from "./session-row-projection-record.js";
+import { create as createSessionRow, selectionRow } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { holdSubagentExecution } from "./session-row-projection.read-fixture.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -241,6 +241,31 @@ it("maintains list order across metadata changes and archived-row rematerializat
       expect((await list("lastInteractionAt"))[0]?.key).toBe(second);
       expect((await list("activity"))[0]?.key).toBe(second);
       expect((await list())[0]?.key).toBe(first);
+      const retained = createSessionRowSelection(
+        cfg,
+        projection.state.scope({}),
+        false,
+        () => projection.state.rowContext,
+      );
+      const publish = () =>
+        retained.add(selectionRow(projection.capture({ agentId: "main", key: first })!)!);
+      publish();
+      const partitions = retained.read().partitions!;
+      const before = partitions.map((partition) => partition.revision);
+      {
+        using maps = vi.spyOn(globalThis, "Map");
+        publish();
+        expect(maps).not.toHaveBeenCalled();
+      }
+      expect(partitions.every((partition, index) => partition.revision === before[index])).toBe(
+        true,
+      );
+      writeMain(first, { updatedAt: 2, lastInteractionAt: 1, label: "Metadata only" });
+      publish();
+      expect(partitions.some((partition, index) => partition.revision !== before[index])).toBe(
+        true,
+      );
+      expect(retained.read().get(first)?.entry.label).toBe("Metadata only");
       const search = async (text: string, archived: boolean | "all" = "all") =>
         rowKeys(await listRows(projection, { search: text, archived }));
       expect(await search("changed metadata")).toEqual([]);
@@ -433,15 +458,13 @@ it("filters active sentinels only after selecting their physical store winner", 
       };
     });
     projection.selectEntries = (query) => {
-      if (!query?.sessionIdOrKey) {
+      const identities = query?.candidateSessionIdsOrKeys;
+      if (!identities) {
         return rows;
       }
       const keys = new Set(
         rows
-          .filter(
-            (row) =>
-              row.key === query.sessionIdOrKey || row.entry.sessionId === query.sessionIdOrKey,
-          )
+          .filter((row) => identities.has(row.key) || identities.has(row.entry.sessionId))
           .map((row) => row.key),
       );
       return rows.filter((row) => keys.has(row.key));

@@ -15,7 +15,6 @@ import {
   invokeAgent,
   makeContext,
   requireValue,
-  waitForAssertion,
 } from "./agent.test-harness.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
@@ -56,6 +55,8 @@ export function registerAgentQueuedRestartRecoveryTests() {
         );
         const active = requireValue(rpcSourceTesting.get(runId), "queued recovery source missing");
 
+        const aborted = createDeferred();
+        active.input.abortSignal.addEventListener("abort", () => aborted.resolve(), { once: true });
         const cancelOptions = { context, client: null, isWebchatConnect: () => false };
         if (cause === "rpc") {
           cancellation = handleChatAbortRequest({
@@ -84,9 +85,9 @@ export function registerAgentQueuedRestartRecoveryTests() {
           });
         }
         void cancellation.catch(() => {});
-        await waitForAssertion(() => {
-          expect(active.input.abortSignal.aborted).toBe(true);
-        });
+        // Stop can await real worker I/O; fake clock progress is not cancellation completion.
+        await Promise.race([aborted.promise, cancellation]);
+        expect(active.input.abortSignal.aborted).toBe(true);
         dispatchGate.resolve();
         await cancellation;
         await active.input.settlement.promise;

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import type { Static } from "typebox";
 import { Check } from "typebox/value";
@@ -14,22 +16,32 @@ import {
 import { prepareEvidenceRevision } from "./evidence-reconciliation.js";
 import { parseYaml } from "./files.js";
 import { RECORD_MAX_BYTES } from "./limits.js";
-import { mergeRedirects } from "./merge.js";
+import { linkTargets, mergeRedirects } from "./merge.js";
 import { approvedRecall, Envelope, type LoadedRecord, type Recall } from "./model.js";
 import {
   AnnotateInput,
+  ExtractSectionInput,
   SavePage,
   ClaimInput,
   RelationshipInput,
   RecallInput,
   type Receipt,
 } from "./mutation-contract.js";
+import { connectedPages, linkGraph, pageSections } from "./page-budget.js";
+import {
+  carryLinks,
+  linkedIds,
+  relinkClaim,
+  sameCitation,
+  sectionEvidence,
+} from "./page-extract.js";
 import { PublicationFiles } from "./publication-files.js";
+import { recordPath } from "./record-path.js";
 import { withinBudget } from "./response-budget.js";
 import { withdrawnIds, eligible } from "./retrieval.js";
 import { encodeRecordEvidence, readSourceDescriptor } from "./source-records.js";
 import { StoragePublication } from "./storage-publication.js";
-import { canonical, scopeKey } from "./storage-types.js";
+import { canonical, scopeKey, type Prepared } from "./storage-types.js";
 import { digest } from "./vault.js";
 /** Fenced edits of existing records: body edits, evidence reconciliation, annotations and recall approval. */
 export class StorageEdits extends StoragePublication {
@@ -92,6 +104,269 @@ export class StorageEdits extends StoragePublication {
         undefined,
         input.reason,
       );
+    });
+    return this.accept(input.requestId, intent, prepared, access, "agent");
+  }
+  /**
+   * Move one body section to a new or connected page in one publication: the
+   * destination gains the section verbatim (links carried, cited evidence copied),
+   * the source keeps its heading with a one-line summary and link, and claims the
+   * section cites move their primary subject to the destination. Everything is
+   * validated together before acceptance; any failure leaves every file unchanged.
+   */
+  async extractSection(input: ExtractSectionInput, access: VaultAccess): Promise<Receipt> {
+    if (!Check(ExtractSectionInput, input) || !input.reason.trim()) {
+      throw new Error("Invalid section extraction input.");
+    }
+    access.assertCurrent();
+    if (!this.config.writesEnabled) {
+      throw new Error("Knowledge writes are disabled.");
+    }
+    if (input.expectedVaultId !== this.config.vaultId) {
+      throw new Error("Connected vault changed; no publication accepted.");
+    }
+    await this.initialize(access);
+    const scope = scopeKey(access.scope),
+      intent = digest(canonical({ operation: "extractSection", input }));
+    const prior = this.store.withDatabase((db) => this.row(db, scope, input.requestId));
+    if (prior) {
+      this.checkReplay(prior, intent);
+      return this.resume(access, input.requestId);
+    }
+    this.assertReadable();
+    const prepared = await this.real.run(access, async (vault): Promise<Prepared> => {
+      const snapshot = new PublicationFiles(this.config.root).snapshot(scope),
+        data = await vault.scan();
+      if (data.ontology?.fingerprint !== input.expectedOntologyFingerprint) {
+        throw new Error("Ontology changed; inspect the current definitions before extracting.");
+      }
+      const withdrawn = this.store.withDatabase((db) =>
+        withdrawnIds(db, this.retrievalBinding(access)),
+      );
+      const current = eligible(data, withdrawn, false);
+      const page = (fence: { id: string; expectedRevision: number; expectedHash: string }) => {
+        const matches = data.records.filter((r) => r.id === fence.id),
+          found = matches.length === 1 ? matches[0] : undefined;
+        if (
+          !found ||
+          !found.valid ||
+          found.kind !== "page" ||
+          found.lifecycle !== "active" ||
+          found.hash !== fence.expectedHash ||
+          found.revision !== fence.expectedRevision ||
+          !current.some((r) => r.id === found.id)
+        ) {
+          throw new Error(
+            `Extraction conflict: page ${fence.id} is unavailable, inactive or changed. Reread it and retry with a new request. No publication accepted.`,
+          );
+        }
+        return found;
+      };
+      const source = page(input.source);
+      const section = pageSections(source.body).find((s) => s.start === input.sectionStart);
+      if (!section) {
+        throw new Error(
+          `No section heading starts at offset ${input.sectionStart} of ${source.title}. Use a section start from a fresh full read or a page-budget rejection. No publication accepted.`,
+        );
+      }
+      const graph = linkGraph(data.records, current);
+      const target = "id" in input.destination ? page(input.destination) : undefined;
+      if (target && target.id === source.id) {
+        throw new Error("A section cannot be extracted to its own page.");
+      }
+      if (target && !connectedPages(graph, source.id).some((r) => r.id === target.id)) {
+        throw new Error(
+          `${target.title} is not connected to ${source.title} by a body link or typed relationship. Extract to a new page, or to a connected page the section is about. No publication accepted.`,
+        );
+      }
+      const create = "id" in input.destination ? undefined : input.destination;
+      const definition = create
+        ? data.ontology?.definitions.find(
+            (d) => d.definition.name === create.type && d.definition.kind === "page",
+          )?.definition
+        : undefined;
+      if (create && !definition) {
+        throw new Error("Choose a valid page type from the current ontology.");
+      }
+      const destinationId = target?.id ?? randomUUID(),
+        destinationTitle = target?.title ?? create!.title;
+      const destinationPath =
+        target?.path ??
+        recordPath(definition!.directory, create!.title, destinationId, (candidate) =>
+          existsSync(path.join(this.config.root, scope, candidate)),
+        );
+      const original = source.body.slice(section.start, section.end);
+      const moved = carryLinks(original, source.path, destinationPath, graph.targets);
+      const text = moved.text.endsWith("\n") ? moved.text : moved.text + "\n";
+      const join = (body: string) =>
+        body + (!body || body.endsWith("\n\n") ? "" : body.endsWith("\n") ? "\n" : "\n\n") + text;
+      // prepare() adds each citation once, next to any the destination already has.
+      const carried = [...sectionEvidence(source, original), ...(input.evidence ?? [])];
+      const fences = {
+        requestId: input.requestId,
+        expectedVaultId: input.expectedVaultId,
+        expectedOntologyFingerprint: input.expectedOntologyFingerprint,
+      };
+      const heading = section.heading || "section";
+      const batch = { data, snapshot };
+      const destination = await this.prepare(
+        vault,
+        {
+          ...fences,
+          ...(target
+            ? {
+                id: target.id,
+                expectedRevision: target.revision,
+                expectedHash: target.hash,
+                title: target.title,
+                body: join(target.body),
+              }
+            : {
+                title: create!.title,
+                type: create!.type,
+                ...(create!.aliases ? { aliases: create!.aliases } : {}),
+                body: text,
+              }),
+          ...(carried.length ? { attachments: carried } : {}),
+          // SAFETY: a page save reads only these SavePage fields; the combined preview validates the result.
+        } as SavePage & ClaimInput & RelationshipInput,
+        "page",
+        access,
+        "agent",
+        undefined,
+        undefined,
+        { ...batch, id: destinationId },
+        target
+          ? `Received section "${heading}" from ${source.title} (${source.id}): ${input.reason}`.slice(
+              0,
+              2000,
+            )
+          : undefined,
+      );
+      if (destination.record.path !== destinationPath) {
+        throw new Error("Edit conflict: destination path changed during validation.");
+      }
+      // The heading stays so the outline survives; one summary line links the new home.
+      const headingEnd = source.body.indexOf("\n", section.start),
+        headingLine = source.body.slice(
+          section.start,
+          headingEnd === -1 || headingEnd > section.end ? section.end : headingEnd,
+        );
+      const label = destinationTitle.replace(/[[\]|\r\n]+/g, " ").trim();
+      const stub = `${headingLine}\n\n${input.summary.trim()} See [[${destinationId}|${label}]].${/\n\s*\n$/.test(original) ? "\n\n" : "\n"}`;
+      const shrunk = await this.prepare(
+        vault,
+        {
+          ...fences,
+          id: source.id,
+          expectedRevision: source.revision,
+          expectedHash: source.hash,
+          title: source.title,
+          body: source.body.slice(0, section.start) + stub + source.body.slice(section.end),
+          // SAFETY: a page save reads only these SavePage fields; the combined preview validates the result.
+        } as SavePage & ClaimInput & RelationshipInput,
+        "page",
+        access,
+        "agent",
+        undefined,
+        undefined,
+        { ...batch, id: source.id },
+        `Extracted section "${heading}" to ${destinationTitle} (${destinationId}): ${input.reason}`.slice(
+          0,
+          2000,
+        ),
+      );
+      // Claims the section cites and that name the source as a subject now belong to the destination.
+      const at = new Date().toISOString();
+      const claims = data.records
+        .filter(
+          (r) =>
+            r.kind === "claim" &&
+            moved.linked.has(r.id) &&
+            r.metadata.entities?.includes(source.id) &&
+            current.some((c) => c.id === r.id),
+        )
+        .map((before) => {
+          const encoded = encodeRecordEvidence(
+            relinkClaim(before, source, destinationId, {
+              reason: `Section "${heading}" moved from ${source.title} to ${destinationTitle}.`,
+              actor: "agent",
+              requestId: input.requestId,
+              at,
+            }),
+            (p) => readSourceDescriptor(path.join(this.config.root, scope), p),
+          );
+          return Object.assign(encoded, { before });
+        });
+      const records = [destination.record, shrunk.record, ...claims.map((c) => c.record)];
+      const artifacts = { ...destination.artifacts, ...shrunk.artifacts },
+        requiredDescriptors = {
+          ...destination.requiredDescriptors,
+          ...shrunk.requiredDescriptors,
+        };
+      for (const claim of claims) {
+        Object.assign(artifacts, claim.descriptors);
+        Object.assign(requiredDescriptors, claim.requiredDescriptors);
+      }
+      // Verify the destination as it will be read before the source text is removed.
+      const preview = await vault.scan({ records, artifacts });
+      const active = eligible(preview, withdrawn, false);
+      for (const record of records) {
+        const m = record.metadata,
+          refs = [
+            ...(m.dependencies ?? []),
+            ...(m.entities ?? []),
+            ...[m.owner, m.source_page].filter((v): v is string => Boolean(v)),
+          ];
+        if (!record.valid || refs.some((id) => !active.some((r) => r.id === id))) {
+          throw new Error(
+            `Extraction validation failed for ${record.title}: ` +
+              preview.issues
+                .filter((i) => i.path === record.path)
+                .map((i) => i.code)
+                .join(", "),
+          );
+        }
+      }
+      const after = linkTargets(preview.records, active),
+        landed = destination.record,
+        landedLinks = linkedIds(text, landed.path, after);
+      if (
+        !landed.body.endsWith(text) ||
+        [...moved.linked].some((id) => !landedLinks.has(id)) ||
+        !linkedIds(shrunk.record.body, shrunk.record.path, after).has(destinationId) ||
+        carried.some((e) => !(landed.metadata.evidence ?? []).some((x) => sameCitation(x, e)))
+      ) {
+        throw new Error("Extraction verification failed; no publication accepted.");
+      }
+      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
+        throw new Error("Edit conflict: vault changed during validation.");
+      }
+      return {
+        record: landed,
+        previous: target,
+        data,
+        snapshot,
+        artifacts,
+        requiredDescriptors,
+        additional: [
+          { before: source, after: shrunk.record },
+          ...claims.map((c) => ({ before: c.before, after: c.record })),
+        ],
+        batch: {
+          items: [
+            { key: "destination", record: landed },
+            { key: "source", record: shrunk.record },
+          ].map(({ key, record }) => ({
+            key,
+            id: record.id,
+            path: record.path,
+            revision: record.revision,
+            hash: record.hash,
+          })),
+        },
+        extract: { targetId: source.id, reason: input.reason },
+      };
     });
     return this.accept(input.requestId, intent, prepared, access, "agent");
   }

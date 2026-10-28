@@ -613,10 +613,23 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   line-height: 1;
 }
 
+openclaw-toast-host[popover] {
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  pointer-events: none;
+}
+
 /* Passive notifications stay in the trailing top corner, away from the chat
  * composer and other bottom-docked controls. The host shows one toast at a time
  * (`show()` replaces the active one), so there is no stack to offset against. */
 .app-toast {
+  pointer-events: auto;
   position: fixed;
   right: calc(20px + var(--safe-area-right));
   top: calc(20px + var(--safe-area-top));
@@ -1870,6 +1883,19 @@ select.settings-select:not([multiple]) {
 
 .data-table {
   --data-table-checkbox-col-width: 36px;
+  /* Sticky cells and the scrolling row share one opaque card composition. */
+  --data-table-row-bg: var(--card);
+  --data-table-hover-bg: color-mix(in srgb, var(--text) var(--surface-hover-amount), var(--card));
+  --data-table-selected-bg: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-amount),
+    var(--card)
+  );
+  --data-table-selected-hover-bg: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-hover-amount),
+    var(--card)
+  );
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
@@ -1994,7 +2020,9 @@ select.settings-select:not([multiple]) {
 }
 
 .data-table tbody tr:hover {
-  background: var(--bg-hover);
+  --data-table-row-bg: var(--data-table-hover-bg);
+
+  background: var(--data-table-row-bg);
 }
 
 .data-table tbody tr:last-child td {
@@ -2023,12 +2051,7 @@ select.settings-select:not([multiple]) {
 
 td.data-table-checkbox-col,
 td.data-table-key-col {
-  background: var(--card);
-}
-
-.data-table tbody tr:hover td.data-table-checkbox-col,
-.data-table tbody tr:hover td.data-table-key-col {
-  background: var(--bg-hover);
+  background: var(--data-table-row-bg);
 }
 
 .data-table-checkbox-col input[type="checkbox"] {
@@ -2250,7 +2273,6 @@ td.data-table-key-col {
   width: min(320px, calc(100vw - 24px));
   max-height: 320px;
   border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
 }
 
@@ -3011,6 +3033,8 @@ td.data-table-key-col {
   transition: transform 180ms ease-out;
 }
 
+/* Automation titles keep their final fade before overflow observation. */
+.chat-summary__automation-title,
 .hover-marquee--overflowing {
   mask-image: linear-gradient(
     var(--hover-marquee-fade-direction),

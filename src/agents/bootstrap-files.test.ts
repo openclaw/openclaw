@@ -130,6 +130,14 @@ async function memoryAliases(remote: boolean) {
   await writeFiles(sourceDir, {
     "MEMORY.md": remote ? content : "private memory",
     "nested/MEMORY.md": content,
+    ...(remote
+      ? {}
+      : {
+          "AGENTS.md": "rules",
+          "SOUL.md": "persona",
+          "IDENTITY.md": "identity",
+          "USER.md": "user",
+        }),
   });
   await createDirectoryAlias(sourceDir, sourceDir, "root-alias");
   await createDirectoryAlias(sourceDir, path.join(sourceDir, "nested"), "nested-alias");
@@ -229,11 +237,9 @@ describe("resolveBootstrapFilesForRun", () => {
           {
             name: "EXTRA.md",
             filePath: path.join(workspaceDir, "BROKEN.md"),
-            content: "broken",
-            missing: false,
           },
-          { name: "EXTRA.md", path: 123, content: "broken", missing: false },
-          { name: "EXTRA.md", path: "   ", content: "broken", missing: false },
+          { name: "EXTRA.md", path: 123 },
+          { name: "EXTRA.md", path: "   " },
         ] as unknown as WorkspaceBootstrapFile[],
     );
 
@@ -244,12 +250,7 @@ describe("resolveBootstrapFilesForRun", () => {
       warn: (message) => warnings.push(message),
     });
 
-    expect(files.map((file) => path.relative(workspaceDir, file.path))).toEqual([
-      "AGENTS.md",
-      "SOUL.md",
-      "IDENTITY.md",
-      "BOOTSTRAP.md",
-    ]);
+    expect(files.map((file) => file.name)).not.toContain("EXTRA.md");
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
   });
@@ -266,11 +267,6 @@ describe("resolveBootstrapFilesForRun", () => {
 
     const workspaceDir = await workspace({ "AGENTS.md": "workspace rules" });
     const agentsPath = path.join(workspaceDir, "AGENTS.md");
-
-    const files = await resolveBootstrapFilesForRun({ workspaceDir });
-    const agentsFiles = files.filter((file) => file.path === agentsPath);
-
-    expect(agentsFiles.map((file) => file.content)).toEqual(["workspace rules"]);
 
     const context = await resolveBootstrapContextForRun({ workspaceDir });
     const agentsContextFiles = context.contextFiles.filter((file) => file.path === agentsPath);
@@ -293,32 +289,21 @@ describe("resolveBootstrapFilesForRun", () => {
     );
   });
 
-  it("ignores stale root BOOTSTRAP.md for home-relative workspace paths", async () => {
+  it("filters completed root BOOTSTRAP.md but keeps nested hooks in a home-relative workspace", async () => {
     registerNamedBootstrapFileHook("BOOTSTRAP.md", "BOOTSTRAP.md", "stale ritual");
+    registerNamedBootstrapFileHook("packages/core/BOOTSTRAP.md", "BOOTSTRAP.md", "package ritual");
     const parentDir = await makeTempWorkspace("openclaw-bootstrap-home-");
     const workspaceDir = path.join(parentDir, "workspace");
-    await writeFiles(workspaceDir, { "AGENTS.md": "rules", "BOOTSTRAP.md": "stale ritual" });
-    await writeCompletedWorkspaceState(workspaceDir);
-
-    const files = await withEnvAsync({ OPENCLAW_HOME: parentDir }, async () =>
-      resolveBootstrapFilesForRun({ workspaceDir: "~/workspace" }),
-    );
-
-    expect(files.map((file) => file.name)).toContain("AGENTS.md");
-    expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
-  });
-
-  it("keeps hook-added nested BOOTSTRAP.md after setup is completed", async () => {
-    registerNamedBootstrapFileHook("packages/core/BOOTSTRAP.md", "BOOTSTRAP.md", "stale ritual");
-    const workspaceDir = await workspace({
+    await writeFiles(workspaceDir, {
       "AGENTS.md": "rules",
       "BOOTSTRAP.md": "stale ritual",
       "packages/core/BOOTSTRAP.md": "package ritual",
     });
     await writeCompletedWorkspaceState(workspaceDir);
-
-    const files = await resolveBootstrapFilesForRun({ workspaceDir });
-
+    const files = await withEnvAsync({ OPENCLAW_HOME: parentDir }, async () =>
+      resolveBootstrapFilesForRun({ workspaceDir: "~/workspace" }),
+    );
+    expect(files.map((file) => file.name)).toContain("AGENTS.md");
     expect(files.map((file) => path.relative(workspaceDir, file.path))).toContain(
       path.join("packages", "core", "BOOTSTRAP.md"),
     );
@@ -333,13 +318,15 @@ describe("resolveBootstrapFilesForRun", () => {
     { mode: "cron", chatType: "direct", sessionKey: "agent:main:cron:daily:run:run-1" },
   ] as const;
   describe.each([false, true])("remote memory = %s", (remote) => {
-    it
-      .runIf(!remote || process.platform !== "win32")
-      .each(remote ? memoryModes : memoryModes.slice(0, 3))(
+    it.runIf(!remote || process.platform !== "win32").each(memoryModes)(
       "filters root aliases but preserves nested memory for $mode",
       async ({ mode, chatType, sessionKey }) => {
         const { workspaceDir, content, release } = await memoryAliases(remote);
         try {
+          registerNamedBootstrapFileHook(
+            "MEMORY.md",
+            mode === "subagent" ? "AGENTS.md" : "SOUL.md",
+          );
           registerLoadedBootstrapFilesHook(
             ["root-alias/MEMORY.md", "nested-alias/MEMORY.md"],
             mode === "subagent" ? "AGENTS.md" : mode === "cron" ? "SOUL.md" : undefined,
@@ -347,42 +334,34 @@ describe("resolveBootstrapFilesForRun", () => {
           const files = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey, chatType });
           const paths = files.map((file) => file.path);
           const rootAliasPath = path.join(workspaceDir, "root-alias/MEMORY.md");
-          if (mode === "direct") {
-            expect(paths).toContain(rootAliasPath);
-          } else {
-            expect(paths).not.toContain(rootAliasPath);
-          }
-          expect(
-            files.find((file) => file.path === path.join(workspaceDir, "nested-alias/MEMORY.md")),
-          ).toMatchObject({ content, missing: false });
+          const nestedPath = path.join(workspaceDir, "nested-alias/MEMORY.md");
+          expect(paths.includes(rootAliasPath)).toBe(mode === "direct");
+          expect(paths.includes(path.join(workspaceDir, "MEMORY.md"))).toBe(mode === "direct");
+          expect(files.find((file) => file.path === nestedPath)).toMatchObject({
+            content,
+            missing: false,
+          });
           if (remote) {
             expect(files.map((file) => file.name)).not.toContain(DEFAULT_USER_FILENAME);
             expect(files.some((file) => file.content === "Gateway decoy")).toBe(false);
+          } else if (mode !== "subagent" && mode !== "cron") {
+            expect(paths.indexOf(nestedPath)).toBeGreaterThan(
+              files.findIndex((file) => file.name === "SOUL.md"),
+            );
           } else {
             expect(
-              files.findIndex(
-                (file) => file.path === path.join(workspaceDir, "nested-alias/MEMORY.md"),
-              ),
-            ).toBeGreaterThan(files.findIndex((file) => file.name === "SOUL.md"));
+              files.filter((file) => file.path !== nestedPath).map((file) => file.name),
+            ).toEqual(
+              mode === "subagent"
+                ? ["AGENTS.md"]
+                : ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"],
+            );
           }
         } finally {
           release();
         }
       },
     );
-  });
-
-  it("does not let hooks relabel and re-add root MEMORY.md to shared sessions", async () => {
-    registerNamedBootstrapFileHook("MEMORY.md", "SOUL.md");
-    const workspaceDir = await workspace({ "MEMORY.md": "private memory" });
-    const rootMemoryPath = path.join(workspaceDir, "MEMORY.md");
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      sessionKey: "agent:main:slack:channel:c1",
-    });
-
-    expect(files.map((file) => file.path)).not.toContain(rootMemoryPath);
   });
 
   it("keeps missing hook records without source identity when policy allows them", async () => {
@@ -407,45 +386,6 @@ describe("resolveBootstrapFilesForRun", () => {
       missing: true,
     });
   });
-
-  it.each([
-    {
-      mode: "subagent",
-      sessionKey: "agent:main:subagent:worker",
-      relabeledName: "AGENTS.md",
-      expectedNames: ["AGENTS.md"],
-    },
-    {
-      mode: "cron",
-      sessionKey: "agent:main:cron:daily:run:run-1",
-      relabeledName: "SOUL.md",
-      expectedNames: ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"],
-    },
-  ] as const)(
-    "rejects loader aliases to root memory relabeled under the $mode allowlist",
-    async ({ sessionKey, relabeledName, expectedNames }) => {
-      const workspaceDir = await workspace({
-        "AGENTS.md": "project rules",
-        "SOUL.md": "persona",
-        "IDENTITY.md": "identity",
-        "USER.md": "user profile",
-        "MEMORY.md": "memory",
-        "HEARTBEAT.md": "heartbeat",
-        "BOOTSTRAP.md": "setup",
-      });
-      const rootMemoryPath = path.join(workspaceDir, DEFAULT_MEMORY_FILENAME);
-      const aliasDir = await createDirectoryAlias(workspaceDir, workspaceDir, "root-memory-alias");
-      registerLoadedBootstrapFilesHook(
-        [path.relative(workspaceDir, path.join(aliasDir, DEFAULT_MEMORY_FILENAME))],
-        relabeledName,
-      );
-
-      const files = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
-
-      expect(files.map((file) => file.name)).toStrictEqual(expectedNames);
-      expect(files.map((file) => file.path)).not.toContain(rootMemoryPath);
-    },
-  );
 });
 
 describe("resolveBootstrapContextForRun", () => {
@@ -550,41 +490,34 @@ describe("hasCompletedBootstrapTurn", () => {
     expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 
-  it("invalidates the old marker after compaction and accepts a newer full bootstrap marker", async () => {
-    const firstEntryId = sessionManager.appendMessage(makeUserMessage("hello", 1));
-    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
-    sessionManager.appendCompaction("trimmed", firstEntryId, 10);
-    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
-    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 3 });
-
-    const hostExec = vi.spyOn(DatabaseSync.prototype, "exec");
-    try {
+  it.each(["compaction", "reset", "branch"] as const)(
+    "invalidates the marker after %s",
+    async (boundary) => {
+      const firstEntryId = sessionManager.appendMessage(makeUserMessage("hello", 1));
+      sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
       expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
-      expect(hostExec.mock.calls.filter(([sql]) => /^BEGIN\b/iu.test(sql))).toEqual([]);
-    } finally {
-      hostExec.mockRestore();
-    }
-  });
+      if (boundary === "compaction") {
+        sessionManager.appendCompaction("trimmed", firstEntryId, 10);
+      } else if (boundary === "reset") {
+        sessionManager.appendResetBoundary("reset");
+      } else {
+        sessionManager.appendLeafControl({ targetId: firstEntryId, appendParentId: firstEntryId });
+      }
+      expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
+      if (boundary !== "compaction") {
+        return;
+      }
+      sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 3 });
 
-  it("invalidates a completion marker after a session reset", async () => {
-    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
-    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
-    sessionManager.appendResetBoundary("reset");
-
-    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
-  });
-
-  it("ignores completion markers on an inactive transcript branch", async () => {
-    const firstEntryId = sessionManager.appendMessage(makeUserMessage("hello", 1));
-    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
-    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
-
-    sessionManager.appendLeafControl({
-      targetId: firstEntryId,
-      appendParentId: firstEntryId,
-    });
-    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
-  });
+      const hostExec = vi.spyOn(DatabaseSync.prototype, "exec");
+      try {
+        expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
+        expect(hostExec.mock.calls.filter(([sql]) => /^BEGIN\b/iu.test(sql))).toEqual([]);
+      } finally {
+        hostExec.mockRestore();
+      }
+    },
+  );
 });
 
 describe("makeBootstrapWarn", () => {

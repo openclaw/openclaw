@@ -117,6 +117,8 @@ When `provider` is not set, OpenClaw uses OpenAI embeddings. Set `provider`
 explicitly to use Bedrock, DeepInfra, Gemini, GitHub Copilot, Mistral, Ollama,
 Voyage, a local GGUF model, or an OpenAI-compatible `/v1/embeddings` endpoint.
 Legacy configs that still say `provider: "auto"` resolve to `openai`.
+The provider sentinels `none` and `auto`, and fallback `none`, are case-insensitive.
+Custom provider IDs retain their spelling; config writes keep authored casing and environment references.
 
 For [oMLX](/providers/omlx), set `provider: "omlx"` and an explicit embedding
 model ID from the server's `/v1/models` endpoint. Chat and memory share

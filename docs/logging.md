@@ -123,6 +123,11 @@ openclaw doctor
 The Control UI's **Logs** tab tails the same file using `logs.tail`.
 See [Control UI](/web/control-ui) for how to open it.
 
+The tab retains the latest 2,000 lines and renders a window around the current
+scroll position. Filter and Export cover the entire retained history; browser
+Find and native text selection cover the rendered window. Use Filter to find an
+older retained line, or Export to copy all matching lines.
+
 ### Channel-only logs
 
 To filter channel activity (WhatsApp/Telegram/etc), use:
@@ -307,6 +312,15 @@ bounded, redacted error details for classification, including when a large
 partial response cannot fit in the transcript. Unrecognized errors still use
 generic chat copy; inspect the Gateway logs and stored error for diagnosis.
 
+Ordinary OpenAI Responses failures log one `provider-error` warning with available code, type,
+and provider `requestId` metadata. Correlation with the originating model call
+uses `clientRequestId` when the provider supplies its own request ID. Missing
+fields and provider prose, request bodies, and response bodies are omitted.
+Same-model retry scheduling is logged at `debug`; exhausted retries produce an
+explicit error. Generic secret-egress request audit lines, including refusals,
+stay at `debug`. Structured `secret.egress` events still count every outcome,
+and certificate failures retain their actionable warning.
+
 When reply dispatch consumes a thrown error after a partial reply or an adopted
 turn, its terminal `message.dispatch.completed` and `message.processed`
 diagnostics retain the failure outcome, identifiers, and timing. The extra
@@ -420,7 +434,9 @@ but excludes streaming the response body. The targeted debug flags above promote
 start and fast successful response metadata to `info` when troubleshooting.
 
 Embedded model requests attach the raw `sessionKey`, `runId`, numbered
-`requestId`, and `requestNumber` to fetch and transport logs. String identifiers
+`requestId`, and `requestNumber` to fetch and transport logs. When a failure
+also includes a provider `requestId`, the local identifier is labeled
+`clientRequestId`. String identifiers
 use lossless JSON escaping so control characters cannot forge log lines; their
 values are not redacted. The request sequence
 continues across same-run retries. Fetch response logs include the HTTP
@@ -469,6 +485,8 @@ one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
 agent execution starts. `replyInitialization` covers inbound dispatch through
 session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
 preparation belong to `preparation`, before the first model request.
+Fast sends retain numeric phase timings without formatting a log message;
+enabled diagnostic phase subscribers still receive their observations.
 
 `detail.*` fields attribute those intervals using the existing reply and agent
 preparation spans, without enabling timeline file logging. They include session
@@ -1164,13 +1182,17 @@ nested inside `admission.work`, so their values must not be added together or
 treated as SQLite execution time.
 
 Admission subphases separate operator retention (`operator`), lifecycle preparation
-through the session writer barrier (`lifecycle_prepare`), the initial session read
-(`session_read`), ACP metadata (`acp_metadata`), placement preparation and refresh
+through the session writer barrier (`lifecycle_prepare`), ACP metadata
+(`acp_metadata`), placement preparation and refresh
 (`placement_prepare`, `placement_refresh`), and current session/retry validation
 (`current_session`). Lifecycle preparation includes agent admission checks and
 queue waits; it is not a pure SQLite lock timer. These fields use the
 `detail.admission.` prefix. Sends without restart-safe recovery skip the unused
 transcript lifecycle-header read; current session and caller checks still run.
+Restart-safe admission reuses the request's prepared session entry for ACP metadata.
+Final `current_session` validation stays ordered; a changed lifecycle causes ACP metadata to be prepared
+again before that validation repeats. Durable input custody still completes before
+acknowledgement.
 
 After acknowledgement, `runAdmission` also covers steering into an active turn.
 Its `detail.run_admission.steer_*` subphases separate authority, continuation and
@@ -1240,7 +1262,12 @@ single listed stack does not mean that stack occupied the whole interval.
 Model-call diagnostics record bounded request/response measurements without
 capturing raw prompt or response content:
 
-- `requestPayloadBytes`: UTF-8 byte size of the final model request payload
+- `requestPayloadBytes`: UTF-8 byte size of the final model request payload.
+  OpenAI and Anthropic Messages transports reuse the serialized body size, after
+  payload hooks and transport adjustments. Other transports measure the payload
+  exposed by their hook; this may differ from the final wire body. Injected
+  Anthropic SDK clients and SDKs without a host fetch also use the hook
+  measurement because they own encoding and network I/O.
 - `responseStreamBytes`: UTF-8 byte size of streamed model response chunk
   payloads. High-frequency text, thinking, and tool-call delta events count
   only the incremental `delta` bytes instead of full `partial` snapshots.

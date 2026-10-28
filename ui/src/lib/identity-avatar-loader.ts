@@ -26,6 +26,16 @@ type CachedIdentityAvatar = {
 const identityAvatarCache = new Map<string, CachedIdentityAvatar>();
 let identityAvatarGeneration = 0;
 let knownAvatarUrls: Set<string> | undefined;
+let pendingAvatarTurn: Promise<void> | undefined;
+
+function nextAvatarTurn(): Promise<void> {
+  return (pendingAvatarTurn ??= new Promise<void>((resolve) => {
+    setTimeout(() => {
+      pendingAvatarTurn = undefined;
+      resolve();
+    }, 0);
+  }));
+}
 
 function knownAvatarStorageKey(): string | null {
   const { origin, resourceBasePath, storageScope } = readAvatarGatewayContext();
@@ -149,9 +159,7 @@ function loadIdentityAvatar(
     try {
       // Cold images must not start all authenticated fetches inside the row
       // construction task. Cached images still resolve synchronously above.
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      await nextAvatarTurn();
       if (identityAvatarCache.get(url) !== entry) {
         return null;
       }

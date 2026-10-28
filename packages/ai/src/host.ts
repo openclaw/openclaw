@@ -185,10 +185,17 @@ export interface AiTransportHost {
   requiresManagedTransport(model: Model, scope?: "fetch"): boolean;
   /** Copies host-owned managed-transport state onto a projected model. */
   inheritManagedTransport(source: Model, target: Model): Model;
+  /** Host-owned deep-immutability proof; absent hosts simply convert each request. */
+  immutableData?: {
+    isDeeplyFrozenPlainData(value: unknown): boolean;
+    freezeJsonSnapshot<T>(value: T): T;
+  };
   /** Applies host-owned transcript replay and pairing rules. */
   transformTransportMessages: AiTransformTransportMessages;
   /** Registers a custom transport API with the host's stream error bridge. */
   registerCustomApi(registry: ApiRegistry, api: Api, streamFn: StreamFn): boolean;
+  /** Optional for existing embedding hosts; omitted means the host decides at emission. */
+  isLogEnabled?(subsystem: string, level: "debug" | "info" | "warn"): boolean;
   /**
    * Emits one transport diagnostic; build runs only when the host logs it and
    * may return null to suppress the entry (e.g. de-duplication).
@@ -265,6 +272,7 @@ const inertAiTransportHost: ActiveAiTransportHost = {
   transformTransportMessages: (messages, model, normalizeToolCallId) =>
     transformMessages(messages, model, normalizeToolCallId),
   registerCustomApi: queueCustomApiRegistration,
+  isLogEnabled: () => true,
   logDebug: () => {},
   logInfo: () => {},
   logWarn: () => {},

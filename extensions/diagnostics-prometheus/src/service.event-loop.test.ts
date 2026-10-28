@@ -27,6 +27,30 @@ function memorySample(
   return { type: "diagnostic.memory.sample" as const, memory: { ...memoryDefaults, ...memory } };
 }
 
+it("keeps the latest major-GC heap and observation time through scavenges", () => {
+  using metrics = createMetricsHarness();
+  expect(metrics.render()).not.toContain("openclaw_heap_used_after_major_gc");
+  for (const thread of ["main", "sqlite-store.worker.js"]) {
+    const sample = {
+      type: "diagnostic.gc" as const,
+      thread,
+      durationMs: 1,
+      heapUsedAfterMajorGcBytes: 1024,
+      heapUsedAfterMajorGcTimestampSeconds: 1700000000,
+    };
+    metrics.record({ ...sample, kind: "mark_sweep_compact" });
+    metrics.record({ ...sample, kind: "mark_sweep_compact", heapUsedAfterMajorGcBytes: 512 });
+    metrics.record({
+      ...sample,
+      kind: "scavenge",
+      heapUsedAfterMajorGcBytes: 9999,
+      heapUsedAfterMajorGcTimestampSeconds: 1700000010,
+    });
+    expectMetrics(metrics.render())(`openclaw_heap_used_after_major_gc_bytes{thread="${thread}"} 512
+openclaw_heap_used_after_major_gc_timestamp_seconds{thread="${thread}"} 1700000000`);
+  }
+});
+
 it("exports worst-isolate headroom and retires missing baselines", () => {
   using metrics = createMetricsHarness();
   const memory = { heapSizeLimitBytes: 1000, oldGenerationAfterGcBytes: 200 };
@@ -229,6 +253,7 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
           direction: "from_worker" as const,
           messages: 4,
           payloadBytes: 1234,
+          payloadBytesByRequestClass: { "audit.writer.process": 1000, other: 234 },
           unmeasuredMessages: 2,
         },
       ],
@@ -272,7 +297,8 @@ openclaw_worker_gc_duration_seconds_total{kind="scavenge",${labels}} ${current.g
   }
   expectMetrics(metrics.render())(`openclaw_worker_count 0
 openclaw_worker_messages_total{direction="from_worker",kind="sqlite_reply"} 4
-openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite_reply"} 1234
+openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite_reply",request_class="audit.writer.process"} 1000
+openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite_reply",request_class="other"} 234
 openclaw_worker_message_unmeasured_total{direction="from_worker",kind="sqlite_reply"} 2
 openclaw_session_row_selections_total{kind="parent",task="control-ui-pr"} 4
 openclaw_session_row_selection_rows_total{kind="parent",task="control-ui-pr"} 12

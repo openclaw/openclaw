@@ -1,0 +1,86 @@
+{
+  "markdownEnvelopes": [
+    {
+      "name": "adjacent fenced code",
+      "text": [
+        "```js\nconst a = 1;",
+        "const b = 2;\n```"
+      ],
+      "workBetweenText": false,
+      "expectedParts": 2
+    },
+    {
+      "name": "fence across folded work",
+      "text": [
+        "```js\nconst a = 1;",
+        "const b = 2;\n```"
+      ],
+      "workBetweenText": true,
+      "expectedParts": 1
+    },
+    {
+      "name": "emphasis across folded work",
+      "text": [
+        "**First",
+        "second**"
+      ],
+      "workBetweenText": true,
+      "expectedParts": 1
+    },
+    {
+      "name": "reference across folded work",
+      "text": [
+        "[source][ref]",
+        "[ref]: https://example.com"
+      ],
+      "workBetweenText": true,
+      "expectedParts": 1
+    },
+    {
+      "name": "list across folded work",
+      "text": [
+        "- First",
+        "- Second"
+      ],
+      "workBetweenText": true,
+      "expectedParts": 1
+    },
+    {
+      "name": "table across folded work",
+      "text": [
+        "| a | b |\n| --- | --- |",
+        "| 1 | 2 |"
+      ],
+      "workBetweenText": true,
+      "expectedParts": 1
+    },
+    {
+      "name": "adjacent plain narration",
+      "text": [
+        "First finding",
+        "Second finding"
+      ],
+      "workBetweenText": false,
+      "expectedParts": 2
+    },
+    {
+      "name": "plain narration bounds work",
+      "text": [
+        "First finding",
+        "Second finding"
+      ],
+      "workBetweenText": true,
+      "expectedParts": 3
+    },
+    {
+      "name": "adjacent provider output text",
+      "text": [
+        "First finding",
+        "Second finding"
+      ],
+      "textType": "output_text",
+      "workBetweenText": false,
+      "expectedParts": 2
+    }
+  ]
+}

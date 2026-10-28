@@ -95,12 +95,17 @@ export function fetchAgentIdentity(
 
 export type AgentIdentityCapability = ReturnType<typeof createAgentIdentityCapability>;
 
-export function createAgentIdentityCapability(gateway: {
-  readonly snapshot: AgentIdentityGatewaySnapshot;
-  readonly connectionRevision?: number;
-  subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
-  subscribeEvents?: (listener: (event: { event: string; payload?: unknown }) => void) => () => void;
-}) {
+export function createAgentIdentityCapability(
+  gateway: {
+    readonly snapshot: AgentIdentityGatewaySnapshot;
+    readonly connectionRevision?: number;
+    subscribe: (listener: (snapshot: AgentIdentityGatewaySnapshot) => void) => () => void;
+    subscribeEvents?: (
+      listener: (event: { event: string; payload?: unknown }) => void,
+    ) => () => void;
+  },
+  readOfflineIdentity?: (agentId: string) => AgentIdentityResult | null,
+) {
   let cachedClient: GatewayBrowserClient | null = gateway.snapshot.client;
   let cachedConnected = gateway.snapshot.phase === "connected";
   let presentationKey = gatewayPresentationScope(gateway).key;
@@ -172,9 +177,11 @@ export function createAgentIdentityCapability(gateway: {
   });
 
   const capability = {
-    get(agentId: string | null | undefined) {
+    get(this: void, agentId: string | null | undefined) {
       const normalized = agentId?.trim();
-      return normalized ? (identities.get(normalized)?.identity ?? null) : null;
+      return normalized
+        ? (identities.get(normalized)?.identity ?? readOfflineIdentity?.(normalized) ?? null)
+        : null;
     },
     entries() {
       return [...identities.values()].map((entry) => entry.identity);

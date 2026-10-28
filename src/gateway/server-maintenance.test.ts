@@ -27,6 +27,7 @@ import { registerChatAbortController } from "./chat-abort.js";
 import type { HealthSummary } from "./health/types.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS, TICK_INTERVAL_MS } from "./server-constants.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
+import { createChannelThawScenario } from "./server-maintenance.thaw.test-support.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
@@ -74,9 +75,11 @@ function createActiveRun(sessionKey: string, kind?: RpcSourceRef["adapter"]["kin
   return ref;
 }
 
-function createMaintenanceTimerDeps() {
+function createMaintenanceTimerDeps(
+  restartRunningChannels?: (shouldContinue: () => boolean) => Promise<boolean>,
+) {
   return {
-    ...createGatewayMaintenanceStateForTest(),
+    ...createGatewayMaintenanceStateForTest({ restartRunningChannels }),
     logHealth: { info: vi.fn(), error: vi.fn() },
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
   };
@@ -91,7 +94,10 @@ async function createThawScenario() {
   vi.spyOn(process, "cpuUsage").mockImplementation(() => cpuUsage);
   const state: { restartReason?: "active-work" | "channel-restart-incomplete" } = {};
   let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission>;
-  const base = createMaintenanceTimerDeps();
+  const restartRunningChannels = vi.fn(
+    async (_shouldContinue: () => boolean) => state.restartReason !== "channel-restart-incomplete",
+  );
+  const base = createMaintenanceTimerDeps(restartRunningChannels);
   const deps = {
     ...base,
     scheduler: createTestGatewayScheduler(clock.clock),
@@ -99,10 +105,7 @@ async function createThawScenario() {
     activeWorkInspectors: {
       getChatRuns: vi.fn(() => (state.restartReason === "active-work" ? 1 : 0)),
     },
-    restartRunningChannels: vi.fn(
-      async (_mode: "new-thaw" | "deferred-retry", _shouldContinue?: () => boolean) =>
-        state.restartReason !== "channel-restart-incomplete",
-    ),
+    restartRunningChannels,
     refreshGatewayHealthSnapshot: vi.fn<
       (opts?: { probe?: boolean; includeSensitive?: boolean }) => Promise<HealthSummary>
     >(base.refreshGatewayHealthSnapshot),
@@ -197,6 +200,94 @@ describe("startGatewayMaintenanceTimers", () => {
     cleanupManagedOutgoingMediaRecordsMock.mockReset().mockResolvedValue(undefined);
   });
 
+  it.each(["deferred", "same-clock", "health-first"] as const)(
+    "preserves another owner's replacement during %s thaw recovery",
+    async (order) => {
+      const harness = await createChannelThawScenario(
+        createMaintenanceTimerDeps(),
+        order === "health-first",
+      );
+      try {
+        const original = harness.signals.get("first");
+        const originalStart =
+          harness.manager.getRuntimeSnapshot().channelAccounts.discord?.first?.lastStartAt;
+        const recoveryOrder: string[] = [];
+        if (order === "health-first") {
+          const stop = harness.manager.stopChannel;
+          vi.spyOn(harness.manager, "stopChannel").mockImplementation((...args) => {
+            recoveryOrder.push(`stop:${args[1] ?? "all"}`);
+            return stop(...args);
+          });
+          const capture = harness.manager.captureAccountRestart;
+          vi.spyOn(harness.manager, "captureAccountRestart").mockImplementation((...args) => {
+            recoveryOrder.push(`${args[2]}-capture:${args[1]}`);
+            return capture(...args);
+          });
+        }
+        await harness.advance(210_000);
+        if (order === "health-first") {
+          expect([...recoveryOrder]).toEqual([
+            "health-monitor-capture:first",
+            "stop:first",
+            "host-thaw-capture:first",
+            "host-thaw-capture:second",
+          ]);
+        } else {
+          expect(harness.stops).toEqual([]);
+          if (order === "same-clock") {
+            harness.wallClock.mockReturnValue(originalStart!);
+          }
+          await harness.manager.stopChannel("discord", "first", { manual: false });
+          await harness.manager.startChannel("discord", "first", { reason: "health-monitor" });
+        }
+        const replacement = harness.signals.get("first");
+        expect(original?.aborted).toBe(true);
+        expect(replacement).not.toBe(original);
+        if (order === "same-clock") {
+          expect(
+            harness.manager.getRuntimeSnapshot().channelAccounts.discord?.first?.lastStartAt,
+          ).toBe(originalStart);
+        }
+        expect(harness.stops).toEqual(["first"]);
+        expect(harness.starts).toEqual(["first", "second", "first"]);
+        harness.state.busy = false;
+        await harness.advance(TICK_INTERVAL_MS);
+        expect(harness.stops).toEqual(["first", "second"]);
+        expect(harness.starts).toEqual(["first", "second", "first", "second"]);
+        expect(replacement?.aborted).toBe(false);
+      } finally {
+        await harness.stop();
+      }
+    },
+  );
+
+  it("retires a failed thaw target recovered elsewhere and captures current lifetimes on a new gap", async () => {
+    const harness = await createChannelThawScenario(createMaintenanceTimerDeps());
+    try {
+      harness.state.busy = false;
+      harness.failedStops.add("second");
+      await harness.advance(75_000);
+      expect(harness.starts).toEqual(["first", "second", "first"]);
+      harness.failedStops.clear();
+      await harness.manager.stopChannel("discord", "second", { manual: false });
+      await harness.manager.startChannel("discord", "second", { reason: "health-monitor" });
+      const replacement = harness.signals.get("second");
+      harness.starts.length = 0;
+      harness.stops.length = 0;
+      await harness.advance(TICK_INTERVAL_MS);
+      expect(harness.starts).toEqual([]);
+      expect(harness.stops).toEqual([]);
+      expect(replacement?.aborted).toBe(false);
+
+      await harness.advance(75_000);
+      expect(harness.starts).toEqual(["first", "second"]);
+      expect(harness.stops).toEqual(["first", "second"]);
+      expect(replacement?.aborted).toBe(true);
+    } finally {
+      await harness.stop();
+    }
+  });
+
   it("does not recover channels after a CPU-busy timing gap", async () => {
     const harness = await createThawScenario();
     try {
@@ -255,11 +346,6 @@ describe("startGatewayMaintenanceTimers", () => {
         harness.state.restartReason = undefined;
         await harness.advance(TICK_INTERVAL_MS);
         harness.expectRecoveryCount(1, reason === "active-work" ? 1 : 3);
-        expect(harness.deps.restartRunningChannels.mock.calls.map(([mode]) => mode)).toEqual(
-          reason === "active-work"
-            ? ["deferred-retry"]
-            : ["new-thaw", "deferred-retry", "deferred-retry"],
-        );
         expect(harness.restartLogs("deferred")).toEqual([
           [
             reason === "active-work"
@@ -353,17 +439,14 @@ describe("startGatewayMaintenanceTimers", () => {
     resetGatewayWorkAdmission();
     let activeChatRuns = 1;
     let restartSucceeds = false;
-    const restartRunningChannels = vi.fn(
-      async (_mode: "new-thaw" | "deferred-retry", shouldContinue?: () => boolean) => {
-        expect(isGatewayWorkAdmissionClosed()).toBe(true);
-        expect(shouldContinue?.()).toBe(true);
-        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
-        return restartSucceeds;
-      },
-    );
+    const restartRunningChannels = vi.fn(async (shouldContinue: () => boolean) => {
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+      expect(shouldContinue?.()).toBe(true);
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+      return restartSucceeds;
+    });
     const timers = startGatewayMaintenanceTimers({
-      ...createMaintenanceTimerDeps(),
-      restartRunningChannels,
+      ...createMaintenanceTimerDeps(restartRunningChannels),
       activeWorkInspectors: {
         getChatRuns: () => activeChatRuns,
       },
@@ -387,10 +470,6 @@ describe("startGatewayMaintenanceTimers", () => {
       restartSucceeds = true;
       await vi.advanceTimersByTimeAsync(TICK_INTERVAL_MS);
       expect(restartRunningChannels).toHaveBeenCalledTimes(2);
-      expect(restartRunningChannels.mock.calls.map(([mode]) => mode)).toEqual([
-        "deferred-retry",
-        "deferred-retry",
-      ]);
       expect(isGatewayWorkAdmissionClosed()).toBe(false);
 
       expect(phases).toEqual([
@@ -416,9 +495,8 @@ describe("startGatewayMaintenanceTimers", () => {
     const logHealth = { info: vi.fn(), error: vi.fn() };
     let inspectionFails = true;
     const timers = startGatewayMaintenanceTimers({
-      ...createMaintenanceTimerDeps(),
+      ...createMaintenanceTimerDeps(restartRunningChannels),
       logHealth,
-      restartRunningChannels,
       activeWorkInspectors: {
         getChatRuns: () => {
           if (inspectionFails) {

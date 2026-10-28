@@ -10,9 +10,9 @@ import {
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import { prepareSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { hasSessionActorEmptyPendingInputHistory } from "./session-actor-replica.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
-  withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import type {

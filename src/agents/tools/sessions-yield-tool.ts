@@ -19,6 +19,7 @@ export type SessionsYieldRuntimeClaim =
   | { pendingChildren: readonly UnsettledRequesterChild[] };
 export type SessionsYieldClaimResult =
   | SessionsYieldRuntimeClaim
+  | { schedulerOwned: true }
   | { messageWaitRegistered: boolean }
   | { error: string };
 export type SessionsYieldIntent = { waitFor?: "message"; acknowledgment?: string };
@@ -75,7 +76,7 @@ const SessionsYieldToolSchema = Type.Object({
   acknowledgment: Type.Optional(
     Type.String({
       description:
-        "Optional waiting reply in this session; with waitFor, text for an eligible task pause notice. Not an inter-session message.",
+        "Optional brief waiting status shown to the user as your message; put answers in normal assistant text. With waitFor, also the task pause notice. Not an inter-session message.",
     }),
   ),
 });
@@ -97,7 +98,7 @@ export function createSessionsYieldTool(opts?: {
     // delivers this response's async results ahead of the yield result.
     async: false,
     description:
-      'End this turn to await pending child completions, not submit a final result. Return completed work normally. Does not message other sessions. Omit waitFor when yielding for your own children; their completions resume this session. Set waitFor:"message" only when a subagent has no pending children and waits for its requester to send it a continuation. For background tools, follow their continuation instructions. Collector runs require explicit collection instead.',
+      'End this turn to await pending child completions, not submit a final result. Return completed work normally. Does not message other sessions. Omit waitFor when yielding for your own children; their completions resume this session. Set waitFor:"message" only when a subagent has no pending children and waits for its requester to send it a continuation. For background tools, follow their continuation instructions. Automation turns end here; the scheduler delivers child output under the job delivery policy. Collector runs require explicit collection instead.',
     parameters: SessionsYieldToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -149,13 +150,21 @@ export function createSessionsYieldTool(opts?: {
       await opts.onYield(
         message,
         acknowledgment,
-        typeof claim === "object" ? claim.messageWaitRegistered : undefined,
+        typeof claim === "object" && "messageWaitRegistered" in claim
+          ? claim.messageWaitRegistered
+          : undefined,
       );
       return jsonResult({
         status: "yielded",
         ...(acknowledgment ? { acknowledgment } : {}),
         // A completion claim resumes this session itself, so the runtime records no message wait.
-        ...(waitFor === "message" && claim === true ? { note: WAIT_FOR_NOT_APPLIED_NOTE } : {}),
+        ...(typeof claim === "object" && "schedulerOwned" in claim
+          ? {
+              note: "Turn ended. The scheduler delivers child output under the job's delivery policy.",
+            }
+          : waitFor === "message" && claim === true
+            ? { note: WAIT_FOR_NOT_APPLIED_NOTE }
+            : {}),
       });
     },
   };

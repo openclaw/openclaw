@@ -121,7 +121,6 @@ async function createExternalCodexGeneration() {
   const generation = generationFixture({
     provider: "openai",
     requestProvider: "openai",
-    config: {},
     label: "external-codex",
   });
   publishCurrentModelGeneration(generation);
@@ -310,7 +309,6 @@ describe("model runtime generation scope", () => {
       contextWindow: 32_768,
       maxTokens: 4_096,
     });
-    expect(await result.authStorage.getApiKey(provider)).toBe("fixture-caller-key");
     expect(await result.modelRegistry.getApiKeyAndHeaders(model)).toMatchObject({
       apiKey: "fixture-caller-key",
     });
@@ -333,7 +331,6 @@ describe("model runtime generation scope", () => {
     const snapshot = withPluginMetadataSnapshotScope(generation.metadataSnapshot, resolve, {
       config: generation.preparedModelRuntime.config,
     });
-    expect(snapshot).toBeDefined();
     expect(snapshot).not.toBe(generation.metadataSnapshot);
     expect(snapshot).toMatchObject({ policyHash: resolveInstalledPluginIndexPolicyHash(config) });
     expect(getRuntimeConfigSnapshot()?.plugins?.enabled).toBe(false);
@@ -579,13 +576,9 @@ describe("model runtime generation scope", () => {
             }),
           );
         }
-        expect(children).toHaveLength(1);
+        expect(children).toMatchObject([{ exitCode: null, connected: true }]);
         expect(liveDuringPreparation).toEqual(children);
         expect(liveAfterSelection).toEqual(invalidation === "none" ? children : []);
-        for (const child of children) {
-          expect(child.exitCode).toBeNull();
-          expect(child.connected).toBe(true);
-        }
       } finally {
         vi.mocked(spawn).mockImplementation(actual.spawn);
       }

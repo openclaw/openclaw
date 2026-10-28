@@ -5,12 +5,12 @@ import {
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
-import {
-  listCrabboxWarmImages,
-  type WarmImageRecord,
-  type WarmProfileRecord,
-  type WarmAllocationRecord,
-} from "./crabbox-worker-warm-image-store.js";
+import type {
+  WarmImageRecord,
+  WarmProfileRecord,
+  WarmAllocationRecord,
+} from "./crabbox-worker-warm-image-records.js";
+import { listCrabboxWarmImages } from "./crabbox-worker-warm-image-store.js";
 import type { CommandCall } from "./crabbox-worker-warm-image.test-support.js";
 
 export const firstWarmImage = async () => (await listCrabboxWarmImages(crabboxState))[0];

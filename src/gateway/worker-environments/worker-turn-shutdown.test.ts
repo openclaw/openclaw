@@ -54,6 +54,8 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
   const accepted = path.join(root, "accepted-workspace");
   await Promise.all([fs.mkdir(remote), fs.mkdir(accepted)]);
   const base = await captureWorkspaceSnapshot({ root: remote, baseCommit: null });
+  // Recovery advances the accepted base before the next turn.
+  const manifests = new Map([[base.manifestRef, base.rawManifest]]);
   await fixture.seedActivePlacement("worker-turn", remote, base.manifestRef);
   const edited = createDeferred();
   const finish = createDeferred();
@@ -85,10 +87,15 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
       if (source.kind !== "local") {
         throw new Error("Expected staged local result");
       }
+      const baseManifestRaw = manifests.get(baseManifestRef);
+      if (!baseManifestRaw) {
+        throw new Error("Missing captured worker workspace base manifest");
+      }
       const current = await captureWorkspaceSnapshot({
         root: remoteWorkspaceDir,
         baseCommit: null,
       });
+      manifests.set(current.manifestRef, current.rawManifest);
       const staged = await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
         request: {
           localPath: source.path,
@@ -100,7 +107,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
         },
         stagingRoot: remoteWorkspaceDir,
         currentManifestRef: current.manifestRef,
-        baseManifestRaw: base.rawManifest,
+        baseManifestRaw,
         currentManifestRaw: current.rawManifest,
       });
       return {

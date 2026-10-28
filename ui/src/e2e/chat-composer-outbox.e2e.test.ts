@@ -286,7 +286,7 @@ suite.define(() => {
       }
       await queue.getByText(cancelText, { exact: true }).waitFor();
       expect(await queue.count()).toBe(2);
-      await page.getByRole("button", { name: "Show earlier messages", exact: true }).click();
+      await page.getByRole("button", { name: "Show earlier unsent messages", exact: true }).click();
       await page.locator(".chat-group.user").getByText(olderText, { exact: true }).waitFor();
       expect(await queue.count()).toBe(2);
       expect(await queue.getByText(prompt, { exact: true }).count()).toBe(1);
@@ -391,9 +391,9 @@ suite.define(() => {
       await gateway.setMethodResponse("chat.history", historyResponses(cancelledHistory));
       await gateway.resolveDeferred("chat.abort", { aborted: true, runIds: [cancelRunId] });
       await queue.waitFor({ state: "detached" });
-      await page.getByRole("button", { name: "Show latest messages", exact: true }).click();
+      await page.getByRole("button", { name: "Show latest unsent messages", exact: true }).click();
       await page
-        .getByRole("button", { name: "Show latest messages", exact: true })
+        .getByRole("button", { name: "Show latest unsent messages", exact: true })
         .waitFor({ state: "detached" });
       const expectRemoved = async () => {
         await page

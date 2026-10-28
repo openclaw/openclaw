@@ -55,7 +55,10 @@ are globally disabled, if `knowledge` is in `plugins.deny`, or if
 `plugins.entries.knowledge.enabled` is `false`. When the slot points elsewhere,
 the memory-slot gate keeps Knowledge disabled.
 
-Slot changes reload the plugin runtime without a Gateway restart. Verify the
+Slot changes reload the plugin runtime without a Gateway restart. Knowledge
+declares `reload.turnHandover`, so a reload does not wait for running agent
+turns: each turn moves to the new version at its next model step
+([reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins)). Verify the
 runtime registration and the live service:
 
 ```bash
@@ -101,17 +104,17 @@ optional.
 }
 ```
 
-| Key                       | Type     | Default           | Meaning                                                                                                                             |
-| ------------------------- | -------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `operatorRead`            | boolean  | `true`            | Let authenticated operators with `operator.read` (or higher) inspect stores in the Control UI and operator RPC.                     |
-| `writesEnabled`           | boolean  | `true`            | Allow agent writes. When `false`, write tools reject, the memory prompt omits save guidance, and no flush plan is offered.          |
-| `stores`                  | object   | `{}`              | Named shared stores. Keys match `^[a-z][a-z0-9-]{0,47}$`. Agents not listed use their own isolated store.                           |
-| `stores.<name>.label`     | string   | the store key     | Display name in the Control UI (1–80 characters). Not a path or identity.                                                           |
-| `stores.<name>.agents`    | string[] | required          | Agent IDs that use this store (at most 100). An empty list keeps the store without members.                                         |
-| `maintenance.enabled`     | boolean  | `true`            | Run the scheduled maintenance pass.                                                                                                 |
-| `maintenance.schedule`    | string   | `"30 3 * * *"`    | Five-field cron expression for the pass.                                                                                            |
-| `maintenance.timezone`    | string   | Gateway host zone | IANA time zone for the schedule.                                                                                                    |
-| `maintenance.reviewJobId` | string   | none              | Automation queued after a pass that leaves private claims unlinked. See [Maintenance](/plugins/knowledge/maintenance#agent-review). |
+| Key                         | Type     | Default           | Meaning                                                                                                                                      |
+| --------------------------- | -------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operatorRead`              | boolean  | `true`            | Let authenticated operators with `operator.read` (or higher) inspect stores in the Control UI and operator RPC.                              |
+| `writesEnabled`             | boolean  | `true`            | Allow agent writes. When `false`, write tools reject, the memory prompt omits save guidance, and no flush plan is offered.                   |
+| `stores`                    | object   | `{}`              | Named shared stores. Keys match `^[a-z][a-z0-9-]{0,47}$`. Agents not listed use their own isolated store.                                    |
+| `stores.<name>.label`       | string   | the store key     | Display name in the Control UI (1–80 characters). Not a path or identity.                                                                    |
+| `stores.<name>.agents`      | string[] | required          | Agent IDs that use this store (at most 100). An empty list keeps the store without members.                                                  |
+| `pageBudgets.hubPercentile` | number   | `90`              | Link-degree percentile at which a page is a hub and gets the smaller body budget. See [Page budgets](/plugins/knowledge/tools#page-budgets). |
+| `maintenance.enabled`       | boolean  | `true`            | Run the scheduled maintenance pass.                                                                                                          |
+| `maintenance.schedule`      | string   | `"30 3 * * *"`    | Five-field cron expression for the pass.                                                                                                     |
+| `maintenance.timezone`      | string   | Gateway host zone | IANA time zone for the schedule.                                                                                                             |
 
 `operatorRead` and `writesEnabled` are plugin-wide gates. Changes to
 `plugins.entries.knowledge.config.stores` do not reload the plugin; Knowledge
@@ -166,31 +169,34 @@ Markdown-only or Git-only copy is not a complete backup.
   and exact-retry semantics. A `published` receipt means files were written.
 - Claims and relationships require retained, hash-verified evidence. Pages may
   omit it.
+- Page bodies have a size budget sized to one or two default reads. Writes that
+  would grow a page past it save nothing and explain how to split the page;
+  claims are never limited. See [Page budgets](/plugins/knowledge/tools#page-budgets).
 - Saved records are immediately available. There is no approval or acceptance
   step.
-- Corrections, withdrawals, and identity merges are explicit agent operations
-  that preserve history. See [Corrections and merges](/plugins/knowledge/corrections).
-- The Control UI is read-only. It hands change requests to chat instead of
-  editing records.
+- Corrections, withdrawals, supersessions, and identity merges are explicit
+  agent operations that preserve history. See [Corrections and merges](/plugins/knowledge/corrections).
+- The Control UI is read-only. **Ask** sends change requests to the agent in a
+  new chat instead of editing records.
 - Operators cannot save knowledge through operator read access. Changing store
   assignments needs `operator.admin`.
 
 ## Tools
 
-Knowledge registers 35 `knowledge_*` agent tools. Each tool acts only on the
+Knowledge registers 38 `knowledge_*` agent tools. Each tool acts only on the
 caller's authorized store and partition.
 
-| Area                  | Tools                                                                                                                                               |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Status and vocabulary | `knowledge_status`, `knowledge_ontology`, `knowledge_diagnostics`                                                                                   |
-| Find and read         | `knowledge_lookup`, `knowledge_grep`, `knowledge_records`, `knowledge_record`, `knowledge_connections`, `knowledge_evidence_read`                   |
-| Dates                 | `knowledge_timeline`, `knowledge_chronicle_day`, `knowledge_chronicle_since`, `knowledge_chronicle_last_seen`                                       |
-| Remember and author   | `knowledge_remember`, `knowledge_save_page`, `knowledge_edit_body`, `knowledge_create_claim`, `knowledge_create_relationship`, `knowledge_annotate` |
-| Evidence files        | `knowledge_attach_file`, `knowledge_attach`, `knowledge_attachment`, `knowledge_reconcile_evidence`                                                 |
-| Ingestion             | `knowledge_publish_batch`, `knowledge_verify`, `knowledge_source_check`                                                                             |
-| Lifecycle             | `knowledge_correct`, `knowledge_withdraw`, `knowledge_merge`, `knowledge_unmerge`, `knowledge_relink`                                               |
-| Automatic recall      | `knowledge_recall`                                                                                                                                  |
-| History and recovery  | `knowledge_history`, `knowledge_revision`, `knowledge_mutation`, `knowledge_resume`                                                                 |
+| Area                  | Tools                                                                                                                                                                            |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Status and vocabulary | `knowledge_status`, `knowledge_ontology`, `knowledge_diagnostics`                                                                                                                |
+| Find and read         | `knowledge_lookup`, `knowledge_grep`, `knowledge_records`, `knowledge_record`, `knowledge_connections`, `knowledge_evidence_read`                                                |
+| Dates                 | `knowledge_timeline`, `knowledge_chronicle_day`, `knowledge_chronicle_since`, `knowledge_chronicle_last_seen`                                                                    |
+| Remember and author   | `knowledge_remember`, `knowledge_save_page`, `knowledge_edit_body`, `knowledge_extract_section`, `knowledge_create_claim`, `knowledge_create_relationship`, `knowledge_annotate` |
+| Evidence files        | `knowledge_attach_file`, `knowledge_attach`, `knowledge_attachment`, `knowledge_reconcile_evidence`                                                                              |
+| Ingestion             | `knowledge_publish_batch`, `knowledge_verify`, `knowledge_source_check`                                                                                                          |
+| Lifecycle             | `knowledge_correct`, `knowledge_withdraw`, `knowledge_supersede`, `knowledge_merge`, `knowledge_unmerge`, `knowledge_relink`                                                     |
+| Automatic recall      | `knowledge_recall`                                                                                                                                                               |
+| History and recovery  | `knowledge_history`, `knowledge_revision`, `knowledge_mutation`, `knowledge_resume`                                                                                              |
 
 See [Tools](/plugins/knowledge/tools) for inputs, limits, and pagination.
 
@@ -199,17 +205,17 @@ See [Tools](/plugins/knowledge/tools) for inputs, limits, and pagination.
 Knowledge ships nine skills. They are agent workflows over the tools above, not
 an autonomous ingestion engine.
 
-| Skill                       | Use                                                                                                 |
-| --------------------------- | --------------------------------------------------------------------------------------------------- |
-| `knowledge-automation`      | Create and verify scheduled ingestion through the host scheduler with a retained authorized worker. |
-| `knowledge-capture`         | Save decisions, preferences, facts, and short notes with attribution and readback.                  |
-| `knowledge-correct`         | Correct or withdraw exact records and inspect affected knowledge.                                   |
-| `knowledge-entities`        | Resolve and enrich people, companies, projects, and concepts with sourced profiles.                 |
-| `knowledge-ingest`          | Ingest documents, articles, and conversations; learn lessons from sets of sources (`/learn`).       |
-| `knowledge-meeting-ingest`  | Ingest meeting transcripts with attendee enrichment, decisions, commitments, and chronology checks. |
-| `knowledge-recall`          | Answer from saved knowledge with inspectable citations. Read-only.                                  |
-| `knowledge-source-ingest`   | Incrementally ingest enumerable sources with snapshot manifests and diffing.                        |
-| `knowledge-unlinked-claims` | Link claims relink left unlinked, create missing pages, retire duplicates, and update page State.   |
+| Skill                           | Use                                                                                                 |
+| ------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `knowledge-automation`          | Create and verify scheduled ingestion through the host scheduler with a retained authorized worker. |
+| `knowledge-capture`             | Save decisions, preferences, facts, and short notes with attribution and readback.                  |
+| `knowledge-claim-consolidation` | Review and consolidate claims: unlinked, on one page, or about one subject; supersede snapshots.    |
+| `knowledge-correct`             | Correct or withdraw exact records and inspect affected knowledge.                                   |
+| `knowledge-entities`            | Resolve and enrich people, companies, projects, and concepts with sourced profiles.                 |
+| `knowledge-ingest`              | Ingest documents, articles, and conversations; learn lessons from sets of sources (`/learn`).       |
+| `knowledge-meeting-ingest`      | Ingest meeting transcripts with attendee enrichment, decisions, commitments, and chronology checks. |
+| `knowledge-recall`              | Answer from saved knowledge with inspectable citations. Read-only.                                  |
+| `knowledge-source-ingest`       | Incrementally ingest enumerable sources with snapshot manifests and diffing.                        |
 
 See [Ingestion workflows](/plugins/knowledge/ingestion).
 
@@ -217,7 +223,8 @@ See [Ingestion workflows](/plugins/knowledge/ingestion).
 
 The **Knowledge** page has Recent and Browse views, keyword Search, entity pages
 with linked claims and evidence, typed connections, retained originals, and file
-history. **Settings** holds Stores & sharing, Vocabulary, Vault status, and
+history. **Scribes** starts and controls [scribes](/plugins/knowledge/scribes).
+**Settings** holds Stores & sharing, Vocabulary, Vault status, and
 Maintenance. A **Knowledge** chat side panel lists the records an agent found,
 read, or changed in the current conversation.
 
@@ -241,6 +248,15 @@ It never calls a model or creates pages. It runs only while `writesEnabled` is
 
 See [Maintenance](/plugins/knowledge/maintenance).
 
+## Scribes
+
+The **Scribes** tab starts conversations that keep a store up to date on their
+own: consolidating unlinked claims after maintenance, learning from conversations
+once or daily, and importing Memory once. Each follows a bundled skill; ongoing
+scribes schedule themselves as OpenClaw automations.
+
+See [Scribes](/plugins/knowledge/scribes).
+
 ## Capabilities and limits
 
 | Capability                                               | Status                                                            |
@@ -251,7 +267,7 @@ See [Maintenance](/plugins/knowledge/maintenance).
 | Keyword retrieval and exact identity lookup              | Implemented (SQLite FTS5)                                         |
 | Structured date queries                                  | Implemented                                                       |
 | Original source file attachments                         | Implemented; chunked upload/download, no evidence-count cap       |
-| Correction, withdrawal, identity merge                   | Implemented as agent-only, history-preserving operations          |
+| Correction, withdrawal, supersession, identity merge     | Implemented as agent-only, history-preserving operations          |
 | Local Git history                                        | Automatic when Git is installed and writes are enabled            |
 | Interrupted-write recovery and conflict retention        | Implemented; not a complete backup/restore protocol               |
 | Read-only Control UI                                     | Implemented; no direct write controls                             |
@@ -333,5 +349,6 @@ and [Uninstall](/cli/plugins/uninstall-and-update#uninstall).
 - [Corrections and merges](/plugins/knowledge/corrections)
 - [Local history](/plugins/knowledge/local-history)
 - [Maintenance](/plugins/knowledge/maintenance)
+- [Scribes](/plugins/knowledge/scribes)
 - [Control UI](/plugins/knowledge/control-ui)
 - [Memory overview](/concepts/memory)

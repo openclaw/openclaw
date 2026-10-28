@@ -14,10 +14,6 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { channelReadyPatch, channelStoppedPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { sendJsonNoStore as writeJsonResponse } from "openclaw/plugin-sdk/http-response-runtime";
-import {
-  isHostNoticePayload,
-  isReplyPayloadTerminalContent,
-} from "openclaw/plugin-sdk/reply-payload";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import {
   createComputedAccountStatusAdapter,
@@ -48,8 +44,9 @@ import {
   extractA2aMessageText,
   resolveA2aRpcMethod,
 } from "./protocol.js";
+import { filterA2aReplyPayload } from "./reply-payload.js";
 import { getA2aChannelRuntime } from "./runtime.js";
-import { A2aTaskStore } from "./task-store.js";
+import { A2aTaskStore, openTerminalStore } from "./task-store.js";
 import type { A2aChannelConfig, ResolvedA2aChannelAccount } from "./types.js";
 
 const MAX_REQUEST_BODY_BYTES = 1024 * 1024;
@@ -159,8 +156,7 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
   base: {
     ...a2aChannelSetupPlugin,
     messaging: {
-      transformReplyPayload: ({ payload }) =>
-        isHostNoticePayload(payload) || !isReplyPayloadTerminalContent(payload) ? null : payload,
+      transformReplyPayload: ({ payload }) => filterA2aReplyPayload(payload),
       normalizeTarget: normalizeA2aChannelTarget,
       inferTargetChatType: () => "direct",
       targetResolver: {
@@ -265,7 +261,8 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
         const version = runtime.version;
         // SAFETY: Gateway injects its full runtime despite the narrowed public contract.
         const channelRuntime = (ctx.channelRuntime ?? runtime.channel) as PluginRuntime["channel"];
-        const store = new A2aTaskStore();
+        const store = new A2aTaskStore(openTerminalStore(runtime, account.accountId));
+        await store.restore();
         const unregisterRoutes: Array<() => void> = [];
         function createAgentCard(request: IncomingMessage) {
           // listAgentIds reads both the canonical `agents.entries` roster and the legacy
@@ -421,7 +418,11 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                       peerName,
                       text,
                     });
-                  }).catch((error: unknown) => store.fail(task.id, error));
+                  })
+                    .catch((error: unknown) => store.fail(task.id, error))
+                    .catch((error: unknown) => {
+                      ctx.log?.error(`A2A task persistence failed: ${String(error)}`);
+                    });
                 }
 
                 if (!send.data.configuration?.returnImmediately) {
@@ -586,7 +587,7 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
           for (const unregister of unregisterRoutes.toReversed()) {
             unregister();
           }
-          store.stop();
+          await store.stop();
           ctx.setStatus(channelStoppedPatch({ accountId: account.accountId }));
         }
       },

@@ -1850,6 +1850,7 @@
                           "plugins/knowledge/corrections",
                           "plugins/knowledge/local-history",
                           "plugins/knowledge/maintenance",
+                          "plugins/knowledge/scribes",
                           "plugins/knowledge/control-ui"
                         ]
                       },
@@ -2286,6 +2287,10 @@
                     ]
                   },
                   {
+                    "group": "Decision models",
+                    "pages": ["providers/liquid-ai"]
+                  },
+                  {
                     "group": "Speech and audio",
                     "pages": [
                       "providers/azure-speech",
@@ -2586,6 +2591,7 @@
                     "pages": [
                       "gateway/security/index",
                       "gateway/security/trust-model",
+                      "gateway/security/presets",
                       "gateway/security/running-the-audit",
                       "gateway/security/audit-checks",
                       "gateway/security/hardened-baseline",
@@ -3246,6 +3252,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.10.8",
                   "releases/2026.10.7",
                   "releases/2026.10.6",
                   "releases/2026.10.5",

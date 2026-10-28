@@ -620,28 +620,6 @@ export function startGatewayConfigReloader(
       applicationStatus = await applyRuntime(plan, nextConfig, ownership, nextSourceConfig);
     } catch (error) {
       ownership.rollbackRuntimeEnv();
-      if (
-        !plan.pluginLifecycle &&
-        error instanceof PluginRuntimeApplicationError &&
-        error.details.phase === "drain" &&
-        !error.details.committed &&
-        error.cause instanceof PluginAdmittedWorkTimeoutError
-      ) {
-        pluginDrainRetry = new AbortController();
-        const retrySignal = AbortSignal.any([lifecycle.signal, pluginDrainRetry.signal]);
-        void Promise.all(
-          error.cause.instances.map((instance) => instance.waitForIdle(retrySignal)),
-        ).then(
-          () => {
-            if (!retrySignal.aborted) {
-              schedule();
-            }
-          },
-          () => {
-            // Cancellation ends this retry observation, not the serving plugin's work.
-          },
-        );
-      }
       throw error;
     }
     await checkpoint();
@@ -800,10 +778,6 @@ export function startGatewayConfigReloader(
             retryCandidate = pendingWrite;
           }
           throw err;
-        } finally {
-          if (activeConfigCandidate === pendingWrite) {
-            activeConfigCandidate = null;
-          }
         }
         return;
       }
@@ -967,6 +941,30 @@ export function startGatewayConfigReloader(
       }
       if (superseded) {
         opts.log.info(`config reload superseded: ${String(err)}`);
+      } else if (
+        err instanceof PluginRuntimeApplicationError &&
+        err.details.phase === "drain" &&
+        !err.details.committed &&
+        err.cause instanceof PluginAdmittedWorkTimeoutError
+      ) {
+        // The failed receipt lets a writing turn finish and release its retained work.
+        pluginDrainRetry = new AbortController();
+        const retrySignal = AbortSignal.any([lifecycle.signal, pluginDrainRetry.signal]);
+        void Promise.all(
+          err.cause.instances.map((instance) => instance.waitForIdle(retrySignal)),
+        ).then(
+          () => {
+            if (!retrySignal.aborted) {
+              schedule();
+            }
+          },
+          () => {
+            // Cancellation ends this retry observation, not the serving plugin's work.
+          },
+        );
+        opts.log.info(
+          `config reload deferred: ${String(err)}; retrying automatically after admitted work and cleanup settle`,
+        );
       } else {
         opts.log.error(`config reload failed: ${String(err)}`);
       }

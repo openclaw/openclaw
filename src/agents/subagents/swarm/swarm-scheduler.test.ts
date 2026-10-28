@@ -64,10 +64,14 @@ describe("swarm scheduler", () => {
 
   it("preserves admission order across early preparation and stale active snapshots", async () => {
     const { started, reserve, activate } = makeQueue();
+    const revision = scheduler.readSwarmReservationRevision();
     expect(reserve("one")).toBe(true);
     expect(reserve("two", { activeRunIds: ["one"] })).toBe(true);
+    expect(scheduler.readSwarmReservationRevision()).toBe(revision);
     const owner = {};
     scheduler.bindSwarmRunReservation("two", owner);
+    expect(scheduler.readSwarmReservationRevision()).toBe(revision + 1);
+    scheduler.bindSwarmRunReservation("two", {});
     expect(scheduler.isSwarmRunWaitingForCapacity("two", owner)).toBe(false);
     activate("two");
     await Promise.resolve();
@@ -80,6 +84,9 @@ describe("swarm scheduler", () => {
     expect(scheduler.isSwarmRunWaitingForCapacity("two", {})).toBe(false);
     expect(scheduler.releaseSwarmRun("one")).toBe(true);
     await vi.waitFor(() => expect(started).toEqual(["one", "two"]));
+    expect(scheduler.readSwarmReservationRevision()).toBe(revision + 1);
+    expect(scheduler.releaseSwarmRun("two")).toBe(true);
+    expect(scheduler.readSwarmReservationRevision()).toBe(revision + 2);
   });
 
   it("skips cancelled work without letting its stale hold withdraw a reused id", async () => {
@@ -88,6 +95,7 @@ describe("swarm scheduler", () => {
     enqueue("two");
     enqueue("three");
     const { owner, waits } = watchCapacity("two");
+    const revision = scheduler.readSwarmReservationRevision();
     await vi.waitFor(() => expect(started).toEqual(["one"]));
     const hold = holdRun("two");
     expect(scheduler.isSwarmRunWaitingForCapacity("two", owner)).toBe(false);
@@ -95,7 +103,9 @@ describe("swarm scheduler", () => {
     expect(scheduler.isSwarmRunWaitingForCapacity("two", owner)).toBe(true);
     const removal = holdRun("two");
     try {
+      expect(scheduler.readSwarmReservationRevision()).toBe(revision);
       expect(removal.withdraw()).toBe(true);
+      expect(scheduler.readSwarmReservationRevision()).toBe(revision + 1);
       expect(waits).toEqual([true, false, true, false]);
       expect(scheduler.isSwarmRunActive("two")).toBe(false);
       enqueue("two", {
@@ -115,6 +125,7 @@ describe("swarm scheduler", () => {
     }
     expect(removal.withdraw()).toBe(false);
     expect(scheduler.releaseSwarmRun("two")).toBe(true);
+    expect(scheduler.readSwarmReservationRevision()).toBe(revision + 1);
   });
 
   it("does not certify an unactivated reservation without a preparation owner", async () => {

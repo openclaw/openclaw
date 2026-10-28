@@ -203,12 +203,15 @@ export function buildMemoryWikiDoctorReport(status: MemoryWikiStatus) {
   };
 }
 
-export function renderMemoryWikiStatus(status: MemoryWikiStatus): string {
+export function renderMemoryWikiStatus(
+  status: MemoryWikiStatus,
+  text: (value: string) => string = String,
+): string {
   const lines = [
-    `Wiki vault mode: ${status.vaultMode}`,
-    `Vault scope: ${status.vaultScope}${status.agentId ? ` (${status.agentId})` : ""}`,
-    `Vault: ${status.vaultExists ? "ready" : "missing"} (${status.vaultPath})`,
-    `Render mode: ${status.renderMode}`,
+    `Wiki vault mode: ${text(status.vaultMode)}`,
+    `Vault scope: ${text(status.vaultScope)}${status.agentId ? ` (${text(status.agentId)})` : ""}`,
+    `Vault: ${status.vaultExists ? "ready" : "missing"} (${text(status.vaultPath)})`,
+    `Render mode: ${text(status.renderMode)}`,
     `Obsidian CLI: ${status.obsidianCli.available ? "available" : "missing"}${status.obsidianCli.requested ? " (requested)" : ""}`,
     `Bridge: ${status.bridge.enabled ? "enabled" : "disabled"}${status.bridgePublicArtifactCount !== null ? ` (${status.bridgePublicArtifactCount} exported artifact${status.bridgePublicArtifactCount === 1 ? "" : "s"})` : ""}`,
     `Unsafe local: ${status.unsafeLocal.allowPrivateMemoryCoreAccess ? `enabled (${status.unsafeLocal.pathCount} paths)` : "disabled"}`,
@@ -219,24 +222,27 @@ export function renderMemoryWikiStatus(status: MemoryWikiStatus): string {
   if (status.warnings.length > 0) {
     lines.push("", "Warnings:");
     for (const warning of status.warnings) {
-      lines.push(`- ${warning.message}`);
+      lines.push(`- ${text(warning.message)}`);
     }
   }
 
   return lines.join("\n");
 }
 
-export function renderMemoryWikiDoctor(report: MemoryWikiDoctorReport): string {
+export function renderMemoryWikiDoctor(
+  report: MemoryWikiDoctorReport,
+  text: (value: string) => string = String,
+): string {
   const lines = [
     report.healthy ? "Wiki doctor: healthy" : `Wiki doctor: ${report.warningCount} issue(s) found`,
     "",
-    renderMemoryWikiStatus(report.status),
+    renderMemoryWikiStatus(report.status, text),
   ];
 
   if (report.fixes.length > 0) {
     lines.push("", "Suggested fixes:");
     for (const fix of report.fixes) {
-      lines.push(`- ${fix.message}`);
+      lines.push(`- ${text(fix.message)}`);
     }
   }
 

@@ -96,7 +96,7 @@ function preserveUserAuthOverride(target: Partial<SessionEntry>, entry: SessionE
 
 function sanitizeFreshCronSessionEntry(
   entry: SessionEntry,
-  options: { preserveAmbientContext: boolean },
+  options: { preserveAmbientContext: boolean; carryInference: boolean },
 ): Partial<SessionEntry> {
   const next: Partial<SessionEntry> = {};
 
@@ -110,8 +110,10 @@ function sanitizeFreshCronSessionEntry(
     copySessionFields(next, entry, AMBIENT_SESSION_CONTEXT_FIELDS);
     Object.assign(next, preserveSessionInheritedToolPolicy(entry));
   }
-  Object.assign(next, resolveCarriedCronModelSelection(entry));
-  preserveUserAuthOverride(next, entry);
+  if (options.carryInference) {
+    Object.assign(next, resolveCarriedCronModelSelection(entry));
+    preserveUserAuthOverride(next, entry);
+  }
 
   return next;
 }
@@ -143,6 +145,12 @@ type CronSessionParams = {
    */
   exactRunSession?: boolean;
   hookExternalContentSource?: SessionEntry["hookExternalContentSource"];
+  /**
+   * The job recorded its inference runtime and account at creation. A differing source
+   * row then seeds no model, runtime or account selection, so a creating conversation
+   * that later switches model or runtime does not change the job's runs.
+   */
+  inferenceCaptured?: boolean;
 };
 
 export async function prepareCronSession(params: CronSessionParams) {
@@ -236,7 +244,10 @@ export function resolveCronSession(
 
   const baseEntry = entry
     ? isNewSession
-      ? sanitizeFreshCronSessionEntry(entry, { preserveAmbientContext: !params.forceNew })
+      ? sanitizeFreshCronSessionEntry(entry, {
+          preserveAmbientContext: !params.forceNew,
+          carryInference: !(sourceSessionDiffers && params.inferenceCaptured),
+        })
       : entry
     : undefined;
 

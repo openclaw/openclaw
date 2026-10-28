@@ -12,6 +12,7 @@ import type { ModelFallbackRouteResolution } from "../../model-fallback.types.js
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
 import type { ReplyDeliveryFactsObserver } from "../../reply-completion.js";
 import type { BoundAgentRunSessionTarget } from "../../run-session-target.types.js";
+import type { AgentMessage } from "../../runtime/index.js";
 import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { ResolvedRunEntryModelSelection } from "../run-entry.types.js";
@@ -49,6 +50,17 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** The reply owner checkpoints the source before recovery rewrites its context. */
+  beforeRecoveryCompaction?: (context: {
+    sessionId: string;
+    provider: string;
+    model: string;
+    authProfileId?: string;
+    authProfileIdSource: "auto" | "user";
+    contextTokenBudget: number;
+  }) => Promise<string>;
+  /** A recovery checkpoint must not compact away the history it is trying to save. */
+  disableCompactionRecovery?: true;
   /** Original admitted settings, retained by the host across private runtime selection. */
   joinObservation?: ReplyMessageJoinObservation;
   /** The logical run already invoked model routing before preparing its candidate chain. */
@@ -86,6 +98,7 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   /** Re-admit from the committed transcript without persisting the original prompt again. */
   pluginRuntimeRefreshContinuation?: true;
+  pluginRuntimeRefreshUserPrompt?: EmbeddedRunAttemptParams["pluginRuntimeRefreshUserPrompt"];
   pluginRuntimeRefreshMessages?: EmbeddedRunAttemptParams["pluginRuntimeRefreshMessages"];
   /** Actual generation cleanup, including source callbacks after native terminal publication. */
   runCleanupSettlement?: Promise<void>;
@@ -115,6 +128,8 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
       readonly target: Readonly<BoundAgentRunSessionTarget & SessionTranscriptTargetBinding>;
       assertCurrent: PreparedSessionSourceAssertion;
     };
+    /** Frozen source-attempt model view; transcript writer custody remains unchanged. */
+    settledTurnFinalizationMessages?: readonly AgentMessage[];
     compactionCountOwner?: "subscription" | "caller";
     /** Current-run committed plan facts; retained across attempts, never loaded from history. */
     completionCheck?: EmbeddedRunCompletionCheck;

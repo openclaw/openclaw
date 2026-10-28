@@ -1028,7 +1028,8 @@ fix_npm_prefix_if_needed() {
   "$(npm_bin)" config set prefix "$target"
 
   local path_line="export PATH=\"${target}/bin:\$PATH\""
-  for rc in "${HOME}/.bashrc" "${HOME}/.zshrc"; do
+  local zsh_rc_dir="${ZDOTDIR:-$HOME}"
+  for rc in "${HOME}/.bashrc" "${zsh_rc_dir}/.zshrc"; do
     if [[ -f "$rc" ]] && ! grep -q ".npm-global" "$rc"; then
       echo "$path_line" >> "$rc"
     fi

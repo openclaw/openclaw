@@ -78,6 +78,11 @@ vi.mock("./session-send-recovery.js", () => ({
   recoverSessionSendDeliveries: postAttachMocks.recoverSessionSendDeliveries,
 }));
 
+// mock-isolation: This worker-free ordering fixture has no pending agent deletions.
+vi.mock("./server-agent-deletion-recovery.js", () => ({
+  resumeAgentDeletions: vi.fn(async () => {}),
+}));
+
 // mock-isolation: Observe recovery scheduling without replaying saved inputs or starting sweep timers.
 vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
   scheduleRestartAbortedMainSessionRecovery:

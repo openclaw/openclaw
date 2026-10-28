@@ -294,9 +294,8 @@ export function listControlUiLinkReaders(
       .filter((plugin) => plugin.enabled && plugin.status === "loaded")
       .map((plugin) => plugin.id),
   );
-  const descriptors = new Map(methods.descriptors().map((method) => [method.name, method]));
   const readable = (name: string, pluginId: string) => {
-    const method = descriptors.get(name);
+    const method = methods.getDescriptor(name);
     return (
       method?.owner.kind === "plugin" &&
       method.owner.pluginId === pluginId &&

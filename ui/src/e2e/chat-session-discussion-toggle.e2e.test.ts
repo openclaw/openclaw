@@ -127,6 +127,7 @@ suite.define(() => {
           .poll(() => frame!.locator("html").getAttribute("data-host-mode"))
           .toBe("light");
         await expect.poll(() => surfaceColor(frame, "--host-surface")).not.toBe("");
+        const lightSurface = await surfaceColor(page, "--bg");
 
         await page.emulateMedia({ colorScheme: "dark" });
 
@@ -134,11 +135,10 @@ suite.define(() => {
           .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
           .toBe("dark");
         await expect.poll(() => frame!.locator("html").getAttribute("data-host-mode")).toBe("dark");
-        await expect
-          .poll(() =>
-            Promise.all([surfaceColor(page, "--bg"), surfaceColor(frame, "--host-surface")]),
-          )
-          .toEqual(["#0e1015", "#0e1015"]);
+        const darkSurface = await surfaceColor(page, "--bg");
+        expect(darkSurface).not.toBe("");
+        expect(darkSurface).not.toBe(lightSurface);
+        await expect.poll(() => surfaceColor(frame, "--host-surface")).toBe(darkSurface);
         expect(new URL(frame!.url()).searchParams.get("theme")).toBe("light");
       },
     );

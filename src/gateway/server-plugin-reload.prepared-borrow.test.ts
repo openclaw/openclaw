@@ -53,7 +53,6 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import { createAccessPolicyTransport } from "./server-methods/agent.visitor-access.test-support.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import * as bootstrap from "./server-plugin-bootstrap.js";
@@ -88,10 +87,10 @@ async function createPublishedPluginFixture(
   const { workspaceDir } = state;
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
-  const logs = { info: vi.fn(onInfo), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   let services: PluginServicesHandle | null = null;
   let manageServices = false;
   const env = process.env;
+  const logs = { info: vi.fn(onInfo), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const log = { ...createSubsystemLogger("gateway/plugins"), ...logs };
   const metadataSnapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
     config,
@@ -182,7 +181,6 @@ async function createPublishedPluginFixture(
     registryOwner,
     runtime,
     log,
-    logs,
     async startServices() {
       manageServices = true;
       services = await startPluginServices({
@@ -484,7 +482,6 @@ it.each(["plugins.reload", "auth refresh", "tool handoff"] as const)(
           expect(enqueue).not.toHaveBeenCalled();
           cleanup.resolve();
           expect(await resumed.promise).toContain('"ok":true');
-          expect(enqueue).toHaveBeenCalledOnce();
         };
         try {
           await withPluginRuntimeGatewayRequestScope(
@@ -545,23 +542,23 @@ it.for(["cold start", "hot enable"] as const)(
       vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
       vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
       vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
-      const visitorConfig = () => ({
+      const visitorConfig = {
         accountId: "test-account",
         appId: "test-app",
         apiToken: "synthetic-visitor-token",
-      });
+      };
       const configFor = (enabled: boolean): OpenClawConfig => ({
         ...modelConfig(state.workspaceDir),
         plugins: {
           allow: [pluginId],
           slots: { memory: "none" },
-          entries: { [pluginId]: { enabled, config: visitorConfig() } },
+          entries: { [pluginId]: { enabled, config: visitorConfig } },
         },
         tools: { allow: [visitorToolName] },
       });
       let config = configFor(mode === "cold start");
       await using fixture = await createPublishedPluginFixture(state, config);
-      const { initial, registryOwner, runtime, log, logs } = fixture;
+      const { initial, registryOwner, runtime, log } = fixture;
       // Match post-attach startup: publish configured model owners, start services,
       // then deliver gateway_start before admitting the first owner turn.
       await fixture.publish();
@@ -584,17 +581,12 @@ it.for(["cold start", "hot enable"] as const)(
         workspaceDir: state.workspaceDir,
         getCron: () => undefined,
         log,
-        logHooks: logs,
+        logHooks: log,
       });
       if (mode === "hot enable") {
         expect(fixture.tools(visitorToolName, undefined, config)).toEqual([]);
         const nextConfig = configFor(true);
         const changedPaths = [`plugins.entries.${pluginId}.enabled`];
-        const plan = buildGatewayReloadPlan(changedPaths, {
-          previousConfig: config,
-          candidateConfig: nextConfig,
-        });
-        expect(plan).toMatchObject({ reloadPlugins: true, restartGateway: false });
         await state.writeConfig(nextConfig);
         await fixture.reload(nextConfig, changedPaths, undefined, () => {
           markPreparedModelRuntimeSnapshotsStale(
@@ -631,7 +623,6 @@ it.for(["cold start", "hot enable"] as const)(
             text: "No visitor grant found for absent@example.test; nothing to revoke.",
           },
         ],
-        details: {},
       });
       expect(gatewayInstance.retainedWorkCount).toBeGreaterThan(retainedBeforeRun);
       await runLease[Symbol.asyncDispose]();

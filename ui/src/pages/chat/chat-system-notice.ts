@@ -67,15 +67,17 @@ export function createSubmittedModelNoticeProjector() {
     if (!from || (from.provider === selected.provider && from.model === selected.model)) {
       return undefined;
     }
+    const modelChange = {
+      from: `${from.provider}/${from.model}`,
+      to: `${selected.provider}/${selected.model}`,
+    };
     return {
       kind: "notice",
       key: `model-selection:${item.key}`,
       timestamp: safeNormalizeMessage(item.message)?.timestamp ?? 0,
       icon: "brain",
-      label: t("chat.systemNotice.modelChanged", {
-        from: `${from.provider}/${from.model}`,
-        to: `${selected.provider}/${selected.model}`,
-      }),
+      label: t("chat.systemNotice.modelChanged", modelChange),
+      modelChange,
       text: "",
     };
   };
@@ -115,6 +117,7 @@ export function projectChatSystemNotice(
           timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
           icon: "brain",
           label: t("chat.systemNotice.modelChanged", { from: details.from, to: details.to }),
+          modelChange: { from: details.from, to: details.to },
           text: "",
         },
       ];

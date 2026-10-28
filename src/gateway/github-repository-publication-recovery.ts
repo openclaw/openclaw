@@ -157,6 +157,7 @@ export function createRepositoryGitHubPublicationRecovery(params: {
   execute: (
     row: RepositoryGitHubPublicationRow,
     assertCustody: () => void,
+    recoveryResult?: SessionGitHubPublicationResult,
   ) => Promise<SessionGitHubPublicationResult>;
 }) {
   const { placements } = params;
@@ -273,10 +274,24 @@ export function createRepositoryGitHubPublicationRecovery(params: {
                   await failStaleRepositoryGitHubPublicationAsync(row, params.assertCurrent);
                   return undefined;
                 }
-                return await params.execute(row, assertCurrent);
+                const result = await params.execute(row, assertCurrent);
+                // Execution validates the requester before returning an ordinary checkpoint wait.
+                return result.status === "requested" &&
+                  !row.checkpoint_ref &&
+                  !owner.workspace.checkpointRef
+                  ? undefined
+                  : result;
               };
               return params.recovery
-                ? await params.recovery.run(row.request_id, execute)
+                ? await params.recovery.run(row, execute, async (result) => {
+                    // The failed attempt can replace the execution claim before settlement.
+                    const current = await readRepositoryGitHubPublicationInWorker(row.request_id);
+                    assertCurrent();
+                    if (!current) {
+                      throw new Error("GitHub repository publication receipt is unavailable.");
+                    }
+                    return params.execute(current, assertCurrent, result);
+                  })
                 : await execute();
             },
           );

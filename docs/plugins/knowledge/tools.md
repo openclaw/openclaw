@@ -14,6 +14,9 @@ Reference for the `knowledge_*` agent tools. Part of the
 Every tool acts on the calling agent's effective store and authorized partition.
 Tools take no store, agent, path, or scope argument. The Control UI and the tools
 use the same typed service and access checks.
+When Knowledge is enabled, its declared tools are included in the built-in
+`coding` and `full` tool profiles. This does not enable other plugins or
+override explicit tool denies, narrower policies, or Knowledge store access.
 
 ## Ontology
 
@@ -60,6 +63,10 @@ to fit is named in `omitted`. Compare hashes across chunks and restart if the
 record changes. Never replace a page from an incomplete body. Missing or
 duplicate IDs return `record: null`. The legacy `includeMetadata` selector
 cannot be combined with `metadataView`.
+
+Claim cards, related statements, and evidence excerpts preserve UTF-16 surrogate
+pairs. A preview may stop one unit before its cap; later source lines do not fill
+that gap.
 
 `knowledge_evidence_read({id, path, sha256})` reads a retained source passage as
 UTF-8 text, with optional `startLine`/`endLine`. It returns a verified source
@@ -181,7 +188,110 @@ resending it:
   bulk upload; use attachments for long originals.
 
 A single body or replacement is limited to 48,000 characters. A complete record
-can grow to 5,000,000 UTF-8 bytes.
+can grow to 5,000,000 UTF-8 bytes, but page bodies have a smaller
+[budget](#page-budgets).
+
+## Page budgets
+
+A page is read in full whenever an agent works on something connected to it, so
+page prose is budgeted by read cost. Sizes count body characters (UTF-16 code
+units, as `knowledge_record` windows do), not frontmatter.
+
+| Page      | Budget                                                      |
+| --------- | ----------------------------------------------------------- |
+| Hub       | 12,000 characters: one default `knowledge_record` body read |
+| Any other | 24,000 characters: two default reads                        |
+
+A page's **degree** is the number of distinct current pages it links to or that
+link to it with wikilinks or Markdown links. Typed relationships and claims do
+not count: a hub is a page other prose routes through, not one with many facts.
+A page is a hub when all of these hold within its store partition:
+
+- Its degree is at or above `pageBudgets.hubPercentile` (default 90, the top
+  tenth) among current pages, measured as the share of pages with a lower degree.
+- The partition has at least 20 current pages. Below that, one page spans five or
+  more percentile points.
+- Its degree is at least 10, so a small or sparsely linked vault has no hubs.
+
+The rule is the same for every page-body write: `knowledge_save_page` creates and
+edits, `knowledge_edit_body`, `knowledge_publish_batch` page items,
+`knowledge_merge` with a combined `body`, and the destination of
+`knowledge_extract_section`. It is checked once, against the same vault snapshot
+the publication is fenced on:
+
+- A write that makes a body **larger than before and larger than its budget** is
+  rejected. Nothing is saved and no receipt is stored.
+- A write that keeps a body the same size or smaller always succeeds, even on a
+  page already over budget. Oversized pages can be cleaned up and corrected, but
+  never grow; no migration is needed.
+- Claims, relationships, `knowledge_remember`, corrections, annotations,
+  withdrawals, `knowledge_unmerge`, recall approval and evidence reconciliation
+  are never limited: none of them grows a page body. A fact can always be saved as
+  a claim when page prose is rejected.
+- Markdown edited directly on disk is observed, not gated; the next tool write
+  to that page follows the rule above.
+
+A rejection is a normal result with `state: "rejected"`. Its `id`, `path`,
+`revision` and `hash` describe the unchanged target (empty for a page that
+would have been created), `message` says what to do, and `budget.pages` lists
+each page that would exceed its budget:
+
+| Field                            | Meaning                                                                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `currentChars`, `attemptedChars` | Body size before and after the rejected write                                                                             |
+| `budgetChars`                    | The page's budget                                                                                                         |
+| `hub`                            | `hub`, `degree`, `percentile`, and the `hubPercentile`, `minPages` and `minDegree` used                                   |
+| `sections`                       | Up to six largest heading sections: `heading`, `level`, `start`/`end` offsets, size, subsection count                     |
+| `sections[].candidates`          | Up to three existing pages connected to this one that the section links to or names, with their remaining `headroomChars` |
+
+Sections come from the current body (`sectionsOf: "current"`), or from the
+attempted body for a create. Reduce the page by moving content, not by deleting
+it: extract a section to a listed candidate it is about, or to a new page, and
+retry with fresh fences. Replaying a rejected request ID evaluates it again.
+
+### Extract a section
+
+`knowledge_extract_section` moves one heading section to another page in a
+single revision-fenced publication:
+
+```json
+{
+  "requestId": "<new UUID>",
+  "expectedVaultId": "<observed vault UUID>",
+  "expectedOntologyFingerprint": "<ontology fingerprint>",
+  "source": { "id": "<page ID>", "expectedRevision": 89, "expectedHash": "<hash>" },
+  "sectionStart": 41230,
+  "destination": { "title": "OpenClaw release process", "type": "project" },
+  "summary": "Releases are cut weekly from main; details moved to their own page.",
+  "reason": "OpenClaw is over its page budget."
+}
+```
+
+- `sectionStart` is the UTF-16 offset of the heading line, from a rejection's
+  `sections` or a fresh full read. The section runs to the next heading of the
+  same or a higher level.
+- `destination` is either `{title, type, aliases?}` for a new page, or the
+  `{id, expectedRevision, expectedHash}` of an existing page connected to the
+  source by a body link (either way) or a typed relationship. The section is
+  appended to an existing page's body.
+- The section moves verbatim. Relative Markdown links are rewritten for the
+  destination's directory; any other link that would resolve differently rejects
+  the request. Source-page evidence whose quote, retained path or filename
+  appears in the section is copied to the destination; add more with
+  `evidence`. The source keeps all of its evidence.
+- The source keeps the heading line, followed by `summary` and a link to the
+  destination (`[[<id>|<title>]]`).
+- Claims the section links to that name the source page as an entity get the
+  destination as their first entity. The source stays a secondary entity only
+  when the claim's title or text names it. Claim text, evidence and lifecycle are
+  unchanged.
+- Every changed record is validated together, and the destination is checked to
+  contain the section with the same link targets, before the publication is
+  accepted. Any failure leaves every file unchanged. The destination's own budget
+  applies. Previous revisions stay in history.
+
+The receipt has `operation: "extract"`, `targetId` set to the source page, and
+`items` for the destination and the source.
 
 ## Claims and relationships
 

@@ -1,6 +1,22 @@
 import { expect, it } from "vitest";
 import { prepareChatHistoryResponsePage } from "../chat-history-response-page.js";
 
+it("reuses a history page when budgeting does not replace or omit messages", () => {
+  const messages = [
+    { role: "assistant", content: "Calling read", __openclaw: { id: "call", seq: 1 } },
+    { role: "toolResult", content: "File contents", __openclaw: { id: "result", seq: 2 } },
+  ];
+  Object.freeze(messages);
+  const page = prepareChatHistoryResponsePage(
+    { messages, pagination: { offset: 0, totalMessages: 2, rawPageMessages: 2 } },
+    { entry: undefined, maxHistoryBytes: 512 * 1024, messageId: undefined },
+  );
+  expect(page.messages).toBe(messages);
+  expect(page.messagesBytes).toBe(Buffer.byteLength(JSON.stringify(messages)));
+  expect(page.omission).toBeUndefined();
+  expect(page.hasMore).toBe(false);
+});
+
 it("keeps oversized cursor identities inside the response byte limit", () => {
   const messageId = "x".repeat(1_000_000);
   const page = prepareChatHistoryResponsePage(

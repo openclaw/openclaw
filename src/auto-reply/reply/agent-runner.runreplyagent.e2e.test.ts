@@ -4277,33 +4277,14 @@ describe("runReplyAgent typing", () => {
   });
 
   it.each([
-    {
-      label: "direct chats",
-      chatType: "direct" as const,
-      noticeVisible: true,
-      verbose: "on" as const,
-    },
-    {
-      label: "direct chats with verbosity off",
-      chatType: "direct" as const,
-      noticeVisible: true,
-      verbose: "off" as const,
-    },
-    {
-      label: "group chats",
-      chatType: "group" as const,
-      noticeVisible: false,
-      verbose: "on" as const,
-    },
-    {
-      label: "channels",
-      chatType: "channel" as const,
-      noticeVisible: false,
-      verbose: "on" as const,
-    },
-  ])(
-    "controls fallback notices for $label without changing state or lifecycle",
-    async ({ chatType, noticeVisible, verbose }) => {
+    ["direct chats", "direct", "whatsapp", true, "on"],
+    ["direct chats with verbosity off", "direct", "whatsapp", true, "off"],
+    ["internal clients", "direct", "webchat", true, "on"],
+    ["group chats", "group", "whatsapp", false, "on"],
+    ["channels", "channel", "whatsapp", false, "on"],
+  ] as const)(
+    "controls fallback notices for %s without changing state or lifecycle",
+    async (_label, chatType, messageProvider, noticeVisible, verbose) => {
       const { sessionStore, storePath } = await makeSessionFixture();
       let callCount = 0;
 
@@ -4342,7 +4323,13 @@ describe("runReplyAgent typing", () => {
             sessionStore,
             sessionKey: "main",
             storePath,
-            sessionCtx: { ChatType: chatType, MessageSid: `fallback-${++turnIndex}` },
+            sessionCtx: {
+              Provider: messageProvider,
+              OriginatingChannel: messageProvider,
+              ChatType: chatType,
+              MessageSid: `fallback-${++turnIndex}`,
+            },
+            runOverrides: { messageProvider },
           }).run();
         const phases: string[] = [];
         const off = onAgentEvent((evt) => {
@@ -4368,6 +4355,12 @@ describe("runReplyAgent typing", () => {
         const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
         const thirdText = Array.isArray(third) ? third[0]?.text : third?.text;
         expect(firstText?.includes("Model Fallback:")).toBe(noticeVisible);
+        for (const result of [first, second]) {
+          const payload = Array.isArray(result) ? result[0] : result;
+          expect(getReplyPayloadMetadata(payload ?? {})?.modelFallbackNotice).toBe(
+            noticeVisible && result === second ? true : undefined,
+          );
+        }
         expect((Array.isArray(repeated) ? repeated[0] : repeated)?.text).not.toContain(
           "Model Fallback:",
         );
@@ -4450,6 +4443,8 @@ describe("runReplyAgent typing", () => {
           }),
           expect.objectContaining({ text: "final" }),
         ]);
+        const notice = Array.isArray(result) ? result[0] : result;
+        expect(getReplyPayloadMetadata(notice ?? {})?.modelFallbackNotice).toBeUndefined();
       } finally {
         fallbackSpy.mockRestore();
       }

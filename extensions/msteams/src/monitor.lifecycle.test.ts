@@ -471,6 +471,34 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       expect.stringContaining("mutable allowlist entries are disabled"),
     );
   });
+
+  it("keeps unresolved name-only allowlists configured so they do not fall back or widen", async () => {
+    const cfg = createConfig();
+    updateMSTeamsConfig(cfg, {
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["Bob Builder"],
+      teams: { Engineering: {} },
+    });
+    resolveAllowlistMocks.resolveMSTeamsTeamsConfig.mockRejectedValueOnce(
+      new Error("Graph unavailable"),
+    );
+
+    await startMonitor(cfg);
+
+    // The operator's stored configuration keeps its original entries; only the in-memory
+    // projection handed to the handler carries the placeholder.
+    expect(cfg.channels?.msteams?.groupAllowFrom).toEqual(["Bob Builder"]);
+    expect(cfg.channels?.msteams?.teams).toEqual({ Engineering: {} });
+
+    const registered = registeredDeps().cfg.channels?.msteams;
+    expect(registered?.groupAllowFrom).toEqual([
+      "19:openclaw-unresolved-allowlist@thread.unresolved",
+    ]);
+    expect(Object.keys(registered?.teams ?? {})).toHaveLength(1);
+    expect(Object.keys(registered?.teams ?? {})).not.toContain("*");
+  });
 });
 
 let gateway: Server;

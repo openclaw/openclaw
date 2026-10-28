@@ -63,7 +63,7 @@ function applyAuthorizationBatch(
         current = snapshotFromExecApprovalsRow({ path: current.path, row: { raw_json: raw } });
       }
     }
-    return { ok: true, snapshot: current };
+    return { ok: true, file: current.file };
   });
   return { snapshot: current, outcomes };
 }

@@ -100,7 +100,12 @@ function readToolExitCode(...values: unknown[]): number | undefined {
   return undefined;
 }
 
-export function isToolCardSkipped(card: ToolCard): boolean {
+// Symbol metadata follows display spreads without exposing result payloads in serialization.
+const recordedToolCardOutcome = Symbol("recordedToolCardOutcome");
+type RecordedToolCard = ToolCard & { [recordedToolCardOutcome]?: ToolCard };
+
+export function isToolCardSkipped(input: RecordedToolCard): boolean {
+  const card = input[recordedToolCardOutcome] ?? input;
   if (card.activity) {
     return card.activity.status === "skipped";
   }
@@ -112,7 +117,8 @@ export function isToolCardSkipped(card: ToolCard): boolean {
   );
 }
 
-export function isToolCardError(card: ToolCard): boolean {
+export function isToolCardError(input: RecordedToolCard): boolean {
+  const card = input[recordedToolCardOutcome] ?? input;
   if (isToolCardSkipped(card)) {
     return false;
   }
@@ -125,9 +131,10 @@ export function isToolCardError(card: ToolCard): boolean {
 }
 
 export function resolveToolCardOutcome(
-  card: ToolCard,
+  input: RecordedToolCard,
   runActive: boolean | undefined,
 ): ToolCardOutcome {
+  const card = input[recordedToolCardOutcome] ?? input;
   if (isToolCardSkipped(card)) {
     return "skipped";
   }
@@ -335,6 +342,8 @@ export function isToolCallContentBlock(item: {
   );
 }
 
+const envelopeCardsByBlock = new WeakMap<object, WeakMap<object, ToolCard>>();
+
 function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
   const catalogMetadata = asNullableRecord(m["__openclaw"]);
@@ -351,6 +360,10 @@ function extractToolCards(message: unknown): ToolCard[] {
   const isLiveToolStream = m["__openclawToolStreamLive"] === true;
   const liveDiffStat = readLiveDiffStat(m["__openclawToolStreamDiffStat"]);
   const cards: ToolCard[] = [];
+  const blockCards = new WeakMap<object, ToolCard>();
+  if (message && typeof message === "object") {
+    envelopeCardsByBlock.set(message, blockCards);
+  }
   const fallbackMatchedCards = new WeakSet<ToolCard>();
   const transcriptMessageId = resolveTranscriptMessageId(m);
   const messageRunId = readSessionMessageIdentity(m)?.runId ?? readNonBlankString(m.runId);
@@ -428,6 +441,7 @@ function extractToolCards(message: unknown): ToolCard[] {
           : {}),
         ...(liveDiffStat ? { liveDiffStat } : {}),
       });
+      blockCards.set(item, cards.at(-1)!);
       continue;
     }
 
@@ -450,6 +464,7 @@ function extractToolCards(message: unknown): ToolCard[] {
         : (existing?.name ?? envelopeName ?? name);
     const result = readResult(item, browserToolName);
     if (existing) {
+      blockCards.set(item, existing);
       fallbackMatchedCards.add(existing);
       existing.callId ??= callId;
       existing.runId ??= runId;
@@ -472,6 +487,7 @@ function extractToolCards(message: unknown): ToolCard[] {
       completed: true,
       ...result,
     });
+    blockCards.set(item, cards.at(-1)!);
   }
 
   if (isStandaloneToolMessage && cards.length === 0) {
@@ -514,18 +530,69 @@ function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
-const toolCardsByMessage = new WeakMap<object, ToolCard[]>();
+const toolCardsByMessage = new WeakMap<object, { content: unknown; cards: ToolCard[] }>();
+const toolCardEnvelopes = new WeakMap<object, object>();
+
+/** Immutable presentation fragments retain pairing context without copying output blocks. */
+export function rememberToolCardEnvelope(fragment: object, envelope: unknown): void {
+  if (envelope && typeof envelope === "object") {
+    toolCardEnvelopes.set(fragment, toolCardEnvelopes.get(envelope) ?? envelope);
+  }
+}
+
+function projectEnvelopeCards(message: object): ToolCard[] | undefined {
+  const envelope = toolCardEnvelopes.get(message);
+  if (!envelope) {
+    return undefined;
+  }
+  extractToolCardsCached(envelope);
+  const recorded = envelopeCardsByBlock.get(envelope);
+  const content = normalizeContent(asNullableRecord(message)?.content);
+  const seen = new Set<ToolCard>();
+  return content.flatMap((block) => {
+    const paired = recorded?.get(block);
+    if (!paired || seen.has(paired)) {
+      return [];
+    }
+    seen.add(paired);
+    const hasResult = content.some(
+      (item) => isToolResultContentType(item.type) && recorded?.get(item) === paired,
+    );
+    if (hasResult) {
+      return [paired];
+    }
+    // Extract calls independently: legacy fragment-local pairing can differ
+    // from the recorded envelope when another call precedes this stretch.
+    const [card] = extractToolCards({ ...asNullableRecord(message), content: [block] });
+    // The call carries its recorded outcome, but output/preview stays at the
+    // result's original position rather than appearing twice.
+    return [
+      {
+        ...card,
+        id: paired.id,
+        callId: paired.callId,
+        name: paired.name,
+        [recordedToolCardOutcome]: paired,
+        completed: paired.completed,
+        isError: isToolCardError(paired),
+        exitCode: paired.exitCode,
+        toolOutput: paired.toolOutput,
+      },
+    ];
+  });
+}
 
 export function extractToolCardsCached(message: unknown): ToolCard[] {
   if (!message || typeof message !== "object") {
     return extractToolCards(message);
   }
+  const content = asNullableRecord(message)?.content;
   const cached = toolCardsByMessage.get(message);
-  if (cached) {
-    return cached;
+  if (cached && cached.content === content) {
+    return cached.cards;
   }
-  const cards = extractToolCards(message);
-  toolCardsByMessage.set(message, cards);
+  const cards = projectEnvelopeCards(message) ?? extractToolCards(message);
+  toolCardsByMessage.set(message, { content, cards });
   return cards;
 }
 
@@ -542,7 +609,18 @@ export function extractToolBlockCardsCached(
   if (cached) {
     return cached;
   }
-  const cards = extractToolCards({ ...message, content: [block] });
+  const fragment = { ...message, content: [block] };
+  rememberToolCardEnvelope(fragment, message);
+  // A result projection uses the recorded card unchanged. Re-extracting its
+  // payload would repeat preview preparation (including browser preview I/O).
+  const envelope = toolCardEnvelopes.get(message) ?? message;
+  extractToolCardsCached(envelope);
+  const recorded = isToolResultContentType(block.type)
+    ? envelopeCardsByBlock.get(envelope)?.get(block)
+    : undefined;
+  const cards = recorded
+    ? [recorded]
+    : (projectEnvelopeCards(fragment) ?? extractToolCards(fragment));
   if (!byBlock) {
     byBlock = new WeakMap();
     toolCardsByBlock.set(message, byBlock);

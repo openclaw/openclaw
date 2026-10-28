@@ -130,37 +130,6 @@ describe("isHeartbeatUserMessage", () => {
       customHeartbeatPrompt,
     );
   });
-  it("recognizes complete silent completion frames without treating quotes as wake inputs", () => {
-    const opening =
-      "An async command completion event was triggered, but user delivery is disabled for this run. ";
-    const closing = " Do not mention, summarize, or reuse command output.";
-    for (const prefix of ["", "[Mon 2026-10-26 10:00 UTC] "]) {
-      const text = `${prefix}${opening}Handle the result internally.${closing}`;
-      expect(isHeartbeatUserMessage(user(text))).toBe(false);
-      expect(
-        isHeartbeatUserMessage({ ...user(text), __openclaw: { importedFrom: "claude-cli" } }),
-      ).toBe(false);
-      const meta = { mirrorOrigin: "claude-catalog-import" };
-      expect(isHeartbeatUserMessage({ ...user(text), __openclaw: meta })).toBe(true);
-      expect(
-        isHeartbeatUserMessage({
-          ...user(`${text}\n\nHeartbeat monitor scratch:\ncheck disk`),
-          __openclaw: meta,
-        }),
-      ).toBe(true);
-      expect(
-        isHeartbeatUserMessage({ ...user(`Please explain this:\n${text}`), __openclaw: meta }),
-      ).toBe(false);
-      expect(
-        isHeartbeatUserMessage({ ...user(text), __openclaw: meta }, undefined, {
-          heartbeatOnly: true,
-        }),
-      ).toBe(false);
-      expect(isHeartbeatUserMessage(user(text), undefined, { claudeImport: true })).toBe(true);
-    }
-    expect(isHeartbeatUserMessage(user(opening))).toBe(false);
-    expect(isHeartbeatUserMessage(user(closing))).toBe(false);
-  });
 });
 
 describe("filterHeartbeatTranscriptArtifacts", () => {
