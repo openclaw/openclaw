@@ -46,8 +46,6 @@ vi.mock("../../agents/simple-completion-runtime.js", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.complete.mockReset();
-  mocks.callGateway.mockReset();
   mocks.acquire.mockResolvedValue({
     async [Symbol.asyncDispose]() {},
     selection: { provider: "openai", modelId: "gpt-5.4", agentDir: "/tmp/agent" },
@@ -81,7 +79,7 @@ it.each<[string, string, string, string | undefined, string | undefined]>([
   ["gateway", "ok", "", undefined, undefined],
   ["gateway", "completed", "", undefined, undefined],
 ])("handles %s status %s (%j)", async (transport, status, text, detail, error) => {
-  mocks.complete.mockResolvedValueOnce({
+  mocks.complete.mockResolvedValue({
     role: "assistant",
     stopReason: status,
     errorMessage: detail,
@@ -90,7 +88,7 @@ it.each<[string, string, string, string | undefined, string | undefined]>([
       { type: "text", text },
     ],
   });
-  mocks.callGateway.mockResolvedValueOnce({
+  mocks.callGateway.mockResolvedValue({
     status,
     summary: detail,
     result: {
@@ -143,12 +141,13 @@ for (const transport of ["local", "gateway"] as const) {
   ])(`preserves ${transport} usage observations: %s`, async (_name, usage, expected) => {
     const gatewayUsage = expected ?? usage;
     const agentMeta = { usage: gatewayUsage, lastCallUsage: gatewayUsage };
-    mocks.complete.mockResolvedValueOnce({ content: [{ type: "text", text: "OK" }], usage });
-    mocks.callGateway.mockResolvedValueOnce({
+    mocks.complete.mockResolvedValue({ content: [{ type: "text", text: "OK" }], usage });
+    mocks.callGateway.mockResolvedValue({
       result: { payloads: [{ text: "OK", mediaUrl: null }], meta: { agentMeta } },
     });
     await runModel(`--${transport}`);
-    const envelope = JSON.parse(JSON.stringify(mocks.runtime.writeJson.mock.calls[0]?.[0]));
+    const json = JSON.stringify(mocks.runtime.writeJson.mock.calls[0]?.[0]);
+    const envelope = JSON.parse(json);
     expect(envelope.usage).toEqual(expected);
     expect(envelope.lastCallUsage).toEqual(expected);
   });
@@ -168,7 +167,7 @@ it.each([
       ...(costStatus === "complete" ? { cost: { total: 0 } } : {}),
     };
     const lastCallUsage = total ? { input: 7, output: 2, total: 9 } : undefined;
-    mocks.callGateway.mockResolvedValueOnce({
+    mocks.callGateway.mockResolvedValue({
       result: { meta: { agentMeta: { usage, lastCallUsage } } },
     });
     await runModel("--gateway");
