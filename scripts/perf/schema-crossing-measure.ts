@@ -149,8 +149,11 @@ if (mode === "seed") {
   using shared = new DatabaseSync(sharedPath);
   shared.exec(fs.readFileSync("test/fixtures/sqlite/openclaw-state-schema-v35.sql", "utf8"));
   shared.exec(
-    "PRAGMA user_version=35; INSERT INTO schema_meta VALUES('primary','global',35,NULL,'synthetic-schema-35',100,100); INSERT INTO config_machine_state VALUES('state.schema.contentVersion','35',100);",
+    "PRAGMA user_version=35; INSERT INTO schema_meta VALUES('primary','global',35,NULL,'synthetic-schema-35',100,100);",
   );
+  const { writeConfigMachineStateInDatabase } =
+    await import("../../src/state/config-machine-state-write.js");
+  writeConfigMachineStateInDatabase(shared, "state.schema.contentVersion", 35);
   const register = shared.prepare("INSERT INTO agent_databases VALUES(?,?,38,?,0)");
   for (const agentId of ids) {
     register.run(agentId, `agents/${agentId}/agent/openclaw-agent.sqlite`, now);
@@ -209,13 +212,15 @@ if (mode === "seed") {
   const started = performance.now();
   await withCliProcessScope(() =>
     withCliCommandCleanup(false, async (cleanup) => {
+      const pluginResources = cleanup?.pluginResources;
+      assert.ok(pluginResources, "Benchmark requires executable CLI cleanup");
       try {
-        await cleanup.pluginResources.run(() =>
+        await pluginResources.run(() =>
           updateMigrateCommand(path.join(root, "recovery", "native")),
         );
       } finally {
         await closeCliResources(cleanup);
-        await cleanup.pluginResources.release();
+        await pluginResources.release();
       }
     }),
   );
