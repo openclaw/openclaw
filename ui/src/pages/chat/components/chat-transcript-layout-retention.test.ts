@@ -190,10 +190,12 @@ describe("transcript layout lifetime", () => {
         false,
       );
       host.disconnect();
-      return [new WeakRef(message), new WeakRef(content)];
+      return {
+        obsolete: [new WeakRef(message), new WeakRef(content)],
+        control: new WeakRef({ unowned: true }),
+      };
     };
-    const obsolete = renderAndDisconnect();
-    const control = new WeakRef({ unowned: true });
+    const { obsolete, control } = renderAndDisconnect();
     try {
       await collectGarbageForTest();
       expect(hasLiveTarget(control)).toBe(false);
