@@ -61,7 +61,7 @@ public enum ChatMessageVisibleText {
         return OpenClawChatMessage.displayText(
             contentText: parts.joined(separator: "\n"),
             role: message.role,
-            stopReason: message.stopReason,
-            errorMessage: message.errorMessage)
+            stopReason: message.presentationOwnsFooter ? message.stopReason : nil,
+            errorMessage: message.presentationOwnsFooter ? message.errorMessage : nil)
     }
 }

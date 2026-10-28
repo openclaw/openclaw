@@ -82,6 +82,7 @@ import {
   type MemoryFlushPlanForRunResolution,
 } from "./memory-flush-plan.js";
 import {
+  TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS,
   estimatePromptTokensForMemoryFlush,
   hasAlreadyFlushedForCurrentCompaction,
   resolveCompactionThreshold,
@@ -89,6 +90,7 @@ import {
   resolveResponsesServerCompactionThreshold,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
+  shouldReadMemoryFlushTranscript,
 } from "./memory-flush.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
@@ -105,9 +107,6 @@ const embeddedAgentRuntimeLoader = createLazyImportLoader(
 const memoryFlushPreparationLoader = createLazyImportLoader(
   () => import("./memory-flush-prepare.js"),
 );
-
-// Leave room for large assistant outputs when checking near-threshold usage.
-const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 
 /** Compacts session context before a reply or after a completed direct command. */
 export async function runSessionCompactionIfNeeded(params: {
@@ -582,7 +581,10 @@ export async function runMemoryFlushIfNeeded(
   const flushRunId = crypto.randomUUID();
   let flushRunRegistered = false;
   const recordFailure = (error: unknown) => recordMemoryFlushFailure(error, params, entry);
-  const contextWindowTokens = resolveFollowupContextTokens(runtimeParams, runtimeId);
+  const contextWindowTokens = Math.min(
+    resolveFollowupContextTokens(runtimeParams, runtimeId),
+    params.recoveryContextTokenBudget ?? Number.POSITIVE_INFINITY,
+  );
   let memoryFlushResolution: MemoryFlushPlanForRunResolution | null;
   try {
     memoryFlushResolution = resolveMemoryFlushPlanForRun({ cfg: params.cfg, contextWindowTokens });
@@ -601,7 +603,6 @@ export async function runMemoryFlushIfNeeded(
     params.promptForEstimate ?? params.followupRun.prompt,
   );
   const persistedPromptTokens = resolveFreshSessionTotalTokens(entry);
-  const hasFreshPersistedPromptTokens = persistedPromptTokens !== undefined;
 
   // The soft margin belongs only to early flushing, leaving room before blocking compaction.
   const flushThreshold = Math.max(
@@ -612,21 +613,9 @@ export async function runMemoryFlushIfNeeded(
     }) - Math.max(0, Math.floor(memoryFlushPlan.softThresholdTokens)),
   );
 
-  // When totals are stale/unknown, derive prompt + last output from transcript so memory
-  // flush can still be evaluated against projected next-input size.
-  //
-  // When totals are fresh, only read the transcript when we're close enough to the
-  // threshold that missing the last output tokens could flip the decision.
-  const shouldReadTranscriptForOutput =
-    entry &&
-    hasFreshPersistedPromptTokens &&
-    promptTokenEstimate !== undefined &&
-    flushThreshold > 0 &&
-    persistedPromptTokens + promptTokenEstimate >=
-      flushThreshold - TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS;
-
   const shouldReadTranscript = Boolean(
-    entry && (!hasFreshPersistedPromptTokens || shouldReadTranscriptForOutput),
+    entry &&
+    shouldReadMemoryFlushTranscript({ persistedPromptTokens, promptTokenEstimate, flushThreshold }),
   );
 
   const forceFlushTranscriptBytes = memoryFlushPlan.forceFlushTranscriptBytes;
@@ -713,6 +702,9 @@ export async function runMemoryFlushIfNeeded(
   const tokenCountForFlush = asPositiveFiniteNumber(projectedTokenCount);
 
   const shouldFlushMemory =
+    (params.recoveryContextTokenBudget !== undefined &&
+      entry != null &&
+      !hasAlreadyFlushedForCurrentCompaction(entry)) ||
     shouldRunMemoryFlush({
       entry,
       tokenCount: tokenCountForFlush,

@@ -16,7 +16,7 @@ import {
 } from "./chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
-  isHeartbeatHistoryTurnBoundaryMessage,
+  isProjectedHistoryTurnBoundaryMessage,
   createPreSessionStartAnnouncePairFilter,
 } from "./chat-display-projection.history.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
@@ -398,7 +398,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
         ...(resolveProfileDisplay && !params.deferProfileDisplay
           ? { resolveCurrentUserProfileDisplay }
           : {}),
-        turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(contextMessage),
+        turnBoundaryPending: isProjectedHistoryTurnBoundaryMessage(contextMessage),
       },
     );
     if (newerContext.length > 0) {
