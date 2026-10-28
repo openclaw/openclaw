@@ -19,14 +19,17 @@ async function runRequest(
   getRuntimeConfig: PreflightParams["context"]["getRuntimeConfig"] = () => ({}),
   backend?: boolean,
   dedupe = new Map<string, DedupeEntry>(),
+  scopes?: string[],
 ) {
   const respond = vi.fn();
   const context = { getRuntimeConfig, dedupe };
-  const client = backend
-    ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
-    : backend === false
-      ? undefined
-      : null;
+  const client = scopes
+    ? { connect: { client: { mode: "backend" }, scopes } }
+    : backend
+      ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
+      : backend === false
+        ? undefined
+        : null;
   const io = createAgentTurnIo(respond);
   const result = await prepareAgentRequestPreflight({ request, context, client, io } as never);
   const replay = () =>
@@ -67,6 +70,51 @@ async function expectCachedReplay(
     expect.objectContaining({ cached: true, runId: "gateway-run" }),
   );
 }
+
+describe("agent.run model-fallback ladder", () => {
+  const baseRequest = {
+    message: "continue",
+    idempotencyKey: "fallback-ladder-run",
+  };
+
+  it("carries a caller-supplied ladder alongside a pinned model", async () => {
+    const { result } = await runRequest(
+      {
+        ...baseRequest,
+        model: "minimax-portal/MiniMax-M3",
+        fallbacks: ["minimax/MiniMax-M3", " ollama/qwen3.5:35b-a3b ", "minimax/MiniMax-M3"],
+      } as never,
+      () => ({}),
+      undefined,
+      new Map<string, DedupeEntry>(),
+      ["operator.admin"],
+    );
+    expect(result?.modelFallbacksOverride).toEqual([
+      "minimax/MiniMax-M3",
+      "ollama/qwen3.5:35b-a3b",
+    ]);
+    expect(result?.modelFallbacksOverrideSource).toBe("request");
+  });
+
+  it("rejects a caller-supplied ladder without model-override scope", async () => {
+    expectRejected(
+      await runRequest({
+        ...baseRequest,
+        fallbacks: ["minimax/MiniMax-M3"],
+      } as never),
+      {
+        code: "INVALID_REQUEST",
+        message: "model fallback overrides are not authorized for this caller.",
+      },
+    );
+  });
+
+  it("leaves the ladder unset when the request carries none", async () => {
+    const { result } = await runRequest(baseRequest as never);
+    expect(result?.modelFallbacksOverride).toBeUndefined();
+    expect(result?.modelFallbacksOverrideSource).toBeUndefined();
+  });
+});
 
 describe("agent database admission preflight", () => {
   afterEach(() => recordAgentDatabaseAdmissions([]));
