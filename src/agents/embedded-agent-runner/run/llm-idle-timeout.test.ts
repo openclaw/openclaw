@@ -27,7 +27,6 @@ import {
 } from "../../../shared/tool-activity-heartbeat.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
-import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { wrapStreamFnRepairMalformedToolCallArguments } from "./attempt.tool-call-argument-repair.js";
 import { streamWithIdleTimeout } from "./llm-idle-timeout.js";
 
@@ -37,12 +36,8 @@ function openStream(
   watchdogOptions?: Parameters<typeof streamWithIdleTimeout>[3],
   options: Parameters<StreamFn>[2] = {},
 ) {
-  return streamWithIdleTimeout(
-    baseFn,
-    50,
-    onTimeout,
-    watchdogOptions,
-  )({} as Parameters<StreamFn>[0], {} as Parameters<StreamFn>[1], options);
+  const streamFn = streamWithIdleTimeout(baseFn, 50, onTimeout, watchdogOptions);
+  return streamFn({} as Parameters<StreamFn>[0], {} as Parameters<StreamFn>[1], options);
 }
 
 function sourceFixture(
@@ -135,9 +130,9 @@ describe("streamWithIdleTimeout", () => {
 
   it("clears setup state when baseFn throws synchronously", async () => {
     const setupError = new Error("sync provider setup failed");
-    const baseFn = vi.fn(() => {
+    const baseFn: StreamFn = () => {
       throw setupError;
-    }) as unknown as Parameters<typeof streamWithIdleTimeout>[0];
+    };
     const onIdleTimeout = vi.fn();
     expect(() => openStream(baseFn, onIdleTimeout)).toThrow("sync provider setup failed");
     await vi.advanceTimersByTimeAsync(500);
@@ -352,56 +347,83 @@ describe("streamWithIdleTimeout", () => {
   );
 });
 
-function createNeverYieldingStream(signal?: AbortSignal): Awaited<ReturnType<StreamFn>> {
+function structuralStream(
+  next: () => Promise<IteratorResult<AssistantMessageEvent>>,
+): Awaited<ReturnType<StreamFn>> {
   return {
     result: () => new Promise<AssistantMessage>(() => {}),
-    [Symbol.asyncIterator]() {
-      return {
-        async next() {
-          return new Promise<IteratorResult<AssistantMessageEvent>>((_resolve, reject) => {
-            signal?.addEventListener("abort", () => reject(new Error("provider abort")), {
-              once: true,
-            });
-          });
-        },
-      };
-    },
+    [Symbol.asyncIterator]: () => ({ next }),
   };
 }
 
+function createNeverYieldingStream(signal?: AbortSignal) {
+  return structuralStream(
+    () =>
+      new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("provider abort")), {
+          once: true,
+        });
+      }),
+  );
+}
+
 describe("streamWithIdleTimeout caller cancellation", () => {
-  it.each([
-    { honorsAbort: false, returning: false },
-    { honorsAbort: true, returning: false },
-    { honorsAbort: false, returning: true },
+  it.for<{
+    phase: "iterator" | "factory";
+    honorsAbort?: boolean;
+    returning?: boolean;
+    alreadyAborted?: boolean;
+    accepted?: boolean;
+  }>([
+    { phase: "iterator", honorsAbort: false },
+    { phase: "iterator", honorsAbort: true },
+    { phase: "iterator", returning: true },
+    { phase: "factory" },
+    { phase: "factory", alreadyAborted: true },
+    { phase: "factory", accepted: true },
   ])(
-    "preempts pending iterators ($honorsAbort, returning: $returning)",
-    async ({ honorsAbort, returning }) => {
-      const callerAbortController = new AbortController();
+    "preempts $phase ($honorsAbort, returning: $returning, aborted: $alreadyAborted, accepted: $accepted)",
+    async ({ phase, honorsAbort, returning, alreadyAborted, accepted }) => {
+      const caller = new AbortController();
       const callerReason = new Error("caller cancelled");
-      const watched = sourceFixture(
-        (_model, _context, options) =>
-          createNeverYieldingStream(honorsAbort ? options?.signal : undefined),
-        undefined,
-        { signal: callerAbortController.signal },
-      );
-      const iterator = (await watched.stream)[Symbol.asyncIterator]();
-      const outcome = iterator.next().catch((error: unknown) => error);
-      const overlapping = iterator.next().catch((error: unknown) => error);
-
-      if (returning) {
-        await iterator.return?.();
+      if (alreadyAborted) {
+        caller.abort(callerReason);
       }
-
-      callerAbortController.abort(callerReason);
-
-      const cancelled = {
-        name: "AbortError",
-        message: callerReason.message,
-        cause: callerReason,
-      };
-      await expect(outcome).resolves.toMatchObject(cancelled);
-      await expect(overlapping).resolves.toMatchObject(cancelled);
+      const watched = sourceFixture(
+        (_model, _context, options) => {
+          if (phase === "iterator") {
+            return createNeverYieldingStream(honorsAbort ? options?.signal : undefined);
+          }
+          return options?.signal?.aborted
+            ? Promise.reject(new Error("provider rejected cancelled setup"))
+            : new Promise<AssistantMessageEventStream>(() => {});
+        },
+        undefined,
+        { signal: caller.signal },
+      );
+      const outcomes: Promise<unknown>[] = [];
+      const observe = (outcome: Promise<unknown>) => outcome.catch((error: unknown) => error);
+      if (phase === "iterator") {
+        const iterator = (await watched.stream)[Symbol.asyncIterator]();
+        outcomes.push(observe(iterator.next()), observe(iterator.next()));
+        if (returning) {
+          await iterator.return?.();
+        }
+      } else {
+        outcomes.push(observe(Promise.resolve(watched.stream)));
+        if (accepted) {
+          await vi.advanceTimersByTimeAsync(20);
+          notifyLlmRequestActivity(watched.signal());
+        }
+      }
+      caller.abort(callerReason);
+      for (const outcome of outcomes) {
+        await expect(outcome).resolves.toMatchObject({
+          name: "AbortError",
+          message: callerReason.message,
+          cause: callerReason,
+        });
+      }
       await vi.advanceTimersByTimeAsync(50);
       expect(watched.signal()?.reason).toBe(returning ? undefined : callerReason);
       expect(watched.onTimeout).not.toHaveBeenCalled();
@@ -412,14 +434,8 @@ describe("streamWithIdleTimeout caller cancellation", () => {
     "preserves provider error mapping (%s)",
     async (failure) => {
       const caller = new AbortController();
-      const source = createAssistantMessageEventStream();
-      const original = source[Symbol.asyncIterator].bind(source);
-      source[Symbol.asyncIterator] = () => {
-        const iterator = original();
-        // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Providers can reject with non-Error payloads.
-        iterator.next = () => Promise.reject(failure);
-        return iterator;
-      };
+      // oxlint-disable-next-line typescript/prefer-promise-reject-errors -- Providers can reject with non-Error payloads.
+      const source = structuralStream(() => Promise.reject(failure));
       const watched = sourceFixture(source, undefined, { signal: caller.signal });
       const stream = await watched.stream;
       const error = await stream[Symbol.asyncIterator]()
@@ -433,47 +449,6 @@ describe("streamWithIdleTimeout caller cancellation", () => {
           message: typeof failure === "string" ? failure : "Non-Error rejection",
         });
       }
-      source.end(makeAgentAssistantMessage({ content: [], stopReason: "error" }));
-    },
-  );
-
-  it.each([
-    { alreadyAborted: false, accepted: false },
-    { alreadyAborted: true, accepted: false },
-    { alreadyAborted: false, accepted: true },
-  ])(
-    "preempts provider stream creation (already aborted: $alreadyAborted, accepted: $accepted)",
-    async ({ alreadyAborted, accepted }) => {
-      const callerAbortController = new AbortController();
-      const callerReason = new Error("caller cancelled");
-      if (alreadyAborted) {
-        callerAbortController.abort(callerReason);
-      }
-      const watched = sourceFixture(
-        (_model, _context, options) =>
-          options?.signal?.aborted
-            ? Promise.reject(new Error("provider rejected cancelled setup"))
-            : new Promise<AssistantMessageEventStream>(() => {}),
-        undefined,
-        { signal: callerAbortController.signal },
-      );
-      if (accepted) {
-        await vi.advanceTimersByTimeAsync(20);
-        notifyLlmRequestActivity(watched.signal());
-      }
-
-      callerAbortController.abort(callerReason);
-
-      await expect(watched.stream).rejects.toMatchObject({
-        name: "AbortError",
-        message: callerReason.message,
-        cause: callerReason,
-      });
-      await vi.advanceTimersByTimeAsync(50);
-      expect([watched.signal()?.reason, watched.onTimeout.mock.calls.length]).toEqual([
-        callerReason,
-        0,
-      ]);
     },
   );
 });
@@ -484,10 +459,7 @@ describe("streamWithIdleTimeout parked consumer", () => {
     const message: AssistantMessage = makeAgentAssistantMessage({
       content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
       api: "openai-chatgpt-responses",
-      model: "test",
-      usage: createZeroUsageFixture(),
       stopReason: "toolUse",
-      timestamp: 1,
     });
     // Match attempt-stream's production order: repair inside the watchdog.
     const watched = sourceFixture(
@@ -541,9 +513,6 @@ describe("streamWithIdleTimeout parked consumer", () => {
           reason: "stop",
           message: makeAgentAssistantMessage({
             content: [{ type: "text", text: "first" }],
-            model: "test",
-            usage: createZeroUsageFixture(),
-            timestamp: 1,
           }),
         });
         stream.end();
