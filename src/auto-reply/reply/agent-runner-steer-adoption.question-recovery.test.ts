@@ -389,6 +389,8 @@ describe("question response custody through reply adoption", () => {
           expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first", "second"]);
           expectNotCalled(followup, abandoned);
           expect(first.controllerInput?.phase).toBe(withdrawn ? "waiting" : "consumed");
+          // Dispatch skips any input still holding an injection record.
+          expect(first.controllerInput?.injection).toBeUndefined();
           expect(second.controllerInput?.phase).toBe("consumed");
         } finally {
           nativeOutcome.resolve();
