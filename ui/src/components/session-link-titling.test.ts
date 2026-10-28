@@ -146,27 +146,6 @@ describe("SessionLinkTitler", () => {
     vi.restoreAllMocks();
   });
 
-  it("seeds and updates roster titles without turning labels into navigation", async () => {
-    const { host, request, titler } = createTitler([row("Cached research")]);
-    const label = document.createElement("span");
-    label.dataset.sessionTitleOnly = "";
-    label.dataset.sessionKey = SESSION_KEY;
-    label.innerHTML = '<span class="session-label"></span>';
-    host.append(label);
-    registerTargets(titler, host);
-    titler.refresh();
-    expectTitle(label, "Cached research");
-    expect(label.classList.contains("markdown-session-link--titled")).toBe(true);
-    expectAttributes(label, { title: null, href: null });
-    expect(label.parentElement).toBe(host);
-    expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
-    expect(request).not.toHaveBeenCalled();
-    titler.context = sessionContext([row("Current research")]);
-    await decorate(titler, label);
-    expectTitle(label, "Current research");
-    expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
-  });
-
   it("caches titles and retains producer labels", async () => {
     const request = vi.fn().mockResolvedValue(previewResponse());
     const { titler } = createTitler([], request);
@@ -197,37 +176,42 @@ describe("SessionLinkTitler", () => {
     expect(first.textContent).toBe("Updated by the producer");
   });
 
-  it("reconciles a saved display title against live roster changes without replaying equal labels", () => {
+  it.each(["a", "span"])("reconciles %s roster titles without replaying equal labels", (tag) => {
     const rows = [row("Saved research")];
-    const { titler, request } = createTitler(rows);
-    const anchor = sessionAnchor();
+    const { host, titler, request } = createTitler(rows);
+    const anchor = tag === "a" ? sessionAnchor() : document.createElement("span");
+    if (tag === "span") {
+      anchor.dataset.sessionTitleOnly = "";
+      anchor.dataset.sessionKey = SESSION_KEY;
+    }
     const label = document.createElement("span");
     label.className = "session-label";
-    label.textContent = "Saved research";
-    anchor.classList.add("markdown-session-link--titled");
+    if (tag === "a") {
+      label.textContent = "Saved research";
+      anchor.classList.add("markdown-session-link--titled");
+    }
     anchor.replaceChildren(label);
+    host.append(anchor);
     const onTitle = vi.fn();
-    titler.register(anchor, label, { title: "Saved research", onTitle });
-    titler.refresh();
+    titler.register(anchor, label, { title: tag === "a" ? "Saved research" : undefined, onTitle });
     const observer = observe(anchor);
     try {
-      titler.refresh();
-      expect(observer.takeRecords()).toEqual([]);
-      rows[0] = row("Current research");
-      titler.refresh();
-      expectTitle(anchor, "Current research");
-      expect(onTitle).toHaveBeenLastCalledWith("Current research");
-      observer.takeRecords();
-      titler.refresh();
-      expect(observer.takeRecords()).toEqual([]);
-      rows[0] = row();
-      titler.refresh();
-      expect(anchor.classList.contains("markdown-session-link--titled")).toBe(false);
-      expect(anchor.textContent).toBe(SESSION_KEY);
-      expect(onTitle).toHaveBeenLastCalledWith(undefined);
-      observer.takeRecords();
-      titler.refresh();
-      expect(observer.takeRecords()).toEqual([]);
+      for (const title of ["Saved research", "Current research", undefined]) {
+        rows[0] = row(title);
+        titler.refresh();
+        expectTitle(anchor, title ?? SESSION_KEY);
+        expect(anchor.firstElementChild).toBe(label);
+        expect(anchor.classList.contains("markdown-session-link--titled")).toBe(Boolean(title));
+        expect(onTitle).toHaveBeenLastCalledWith(title);
+        if (tag === "span") {
+          expectAttributes(anchor, { title: null, href: null });
+          expect(anchor.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
+          expect(anchor.parentElement).toBe(host);
+        }
+        observer.takeRecords();
+        titler.refresh();
+        expect(observer.takeRecords()).toEqual([]);
+      }
       expect(request).not.toHaveBeenCalled();
     } finally {
       observer.disconnect();

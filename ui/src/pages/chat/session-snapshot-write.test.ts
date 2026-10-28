@@ -203,9 +203,25 @@ describe("snapshot write serialization and scheduling", () => {
 
   it.each([
     {
-      name: "transcript display facts and progress",
+      name: "display facts and JSON value conversion",
       value: {
         ...snapshot(),
+        deltaCursor: 'cursor-"\\🦞',
+        displayedLeafEntryId: null,
+        avatarSources: undefined,
+        messages: [
+          {
+            content: [{ type: "text", text: "line\n🦞", omitted: undefined }],
+            callback: () => true,
+            symbol: Symbol("omitted"),
+            date: new Date(0),
+            nested: { values: [undefined, Number.NaN, Infinity, -0, () => true, Symbol("null")] },
+          },
+          { toJSON: () => ({ text: "converted", nested: [1, null] }) },
+          undefined,
+          null,
+        ],
+        pagination: { hasMore: true, nextOffset: 2.5, totalMessages: 10 },
         transcriptMetadata: {
           key: "agent:main:notes",
           kind: "direct",
@@ -223,47 +239,11 @@ describe("snapshot write serialization and scheduling", () => {
       },
     },
     {
-      name: "nested non-JSON values",
-      value: {
-        ...snapshot(),
-        deltaCursor: 'cursor-"\\🦞',
-        displayedLeafEntryId: null,
-        messages: [
-          {
-            content: [{ type: "text", text: "line\n🦞", omitted: undefined }],
-            callback: () => true,
-            symbol: Symbol("omitted"),
-            date: new Date(0),
-            nested: { values: [undefined, Number.NaN, Infinity, -0, () => true, Symbol("null")] },
-          },
-          undefined,
-          null,
-        ],
-        pagination: { hasMore: true, nextOffset: 2.5, totalMessages: 10 },
-      },
-    },
-    {
       name: "empty complete snapshot",
       value: {
         messages: [],
         pagination: { hasMore: false, completeSnapshot: true, totalMessages: 0 },
         sessionId: null,
-      },
-    },
-    {
-      name: "undefined optional fields",
-      value: {
-        ...snapshot(),
-        deltaCursor: undefined,
-        displayedLeafEntryId: undefined,
-        pagination: { hasMore: false, totalMessages: undefined },
-      },
-    },
-    {
-      name: "custom JSON content",
-      value: {
-        ...snapshot(),
-        messages: [{ toJSON: () => ({ text: "converted", nested: [1, null] }) }],
       },
     },
   ] satisfies Array<{ name: string; value: ChatSessionSnapshot }>)(
@@ -277,16 +257,7 @@ describe("snapshot write serialization and scheduling", () => {
         sessionId: value.sessionId,
         sessionKey,
       };
-      // Previous persistence measured each sanitized array item, then both envelopes.
-      const messageWeight = sanitized.messages.reduce<number>(
-        (sum, message) => sum + JSON.stringify([message]).length - 2,
-        0,
-      );
-      const expectedWeight =
-        messageWeight +
-        Math.max(0, sanitized.messages.length - 1) +
-        JSON.stringify({ ...sanitized, messages: [] }).length +
-        JSON.stringify(envelope).length;
+      const expectedWeight = JSON.stringify(sanitized).length + JSON.stringify(envelope).length;
       writeSnapshotFixture(store, sessionKey, value);
       const stringify = vi.spyOn(JSON, "stringify");
       await store.flush();
@@ -311,7 +282,6 @@ describe("snapshot write serialization and scheduling", () => {
   );
 
   it.each([
-    { name: "retired projection", patch: { projectionVersion: 5 } },
     { name: "non-array messages", patch: { snapshot: { ...snapshot(), messages: {} } } },
     {
       name: "missing messages",

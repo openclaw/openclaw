@@ -77,10 +77,9 @@ describe("session message cache", () => {
     expect(persisted).toHaveBeenCalledTimes(2);
     expect(read()?.sessionState?.archived).toBe(false);
   });
+
   it("publishes each admitted snapshot once with its pruned thumbnail weight", () => {
-    const cache: ChatMessageCache = new Map();
-    const host = { assistantAgentId: "main" };
-    const target = { sessionKey: "agent:main:thumbnails" };
+    const { cache, read, write, append } = createCacheContext();
     const thumbnail = new Blob([new Uint8Array(256 * 1024)], { type: "image/webp" });
     const image = { width: 480, height: 240, rendition: 480 as const, thumbnail };
     const messages = Array.from({ length: 34 }, (_, index) => ({
@@ -88,49 +87,39 @@ describe("session message cache", () => {
       content: "Synthetic image",
       __openclaw: { id: `image-${index}`, seq: index + 1 },
     }));
-    const write = vi.fn((_key: string, value: ChatSessionSnapshot, weight: number) => {
+    const publish = vi.fn((_key: string, value: ChatSessionSnapshot, weight: number) => {
       expect(weight).toBe(JSON.stringify(value).length);
     });
-    observeChatCache(cache, { write, delete: vi.fn() });
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      target,
+    observeChatCache(cache, { write: publish, delete: vi.fn() });
+    write(
       widgetSnapshot(messages, "session-1", {
         rowDisplay: Object.fromEntries(
           messages.map((_, index) => [`image-${index}`, { images: { source: image } }]),
         ),
       }),
     );
-    expect(write).toHaveBeenCalledTimes(1);
-    const saved = readChatSessionSnapshot(cache, host, target)!;
-    expect(saved.messages).toBe(messages);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(read()?.messages).toBe(messages);
     expect(
-      Object.values(saved.rowDisplay ?? {}).filter((row) => row.images?.source?.thumbnail),
+      Object.values(read()?.rowDisplay ?? {}).filter((row) => row.images?.source?.thumbnail),
     ).toHaveLength(32);
-    appendChatMessageToCache(cache, host, target, {
+    append("home", {
       role: "assistant",
       content: "Following message",
       __openclaw: { id: "following", seq: 35 },
     });
-    expect(write).toHaveBeenCalledTimes(2);
-    cacheChatSessionSnapshot(
-      cache,
-      host,
-      { sessionKey: "agent:main:other" },
+    expect(publish).toHaveBeenCalledTimes(2);
+    write(
       widgetSnapshot(
         [{ role: "assistant", content: "Other", __openclaw: { id: "other" } }],
         "two",
-        {
-          rowDisplay: { other: { images: { source: image } } },
-        },
+        { rowDisplay: { other: { images: { source: image } } } },
       ),
+      "other",
     );
-    expect(write).toHaveBeenCalledTimes(4);
+    expect(publish).toHaveBeenCalledTimes(4);
     expect(
-      Object.values(readChatSessionSnapshot(cache, host, target)?.rowDisplay ?? {}).filter(
-        (row) => row.images?.source?.thumbnail,
-      ),
+      Object.values(read()?.rowDisplay ?? {}).filter((row) => row.images?.source?.thumbnail),
     ).toHaveLength(31);
   });
 

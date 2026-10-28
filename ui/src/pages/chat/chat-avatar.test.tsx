@@ -279,21 +279,22 @@ it("paints known assistant and forwarded avatars before reconnect without readin
   );
   const fetchAvatar = vi.spyOn(globalThis, "fetch");
   const [connected, setConnected] = createSignal(false);
+  const assistant = (agentId: string, source: string | null) => ({
+    agentId,
+    name: agentId,
+    ...resolveAssistantDisplayAvatar({
+      currentAgentId: agentId,
+      assistantAvatar: "/avatar/stale-bootstrap",
+      assistantAvatarSource: source,
+      agents: [{ id: agentId, identity: { avatar: "/avatar/stale-roster" } }],
+    }),
+  });
   const view = mountSolid(() => (
     <>
       <ChatAvatar
         role="assistant"
         mediaReadAllowed={connected()}
-        assistant={{
-          agentId: "main",
-          name: "Main",
-          ...resolveAssistantDisplayAvatar({
-            currentAgentId: "main",
-            assistantAvatar: "/avatar/stale-bootstrap",
-            assistantAvatarUrl: null,
-            assistantAvatarSource: connected() ? origin + main : main,
-          }),
-        }}
+        assistant={assistant("main", connected() ? origin + main : main)}
       />
       <ForwardedAvatar
         agentId="research"
@@ -311,17 +312,7 @@ it("paints known assistant and forwarded avatars before reconnect without readin
       <ChatAvatar
         role="assistant"
         mediaReadAllowed={connected()}
-        assistant={{
-          agentId: "cleared",
-          name: "Cleared",
-          ...resolveAssistantDisplayAvatar({
-            currentAgentId: "cleared",
-            assistantAvatar: "/avatar/stale-bootstrap",
-            assistantAvatarUrl: null,
-            assistantAvatarSource: null,
-            agents: [{ id: "cleared", identity: { avatar: "/avatar/stale-roster" } }],
-          }),
-        }}
+        assistant={assistant("cleared", null)}
       />
       <ChatAvatar role="user" sender={sender} mediaReadAllowed={connected()} />
       <ChatAuthorAvatar sender={sender} mediaReadAllowed={connected()} />

@@ -1,10 +1,6 @@
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import {
-  controlUiSessionUrl,
-  defaultControlUiFeatureMethods,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { getInitialHistoryRequests } from "./chat-initial-history.test-support.ts";
 import {
@@ -28,7 +24,6 @@ suite.define(() => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const gateway = await installMockGateway(page, {
           sessionKey: sourceKey,
-          featureMethods: [...defaultControlUiFeatureMethods],
           sessions: [createControlUiSessionRow(sourceKey, "Source conversation", 1)],
           sessionTranscripts: {
             [sourceKey]: transcript(`Open [Linked conversation](${destinationPath}).`),

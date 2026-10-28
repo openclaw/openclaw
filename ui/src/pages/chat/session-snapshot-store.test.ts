@@ -161,11 +161,24 @@ async function readRawRecord(
 }
 
 describe("persistent chat session snapshots", () => {
-  it("restores row display bytes with their transcript and removes them on scoped sign-out", async () => {
+  it("restores conversation display facts and bytes within their account scope", async () => {
     // fake-indexeddb uses Node structured clone; jsdom's Blob is not cloneable there.
     vi.stubGlobal("Blob", NodeBlob);
     const thumbnail = new Blob([new Uint8Array([1, 2, 3])], { type: "image/webp" });
+    const remembered: NonNullable<ChatSessionSnapshot["composer"]> = {
+      id: "model",
+      provider: "openai",
+      name: "Remembered model",
+      reasoning: true,
+      speed: { active: false, currentOverride: "off", label: "Standard", supported: true },
+      thinkingLevel: "high",
+      thinkingDefault: "medium",
+      thinkingLevels: [{ id: "high", label: "High" }],
+      permissionMode: "full",
+      defaultPermissionMode: "workspace",
+    };
     const saved = {
+      composer: remembered,
       ...snapshot({ role: "assistant", content: "Synthetic image", __openclaw: { id: "reply" } }),
       rowDisplay: {
         reply: {
@@ -177,16 +190,21 @@ describe("persistent chat session snapshots", () => {
         },
       },
     };
-    const writer = new SessionSnapshotStore();
-    await persist(writer, sessionKey, saved);
+    await seed(saved);
     const restored = await readSnapshot();
+    expect(restored?.composer).toEqual(remembered);
     expect(restored?.rowDisplay?.reply?.links).toEqual(saved.rowDisplay.reply.links);
     const image = restored?.rowDisplay?.reply?.images?.source;
     expect(image).toMatchObject({ width: 480, height: 240, rendition: 480 });
     expect(await image?.thumbnail?.arrayBuffer()).toEqual(await thumbnail.arrayBuffer());
     expect(restored?.rowDisplay?.evicted).toBeUndefined();
+    const otherAccountKey = resolveChatSnapshotKey(
+      { ...snapshotHost, client: { recoveryScope: "account-b", recoveryScopeReady: true } },
+      { sessionKey: rawKey(sessionKey) },
+    );
+    expect(await readSnapshot(otherAccountKey)).toBeNull();
     const other = key("agent:main:other");
-    await persist(writer, other, { ...saved, sessionId: "other" });
+    await seed({ ...saved, sessionId: "other" }, other);
     await clearStoredChatSnapshots(sessionKey.slice(0, sessionKey.indexOf("\u0000") + 1));
     expect(await readSnapshot()).toBeNull();
     expect(await readSnapshot(other)).toBeNull();
@@ -224,28 +242,6 @@ describe("persistent chat session snapshots", () => {
     expect(next?.rowDisplay?.["new-0"]?.images?.source?.thumbnail).toBeInstanceOf(Blob);
   });
 
-  it("restores model display data with the conversation, isolated from another account", async () => {
-    const writer = new SessionSnapshotStore();
-    const remembered: NonNullable<ChatSessionSnapshot["composer"]> = {
-      id: "model",
-      provider: "openai",
-      name: "Remembered model",
-      reasoning: true,
-      speed: { active: false, currentOverride: "off", label: "Standard", supported: true },
-      thinkingLevel: "high",
-      thinkingDefault: "medium",
-      thinkingLevels: [{ id: "high", label: "High" }],
-      permissionMode: "full",
-      defaultPermissionMode: "workspace",
-    };
-    await persist(writer, sessionKey, { ...snapshot(), composer: remembered });
-    expect((await readSnapshot())?.composer).toEqual(remembered);
-    const otherKey = resolveChatSnapshotKey(
-      { ...snapshotHost, client: { recoveryScope: "account-b", recoveryScopeReady: true } },
-      { sessionKey: rawKey(sessionKey) },
-    );
-    expect(await readSnapshot(otherKey)).toBeNull();
-  });
   let writer: SessionSnapshotStore;
   const seed = async (value = snapshot(), cacheKey = sessionKey) =>
     persist(writer, cacheKey, value);
