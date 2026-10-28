@@ -15,6 +15,7 @@ import { resolveSessionParentSessionKey } from "../../channels/plugins/session-c
 import { conversationIdentityFromSessionEntry } from "../../config/sessions/conversation-identity.js";
 import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
+import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistryAsync,
@@ -858,12 +859,18 @@ async function initSessionStateAttemptLocked(
     // The outer retry owns conflicts; never retry while holding the writer lane.
     throw new ReplySessionInitConflictError(sessionKey);
   }
+  const replyOp = params.replyOperation;
+  const isMatchingReplyOperationKey =
+    replyOp !== undefined &&
+    (replyOp.key === sessionKey ||
+      normalizeExplicitSessionKey(replyOp.key, params.ctx) === sessionKey);
   if (
-    params.replyOperation?.key === sessionKey &&
+    replyOp &&
+    isMatchingReplyOperationKey &&
     (entry?.sessionId !== committed.sessionEntry.sessionId ||
       entry?.lifecycleRevision !== committed.sessionEntry.lifecycleRevision)
   ) {
-    await acknowledgeReplySessionTransition(params.replyOperation, {
+    await acknowledgeReplySessionTransition(replyOp, {
       previous: entry,
       current: committed.sessionEntry,
     });
