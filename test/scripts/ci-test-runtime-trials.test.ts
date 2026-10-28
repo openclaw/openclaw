@@ -56,9 +56,8 @@ async function recordRun(
 }
 
 function expectIncludes(calls: Awaited<ReturnType<typeof recordRun>>["calls"], expected: string[]) {
-  expect(calls.map(({ runtime, includes }) => ({ runtime, includes }))).toEqual(
-    ["node", "bun"].map((runtime) => ({ runtime, includes: expected })),
-  );
+  const actual = calls.map(({ runtime, includes }) => ({ runtime, includes }));
+  expect(actual).toEqual(["node", "bun"].map((runtime) => ({ runtime, includes: expected })));
 }
 
 it.each([
@@ -101,9 +100,7 @@ it.each(["bun-all", "dual-all"] as const)(
       { kind: "group", name: "gateway-methods", plan: { configs, includePatterns } },
       { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
     );
-    expect(calls.map(({ runtime, includes }) => ({ runtime, includes }))).toEqual(
-      ["node", "bun"].map((runtime) => ({ runtime, includes: includePatterns })),
-    );
+    expectIncludes(calls, includePatterns);
     expect(calls[0]!.args.slice(0, 2)).toEqual(configs);
     // The methods project excludes its isolated sibling, leaving no Bun file.
     expect(calls[1]!.args).toEqual([isolatedConfig, "--", `--exclude=${path.resolve(heapFile)}`]);
@@ -178,10 +175,8 @@ it("retains Node exceptions when argv overrides a known config", () => {
     vitestArgs: ["--config", processConfig],
   };
   const selected = selections(selection, "bun-all");
-  expect(selected).toHaveLength(2);
-  expect(selected[0]!.runtime).toBe("node");
+  expect(selected.map(({ runtime }) => runtime)).toEqual(["node", "bun"]);
   expect(selected[0]!.vitestArgs).toContain(path.resolve(nodeFile));
-  expect(selected[1]!.runtime).toBe("bun");
   expect(selected[1]!.vitestArgs).toContain(`--exclude=${path.resolve(nodeFile)}`);
   expect(requiresBun(selection, "bun-all")).toBe(true);
 });
@@ -205,11 +200,9 @@ it("retains exact Node exceptions and selects broad target remainders on Bun", a
     expect(selections({ targets: [target] }, "bun-all")).toEqual([{ runtime }]);
   }
   const { calls } = await recordRun({ kind: "target", name: "process", target: "src/process" });
-  expect(calls).toHaveLength(2);
-  expect(calls[0]!.runtime).toBe("node");
+  expect(calls.map(({ runtime }) => runtime)).toEqual(["node", "bun"]);
   expect(calls[0]!.args).toContain(nodeFile);
   expect(calls[0]!.args).not.toContain("src/process");
-  expect(calls[1]!.runtime).toBe("bun");
   expect(calls[1]!.args).toContain("src/process");
   expect(calls[1]!.args).toContain(`--exclude=${path.resolve(nodeFile)}`);
 });
