@@ -27,7 +27,7 @@ it("appends a byte-stable index for owner-private sessions until the cutoff move
   const first = await hook({ prompt: "hi", messages }, hookContext(f));
   expect(first.appendSystemContext).toContain("- note: Brightpath analysis playbook");
   // Neither a new record nor renaming a listed one changes the index mid-session.
-  await f.save("Saved during the session");
+  await f.save(`${"p".repeat(78)}🎯 review`);
   const current = (await f.service.record({ id: saved.id }, f.tool)).record!;
   await f.service.save_page(
     {
@@ -48,7 +48,7 @@ it("appends a byte-stable index for owner-private sessions until the cutoff move
     { prompt: "new", messages: [{ role: "compactionSummary", timestamp: Date.now() + 1 }] },
     hookContext(f),
   );
-  expect(refreshed.appendSystemContext).toContain("Saved during the session");
+  expect(JSON.stringify(refreshed)).toContain(`- note: ${"p".repeat(78)}…`);
 });
 
 it("pins the index per physical store, so a binding moved to a fresh store renders its own", async () => {
