@@ -1,46 +1,28 @@
-# ShopMini — Demo quản lý shop nhỏ
+# ShopMini — Demo quản lý bán hàng
 
-ShopMini là bản demo học tập để quản lý sản phẩm, đơn hàng và doanh thu cơ bản. Dự án được đặt trong thư mục riêng của fork OpenClaw để không can thiệp vào mã nguồn chính của OpenClaw.
+ShopMini là bản demo frontend học tập dành cho shop nhỏ, đặt trong thư mục riêng của fork OpenClaw.
 
-## Chức năng hiện có
+## Chức năng
 
-- Bảng tổng quan: doanh thu từ đơn đã giao, tổng số đơn, đơn đang xử lý và số sản phẩm.
-- Quản lý sản phẩm: thêm sản phẩm, xem giá/tồn kho và xóa sản phẩm khi không có đơn chưa hủy liên quan.
-- Quản lý đơn hàng: tạo đơn, kiểm tra tồn kho, tìm kiếm, lọc trạng thái, chuyển trạng thái và hủy đơn.
-- Tự tính tổng tiền và cập nhật số lượng tồn kho khi tạo hoặc hủy đơn.
-- Lưu dữ liệu trong `localStorage` của trình duyệt.
-- Giao diện responsive, không sử dụng thư viện bên ngoài.
+- Dashboard: doanh thu từ đơn đã giao, tổng đơn, đơn đang xử lý, số sản phẩm và ước tính lợi nhuận gộp / giá trị tồn kho.
+- Sản phẩm: thêm, tìm kiếm, theo dõi giá bán, giá vốn và tồn kho; ngăn xóa sản phẩm đã có đơn hàng liên quan.
+- Đơn hàng: tạo đơn, kiểm tra tồn kho, tìm kiếm/lọc trạng thái, cập nhật trạng thái, hủy đơn và hoàn hàng vào kho.
+- Kho hàng: nhập hoặc điều chỉnh tồn kho, không cho số lượng tồn âm, xem lịch sử thay đổi.
+- Khách hàng: tổng hợp khách mua, số đơn và chi tiêu đã giao; tìm kiếm theo tên.
+- Báo cáo: doanh thu, giá vốn hàng đã giao, lợi nhuận gộp ước tính, giá trị tồn kho.
+- Xuất CSV: danh sách đơn hàng và khách hàng.
+- Lưu dữ liệu trong localStorage; giao diện responsive và không cần thư viện bên ngoài.
 
-## Cách chạy trong VS Code
+## Chạy trên VS Code
 
-1. Mở thư mục `projects/shopmini` trong VS Code hoặc mở file `index.html`.
-2. Mở `index.html` bằng trình duyệt. Bạn cũng có thể dùng tiện ích Live Server trong VS Code nếu đã cài.
-3. Thử tạo sản phẩm mới, tạo đơn hàng, tìm kiếm đơn và cập nhật trạng thái.
-4. Để khôi phục dữ liệu mẫu, mở Developer Tools → Console và chạy:
+1. Mở thư mục \`projects/shopmini\` trong VS Code.
+2. Mở \`index.html\` trong trình duyệt hoặc dùng tiện ích Live Server.
+3. Dùng dữ liệu demo để thử các luồng sản phẩm, đơn hàng, nhập kho và báo cáo.
 
-```js
-ShopMini.resetDemo()
-```
+## Giới hạn
 
-Nếu trình duyệt chặn lưu trữ khi mở file trực tiếp, hãy chạy qua Live Server.
+Đây là demo frontend. Dữ liệu chỉ được lưu trong trình duyệt hiện tại, không đồng bộ giữa nhiều máy. Chưa có backend/database dùng chung, đăng nhập/phân quyền bảo mật, sao lưu máy chủ, hóa đơn điện tử, tích hợp vận chuyển, thanh toán trực tuyến, kết nối sàn thương mại điện tử, thông báo SMS/email hoặc chatbot AI thực sự. Báo cáo lợi nhuận là ước tính đơn giản, chưa trừ chi phí vận hành và thuế. Không sử dụng bản demo này để lưu dữ liệu khách hàng thật hoặc thay thế phần mềm kế toán.
 
-## Cấu trúc
+## Vị trí
 
-- `index.html`: cấu trúc giao diện.
-- `style.css`: giao diện và responsive.
-- `app.js`: dữ liệu mẫu, xử lý đơn/sản phẩm và lưu localStorage.
-
-## Phạm vi và giới hạn
-
-Đây là **MVP frontend**, chưa tích hợp OpenClaw runtime, AI API, backend, database dùng chung, tài khoản, phân quyền, sao lưu máy chủ hay thanh toán. Dữ liệu chỉ nằm trong trình duyệt hiện tại; không dùng bản này để lưu thông tin khách hàng thật hoặc vận hành cửa hàng thật.
-
-## Hướng phát triển tiếp theo
-
-1. Viết backend và database (ví dụ Node.js + SQLite/PostgreSQL).
-2. Thêm đăng nhập, phân quyền theo từng shop và kiểm tra dữ liệu ở server.
-3. Bổ sung xuất CSV, báo cáo theo ngày/tháng và sao lưu.
-4. Chỉ tích hợp OpenClaw như một lớp trợ lý tùy chọn sau khi xác định rõ tác vụ cần tự động hóa (ví dụ tổng hợp báo cáo hoặc trả lời câu hỏi về đơn hàng).
-
-## Nơi lưu mã nguồn
-
-Được lưu trong fork OpenClaw ở nhánh `feature/shopmini-mvp`, thư mục `projects/shopmini/`. Nhánh `main` không bị chỉnh sửa.
+Nhánh \`feature/shopmini-mvp\`, thư mục \`projects/shopmini/\`. Nhánh \`main\` không bị chỉnh sửa.
