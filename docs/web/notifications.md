@@ -1,5 +1,5 @@
 ---
-summary: "Enable and test browser or macOS notifications from the Control UI"
+summary: "Manage browser and macOS notifications or check native iOS notification settings"
 title: "Notifications"
 read_when:
   - Enabling notifications from Settings
@@ -10,7 +10,7 @@ read_when:
 
 OpenClaw can ping you when something needs your attention, including an exec or plugin approval request. The ping arrives in the browser that runs the Control UI. It can also arrive through native macOS notifications when you use the OpenClaw macOS app. Your first chat send may request permission automatically. **Settings → Notifications** remains the place to enable or repair the current device. Use the same page to check its status and send yourself a test.
 
-This page covers those two surfaces. It does not control channel reaction notifications, Android notification forwarding, or iOS background push. The mobile apps register for push through their own node paths. See [iOS](/platforms/ios) and [Nodes](/nodes).
+This page also shows native iOS notification status and links to the app's device settings and permissions. It does not control channel reaction notifications, Android notification forwarding, or iOS background push. The mobile apps register for push through their own node paths. See [iOS](/platforms/ios) and [Nodes](/nodes).
 
 ## Which surface you get
 
@@ -20,9 +20,12 @@ What the Notifications page controls depends on where you opened it:
 | ------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | Supported web browser or installed Control UI PWA | Browser Push API via the Control UI service worker | Receive approvals and enabled attention categories, manage this browser's subscription, and send a test |
 | OpenClaw macOS app                                | Native macOS notifications                         | Grant app permission, jump to System Settings when blocked, send a local test                           |
+| OpenClaw iOS app                                  | Native iOS notification settings                   | Check delivery and permission status; open This iPhone/This iPad or Device permissions                  |
 | Browser without Push API support                  | None                                               | Status only. Enable and test stay unavailable                                                           |
 
 The macOS app deliberately uses the native permission flow instead of browser push. That is the notification system your Mac already respects.
+
+In the iOS app, **This iPhone** or **This iPad** opens the existing device settings, where the **Notifications** switch controls delivery. **Device permissions** opens the native access settings. The Notifications page does not require installing a Home Screen web app and does not offer a browser push test.
 
 ## Enable browser notifications
 
