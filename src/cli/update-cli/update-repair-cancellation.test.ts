@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   assertManagedHandoffTestConsumer,
@@ -19,6 +19,13 @@ import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as census from "../../infra/openclaw-process-census.js";
+import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
+import {
+  publicationActivation,
+  withPublicationFence,
+} from "../../infra/package-update-publication.test-support.js";
+import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
+import * as runtimeWorker from "../../infra/runtime-worker-url.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import {
@@ -36,6 +43,7 @@ import { killPidIfAlive, waitForPidToExit } from "../../test-utils/process-tree.
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { preparePackagePublication } from "./update-package-publication.test-support.js";
 
 const { createRepairState, mocks } = await import("./update-repair.test-support.js");
 
@@ -264,6 +272,43 @@ unix(
     });
     await expect(admit("next-update")).resolves.toBe("admitted");
     expect(f.rows()).toEqual([]);
+  },
+);
+
+unix(
+  "repair settles cancelled custody together with an unused package preparation",
+  { timeout: 60_000 },
+  async () => {
+    // The swap fixture's package becomes the crashed updater's installation.
+    const swap = await createPackageSwapFixture(path.dirname(f.install));
+    fs.rmSync(f.install, { recursive: true });
+    fs.renameSync(swap.packageRoot, f.install);
+    // Journals record the built sealed helper; source tests seal inert bytes.
+    const helper = path.join(path.dirname(f.install), "sealed.mjs");
+    fs.writeFileSync(helper, "");
+    const resolveWorkerUrl = runtimeWorker.resolveRuntimeWorkerUrl;
+    vi.spyOn(runtimeWorker, "resolveRuntimeWorkerUrl").mockImplementation((entry) =>
+      entry.sourceWorkerName === "package-update-activation-sealed"
+        ? pathToFileURL(helper)
+        : resolveWorkerUrl(entry),
+    );
+    const { initial } = await withPublicationFence(f.slot, async (fence) =>
+      preparePackagePublication({ ...swap, packageRoot: f.install }, publicationActivation(fence)),
+    );
+    expect(initial.phase).toBe("prepared");
+    f.crash();
+    await f.stopCandidate();
+
+    // Package settlement used to request fresh admission, which the custody refused.
+    await repair();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("closed as publication-not-started"),
+    );
+    expect(lastJson()).toMatchObject({ status: "ok" });
+    expect(f.rows()).toEqual([]);
+    expect(() => assertNoPendingPackageActivation(f.install)).not.toThrow();
+    await expect(admit("next-update")).resolves.toBe("admitted");
   },
 );
 
