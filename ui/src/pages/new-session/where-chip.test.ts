@@ -299,15 +299,16 @@ describe("Where chip", () => {
     expect(container.querySelector("openclaw-select-picker")).toBeNull();
   });
 
-  it("renders devices for writers while cloud and Connect remain admin-only", async () => {
+  it("renders granted cloud profiles for writers while Connect and setup remain admin-only", async () => {
     const writer = await renderPicker(false);
     const autoRow = option(writer, "auto-device");
     expect(autoRow?.getAttribute("aria-pressed")).toBe("false");
     expect(hoverDetails(autoRow)).toContain("Chooses the least-busy connected device");
     expect(option(writer, "device:runner")).not.toBeNull();
     expect(writer.querySelector(".session-menu__sub, .session-menu__description")).toBeNull();
-    expect(option(writer, "cloud:aws")).toBeNull();
+    expect(option(writer, "cloud:aws")).not.toBeNull();
     expect(writer.querySelector('[data-action="connect-machine"]')).toBeNull();
+    expect(writer.querySelector('[data-action="manage-cloud-workers"]')).toBeNull();
 
     const admin = await renderPicker(true);
     expect(option(admin, "cloud:aws")).not.toBeNull();

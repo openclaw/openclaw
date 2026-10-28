@@ -2,7 +2,11 @@ import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { serializedJsonArrayBytes } from "./serialized-json.js";
 import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
 import { captureSessionRowGeneration, type SessionRowGeneration } from "./session-row-identity.js";
-import { sessionRowEncodingBytes } from "./session-row-serialization.js";
+import {
+  registerSerializedSessionRow,
+  serializeSessionRow,
+  sessionRowEncodingBytes,
+} from "./session-row-serialization.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
 // Selection and presentation have separate keys: 512 slots cover 256 complete queries.
@@ -374,16 +378,25 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       }
       // The immutable source owns values; only field order and response-local fact indexes
       // can change its packed bytes. Retain one layout, never a cache of list shapes.
+      const sameKeys = previous && previous.keys.length === keyCount;
       if (
-        previous &&
-        previous.keys.length === keyCount &&
+        sameKeys &&
         previous.row.sharedFacts?.length === row.sharedFacts?.length &&
         (row.sharedFacts?.every((ref, position) => ref === previous.row.sharedFacts?.[position]) ??
           true)
       ) {
         rows[index] = previous.row;
       } else {
-        retained.packed = { row, keys: Object.keys(row) };
+        if (sameKeys && row.sharedFacts) {
+          // Packing appends numeric fact indexes last. All preceding fields and their
+          // order still belong to the same immutable source; only replace that array.
+          const encoded = serializeSessionRow(previous.row);
+          registerSerializedSessionRow(
+            row,
+            encoded.slice(0, encoded.lastIndexOf("[")) + JSON.stringify(row.sharedFacts) + "}",
+          );
+        }
+        retained.packed = { row, keys: sameKeys ? previous.keys : Object.keys(row) };
       }
     }
     return { sessions: rows, sharedFacts };

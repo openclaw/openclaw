@@ -124,8 +124,10 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
     input.action.kind === "replace" ||
     input.action.kind === "repair" ||
     (input.action.kind === "prepare" && input.action.manifest.replace);
-  if (row.tree_root_digest && !replacing) {
-    records = readLocalWorkspaceTree(db, row.tree_root_digest);
+  if (row.tree_root_digest && (!replacing || input.action.kind === "repair")) {
+    records = readLocalWorkspaceTree(db, row.tree_root_digest, {
+      allowMissing: input.action.kind === "repair",
+    });
   } else if (!row.baseline_json && !replacing) {
     // Decode within the read scope; do not retain the JSON inventory beside its tree during scanning.
     for (const { node_json } of executeSqliteQuerySync(
@@ -240,19 +242,47 @@ export async function executeLocalWorkspaceManifestRead(
             ]),
         )
       : [];
+    // Surviving saved-root records supply membership, not reconstructed content.
+    // Every candidate is scanned afresh and authenticated by the exact saved root.
+    const baselinePaths = new Set(snapshot.records.keys());
+    baselinePaths.delete("");
+    const baselineDirectories = new Set(
+      [...snapshot.records.values()]
+        .filter(({ node }) => node.type === "directory" && node.path !== "")
+        .map(({ node }) => node.path),
+    );
+    let canonicalPaths: Set<string> | undefined;
+    let projectionPaths: Set<string> | undefined;
+    let projectionDirectories: Set<string> | undefined;
     let scanFailure: unknown;
-    for (const root of [row.projection_path, action.canonicalRoot]) {
+    for (const candidate of ["projection", "canonical", "canonicalWithProjectionPaths"] as const) {
+      const extendCanonical = candidate === "canonicalWithProjectionPaths";
+      if (extendCanonical && !projectionPaths) {
+        continue;
+      }
+      const root = candidate === "projection" ? row.projection_path : action.canonicalRoot;
       const nodes: LocalWorkspaceManifestNode[] = [];
       try {
-        const includePaths =
-          root === action.canonicalRoot
-            ? await selectLocalWorkspaceCanonicalPaths({
-                root,
-                admittedPaths: row.source_paths_json,
-                assertCurrent: () => undefined,
-              })
-            : undefined;
-        if (includePaths) {
+        let includePaths: Set<string> | undefined;
+        const preserveDirectories = new Set(baselineDirectories);
+        if (candidate !== "projection") {
+          canonicalPaths ??= await selectLocalWorkspaceCanonicalPaths({
+            root,
+            admittedPaths: row.source_paths_json,
+            baselinePaths,
+            assertCurrent: () => undefined,
+          });
+          includePaths = new Set(canonicalPaths);
+          // Keep the original canonical candidate first: a later guest addition
+          // can share a name with unrelated host-only bytes.
+          if (extendCanonical) {
+            for (const entryPath of projectionPaths!) {
+              includePaths.add(entryPath);
+            }
+            for (const entryPath of projectionDirectories!) {
+              preserveDirectories.add(entryPath);
+            }
+          }
           for (const document of documents) {
             for (const entryPath of document.keys()) {
               includePaths.add(entryPath);
@@ -263,12 +293,21 @@ export async function executeLocalWorkspaceManifestRead(
           root,
           baseCommit: row.base_commit,
           includePaths,
+          preserveDirectories,
           buildCacheInputs: retained,
           onEntry: (node) => nodes.push(node),
         });
       } catch (error) {
         scanFailure = error;
         continue;
+      }
+      if (candidate === "projection") {
+        // Failed scans never contribute partial hints. Names only select a later
+        // candidate; they do not enroll files or change source admission.
+        projectionPaths = new Set(nodes.map((node) => node.path));
+        projectionDirectories = new Set(
+          nodes.filter((node) => node.type === "directory").map((node) => node.path),
+        );
       }
       const records = createLocalWorkspaceManifestTree(nodes);
       if (
@@ -597,7 +636,10 @@ export async function executeLocalWorkspaceManifestRead(
     preparations:
       treeRoot === previousTreeRoot
         ? []
-        : prepareLocalWorkspaceTreePacks(records, replace ? records.values() : delta.records),
+        : prepareLocalWorkspaceTreePacks(
+            records,
+            replace ? undefined : [...delta.records.map(({ node }) => node.path), ...delta.removed],
+          ),
     records: [],
     observation,
     removed: [],

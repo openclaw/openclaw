@@ -124,13 +124,13 @@ async function startHttpHarness(options?: {
   if (!taskStore || !handler) {
     throw new Error("A2A account did not register its HTTP route");
   }
-  dispatchers.set(
-    taskStore,
+  const onDispatch = vi.fn<typeof dispatchA2aInbound>(
     options?.onDispatch ??
       (async (message) => {
         await taskStore.complete(message.taskId, `echo: ${message.text}`);
       }),
   );
+  dispatchers.set(taskStore, onDispatch);
   const baseUrl = "http://gateway.example.test";
 
   const dispatchRequest = async (dispatch: {
@@ -180,6 +180,7 @@ async function startHttpHarness(options?: {
     },
     taskStore,
     handler,
+    onDispatch,
     get: (endpoint: string) => dispatchRequest({ method: "GET", endpoint }),
     post: (body: unknown, token: string | null = "alpha-secret") =>
       dispatchRequest({
@@ -531,7 +532,12 @@ describe("A2A JSON-RPC protocol boundary", () => {
 
   it("executes batch notifications without returning notification response entries", async () => {
     const harness = await startHttpHarness();
-    const notification = sendRequest({ text: "notify", returnImmediately: true });
+    const notification = sendRequest({
+      contextId: "notify-context",
+      messageId: "batch-notification",
+      text: "notify",
+      returnImmediately: true,
+    });
     const { id: _notificationId, ...withoutId } = notification;
     const response = await harness.post([
       withoutId,
@@ -547,15 +553,57 @@ describe("A2A JSON-RPC protocol boundary", () => {
       result: { task: { artifacts: [{ parts: [{ text: "echo: visible" }] }] } },
     });
     expect(results[1]).toMatchObject({ id: null, error: { code: -32600 } });
+
+    await vi.waitFor(() => expect(harness.onDispatch).toHaveBeenCalledTimes(2));
+    const notificationCalls = harness.onDispatch.mock.calls.filter(
+      ([message]) => message.messageId === "batch-notification",
+    );
+    expect(notificationCalls).toHaveLength(1);
+    const call = notificationCalls[0]!;
+    expect(call[0]).toMatchObject({
+      taskId: expect.any(String),
+      contextId: "notify-context",
+      messageId: "batch-notification",
+      peerName: "alpha",
+      text: "notify",
+    });
+    const result = harness.onDispatch.mock.results[harness.onDispatch.mock.calls.indexOf(call)]!;
+    expect(result.type).toBe("return");
+    await expect(result.value).resolves.toBeUndefined();
+    expect(harness.taskStore.get(call[0].taskId, "alpha")).toMatchObject({
+      status: { state: "TASK_STATE_COMPLETED" },
+      artifacts: [{ parts: [{ text: "echo: notify" }] }],
+    });
   });
 
   it("responds to notification-only requests with HTTP 200 and an empty body", async () => {
     const harness = await startHttpHarness();
-    const { id: _notificationId, ...notification } = sendRequest({ returnImmediately: true });
+    const { id: _notificationId, ...notification } = sendRequest({
+      contextId: "notification-context",
+      messageId: "notification-only",
+      returnImmediately: true,
+    });
     const response = await harness.post(notification);
 
     expect(response.status).toBe(200);
     await expect(response.text()).resolves.toBe("");
+
+    await vi.waitFor(() => expect(harness.onDispatch).toHaveBeenCalledTimes(1));
+    const [message] = harness.onDispatch.mock.calls[0]!;
+    expect(message).toMatchObject({
+      taskId: expect.any(String),
+      contextId: "notification-context",
+      messageId: "notification-only",
+      peerName: "alpha",
+      text: "hello",
+    });
+    const result = harness.onDispatch.mock.results[0]!;
+    expect(result.type).toBe("return");
+    await expect(result.value).resolves.toBeUndefined();
+    expect(harness.taskStore.get(message.taskId, "alpha")).toMatchObject({
+      status: { state: "TASK_STATE_COMPLETED" },
+      artifacts: [{ parts: [{ text: "echo: hello" }] }],
+    });
   });
 
   it("rejects task inspection from a different configured peer", async () => {

@@ -61,7 +61,7 @@ export function registerExternalHandoffShutdownTests(f: UpdateRespawnFixtures): 
         f.respawnGatewayProcessForUpdate,
         f.writeGatewayRestartHandoff,
       );
-      expect(f.cancelShutdownHardExitWatchdog).toHaveBeenCalledOnce();
+      expect(f.cancelShutdownHardExitWatchdog).toHaveBeenCalledTimes(fails ? 0 : 1);
     }, true);
   });
 

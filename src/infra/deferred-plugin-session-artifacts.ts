@@ -95,13 +95,11 @@ export function collectArchivedSources(
 
 export function existingSessionSourcePaths(
   sourcePath: string,
-  target: SessionSqliteMigrationTargetInput,
-  env: NodeJS.ProcessEnv,
-  archives?: ArchivedSessionSources,
+  archives: ArchivedSessionSources,
 ): string[] {
   return statMigrationPath(sourcePath)
     ? [sourcePath]
-    : ((archives ?? collectArchivedSources(target, env)).get(sourcePath) ?? [])
+    : (archives.get(sourcePath) ?? [])
         .map((source) => source.path)
         .filter((source) => statMigrationPath(source));
 }

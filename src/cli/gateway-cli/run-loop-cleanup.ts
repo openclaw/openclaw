@@ -127,7 +127,15 @@ export function createGatewayRunCleanup(
         ["shared-state", operations.closeSharedState],
         ["release-lock", operations.releaseLock],
         ["startup-watchdog", operations.clearStartupWatchdog],
-        ["request-watchdogs", operations.clearRequestWatchdogs],
+        [
+          "request-watchdogs",
+          () => {
+            // Retained native handles still need the owned process's hard-exit safety net.
+            if (!ownsProcessLifecycle || !cleanupFailed) {
+              operations.clearRequestWatchdogs();
+            }
+          },
+        ],
         ["retained-cleanup", joinCleanup],
         ["cleanup-signals", operations.cleanupSignals],
       ];

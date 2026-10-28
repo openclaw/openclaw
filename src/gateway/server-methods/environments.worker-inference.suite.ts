@@ -38,6 +38,7 @@ export function registerWorkerInferenceEnvironmentTests(
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]?.[1]).toEqual({
       environments: [],
+      dispatchableProfileIds: [],
       profiles: [
         { id: "canonical", providerId: "device", inference: "worker" },
         { id: "default", providerId: "device" },
@@ -89,6 +90,7 @@ export function registerWorkerInferenceEnvironmentTests(
         true,
         {
           environments: [],
+          dispatchableProfileIds: [],
           profiles: [
             {
               id: "dedicated-native",

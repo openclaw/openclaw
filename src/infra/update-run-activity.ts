@@ -92,7 +92,7 @@ function formatUnverifiedUpdateRunAncestry(record: UpdateRunRecord): string {
   const pids = recordedUpdateRunDrivers(record)
     .map((driver) => driver.pid)
     .join(", ");
-  return `Update ${record.runId} was inherited by this process, but this host could not read this process's ancestry to verify that its live driver (PID ${pids}) started it, so it was not treated as a continuation. This is a process-inspection failure, not evidence of another update. Retry when the host is less busy; if it persists, let the update finish, then run \`openclaw update repair\`.`;
+  return `Update ${record.runId} was inherited by this process, but this host could not read this process's ancestry to verify that its live driver (PID ${pids}) started it, so it was not treated as a continuation. This is a process-inspection failure, not evidence of another update. Restore process inspection (on Linux, readable /proc/<pid>/stat or a compatible proc-safe native helper), wait for the recorded driver to exit, then run \`openclaw update repair\`.`;
 }
 
 export function formatUpdateRunOwnership(record: UpdateRunRecord): string {

@@ -286,6 +286,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             runSetupScript: request.runSetupScript,
             admittedIntent: preparedIntent,
             inheritedProfile: request.inheritedProfile,
+            beforeProvision: assertCurrent,
           });
       return await startup.continueProvisionedDispatch({
         markPhase: diagnostics?.mark,

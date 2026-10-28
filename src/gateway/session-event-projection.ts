@@ -308,10 +308,17 @@ export function prepareSessionEventProjection(
           variants: [],
           envelope,
           plan,
-          serializeSession: () =>
-            (sessionJSON ??= plan.rows
-              ? JSON.stringify(plan.rows.wire[0])
-              : serializeSessionRow(row)),
+          serializeSession: () => {
+            if (sessionJSON === undefined) {
+              const encoded = serializeSessionRow(row);
+              const wire = plan.rows?.wire[0];
+              // Patches already carry their encoding; full wrappers vary only by history.
+              sessionJSON = wire
+                ? `${JSON.stringify({ key: wire.key, agentId: wire.agentId, version: wire.version }).slice(0, -1)},"full":${encoded}${"retain" in wire ? ',"retain":false' : ""}}`
+                : encoded;
+            }
+            return sessionJSON;
+          },
           delivered: (viewer) => connection.references(viewer).deliver(plan),
         };
         deliveries.set(references.history, delivery);

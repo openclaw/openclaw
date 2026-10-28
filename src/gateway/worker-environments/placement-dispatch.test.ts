@@ -124,6 +124,7 @@ describe("worker placement dispatch", () => {
         runSetupScript,
         inheritedProfile,
         admittedIntent: inheritedProfile,
+        beforeProvision: expect.any(Function),
       });
     },
   );

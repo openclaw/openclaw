@@ -1,4 +1,11 @@
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { hasErrnoCode } from "../infra/errno.js";
+import { parseGatewayLockPayload } from "../infra/gateway-lock-payload.js";
+import {
+  resolveGatewayStateOwnerPath,
+  type captureGatewayStateOwner,
+} from "../infra/gateway-state-owner.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { publishSqliteWalCheckpointObservation } from "../infra/sqlite-wal-checkpoint.js";
 import type { SqliteWorkerCloseReceipt } from "../infra/sqlite-worker-contract.js";
@@ -7,10 +14,17 @@ import {
   readDatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { runSqliteWorkerStoreOperation } from "../infra/sqlite-worker-store.js";
+import {
+  closeUnclaimedSharedStateSqliteWorkers,
+  runSqliteWorkerStoreOperation,
+} from "../infra/sqlite-worker-store.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
-import type { AgentDatabaseFileExecutionIdentity } from "./openclaw-agent-execution-contract.js";
+import type {
+  AgentDatabaseFileExecutionIdentity,
+  AgentDatabaseNativeStore,
+} from "./openclaw-agent-execution-contract.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { openOpenClawStateWorkerCleanupStore } from "./openclaw-state-worker-store.js";
 
@@ -142,4 +156,105 @@ export async function publishAgentDatabaseCloseCheckpoint(
   } catch {
     // A stale diagnostic must not clear another generation's budget or fail native cleanup.
   }
+}
+
+/** Join native disposal before deciding whether the original lease can still be settled. */
+export async function closeAgentDatabaseNativeGeneration(params: {
+  pathname: string;
+  context: OpenClawStateWorkerContext;
+  processOwner: ReturnType<typeof captureGatewayStateOwner>;
+  opening: Promise<AgentDatabaseNativeStore | undefined> | undefined;
+  readOpenedStore: () => AgentDatabaseNativeStore | undefined;
+  assertCleanupOwned: () => void;
+  readRetirement(): {
+    stopped: Promise<void> | undefined;
+    lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
+    readOpenRefused: (() => boolean) | undefined;
+    closed: ReturnType<typeof readAgentDatabaseClosedReceipt>;
+  };
+}): Promise<void> {
+  const { pathname, context, processOwner, opening, readOpenedStore, assertCleanupOwned } = params;
+  const errors: unknown[] = [];
+  try {
+    processOwner?.assertCurrent();
+  } catch (error) {
+    // Ordinary admission may retire first; only physical ownership loss forbids lease settlement.
+    if (processOwner?.signal.aborted) {
+      errors.push(error);
+    }
+  }
+  let storeClosed = false;
+  if (opening) {
+    try {
+      await opening.then(
+        async (store) => {
+          await store?.close();
+          storeClosed = store !== undefined;
+        },
+        () => readOpenedStore()?.close() ?? closeUnclaimedSharedStateSqliteWorkers(pathname),
+      );
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  const retirement = params.readRetirement();
+  // A failed close can leave the Worker running; its retry owns lease cleanup.
+  if (
+    errors.length === 0 &&
+    !processOwner?.signal.aborted &&
+    retirement.stopped &&
+    retirement.lease
+  ) {
+    try {
+      await cleanupRetiredAgentDatabaseLease({
+        context,
+        stopped: retirement.stopped,
+        assertOwned: assertCleanupOwned,
+        lease: retirement.lease,
+        readOpenRefused: retirement.readOpenRefused,
+        closed: () => (storeClosed ? retirement.closed : undefined),
+      });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (processOwner?.signal.aborted && retirement.stopped) {
+    await finishAgentDatabaseRetirementAfterOwnershipLoss(
+      pathname,
+      context.admission.databasePath,
+      retirement.stopped,
+      errors,
+    );
+    return;
+  }
+  throwSqliteLifecycleErrors(errors, "Agent native close and lease cleanup failed");
+  await publishAgentDatabaseCloseCheckpoint(pathname, retirement.closed, assertCleanupOwned);
+}
+
+/** Lost write authority cannot prevent disposal or authorize another lease cleanup write. */
+async function finishAgentDatabaseRetirementAfterOwnershipLoss(
+  pathname: string,
+  stateDatabasePath: string,
+  stopped: Promise<void>,
+  errors: unknown[],
+): Promise<void> {
+  await stopped;
+  invalidateOpenClawAgentDatabaseValidation(pathname);
+  const lockPath = resolveGatewayStateOwnerPath(stateDatabasePath);
+  const replacement = await readFile(lockPath, "utf8").then(
+    (raw) => {
+      const holder = parseGatewayLockPayload(raw);
+      return holder ? { pid: holder.pid, role: holder.role } : "unrecognized lock contents";
+    },
+    (error: unknown) => (hasErrnoCode(error, "ENOENT") ? "lock removed" : "lock unreadable"),
+  );
+  createSubsystemLogger("state/agent-db").warn(
+    "Agent database native handle retired after state ownership loss; lease cleanup deferred to recovery",
+    {
+      path: pathname,
+      lockPath,
+      replacement,
+      errors: errors.map((error) => coerceErrorMessage(error)),
+    },
+  );
 }

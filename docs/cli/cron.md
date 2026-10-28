@@ -315,6 +315,8 @@ openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 
 With `--wait`, the CLI calls `cron.run` first, then polls the durable `cron.runs` row for the returned `runId`. It does not reread mutable job delivery settings. JSON reports payload execution as `status` and whole-run completion as `completionStatus`. The command exits `0` only for `completionStatus: "succeeded"`. `failed`, `unknown`, execution errors or skips, a missing `runId`, and timeout expiry exit non-zero (default `10m`, polled every `2s` by default). `--poll-interval` must be greater than zero. Completed JSON output, including the run summary, is flushed before the command exits, so it can be piped to a JSON reader.
 
+Interrupting the CLI stops waiting for the result. The queued run continues in the Gateway.
+
 <Note>
 Use `--due` to test the condition gate when the job is currently due, or wait for its scheduled evaluation. Unlike a forced run, `--due` honors `trigger.script`; it does not make a job due early. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling. An enqueued run skipped by the gate exits non-zero with `--wait`.
 </Note>
@@ -507,9 +509,10 @@ page metadata returned by the previous command.
 `openclaw automations list` shows enabled jobs across agents by default, including jobs whose owner cannot be resolved. Pass `--all` to include disabled jobs, or `--agent <id>` to filter by the effective normalized agent ID. Ownership resolves from the job's declared agent, its agent-scoped session key, then the configured system-agent owner. Unresolved jobs do not match an agent filter. The `cron list` alias has the same behavior.
 
 Use `--query <text>` to search job IDs, names, descriptions, declared agent IDs,
-and display names. Matching is case-insensitive and uses the Gateway's existing
-inventory filter before paging; the CLI reads every bounded matching page with
-the same query. It combines with `--all`, `--agent`, and either text or `--json`
+and display names. Matching is case-insensitive and compares canonically equivalent
+Unicode forms as the same text without rewriting stored metadata. The Gateway filters
+before paging; the CLI reads every bounded matching page with the same query. It
+combines with `--all`, `--agent`, and either text or `--json`
 output. Omitting the flag or passing only whitespace keeps the existing listing.
 This searches job metadata, not message or script payloads; use `automations runs
 <job-id> --query <text>` to search run summaries and errors instead.

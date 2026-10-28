@@ -1982,7 +1982,7 @@ describe("systemd service control", () => {
     vi.spyOn(os, "userInfo").mockImplementationOnce(() => {
       throw new Error("no user info");
     });
-    execFileMock.mockResolvedValueOnce(failure("Failed to connect to bus"));
+    execFileMock.mockResolvedValue(failure("Failed to connect to bus"));
     const operation = stopSystemdService({
       stdout: captureOutput().stdout,
       env: { HOME: MANAGED_HOME, USER: "", LOGNAME: "" },
